@@ -1,0 +1,1 @@
+Follow root AGENTS.md. Implement only the current prompt in prompts/. Do not add a Kanban DB. Do not vendor a full copy of github-agent-contracts; depend on a sibling clone path via GITHUB_AGENT_CONTRACTS. Zero runtime deps unless a prompt says otherwise. Node 20 ESM.
