@@ -1,0 +1,28 @@
+name: check-agent-trailers
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  trailers:
+    name: check-agent-trailers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Use the base revision's trusted checker
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: git checkout --detach "$BASE_SHA"
+
+      - name: Check trailers on PR commits
+        uses: ./.github/actions/check-agent-trailers
+        with:
+          base-sha: ${{ github.event.pull_request.base.sha }}
+          head-sha: ${{ github.event.pull_request.head.sha }}

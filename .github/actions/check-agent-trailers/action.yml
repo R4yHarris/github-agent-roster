@@ -1,0 +1,25 @@
+name: Check agent trailers
+description: Check every PR commit for agent provenance trailers using Node 20+ and full Git history.
+
+inputs:
+  base-sha:
+    description: Full base commit SHA of the pull request.
+    required: true
+  head-sha:
+    description: Full head commit SHA of the pull request.
+    required: true
+  require-on-all-commits:
+    description: Require AI-Agent and AI-Model on human commits as well as agent commits.
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Check PR commit messages and authors
+      shell: bash
+      env:
+        BASE_SHA: ${{ inputs.base-sha }}
+        HEAD_SHA: ${{ inputs.head-sha }}
+        REQUIRE_ON_ALL_COMMITS: ${{ inputs.require-on-all-commits }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: node "$ACTION_PATH/../../../scripts/check-pr-agent-trailers.mjs"
