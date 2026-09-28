@@ -1,0 +1,3 @@
+[submodule "vendor/github-agent-contracts"]
+	path = vendor/github-agent-contracts
+	url = https://github.com/R4yHarris/github-agent-contracts.git
