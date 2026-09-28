@@ -1,0 +1,9 @@
+version: 1
+default: deny
+roles:
+  coder:
+    allow: [commit_branch, open_pr, comment, label]
+  merger:
+    allow: [merge]
+  deploy:
+    allow: []
