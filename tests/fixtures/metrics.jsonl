@@ -1,0 +1,4 @@
+{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","agent":null,"model":"model-b","schema":1,"provider":"other","model_version":"1","effort":null,"context_used":null,"context_max":null,"context_out":null,"session":null,"task":null}
+{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","agent":"coder","model":"model-a","schema":1,"provider":"other","model_version":"1","effort":"h","context_used":12,"context_max":100,"context_out":6,"session":"s1","task":"t1"}
+{"sha":"cccccccccccccccccccccccccccccccccccccccc","agent":"coder","model":"model-a","schema":1,"provider":"other","model_version":"1","effort":"l","context_used":10,"context_max":100,"context_out":5,"session":"s2","task":"t2"}
+{"sha":"dddddddddddddddddddddddddddddddddddddddd","agent":"coder","model":"model-a","schema":1,"provider":"other","model_version":"2","effort":"l","context_used":11,"context_max":100,"context_out":5,"session":"s3","task":"t3"}

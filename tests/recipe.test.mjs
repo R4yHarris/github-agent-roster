@@ -1,0 +1,157 @@
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { parseRecipe, RecipeError, validateRecipe } from "../src/lib/recipe.mjs";
+
+const example = `version: 1
+ask: issue:42
+seats:
+  - id: planner
+    principal: coder
+    worker: copilot
+  - id: coder
+    principal: coder
+    worker: hermes
+`;
+
+function temporaryDirectory(context) {
+  const directory = mkdtempSync(join(tmpdir(), "roster-recipe-"));
+  context.after(() => rmSync(directory, { recursive: true, force: true }));
+  return directory;
+}
+
+test("parses the version 1 planner/coder recipe without granting capabilities", () => {
+  const recipe = parseRecipe(example);
+  assert.deepEqual(recipe, {
+    version: 1,
+    ask: "issue:42",
+    seats: [
+      { id: "planner", principal: "coder", worker: "copilot" },
+      { id: "coder", principal: "coder", worker: "hermes" },
+    ],
+  });
+  assert.equal(Object.isFrozen(recipe), true);
+  assert.equal(Object.isFrozen(recipe.seats), true);
+  assert.equal(Object.isFrozen(recipe.seats[0]), true);
+  assert.throws(() => { recipe.seats[0].principal = "merger"; }, TypeError);
+});
+
+test("supports comments, CRLF, unordered keys, and a single coder seat", () => {
+  const source = `# Human-written recipe
+seats: # Ordered steps
+  - worker: copilot
+    id: planner
+    principal: coder
+  - principal: coder
+    worker: hermes
+    id: coder
+ask: issue:42
+version: 1
+`;
+  assert.deepEqual(parseRecipe(source.replace(/\n/g, "\r\n")), parseRecipe(example));
+  assert.deepEqual(parseRecipe("version: 1\nask: issue:1\nseats:\n  - id: coder\n    principal: coder\n    worker: hermes\n").seats, [
+    { id: "coder", principal: "coder", worker: "hermes" },
+  ]);
+});
+
+test("rejects missing, duplicate, or extra root and seat keys", () => {
+  for (const [name, source] of [
+    ["empty", ""],
+    ["missing version", example.replace("version: 1\n", "")],
+    ["missing ask", example.replace("ask: issue:42\n", "")],
+    ["missing seats", example.slice(0, example.indexOf("seats:"))],
+    ["missing id", example.replace("  - id: planner\n", "  - worker: copilot\n").replace("    worker: copilot\n", "")],
+    ["missing principal", example.replace("    principal: coder\n", "")],
+    ["missing worker", example.replace("    worker: hermes\n", "")],
+    ["duplicate version", `version: 1\n${example}`],
+    ["duplicate ask", `${example}ask: issue:43\n`],
+    ["duplicate seats", `${example}seats:\n  - id: coder\n    principal: coder\n    worker: hermes\n`],
+    ["duplicate seat key", example.replace("    worker: hermes\n", "    worker: hermes\n    worker: copilot\n")],
+    ["duplicate seat id", `${example}  - id: coder\n    principal: coder\n    worker: hermes\n`],
+    ["unknown root key", `${example}default: allow\n`],
+    ["unknown seat key", example.replace("    worker: hermes\n", "    worker: hermes\n    merge: true\n")],
+    ["inline empty seats", example.replace("seats:", "seats: []")],
+  ]) {
+    assert.throws(() => parseRecipe(source), RecipeError, name);
+  }
+});
+
+test("denies unsupported seat roles, worker names, and workflow shapes", () => {
+  for (const [name, source] of [
+    ["deploy seat", example.replace("id: coder", "id: deploy")],
+    ["review seat", example.replace("id: coder", "id: reviewer")],
+    ["merger principal", example.replace("    principal: coder", "    principal: merger")],
+    ["deploy principal", example.replace("    principal: coder", "    principal: deploy")],
+    ["planner principal", example.replace("    principal: coder", "    principal: planner")],
+    ["unknown worker", example.replace("worker: hermes", "worker: unknown")],
+    ["merge allowance", example.replace("    worker: hermes\n", "    worker: hermes\n    allow: [merge]\n")],
+    ["deploy permission", example.replace("    worker: hermes\n", "    worker: hermes\n    deploy: true\n")],
+    ["planner only", example.slice(0, example.indexOf("  - id: coder"))],
+    ["no seats", "version: 1\nask: issue:42\nseats:\n"],
+    ["coder before planner", example.replace(
+      /  - id: planner[\s\S]+/,
+      "  - id: coder\n    principal: coder\n    worker: hermes\n  - id: planner\n    principal: coder\n    worker: copilot\n",
+    )],
+  ]) {
+    assert.throws(() => parseRecipe(source), RecipeError, name);
+  }
+});
+
+test("rejects malformed issue references and unsupported YAML", () => {
+  for (const [name, source] of [
+    ...["issue:0", "issue:01", "issue:-1", "issue:1.0", "issue:9007199254740992", "https://github.com/x/y/issues/1"]
+      .map((ask) => [ask, example.replace("issue:42", ask)]),
+    ["wrong version", example.replace("version: 1", "version: 2")],
+    ["quoted version", example.replace("version: 1", 'version: "1"')],
+    ["quoted worker", example.replace("worker: hermes", 'worker: "hermes"')],
+    ["anchor", example.replace("worker: hermes", "worker: &hermes hermes")],
+    ["alias", example.replace("worker: hermes", "worker: *hermes")],
+    ["tag", example.replace("worker: hermes", "worker: !worker hermes")],
+    ["document marker", `---\n${example}`],
+    ["tab indentation", example.replace("  - id: coder", "\t- id: coder")],
+    ["wrong indentation", example.replace("    worker: hermes", "   worker: hermes")],
+    ["lone carriage return", example.replace("version: 1\n", "version: 1\r")],
+    ["nul comment", `# comment\0\n${example}`],
+    ["inline mapping", example.replace("  - id: coder\n    principal: coder\n    worker: hermes", "  - {id: coder, principal: coder, worker: hermes}")],
+  ]) {
+    assert.throws(() => parseRecipe(source), RecipeError, name);
+  }
+  assert.throws(() => parseRecipe(" ".repeat(65_537)), RecipeError);
+  assert.throws(() => parseRecipe(undefined), RecipeError);
+});
+
+test("validates files without falling back on missing, malformed, or oversized input", (context) => {
+  const directory = temporaryDirectory(context);
+  const path = join(directory, "recipe.yml");
+  writeFileSync(path, example);
+  assert.deepEqual(validateRecipe(path), parseRecipe(example));
+
+  writeFileSync(path, "version: 1\nask: issue:42\nseats: []\n");
+  assert.throws(() => validateRecipe(path), RecipeError);
+  writeFileSync(path, "x".repeat(65_537));
+  assert.throws(() => validateRecipe(path), /at most 64 KiB/);
+  writeFileSync(path, Buffer.from([0xff]));
+  assert.throws(() => validateRecipe(path), /must be UTF-8/);
+  assert.throws(() => validateRecipe(directory), /regular file/);
+  assert.throws(() => validateRecipe(join(directory, "missing.yml")), /Cannot read recipe file/);
+  assert.throws(() => validateRecipe(""), /Recipe path/);
+});
+
+test("refuses a symlink even when its target is a valid recipe", (context) => {
+  const directory = temporaryDirectory(context);
+  const target = join(directory, "recipe.yml");
+  const link = join(directory, "link.yml");
+  writeFileSync(target, example);
+  try {
+    symlinkSync(target, link, "file");
+  } catch (error) {
+    if (["EPERM", "EACCES", "ENOTSUP"].includes(error.code)) {
+      context.skip("Creating symlinks is unavailable on this system.");
+      return;
+    }
+    throw error;
+  }
+  assert.throws(() => validateRecipe(link), /not a symlink/);
+});

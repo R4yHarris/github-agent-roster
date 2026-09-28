@@ -1,5 +1,7 @@
 .DS_Store
 node_modules/
+.worktrees/
+/evals.jsonl
 .venv/
 __pycache__/
 .env
