@@ -41,7 +41,7 @@ node src/cli.mjs stats --ref HEAD --evals evals.jsonl
 node src/cli.mjs vault list
 node src/cli.mjs eval roster-20260928T120000000Z accept 3 n
 node src/cli.mjs recommend --task-class feat
-node --test
+npm test
 ```
 
 Copy [the example config](roster.config.example.yml) to ignored
@@ -89,7 +89,7 @@ then the sibling clone at `../github-agent-contracts`. It fails if no candidate
 contains `scripts/agent-pr.mjs`. See [the dependency guide](docs/DEPENDENCY.md)
 for path semantics and initialization instructions.
 
-Run tests with `node --test`; there are no runtime package dependencies.
+Run tests with `npm test`; there are no runtime package dependencies.
 Tests run with no API key or model endpoint.
 
 ## Publish
