@@ -1,0 +1,7 @@
+version: 1
+ask: issue:N
+seats:
+  - id: coder
+    principal: coder
+    worker: builtin
+    sequence: [load_context, implement, run_tests, summarize]

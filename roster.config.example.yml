@@ -1,16 +1,17 @@
 schema: 1
-
 llm:
-  base_url: ""
+  base_url: ""          # OpenAI-compatible; empty = deterministic stub
   model: ""
   api_key_env: ROSTER_API_KEY
-  api_key_optional: true
-
-effort: m
-seat: coder
-
+  effort: m             # l|m|h|x
+  context_max: 0        # 0 = unknown
+seat:
+  id: coder
+  principal: coder      # contracts role; no merge, no deploy
+  turn_budget: 8
+  tools: [read_file, write_file, list_dir, run_test]
 paths:
-  memory: ./memory
-  skills: ./skills
-  asks: ./asks
-  worktrees: ./.worktrees
+  memory: .roster/memory/coder.jsonl
+  skills: skills
+  asks: .roster/asks
+  worktrees: .worktrees

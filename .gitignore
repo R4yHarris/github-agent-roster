@@ -3,6 +3,9 @@ node_modules/
 .worktrees/
 .roster/runs/
 .roster/evals.jsonl
+.roster/config.yml
+.roster/memory/
+.roster/asks/
 /evals.jsonl
 .venv/
 __pycache__/

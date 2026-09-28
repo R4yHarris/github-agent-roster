@@ -1,8 +1,13 @@
 # AGENTS.md
 
-This repository is **github-agent-roster**: an orchestrator for teams of coding agents.
+This repository is **github-agent-roster**: a standalone orchestrator for
+software tasks. The first loop has one builtin coder seat; it does not require
+Hermes, Claude Code, or Copilot.
 
-GitHub is the board and the forge. Identity, policy, trailers, and `agent-pr.mjs` live in **github-agent-contracts**. This repo assigns work. It does not replace git.
+GitHub is the board and the forge. This repo owns planning, task files, coder
+execution, skills, tools, memory, and worktrees. Identity, policy, trailers,
+and `agent-pr.mjs` live in **github-agent-contracts**, the GitHub publish SDK
+only. This repo does not replace git.
 
 ## Hard boundaries
 
@@ -10,8 +15,9 @@ GitHub is the board and the forge. Identity, policy, trailers, and `agent-pr.mjs
 - Do not invent a Kanban database. Issues + PRs are the queue.
 - Do not commit PEMs, tokens, or `.env`.
 - Do not edit `agent-policy.yml` in a consumer repo; humans own policy.
-- Publish code changes from the repository root with `node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "..."` when App env is set.
+- Publish reviewed code changes from the current feature worktree's repository root with `node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "..."` when App env is set.
 - Never `git commit` as the signed-in human when App env is set.
+- Never edit `.github/workflows/*` from the coder seat.
 
 ## Contracts dependency
 
@@ -27,10 +33,12 @@ Fail if no candidate contains the `scripts/agent-pr.mjs` file. See
 
 ## First loop (v0)
 
-1. Human states an ask (GitHub issue).
-2. Planner writes a recipe (task graph) on the issue.
-3. One coder worker gets a worktree + `AI_*` env.
-4. Worker publishes via `agent-pr.mjs`.
+1. Human states an ask (GitHub issue; a local `roster ask` draft does not create one).
+2. Stub or configured LLM planner writes one coder RECIPE and TASK.
+3. Builtin coder loads AGENTS.md, TASK.md, skills, and recent memory into a bounded loop in an issue worktree.
+4. Coder runs `node --test`; publication uses `agent-pr.mjs` only on explicit request.
 5. Human posts `AI-Eval:` on the PR.
 
-No multi-agent swarm until that loop is reliable.
+With no LLM endpoint, the deterministic stub writes a RESULT summary and does
+not change code or run tests. No multi-agent swarm until the single-seat loop
+is reliable. See [SDLC](docs/SDLC.md) for the config and runtime contract.

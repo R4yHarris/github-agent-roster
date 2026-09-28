@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { inferTaskClass, recordRun } from './learn.mjs';
+import { renderAssignment } from '../planner/stub.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -37,9 +38,16 @@ export async function runIssue(issueNumber, {
   env = process.env,
   now = () => new Date(),
   log = console.log,
+  worktrees = '.worktrees',
+  beforeWorktree = async () => {},
 } = {}) {
   if (!/^[1-9]\d*$/.test(String(issueNumber)) || !Number.isSafeInteger(Number(issueNumber))) {
     throw new TypeError('Issue number must be a positive safe integer');
+  }
+  if (typeof worktrees !== 'string' || !worktrees || path.isAbsolute(worktrees) ||
+      path.win32.isAbsolute(worktrees) ||
+      worktrees.split(/[\\/]/).some((part) => !part || part === '.' || part === '..')) {
+    throw new TypeError('Worktrees path must be relative to the repository root');
   }
   const number = Number(issueNumber);
 
@@ -80,25 +88,17 @@ export async function runIssue(issueNumber, {
   }
 
   const task = `issue-${number}`;
-  const worktreePath = path.join(repoRoot, '.worktrees', task);
+  const worktreePath = path.join(repoRoot, worktrees, task);
   const assignmentPath = path.join(worktreePath, 'ASSIGNMENT.md');
   const envPath = path.join(worktreePath, '.env');
   const session = `roster-${now().toISOString().replace(/[-:.]/g, '')}`;
   const nextCommand = `node $GITHUB_AGENT_CONTRACTS/scripts/agent-pr.mjs --message "feat: issue ${number}"`;
 
+  await beforeWorktree(repoRoot, worktreePath);
   await fileSystem.mkdir(path.dirname(worktreePath), { recursive: true });
   await command('git', ['worktree', 'add', '-b', task, worktreePath], repoRoot);
 
-  const assignment = `# Assignment
-
-- Issue URL: ${issue.url}
-- Issue number: ${number}
-- Title: ${issue.title}
-
-## Ask
-
-${issue.body}
-`;
+  const assignment = renderAssignment(issue);
   try {
     await fileSystem.writeFile(assignmentPath, assignment, { encoding: 'utf8', flag: 'wx' });
     await fileSystem.writeFile(envPath, `AI_TASK=${task}\nAI_SESSION=${session}\n`, {

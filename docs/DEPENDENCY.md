@@ -46,7 +46,7 @@ Unset the variable rather than setting it to an empty value.
 ## Publish
 
 With `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_PATH` set, publish from the
-repository root using the initialized submodule:
+current feature worktree's repository root using the initialized submodule:
 
 ```sh
 node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "..."
@@ -56,6 +56,11 @@ The publisher also requires a feature branch and a human-owned root
 `agent-policy.yml` granting the coder publishing capabilities, matching the
 reviewed policy on origin's default branch. Do not create or edit policy as
 part of dependency setup.
+
+A new issue worktree may need `git submodule update --init --recursive` run
+from its own root before manual publication. The builtin `--publish` path
+initializes it, selects reviewed task files, and invokes the SDK from that
+root; without the flag, it prints the next command but does not invoke it.
 
 Do not commit as the signed-in human when App environment variables are set.
 Never commit tokens, private keys, or `.env`.
