@@ -35,6 +35,7 @@ test("help lists every prompt's command", () => {
   assert.match(result.stdout, /roster\s+recommend\s+--task-class/);
   assert.match(result.stdout, /roster\s+ask/);
   assert.match(result.stdout, /--runtime builtin \[--seats planner,coder\]/);
+  assert.match(result.stdout, /--auto-model/);
   assert.match(result.stdout, /^  roster run --issue N --runtime builtin --seats planner,coder$/m);
 });
 
@@ -76,6 +77,8 @@ test("builtin CLI defaults to paired seats, rejects unsupported selections, and 
     "--seats", "planner,coder"]);
   assert.notEqual(noIssue.status, 0);
   assert.match(noIssue.stderr, /Issue number must be a positive safe integer/);
+  const autoIssue = run(["run", "--issue", "n/a", "--runtime", "builtin", "--auto-model"]);
+  assert.match(autoIssue.stderr, /Issue number must be a positive safe integer/);
   const defaultSeats = run(["run", "--issue", "n/a", "--runtime", "builtin"]);
   assert.match(defaultSeats.stderr, /Issue number must be a positive safe integer/);
   const legacySeat = run(["run", "--issue", "n/a", "--seat", "coder", "--runtime", "builtin"]);

@@ -13,7 +13,8 @@ import { runIssue } from './issue.mjs';
 import {
   closeMergedIssue, issueMergeMessage, mergedPullNumber, mergedPullNumberFromFailure,
 } from './issue-board.mjs';
-import { inferTaskClass, recordRun } from './learn.mjs';
+import { inferTaskClass, recommend, recordRun } from './learn.mjs';
+import { loadMetrics } from './metrics.mjs';
 import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -100,6 +101,7 @@ export async function runBuiltinIssue(issueNumber, {
   env = process.env,
   publish = false,
   seats = 'planner,coder',
+  autoModel = false,
   log = console.log,
   runCommand,
   fetchImpl,
@@ -107,17 +109,25 @@ export async function runBuiltinIssue(issueNumber, {
   runTestCommand,
   publisher = execFileAsync,
   issueCloser = closeMergedIssue,
+  metricsLoader = loadMetrics,
   now,
 } = {}) {
   if (seats !== 'planner,coder') {
     throw new TypeError('Builtin seats must be planner,coder in that order');
+  }
+  if (typeof autoModel !== 'boolean') throw new TypeError('--auto-model must be a boolean');
+  if (autoModel && config.llm.model) {
+    throw new Error('--auto-model requires an empty config.llm.model');
+  }
+  if (!autoModel && config.llm.base_url && !config.llm.model) {
+    throw new Error('Set config.llm.model or use --auto-model');
   }
   if (publish && (!config.llm.base_url || !env.GITHUB_APP_ID || !env.GITHUB_APP_PRIVATE_KEY_PATH)) {
     throw new Error('--publish requires an LLM endpoint and GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH');
   }
   const commandEnv = { ...env };
   delete commandEnv[config.llm.api_key_env];
-  resolveContractsPath({ repoRoot, cwd, env });
+  const contractsPath = resolveContractsPath({ repoRoot, cwd, env });
   const issueCommand = runCommand ?? (async (program, args, workingDirectory) =>
     (await execFileAsync(program, args, { cwd: workingDirectory, env: commandEnv, encoding: 'utf8' })).stdout);
   const prepared = await runIssue(issueNumber, {
@@ -126,12 +136,36 @@ export async function runBuiltinIssue(issueNumber, {
     sessionId: `roster-${issueNumber}-coder`, recordPreparation: false,
   });
   const { worktreePath } = prepared;
+  let activeConfig = config;
+  let autoRecommendation = null;
+  if (autoModel) {
+    const taskClass = inferTaskClass(prepared.issue.title);
+    if (config.llm.base_url && taskClass) {
+      autoRecommendation = recommend(metricsLoader({
+        contractsPath, cwd: prepared.repoRoot,
+      }), taskClass);
+    }
+    if (autoRecommendation) {
+      if (!/^[A-Za-z0-9._:/-]+$/.test(autoRecommendation.model)) {
+        throw new Error('The recommended model name is invalid');
+      }
+      activeConfig = { ...config, llm: Object.freeze({
+        ...config.llm, model: autoRecommendation.model,
+        effort: autoRecommendation.effort ?? config.llm.effort,
+      }) };
+      log(`Auto-model: ${autoRecommendation.model} from ${autoRecommendation.n} human evaluations`);
+    } else {
+      activeConfig = { ...config, llm: Object.freeze({ ...config.llm, base_url: '', model: '' }) };
+      log(`Auto-model: ${config.llm.base_url && taskClass
+        ? 'insufficient evaluated data' : 'no configured endpoint or task class'}; deterministic stub`);
+    }
+  }
   const sessions = {
     planner: `roster-${prepared.issue.number}-planner`,
     coder: prepared.session,
   };
   const planner = await runPlanner({
-    worktree: worktreePath, repoRoot, issue: prepared.issue, config,
+    worktree: worktreePath, repoRoot, issue: prepared.issue, config: activeConfig,
     task: prepared.task, session: sessions.planner, fetchImpl, env, vault,
   });
   const metricEnv = { ...commandEnv };
@@ -142,18 +176,18 @@ export async function runBuiltinIssue(issueNumber, {
     session, task: prepared.task, task_class: taskClass,
   }, { cwd: prepared.repoRoot, env: { ...metricEnv, ...run.env } });
   const plannerRun = buildRun({
-    config, usage: planner.usage ?? {}, session: sessions.planner, task: prepared.task,
+    config: activeConfig, usage: planner.usage ?? {}, session: sessions.planner, task: prepared.task,
     includeStub: true,
   });
   await recordSeat(sessions.planner, plannerRun);
   const result = await runCoder({
-    worktree: worktreePath, repoRoot, config, task: prepared.task, session: sessions.coder,
+    worktree: worktreePath, repoRoot, config: activeConfig, task: prepared.task, session: sessions.coder,
     fetchImpl, env, vault, runTestCommand,
   });
   await ensureUnchanged(planner.recipePath, planner.recipe);
   await ensureUnchanged(planner.taskPath, planner.task);
   const coderRun = buildRun({
-    config, usage: result.usage ?? {}, session: sessions.coder, task: prepared.task,
+    config: activeConfig, usage: result.usage ?? {}, session: sessions.coder, task: prepared.task,
     includeStub: true,
   });
   await recordSeat(sessions.coder, coderRun);
@@ -168,11 +202,11 @@ export async function runBuiltinIssue(issueNumber, {
 
   const completed = {
     ...prepared, recipePath: planner.recipePath, taskPath: planner.taskPath,
-    planner, result, sessions, runs, run: coderRun, command,
+    planner, result, sessions, runs, run: coderRun, command, autoRecommendation,
   };
   if (publish) {
     const { contractsPath, publishEnv } = await prepareBuiltinPublication(completed, {
-      cwd, config, env,
+      cwd, config: activeConfig, env,
     });
     let stdout;
     try {

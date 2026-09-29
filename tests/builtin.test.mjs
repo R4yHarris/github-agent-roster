@@ -134,6 +134,86 @@ test('--publish requires an LLM and App environment before any GitHub or worktre
   assert.deepEqual(options.calls, []);
 });
 
+test('--auto-model is required when a configured endpoint has no model and cannot override a chosen model', async (context) => {
+  const options = fixture(context);
+  const emptyModel = parseConfig(example.replace('profile: ""', 'profile: ollama'));
+  await assert.rejects(runBuiltinIssue(42, { ...options, config: emptyModel }),
+    /Set config\.llm\.model or use --auto-model/);
+  await assert.rejects(runBuiltinIssue(42, {
+    ...options, config: llmConfig, autoModel: true,
+  }), /--auto-model requires an empty config\.llm\.model/);
+  assert.deepEqual(options.calls, []);
+});
+
+test('auto-model with fewer than three evaluated runs stays a network-free stub', async (context) => {
+  const options = fixture(context);
+  options.issue.title = 'feat: Add status';
+  const config = parseConfig(example.replace('profile: ""', 'profile: ollama'));
+  const evaluated = Array.from({ length: 2 }, (_, index) => ({
+    task_class: 'feat', model: 'candidate-model', effort: 'h',
+    evaluation: { session: `sample-${index}`, verdict: 'accept' },
+  }));
+  const logs = [];
+  const result = await runBuiltinIssue(42, {
+    ...options, config, autoModel: true, log: (line) => logs.push(line),
+    metricsLoader: ({ contractsPath, cwd }) => {
+      assert.equal(contractsPath, options.contracts);
+      assert.equal(cwd, options.target);
+      return evaluated;
+    },
+    fetchImpl: () => assert.fail('Insufficient data must not contact an LLM'),
+    runTestCommand: () => assert.fail('Stub must not run tests'),
+  });
+  assert.equal(result.autoRecommendation, null);
+  assert.equal(result.result.mode, 'stub');
+  assert.equal(result.runs.coder.env.AI_MODEL, 'builtin-stub');
+  assert.equal(config.llm.model, '');
+  assert.ok(logs.some((line) => line.includes('insufficient evaluated data')));
+});
+
+test('auto-model uses a three-evaluation recommendation for both seats without editing config', async (context) => {
+  const options = fixture(context);
+  options.issue.title = 'feat: Add status';
+  const config = parseConfig(example.replace('profile: ""', 'profile: ollama'));
+  const evaluated = Array.from({ length: 3 }, (_, index) => ({
+    task_class: 'feat', model: 'candidate-model', effort: 'h',
+    evaluation: { session: `sample-${index}`, verdict: 'accept' },
+  }));
+  let requests = 0;
+  const result = await runBuiltinIssue(42, {
+    ...options, config, autoModel: true, metricsLoader: () => evaluated,
+    env: { ...options.env, ROSTER_API_KEY: 'test-only-key' },
+    log: () => {},
+    fetchImpl: async (url, request) => {
+      requests += 1;
+      assert.equal(String(url), 'http://127.0.0.1:11434/v1/chat/completions');
+      assert.equal(JSON.parse(request.body).model, 'candidate-model');
+      if (requests === 1) return { status: 200, json: async () => ({
+        choices: [{ message: { role: 'assistant', content: JSON.stringify({
+          title: 'Add status', acceptance_checks: ['node --test exits 0'],
+          files_allowed: ['README.md'],
+        }) } }],
+        usage: { prompt_tokens: 2, completion_tokens: 1 },
+      }) };
+      return { status: 200, json: async () => ({
+        choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Done.' } }],
+        usage: { prompt_tokens: 3, completion_tokens: 2 },
+      }) };
+    },
+    runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+  });
+  assert.equal(requests, 2);
+  assert.equal(result.autoRecommendation.n, 3);
+  assert.equal(result.autoRecommendation.model, 'candidate-model');
+  assert.equal(result.result.mode, 'llm');
+  assert.equal(result.runs.planner.env.AI_MODEL, 'candidate-model');
+  assert.equal(result.runs.coder.env.AI_MODEL, 'candidate-model');
+  assert.equal(result.runs.coder.env.AI_EFFORT, 'h');
+  assert.equal(result.runs.coder.env.AI_CONTEXT_USED, '3');
+  assert.equal(config.llm.model, '');
+  assert.equal(existsSync(path.join(options.repoRoot, '.roster', 'config.yml')), false);
+});
+
 test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the SDK only with --publish', async (context) => {
   const options = fixture(context);
   const logs = [];

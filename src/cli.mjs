@@ -20,7 +20,7 @@ const help = `Usage:
   roster --help
   roster ask "..."
   roster run --issue N
-  roster run --issue N --runtime builtin [--seats planner,coder] [--publish]
+  roster run --issue N --runtime builtin [--seats planner,coder] [--auto-model] [--publish]
   roster run --issue N --runtime builtin --seats planner,coder
   roster status [--issue N] [--offline]
   roster recipe validate PATH
@@ -94,7 +94,7 @@ async function main(args) {
   } else if (args[0] === 'run' && args.includes('--runtime')) {
     const options = runOptions(args.slice(1));
     await runBuiltinIssue(options.issue, { publish: options.publish, seats: options.seats,
-      repoRoot: rosterRoot });
+      autoModel: options.autoModel, repoRoot: rosterRoot });
   } else if (args[0] === 'status') {
     let issue;
     let offline = false;
@@ -153,14 +153,16 @@ async function main(args) {
   function runOptions(args) {
     const options = {};
     const seen = new Set();
-    const usage = 'Use roster run --issue N --runtime builtin [--seats planner,coder] [--publish].';
+    const usage = 'Use roster run --issue N --runtime builtin [--seats planner,coder] [--auto-model] [--publish].';
     for (let index = 0; index < args.length; index += 1) {
       const flag = args[index];
-      if (!['--issue', '--seat', '--seats', '--runtime', '--publish'].includes(flag) || seen.has(flag)) {
+      if (!['--issue', '--seat', '--seats', '--runtime', '--auto-model', '--publish'].includes(flag) ||
+          seen.has(flag)) {
         throw new TypeError(usage);
       }
       seen.add(flag);
       if (flag === '--publish') options.publish = true;
+      else if (flag === '--auto-model') options.autoModel = true;
       else {
         const value = args[++index];
         if (!value || value.startsWith('--')) throw new TypeError(usage);

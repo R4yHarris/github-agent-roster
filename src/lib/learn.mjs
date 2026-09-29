@@ -246,7 +246,8 @@ export function recommend(records, taskClass) {
   const groups = new Map();
   for (const record of records) {
     if ((record.task_class ?? inferTaskClass(record.task)) !== taskClass ||
-        !record.model || record.model === 'unknown' || !VERDICTS.includes(record.evaluation?.verdict)) {
+        !record.model || ['unknown', 'builtin-stub'].includes(record.model) ||
+        !VERDICTS.includes(record.evaluation?.verdict)) {
       continue;
     }
     const effort = record.effort ?? null;
