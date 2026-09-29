@@ -20,7 +20,9 @@ without editing the tracked example or storing credentials.
 - `llm.base_url`: OpenAI-compatible chat completions base (for example
   `http://localhost:1234/v1`). Empty with no selected `llm.profile` means a
   network-free deterministic stub. Select `ollama`, `lmstudio`, or `openai`
-  from `profiles` instead of setting a custom URL, then set `llm.model`.
+  from `profiles` instead of setting a custom URL, then set `llm.model` or
+  explicitly use `--auto-model` with an empty model. With fewer than three
+  matching human evaluations, auto-model runs the deterministic stub.
   Local endpoints may work without
   a key; when needed, set the environment variable named by `llm.api_key_env`
   or store an API key under that name in the file vault. A non-empty environment
@@ -87,7 +89,14 @@ must be reported, not treated as success.
 
 ```sh
 node src/cli.mjs run --issue 42 --runtime builtin
+node src/cli.mjs run --issue 42 --runtime builtin --auto-model
 ```
+
+`--auto-model` is opt-in and requires an empty configured model. It uses
+the issue title's recognized task class to select an evaluated model/effort
+pair with at least three distinct samples. The selection is only in memory:
+it does not rewrite `.roster/config.yml`. Insufficient data, an unknown
+task class, or no configured endpoint leaves the run in stub mode.
 
 Use `node src/cli.mjs status --issue 42` to read the issue, its open
 `issue-42` branch PR, and the local worktree path. Add `--offline` to read

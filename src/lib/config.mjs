@@ -190,7 +190,6 @@ export function parseConfig(source) {
   if (llm.model && !/^[A-Za-z0-9._:/-]+$/.test(llm.model)) invalid('llm.model must be a model name without whitespace');
   if (llm.base_url) {
     baseUrl(llm.base_url, 'llm.base_url');
-    if (!llm.model) invalid('llm.base_url requires a model');
   }
 
   const seat = config.seat;
@@ -257,7 +256,7 @@ export function loadConfig({ repoRoot = rosterRoot } = {}) {
 
 export async function setConfigValue(field, value, { repoRoot = rosterRoot } = {}) {
   if (!['model', 'effort'].includes(field) || typeof value !== 'string' ||
-      !value || /[\r\n\0]/.test(value)) {
+      (field === 'effort' && !value) || /[\r\n\0]/.test(value)) {
     throw new TypeError('Set a single-line llm.model or llm.effort value');
   }
   const file = path.join(repoRoot, '.roster', 'config.yml');

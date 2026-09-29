@@ -11,8 +11,11 @@ prepare-only. See [SDLC](SDLC.md) for execution and publishing.
 
 - `schema: 1` identifies the config shape.
 - `llm.base_url`, `llm.model`, and `llm.profile` are deliberately empty
-  strings. Choose a profile and model, or set a custom base URL and model;
-  the example does not select a provider or contact an endpoint.
+  strings. Choose a profile and model, or set a custom base URL and model.
+  With an empty model, only an explicit `run --auto-model` may choose from
+  human-evaluated runs; without it, a configured endpoint fails before
+  creating a worktree. The example does not select a provider or contact
+  an endpoint.
 - `profiles.ollama`, `profiles.lmstudio`, and `profiles.openai` define
   validated base URLs and API-key environment names. Selecting
   `llm.profile` uses that endpoint and key name; `llm.base_url` must then
@@ -44,7 +47,8 @@ available ID for `llm.model`. Keep local servers bound to loopback unless
 remote access is deliberately secured.
 In the interactive [Roster shell](REPL.md), `/model MODEL` and `/effort h`
 persist those two fields to ignored `.roster/config.yml` without editing the
-tracked example. Select the endpoint profile in that private config.
+tracked example. `/model clear` leaves the model empty for opt-in
+`/run N --auto-model`. Select the endpoint profile in that private config.
 
 ## Local profiles
 

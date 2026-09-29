@@ -20,7 +20,7 @@ const help = `Commands:
   /ask TEXT                 Create an issue, or draft one if gh is unavailable
   /model [MODEL]            Show or persist the LLM model
   /effort [l|m|h|x]         Show or persist the effort level
-  /run N                    Run the builtin planner and coder for issue N
+  /run N [--auto-model]     Run builtin seats, optionally routing from human evaluations
   /status [N] [--offline]   Show an issue, open PR, and local worktree
   /eval TARGET VERDICT 1-5 y|n
   /publish [SUBJECT]        Publish reviewed changes (conventional subject)
@@ -138,8 +138,8 @@ export function createDispatcher({
           output.write(`Model: ${state.config.llm.model || '(unset)'}\n`);
           return true;
         }
-        state.config = await api.setConfigValue('model', args, { repoRoot });
-        output.write(`Model: ${state.config.llm.model}\n`);
+        state.config = await api.setConfigValue('model', args === 'clear' ? '' : args, { repoRoot });
+        output.write(`Model: ${state.config.llm.model || '(unset)'}\n`);
         return true;
       }
       case 'effort': {
@@ -152,11 +152,12 @@ export function createDispatcher({
         return true;
       }
       case 'run': {
-        const issue = /^(?:--issue\s+)?([1-9]\d*)$/.exec(args);
-        if (!issue) throw new TypeError('Use /run N or /run --issue N.');
+        const issue = /^(?:--issue\s+)?([1-9]\d*)(?:\s+--auto-model)?$/.exec(args);
+        if (!issue) throw new TypeError('Use /run N [--auto-model] or /run --issue N [--auto-model].');
+        const autoModel = args.endsWith(' --auto-model');
         const messages = [];
         state.lastRun = await api.runBuiltinIssue(issue[1], {
-          cwd, repoRoot, config: state.config, env, publish: false,
+          cwd, repoRoot, config: state.config, env, publish: false, autoModel,
           log: (message) => messages.push(message),
         });
         state.published = false;

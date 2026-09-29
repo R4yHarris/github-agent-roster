@@ -12,7 +12,7 @@ agents and CI.
 | `/ask TEXT` | Create an issue through `gh`, or write a local Ask, recipe, task, and create command when `gh` is missing. |
 | `/model [MODEL]` | Show the current model or persist a new one to ignored `.roster/config.yml`. |
 | `/effort [l|m|h|x]` | Show the current effort or persist a new level to ignored `.roster/config.yml`. |
-| `/run N` or `/run --issue N` | Run the builtin planner then coder in one issue worktree. The stub writes a task and result, but does not edit code or test. |
+| `/run N [--auto-model]` or `/run --issue N [--auto-model]` | Run the builtin planner then coder in one issue worktree. The optional flag routes an empty configured model only with enough human evaluations; otherwise the stub writes a task and result without editing code or testing. |
 | `/status [N] [--offline]` | Show an issue, its open branch PR, and worktree path. Defaults to the last run or created issue; offline reads only the cached assignment and reports PR state as unknown. |
 | `/eval TARGET accept|reject|rework 1-5 y|n` | Record a human evaluation through the existing evaluation library. |
 | `/publish [SUBJECT]` | Publish reviewed changes using the pinned contracts SDK. After `/run N`, the default subject is `feat: issue N`; a confirmed merge comments on and closes that issue. Otherwise supply a conventional subject. |
@@ -34,6 +34,10 @@ Roster CLI process or add a queue.
 fields in the private config, keeping the other fields and comments. The
 updated values apply to the next `/run` in this shell. With no selected
 endpoint or profile, setting a model alone still leaves the stub active.
+`/model clear` leaves the model empty; `/run N --auto-model` can then apply
+a recommendation in memory only when at least three matching human
+evaluations exist. Without that flag, an empty model with a configured
+endpoint is an explicit error.
 Running `/model` or `/effort` without a value shows the current setting.
 Do not put API key values in the config; it remains ignored by Git.
 

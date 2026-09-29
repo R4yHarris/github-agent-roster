@@ -45,7 +45,7 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
           taskPath: 'TASK.md', command: 'gh issue create --body-file ask.md' };
       },
       runBuiltinIssue: async (issue, options) => {
-        calls.push(['run', issue, options.publish, options.config.llm.model,
+        calls.push(['run', issue, options.publish, options.autoModel, options.config.llm.model,
           options.config.llm.effort]);
         options.log('Worktree: issue-42\n' +
           'node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue 42" --merge-when-green');
@@ -115,7 +115,7 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
     ['ask', 'Add a status section.'],
     ['set-config', 'model', 'local-model'],
     ['set-config', 'effort', 'h'],
-    ['run', '42', false, 'local-model', 'h'],
+    ['run', '42', false, false, 'local-model', 'h'],
     ['status', 42, false],
     ['status', 42, true],
     ['eval', 'roster-42-coder', 'accept', '3', 'n', cwd],
@@ -139,6 +139,27 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
   assert.match(output.text, /ROSTER_TOKEN is stored \(value hidden/);
   assert.match(errorOutput.text, /Unknown command: \/unknown/);
   assert.match(errorOutput.text, /Unknown command: plain/);
+});
+
+test('/model clear and /run --auto-model opt into routing without persisting a selection', async () => {
+  const calls = [];
+  const shell = dispatcher({
+    services: {
+      setConfigValue: async (field, value) => {
+        calls.push(['set', field, value]);
+        return { ...config, llm: { ...config.llm, model: value } };
+      },
+      runBuiltinIssue: async (issue, options) => {
+        calls.push(['run', issue, options.autoModel, options.config.llm.model]);
+        return { issue: { number: 42 }, task: 'issue-42', repoRoot: cwd,
+          worktreePath: join(cwd, '.worktrees', 'issue-42') };
+      },
+    },
+  });
+  await shell.dispatch('/model clear');
+  await shell.dispatch('/run 42 --auto-model');
+  assert.deepEqual(calls, [['set', 'model', ''], ['run', '42', true, '']]);
+  assert.match(shell.output.text, /Model: \(unset\)/);
 });
 
 test('slash ask prints the created issue URL when gh is available', async () => {

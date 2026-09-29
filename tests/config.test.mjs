@@ -63,6 +63,20 @@ test('named profiles select local or hosted endpoint and API-key name without se
   }
 });
 
+test('an endpoint with an empty model remains valid for explicitly gated auto-model routing', async (context) => {
+  const selected = parseConfig(example.replace('profile: ""', 'profile: ollama'));
+  assert.equal(selected.llm.model, '');
+  assert.equal(selected.llm.base_url, 'http://127.0.0.1:11434/v1');
+
+  const repoRoot = fixture(context);
+  mkdirSync(join(repoRoot, '.roster'));
+  writeFileSync(join(repoRoot, '.roster', 'config.yml'),
+    example.replace('profile: ""', 'profile: ollama').replace('model: ""', 'model: earlier-model'));
+  const cleared = await setConfigValue('model', '', { repoRoot });
+  assert.equal(cleared.llm.model, '');
+  assert.equal(loadConfig({ repoRoot }).llm.base_url, 'http://127.0.0.1:11434/v1');
+});
+
 test('private config overrides the example without resolving or logging the API key', (context) => {
   const repoRoot = fixture(context);
   mkdirSync(join(repoRoot, '.roster'));
@@ -137,7 +151,6 @@ test('rejects invalid schema, fields, roles, paths, tool names, and endpoint set
     ['effort', example.replace('effort: m ', 'effort: max ')],
     ['traversal', example.replace('skills: skills', 'skills: ../outside')],
     ['absolute', example.replace('skills: skills', 'skills: C:\\outside')],
-    ['no model', example.replace('base_url: ""', 'base_url: http://localhost:1234/v1')],
     ['credentials', example.replace('base_url: ""', 'base_url: https://name:secret@api.example/v1')
       .replace('model: ""', 'model: test-model')],
   ]) {

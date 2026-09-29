@@ -60,6 +60,9 @@ The Node 20 ESM CLI supports both the builtin loop and a manual handoff:
   a printable `gh issue create` command.
 - `run --issue N --runtime builtin` runs builtin planner then coder in one
   worktree. `--seats planner,coder` is optional; publishing requires `--publish`.
+- `run --issue N --runtime builtin --auto-model` opts into an evaluated model
+  only when the configured model is empty and at least three matching human
+  evaluations exist; otherwise it keeps the stub.
 - `run --issue N` reads a GitHub issue, creates one coder worktree, writes the
   assignment and ignored `.env`, and prints the next publishing command. It
   does not launch Hermes or any other worker.
@@ -112,6 +115,7 @@ node src/cli.mjs --help
 node src/cli.mjs ask "Add a Status section to README.md"
 node src/cli.mjs run --issue 42
 node src/cli.mjs run --issue 42 --runtime builtin
+node src/cli.mjs run --issue 42 --runtime builtin --auto-model
 node src/cli.mjs recipe validate recipe.yml
 node src/cli.mjs stats --ref HEAD --evals evals.jsonl
 node src/cli.mjs vault list

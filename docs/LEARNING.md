@@ -131,8 +131,8 @@ Recommendations group by **task class, model, and effort**. Classification uses
 `task_class` when present, otherwise a conventional task prefix such as
 `feat-auth`, `fix.cli`, `docs-guide`, or `test-unit`. Issue titles such as
 `feat(cli): add a flag` supply the class when roster records the assignment.
-Opaque tasks like `issue-42` are not guessed into a class. Unknown models are
-not candidates.
+Opaque tasks like `issue-42` are not guessed into a class. Unknown models and
+the deterministic `builtin-stub` are not candidates.
 
 For each configuration:
 
@@ -157,8 +157,11 @@ feat: careful-model effort=h accept-rate=66.7% n=3
 ```
 
 If no configuration qualifies, the exact output is `insufficient data`.
-Recommendations are read-only suggestions; they do not change the worker,
-recipe, policy, or publishing configuration.
+`roster recommend` is read-only. Only
+`roster run --issue N --runtime builtin --auto-model` with an empty configured
+model applies a qualifying suggestion
+to that run's planner and coder, without editing private config or policy.
+Fewer than three evaluated samples keep the run on the deterministic stub.
 
 Both `.roster/runs/` and `.roster/evals.jsonl` are ignored by Git. Keep human
 feedback local unless the human explicitly posts the optional PR comment.

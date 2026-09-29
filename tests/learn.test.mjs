@@ -109,6 +109,7 @@ test('uses deterministic ties, with larger evaluated samples ahead of model name
   assert.equal(recommend([...samples('a', 3), ...samples('z', 4)], 'test').model, 'z');
   assert.equal(recommend([...samples('z', 3), ...samples('a', 3)], 'test').model, 'a');
   assert.equal(recommend(samples('unknown', 3), 'test'), null);
+  assert.equal(recommend(samples('builtin-stub', 3), 'test'), null);
 });
 
 test('recognizes only explicit classes and conventional task/title prefixes', () => {
