@@ -5,7 +5,7 @@ Roster is the team control plane: its builtin planner and coder seats run in
 sequence in one process and issue worktree. The planner writes a recipe and
 task; the coder can edit code with an OpenAI-compatible model, run tests, and
 prepare a PR. No Hermes, Claude Code, or Copilot worker is required. GitHub
-Issues and PRs remain the board and forge.
+Issues and PRs remain the [board and forge](docs/BOARD.md).
 
 [github-agent-contracts](https://github.com/R4yHarris/github-agent-contracts)
 is the **GitHub publish SDK**, consumed as a required
@@ -142,6 +142,7 @@ See [the one-task loop](docs/ONE_TASK_LOOP.md), [same-session seats](docs/MULTIA
 [the human shell](docs/REPL.md), [recipes](docs/SEATS.md), and
 [metrics](docs/METRICS.md), [learning](docs/LEARNING.md),
 [LLM configuration and the vault](docs/LLM.md), [builtin tools](docs/TOOLS.md),
+[the GitHub board](docs/BOARD.md),
 [SDLC](docs/SDLC.md), and
 [principals](docs/PRINCIPALS.md) for details.
 
