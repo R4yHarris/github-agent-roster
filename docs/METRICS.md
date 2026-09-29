@@ -1,13 +1,15 @@
 # Local metrics
 
-The builtin coder's [`buildRun`](../src/metrics/run.mjs) constructs a compact
-schema 1 AI-Run line from configured model/effort/context limit, issue
-session/task IDs, and token counts **reported** by the planner and coder chat
-responses. Unknown provider, version, context, or counts stay unset (`-` in
-the compact line); a missing usage report makes the corresponding aggregate
-count unknown rather than an estimate. The publisher receives only known
-`AI_*` environment fields, not the model API key. The empty-URL stub produces
-no AI-Run line. Contracts still owns the trailer format and publication.
+[`buildRun`](../src/metrics/run.mjs) constructs two compact schema 1 AI-Run
+lines in a builtin issue run: one for `roster-N-planner` from planner token
+reports and one for `roster-N-coder` from coder token reports. Both use task
+`issue-N`. Unknown provider, version, context, or counts stay unset (`-` in
+the compact line); a missing usage report never becomes an estimate. The
+empty-URL stub emits both seat records labeled `builtin-stub`, with no
+invented LLM usage. The publisher receives the coder's known `AI_*` fields
+only, not the model API key: the contracts SDK supports one AI-Run trailer per
+published code commit. Both seat runs are printed and, when local learning
+is enabled, recorded separately. Contracts owns the trailer format.
 
 `src/lib/metrics.mjs` reads compact AI-Run JSONL by invoking contracts
 `scripts/export-agent-metrics.mjs` with Node. Contracts resolution checks the

@@ -6,6 +6,7 @@ import { TextDecoder } from 'node:util';
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
 const fields = {
   llm: ['base_url', 'model', 'api_key_env', 'effort', 'context_max'],
+  planner: ['turn_budget'],
   seat: ['id', 'principal', 'turn_budget', 'tools'],
   paths: ['memory', 'skills', 'asks', 'worktrees'],
 };
@@ -71,7 +72,7 @@ export function parseConfig(source) {
   if (typeof source !== 'string' || Buffer.byteLength(source, 'utf8') > 65_536) {
     invalid('expected UTF-8 text of at most 64 KiB');
   }
-  const config = { llm: {}, seat: {}, paths: {} };
+  const config = { llm: {}, planner: {}, seat: {}, paths: {} };
   const roots = new Set();
   let section;
   for (const [index, original] of source.replace(/\r\n/g, '\n').split('\n').entries()) {
@@ -99,9 +100,11 @@ export function parseConfig(source) {
       invalid(`${match[1]} must be a mapping`);
     }
   }
-  if (roots.size !== 4 || Object.entries(fields).some(([name, required]) =>
-    required.some((field) => !Object.hasOwn(config[name], field)))) {
-    invalid('schema, llm, seat, and paths must contain every documented field');
+  if (!roots.has('schema') ||
+      ['llm', 'seat', 'paths'].some((name) =>
+        !roots.has(name) || fields[name].some((field) => !Object.hasOwn(config[name], field))) ||
+      (roots.has('planner') && !Object.hasOwn(config.planner, 'turn_budget'))) {
+    invalid('schema, llm, seat, paths, and optional planner must contain every documented field');
   }
 
   const llm = config.llm;
@@ -142,6 +145,13 @@ export function parseConfig(source) {
   }
   seat.tools = Object.freeze(seat.tools);
 
+  const planner = config.planner;
+  planner.turn_budget = roots.has('planner')
+    ? integerValue(planner.turn_budget, 'planner.turn_budget') : 1;
+  if (planner.turn_budget < 1 || planner.turn_budget > 64) {
+    invalid('planner.turn_budget must be between 1 and 64');
+  }
+
   for (const name of fields.paths) {
     config.paths[name] = relativePath(stringValue(config.paths[name], `paths.${name}`), `paths.${name}`);
   }
@@ -149,6 +159,7 @@ export function parseConfig(source) {
   return Object.freeze({
     schema: 1,
     llm: Object.freeze(llm),
+    planner: Object.freeze(planner),
     seat: Object.freeze(seat),
     paths: Object.freeze(config.paths),
   });

@@ -1,6 +1,7 @@
 # Roster threat model
 
-This model covers one coder worker, its worktree and tools, and publication
+This model covers the sequential builtin planner and coder, their shared
+worktree, the coder's tools, and publication
 through the contracts dependency. It defines the required boundaries for the
 later unattended WSL worker; it does not claim that the roster CLI is a sandbox.
 See [principals](PRINCIPALS.md) for the seat-to-role mapping.
@@ -68,7 +69,8 @@ the coder worker.
 
 The contracts publisher checks coder grants against reviewed policy and refuses
 policy and workflow changes. Those publication checks are not a filesystem
-write sandbox. The [builtin tools](../src/runtime/tools.mjs) enforce task
+write sandbox. The planner has no model-invokable tools and writes only
+validated recipe/task files. The [builtin coder tools](../src/runtime/tools.mjs) enforce task
 allowlists, reject path and symlink escapes, and deny writes to Git metadata,
 recognized environment files, PEMs, policy, workflows, and generated task files.
 These application-level guards are not complete enforcement of every required

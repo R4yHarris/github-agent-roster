@@ -76,6 +76,7 @@ ${issue.body}
   ]);
   assert.deepEqual(result, {
     issue,
+    repoRoot,
     worktreePath,
     assignmentPath: path.join(worktreePath, 'ASSIGNMENT.md'),
     envPath: path.join(worktreePath, '.env'),
@@ -86,6 +87,17 @@ ${issue.body}
   assert.equal(messages.length, 1);
   assert.match(messages[0], /After editing inside the worktree, load \.env/);
   assert.ok(messages[0].endsWith(nextCommand));
+});
+
+test('builtin preparation can set a seat session without a third preparation run', async () => {
+  const { writes, options } = harness();
+  const result = await runIssue(42, {
+    ...options, sessionId: 'roster-42-coder', recordPreparation: false,
+  });
+  assert.equal(result.session, 'roster-42-coder');
+  assert.equal(writes.find(({ file }) => file?.endsWith('.env')).content,
+    'AI_TASK=issue-42\nAI_SESSION=roster-42-coder\n');
+  await assert.rejects(runIssue(42, { ...options, sessionId: 'bad\nsession' }), /Session ID/);
 });
 
 test('rejects invalid issue numbers before invoking git or gh', async () => {

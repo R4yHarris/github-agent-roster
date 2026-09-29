@@ -17,7 +17,7 @@ const help = `Usage:
   roster --help
   roster ask "..."
   roster run --issue N
-  roster run --issue N --seat coder --runtime builtin [--publish]
+  roster run --issue N --runtime builtin [--seats planner,coder] [--publish]
   roster recipe validate PATH
   roster stats [--ref REVISION_OR_RANGE] [--evals PATH]
   roster vault set NAME
@@ -26,8 +26,8 @@ const help = `Usage:
   roster recommend --task-class feat|fix|docs|test
 
 Ask drafts an offline task. Bare run prepares the legacy worktree; builtin run
-plans and executes one coder. Publishing is opt-in. Recipe validates strict v0
-seat YAML. Stats joins contracts AI-Run history with local runs and human evals.
+plans and executes planner then coder in one worktree. Publishing is opt-in.
+Recipe validates strict v0 seat YAML. Stats joins contracts AI-Run history with local runs and human evals.
 Eval records a human decision locally. Recommend needs at least 3 evaluated runs.
 Vault set reads a secret from stdin; vault list prints names, never values.
 `;
@@ -73,7 +73,7 @@ async function main(args) {
     await runIssue(args[2]);
   } else if (args[0] === 'run' && args.includes('--runtime')) {
     const options = runOptions(args.slice(1));
-    await runBuiltinIssue(options.issue, { publish: options.publish,
+    await runBuiltinIssue(options.issue, { publish: options.publish, seats: options.seats,
       repoRoot: rosterRoot });
   } else if (args.length === 3 && args[0] === 'recipe' && args[1] === 'validate') {
     validateRecipe(args[2]);
@@ -111,19 +111,27 @@ async function main(args) {
   function runOptions(args) {
     const options = {};
     const seen = new Set();
+    const usage = 'Use roster run --issue N --runtime builtin [--seats planner,coder] [--publish].';
     for (let index = 0; index < args.length; index += 1) {
       const flag = args[index];
-      if (!['--issue', '--seat', '--runtime', '--publish'].includes(flag) || seen.has(flag)) {
-        throw new TypeError('Use roster run --issue N --seat coder --runtime builtin [--publish].');
+      if (!['--issue', '--seat', '--seats', '--runtime', '--publish'].includes(flag) || seen.has(flag)) {
+        throw new TypeError(usage);
       }
       seen.add(flag);
       if (flag === '--publish') options.publish = true;
-      else options[flag.slice(2)] = args[++index];
+      else {
+        const value = args[++index];
+        if (!value || value.startsWith('--')) throw new TypeError(usage);
+        options[flag.slice(2)] = value;
+      }
     }
-    if (!options.issue || options.seat !== 'coder' || options.runtime !== 'builtin') {
-      throw new TypeError('Use roster run --issue N --seat coder --runtime builtin [--publish].');
+    if (!options.issue || options.runtime !== 'builtin' ||
+        (options.seat !== undefined && options.seat !== 'coder') ||
+        (options.seats !== undefined && options.seats !== 'planner,coder') ||
+        (options.seat !== undefined && options.seats !== undefined)) {
+      throw new TypeError(usage);
     }
-    return options;
+    return { ...options, seats: 'planner,coder' };
   }
 }
 

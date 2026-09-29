@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { inferTaskClass, recordRun } from './learn.mjs';
+import { IDENTIFIER, inferTaskClass, recordRun } from './learn.mjs';
 import { renderAssignment } from '../planner/stub.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -40,9 +40,17 @@ export async function runIssue(issueNumber, {
   log = console.log,
   worktrees = '.worktrees',
   beforeWorktree = async () => {},
+  sessionId,
+  recordPreparation = true,
 } = {}) {
   if (!/^[1-9]\d*$/.test(String(issueNumber)) || !Number.isSafeInteger(Number(issueNumber))) {
     throw new TypeError('Issue number must be a positive safe integer');
+  }
+  if (sessionId !== undefined && (typeof sessionId !== 'string' || !IDENTIFIER.test(sessionId))) {
+    throw new TypeError('Session ID must be an opaque identifier of at most 64 characters');
+  }
+  if (typeof recordPreparation !== 'boolean') {
+    throw new TypeError('recordPreparation must be a boolean');
   }
   if (typeof worktrees !== 'string' || !worktrees || path.isAbsolute(worktrees) ||
       path.win32.isAbsolute(worktrees) ||
@@ -91,7 +99,7 @@ export async function runIssue(issueNumber, {
   const worktreePath = path.join(repoRoot, worktrees, task);
   const assignmentPath = path.join(worktreePath, 'ASSIGNMENT.md');
   const envPath = path.join(worktreePath, '.env');
-  const session = `roster-${now().toISOString().replace(/[-:.]/g, '')}`;
+  const session = sessionId ?? `roster-${now().toISOString().replace(/[-:.]/g, '')}`;
   const nextCommand = `node $GITHUB_AGENT_CONTRACTS/scripts/agent-pr.mjs --message "feat: issue ${number}"`;
 
   await beforeWorktree(repoRoot, worktreePath);
@@ -110,12 +118,14 @@ export async function runIssue(issueNumber, {
     throw new Error(`Worktree ${worktreePath} was created but assignment setup failed: ${error.message}`, { cause: error });
   }
 
-  try {
-    await recordRun({ session, task, task_class: inferTaskClass(issue.title) }, {
-      cwd: repoRoot, env, fileSystem,
-    });
-  } catch (error) {
-    throw new Error(`Worktree ${worktreePath} was prepared but run recording failed: ${error.message}`, { cause: error });
+  if (recordPreparation) {
+    try {
+      await recordRun({ session, task, task_class: inferTaskClass(issue.title) }, {
+        cwd: repoRoot, env, fileSystem,
+      });
+    } catch (error) {
+      throw new Error(`Worktree ${worktreePath} was prepared but run recording failed: ${error.message}`, { cause: error });
+    }
   }
 
   log(`Worktree: ${worktreePath}
@@ -124,5 +134,5 @@ Environment: ${envPath}
 After editing inside the worktree, load .env into the worker environment and run:
 ${nextCommand}`);
 
-  return { issue, worktreePath, assignmentPath, envPath, task, session, nextCommand };
+  return { issue, repoRoot, worktreePath, assignmentPath, envPath, task, session, nextCommand };
 }

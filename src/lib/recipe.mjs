@@ -4,7 +4,10 @@ import { TextDecoder } from "node:util";
 const MAX_RECIPE_BYTES = 65_536;
 const SEAT_IDS = ["planner", "coder"];
 const WORKERS = ["copilot", "hermes", "builtin"];
-const BUILTIN_SEQUENCE = ["load_context", "implement", "run_tests", "summarize"];
+const BUILTIN_SEQUENCES = {
+  planner: ["read_ask", "plan", "write_task"],
+  coder: ["load_context", "implement", "run_tests", "summarize"],
+};
 
 export class RecipeError extends Error {}
 
@@ -32,13 +35,12 @@ export function parseRecipe(source) {
     ) invalidRecipe();
     const builtin = fields.worker === "builtin";
     if (builtin !== Object.hasOwn(fields, "sequence") ||
-        (builtin && (fields.id !== "coder" ||
-          fields.sequence !== `[${BUILTIN_SEQUENCE.join(", ")}]`))) invalidRecipe();
+        (builtin && fields.sequence !== `[${BUILTIN_SEQUENCES[fields.id].join(", ")}]`)) invalidRecipe();
     seats.push(Object.freeze({
       id: fields.id,
       principal: fields.principal,
       worker: fields.worker,
-      ...(builtin ? { sequence: Object.freeze([...BUILTIN_SEQUENCE]) } : {}),
+      ...(builtin ? { sequence: Object.freeze([...BUILTIN_SEQUENCES[fields.id]]) } : {}),
     }));
     seatIds.add(fields.id);
     fields = undefined;

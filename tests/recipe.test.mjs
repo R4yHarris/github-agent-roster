@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -36,6 +36,19 @@ test("parses the version 1 planner/coder recipe without granting capabilities", 
   assert.equal(Object.isFrozen(recipe.seats), true);
   assert.equal(Object.isFrozen(recipe.seats[0]), true);
   assert.throws(() => { recipe.seats[0].principal = "merger"; }, TypeError);
+});
+
+test("accepts exactly the builtin planner then coder sequence", () => {
+  const source = readFileSync(new URL("../templates/sdlc/RECIPE.yml", import.meta.url), "utf8")
+    .replace("issue:N", "issue:42");
+  assert.deepEqual(parseRecipe(source).seats, [
+    { id: "planner", principal: "coder", worker: "builtin",
+      sequence: ["read_ask", "plan", "write_task"] },
+    { id: "coder", principal: "coder", worker: "builtin",
+      sequence: ["load_context", "implement", "run_tests", "summarize"] },
+  ]);
+  assert.throws(() => parseRecipe(source.replace("read_ask, plan, write_task", "write_file")),
+    RecipeError);
 });
 
 test("supports comments, CRLF, unordered keys, and a single coder seat", () => {

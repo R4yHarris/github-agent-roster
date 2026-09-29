@@ -3,7 +3,7 @@
 Start with a local OpenAI-compatible server. The
 [schema 1 config example](../roster.config.example.yml) supplies defaults for
 the builtin planner and coder. Copy it to ignored `.roster/config.yml` to
-configure the opt-in `run --issue N --seat coder --runtime builtin` path.
+configure the opt-in `run --issue N --runtime builtin` path.
 An empty endpoint keeps the deterministic stub; bare `run --issue N` remains
 prepare-only. See [SDLC](SDLC.md) for execution and publishing.
 
@@ -18,15 +18,17 @@ prepare-only. See [SDLC](SDLC.md) for execution and publishing.
   required.
 - `llm.effort: m` records medium effort and `llm.context_max: 0` means an unknown
   context limit. These are run metadata, not provider-specific request options.
-- `seat.id: coder` and `seat.principal: coder` select the builtin seat and
-  contracts role. `seat.turn_budget` bounds the loop and `seat.tools` lists its
-  allowed tools. The human-owned policy still governs publishing.
+- `planner.turn_budget` bounds the planner's JSON responses; it has no file
+  tools. `seat.id: coder` and `seat.principal: coder` select the coder and
+  contracts role. `seat.turn_budget` bounds the coder loop and `seat.tools`
+  lists its allowed tools. The human-owned policy still governs publishing.
 - `paths.memory` names the `.roster/memory/coder.jsonl` memory file.
   `paths.skills`, `paths.asks`, and `paths.worktrees` name repository-relative
   directories (`skills`, `.roster/asks`, and `.worktrees`). GitHub issues and PRs
   remain the work queue.
 
-Keep every field in the example when overriding configuration. The separate
+Keep every field in the example when overriding configuration. Older private
+configs without `planner` remain valid with a one-turn planner. The separate
 [chat factory and vault](LLM.md) accept an in-memory API with
 `llm.api_key_optional` and `llm.api_key_name`; those are not builtin YAML fields.
 

@@ -1,8 +1,9 @@
 # github-agent-roster
 
 A standalone Node 20 ESM coding-agent orchestrator for software tasks.
-Roster is the team control plane: its **builtin coder seat** can plan an issue,
-edit an isolated worktree with an OpenAI-compatible model, run tests, and
+Roster is the team control plane: its builtin planner and coder seats run in
+sequence in one process and issue worktree. The planner writes a recipe and
+task; the coder can edit code with an OpenAI-compatible model, run tests, and
 prepare a PR. No Hermes, Claude Code, or Copilot worker is required. GitHub
 Issues and PRs remain the board and forge.
 
@@ -25,18 +26,18 @@ There is no separate Kanban database, and Roster does not replace Git.
 ## MVP path
 
 ```text
-config -> explicit /v1 endpoint -> one builtin coder seat -> tests -> agent-pr -> AI-Eval
+config -> explicit /v1 endpoint -> planner -> coder -> tests -> agent-pr -> AI-Eval
 ```
 
-1. **Config:** select the model, endpoint, and single coder seat. The CLI uses
+1. **Config:** select the model, endpoint, and per-seat turn budgets. The CLI uses
    the current repository's GitHub origin and the supplied issue number.
    Keep secrets out of committed configuration.
 2. **Local or hosted `/v1` endpoint:** explicitly connect the coder to an
    OpenAI-compatible model, with any required key supplied through the configured
    environment variable. No hosted service is selected by default.
-3. **One coder seat:** work on the issue in an isolated Git worktree with the
-   assignment, recipe, acceptance checks, skills, and bounded recent memory.
-   The LLM path must pass `node --test` after its last edit.
+3. **Two sequential seats:** the planner writes the recipe and task in an
+   isolated Git worktree; the coder reads them with skills and bounded memory.
+   The LLM coder must pass `node --test` after its last edit.
 4. **`agent-pr`:** optionally publish reviewed changes through the contracts SDK
    under the GitHub App identity, subject to human-owned policy.
 5. **`AI-Eval`:** a human reviews the PR and posts an `AI-Eval:` comment.
@@ -52,8 +53,8 @@ vault lookup is not wired into the builtin client.
 The Node 20 ESM CLI supports both the builtin loop and a manual handoff:
 
 - `ask "..."` drafts a local ask, recipe, and task; it does not create an issue.
-- `run --issue N --seat coder --runtime builtin` plans and executes the builtin
-  coder. Publishing requires the explicit `--publish` flag.
+- `run --issue N --runtime builtin` runs builtin planner then coder in one
+  worktree. `--seats planner,coder` is optional; publishing requires `--publish`.
 - `run --issue N` reads a GitHub issue, creates one coder worktree, writes the
   assignment and ignored `.env`, and prints the next publishing command. It
   does not launch Hermes or any other worker.
@@ -99,7 +100,7 @@ Tests run with no API key or model endpoint.
 node src/cli.mjs --help
 node src/cli.mjs ask "Add a Status section to README.md"
 node src/cli.mjs run --issue 42
-node src/cli.mjs run --issue 42 --seat coder --runtime builtin
+node src/cli.mjs run --issue 42 --runtime builtin
 node src/cli.mjs recipe validate recipe.yml
 node src/cli.mjs stats --ref HEAD --evals evals.jsonl
 node src/cli.mjs vault list
@@ -117,7 +118,7 @@ the current repository's GitHub origin. The builtin path creates
 `.worktrees/issue-N`, writes `ASSIGNMENT.md`, `RECIPE.yml`, and `TASK.md`, runs
 the coder, and prints a publishing command. Bare `run --issue N` remains
 prepare-only. For a manual handoff, load the generated ignored `.env` into the
-worker environment before publishing.
+worker environment before publishing. See [same-session seats](docs/MULTIAGENT.md).
 
 Create `.roster/runs` at the repository root to opt into successful-run JSONL
 recording. `stats` joins local Git history through the resolved contracts pack
@@ -126,7 +127,8 @@ Human `eval` appends a decision, never the coder path. `recommend` suggests the
 highest accept-rate only with at least three evaluated samples, otherwise
 printing `insufficient data`. Nothing fetches human evaluations from GitHub.
 
-See [the one-task loop](docs/ONE_TASK_LOOP.md), [seats](docs/SEATS.md), and
+See [the one-task loop](docs/ONE_TASK_LOOP.md), [same-session seats](docs/MULTIAGENT.md),
+[recipes](docs/SEATS.md), and
 [metrics](docs/METRICS.md), [learning](docs/LEARNING.md),
 [LLM configuration and the vault](docs/LLM.md), [SDLC](docs/SDLC.md), and
 [principals](docs/PRINCIPALS.md) for details.

@@ -1,9 +1,10 @@
 # One-task loop
 
-The builtin path is `roster run --issue N --seat coder --runtime builtin`
-([SDLC](SDLC.md)). It reads the existing issue, creates one coder worktree,
-generates `RECIPE.yml` and `TASK.md`, loads roster context/skills/memory,
-executes the bounded coder loop, and writes `RESULT.md`. When no LLM endpoint
+The builtin path is `roster run --issue N --runtime builtin`
+([SDLC](SDLC.md)). It reads the existing issue, creates one worktree, runs a
+builtin planner to write `RECIPE.yml` and `TASK.md`, then loads roster
+context/skills/memory into the bounded coder loop and writes `RESULT.md`.
+When no LLM endpoint
 is configured, the deterministic stub writes only the result summary and
 does **not** implement the ask or run tests. With an endpoint, the coder uses
 four guarded tools and must pass a final `node --test` run. It prints
@@ -62,11 +63,13 @@ the worker environment, normally the initialized `vendor/github-agent-contracts`
 submodule; see [dependency resolution](DEPENDENCY.md). The printed command uses
 POSIX shell variable syntax; PowerShell
 users must use their shell's environment-variable syntax when executing it.
-Without the explicit `--seat coder --runtime builtin` flags, this module only
-prepares one coder seat and prints the legacy publishing command: it does not
+Without `--runtime builtin`, this module only prepares a coder handoff and
+prints the legacy publishing command: it does not
 start a worker, merge, or open additional issues. Merge remains
 human-controlled. The builtin path reuses this issue lookup and assignment
-preparation, rendering `ASSIGNMENT.md` from the SDLC template.
+preparation, rendering `ASSIGNMENT.md` from the SDLC template, but sets the
+ignored `.env` session to `roster-N-coder` and records separate planner/coder
+sessions. See [same-session seats](MULTIAGENT.md).
 
 Tests inject `runCommand`, `fileSystem`, `env`, `now`, and `log` into `runIssue` to
 simulate git, gh, file writes, timestamps, and output without a network call.

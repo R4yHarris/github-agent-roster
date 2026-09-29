@@ -1,4 +1,4 @@
-# Builtin single-seat SDLC
+# Builtin sequential-seat SDLC
 
 The roster is the planner and executor. The required
 [`github-agent-contracts`](../vendor/github-agent-contracts) submodule is only
@@ -24,9 +24,12 @@ Git repository). Ignore a custom worktrees path yourself if you change it.
 - `llm.effort` (`l|m|h|x`) and `llm.context_max` (zero means unknown) describe
   provenance for AI-Run. They are not guessed from the endpoint or sent as a
   model-specific reasoning parameter.
+- `planner.turn_budget` bounds planning chat responses to 1-64 (example: 2).
+  The planner has no file tools and writes only validated plan artifacts.
+  Private schema 1 configs predating the planner section use a one-turn planner.
 - `seat.id` and `seat.principal` are both `coder`. The principal does not confer
-  merge or deploy rights. `turn_budget` limits chat responses to 1-64; the
-  example uses 8. `tools` can only name the four builtin tools.
+  merge or deploy rights. `seat.turn_budget` limits coder responses to 1-64
+  (example: 8). `seat.tools` can only name the four builtin tools.
 - `paths.memory` is JSONL (last 20 entries enter context); `paths.skills`
   loads `*/SKILL.md` from **this** checkout; `paths.asks` holds local drafts;
   `paths.worktrees` selects a path inside the issue repository.
@@ -38,8 +41,8 @@ Git repository). Ignore a custom worktrees path yourself if you change it.
 [`RECIPE.yml`](../templates/sdlc/RECIPE.yml),
 [`TASK.md`](../templates/sdlc/TASK.md), and
 [`ASSIGNMENT.md`](../templates/sdlc/ASSIGNMENT.md).
-The generated recipe has one `coder` seat with `principal: coder`,
-`worker: builtin`, and the fixed sequence
+The generated recipe has builtin `planner` then `coder` seats with principal
+`coder`. Their fixed sequences are `[read_ask, plan, write_task]` and
 `[load_context, implement, run_tests, summarize]`. It assigns work, not GitHub
 capabilities.
 
@@ -68,14 +71,15 @@ must be reported, not treated as success.
 ## Execute and publish
 
 ```sh
-node src/cli.mjs run --issue 42 --seat coder --runtime builtin
+node src/cli.mjs run --issue 42 --runtime builtin
 ```
 
 The command uses the current Git repository's GitHub origin, authenticated
 `gh issue view`, and branch `issue-42` in `.worktrees/issue-42`. It writes
 `ASSIGNMENT.md`, `RECIPE.yml`, `TASK.md`, and an ignored `.env` containing
-`AI_TASK` and `AI_SESSION`. The coder reads that worktree's `AGENTS.md` and
-`TASK.md`, this roster's skills, and the last 20 memory JSONL lines. Its
+`AI_TASK` and the coder's `AI_SESSION`. The planner writes only `RECIPE.yml`
+and `TASK.md`; the coder reads that worktree's `AGENTS.md`, `TASK.md`, this
+roster's skills, and the last 20 memory JSONL lines. Its
 `read_file`, `write_file`, and `list_dir` tools stay inside the worktree and
 reject symlink escapes; writes must match the TASK file's allowed list and
 cannot touch `.env*`, `*.pem`, `.git`, `agent-policy.yml`,
@@ -100,13 +104,15 @@ needed. `--publish` executes it only after an LLM run and passing tests, with
 task-allowed files, excluding generated task files and refusing policy,
 workflows, secrets, or other out-of-scope changes. The SDK enforces the
 human-owned policy and creates a draft PR with the App identity; no merge or
-deploy is requested. The runner supplies an AI-Run line and known `AI_*`
-values from config and reported planner/coder tokens, leaving unknown slots
-unset or `-`. An API key is not forwarded to tests or the publisher.
+deploy is requested. The runner prints one AI-Run for each seat with its own
+session and reported token counts; the single code commit published through
+the SDK carries the coder's run. Unknown slots remain unset or `-`. An API key
+is not forwarded to tests or the publisher.
 
 The earlier `roster run --issue N` remains a prepare-only compatibility
 command. See [the one-task loop](ONE_TASK_LOOP.md),
-[seats and recipes](SEATS.md), and [local metrics](METRICS.md).
+[same-session seats](MULTIAGENT.md), [recipes](SEATS.md), and
+[local metrics](METRICS.md).
 ## Manual planning and acceptance checks
 
 The v0 software loop is:

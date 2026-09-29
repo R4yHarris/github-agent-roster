@@ -14,13 +14,19 @@ New-Item -ItemType Directory -Force .roster\runs
 node src\cli.mjs run --issue 42
 ```
 
-After successful worktree and assignment setup, `run` appends exactly one JSONL
-record to `.roster/runs/runs.jsonl`. Without the directory it records nothing
+After successful worktree and assignment setup, bare `run --issue N` appends
+one JSONL record to `.roster/runs/runs.jsonl`. Without the directory it records nothing
 and does not create `.roster`. Failed setup never records a successful run.
 Recording failures are reported explicitly, including the already-created
 worktree path; inspect that worktree rather than blindly rerunning setup.
 
-The current run command prepares a worker, not a completed commit. Its generated
+For `run --issue N --runtime builtin`, setup adds no preparation record. It
+records one run per completed seat (`roster-N-planner`, then
+`roster-N-coder`) with only that seat's reported metrics. If the coder fails,
+the planner record may remain. The deterministic stub uses model
+`builtin-stub`, with no fabricated tokens.
+
+The bare run command prepares a worker, not a completed commit. Its generated
 `session` and `task` are known, but the eventual commit SHA is not: the starting
 HEAD is **not** recorded as the result. Published contracts metadata supplies
 the SHA later, joined by session and, when available, task.

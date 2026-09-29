@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { chatCompletion } from '../lib/llm.mjs';
 import { parseRecipe } from '../lib/recipe.mjs';
+import { mergeUsage } from '../metrics/run.mjs';
 import { isForbiddenWrite } from '../runtime/tools.mjs';
 
 const templates = new Map();
@@ -107,39 +108,66 @@ export function planStub(ask, { reference = 'local:draft', title } = {}) {
 
 export async function planAsk(ask, { config, reference = 'local:draft', title, fetchImpl, env } = {}) {
   const cleanAsk = cleanAskText(ask);
-  if (!config.llm.base_url) return { ...planStub(cleanAsk, { reference, title }), usage: null };
-  const response = await chatCompletion({
-    config,
-    fetchImpl,
-    env,
-    messages: [
-      { role: 'system', content: 'Plan one software task. Return only JSON with title, acceptance_checks (short, verifiable strings including node --test exits 0), and files_allowed (relative files or directory/** patterns). Do not include protected files, merge, deploy, or extra seats.' },
-      { role: 'user', content: cleanAsk },
-    ],
-  });
-  const message = response?.choices?.[0]?.message;
-  if (typeof message?.content !== 'string' || message.tool_calls?.length) {
-    throw new Error('LLM planner did not return a JSON task plan');
+  if (!config.llm.base_url) return { ...planStub(cleanAsk, { reference, title }), usage: null, turns: 0 };
+  const budget = config.planner?.turn_budget;
+  if (!Number.isSafeInteger(budget) || budget < 1 || budget > 64) {
+    throw new TypeError('Planner turn budget must be between 1 and 64');
   }
-  let plan;
-  try {
-    plan = JSON.parse(message.content);
-  } catch {
-    throw new Error('LLM planner returned invalid JSON');
+  const fixedTitle = title === undefined ? undefined : oneLine(title, 'Task title');
+  const messages = [
+    { role: 'system', content: 'You are the builtin planner seat. You have no tools and must not modify app code. Plan one software task. Return only JSON with title, acceptance_checks (short, verifiable strings including node --test exits 0), and files_allowed (relative files or directory/** patterns). Do not include protected files, merge, deploy, or extra seats.' },
+    { role: 'user', content: cleanAsk },
+  ];
+  const usages = [];
+  for (let turn = 1; turn <= budget; turn += 1) {
+    const response = await chatCompletion({ config, fetchImpl, env, messages });
+    usages.push(response?.usage ?? null);
+    const choice = response?.choices?.[0];
+    const message = choice?.message;
+    if (message?.tool_calls !== undefined || choice?.finish_reason === 'tool_calls') {
+      throw new Error('LLM planner cannot call tools, including write_file');
+    }
+    if (choice?.finish_reason != null && choice.finish_reason !== 'stop') {
+      throw new Error('LLM planner returned an unsupported chat response');
+    }
+    if (typeof message?.content !== 'string' || !message.content.trim()) {
+      throw new Error('LLM planner did not return a JSON task plan');
+    }
+    if (Buffer.byteLength(message.content, 'utf8') > 16_384) {
+      throw new Error('LLM planner response exceeds 16 KiB');
+    }
+    let failure;
+    let plan;
+    try {
+      plan = JSON.parse(message.content);
+    } catch {
+      failure = 'LLM planner returned invalid JSON';
+    }
+    if (!failure && (!plan || typeof plan !== 'object' || Array.isArray(plan) ||
+        Object.keys(plan).sort().join(',') !== 'acceptance_checks,files_allowed,title')) {
+      failure = 'LLM planner returned an unsupported task plan';
+    }
+    if (!failure) {
+      try {
+        return {
+          ...buildPlan(cleanAsk, {
+            reference, title: fixedTitle ?? plan.title,
+            acceptanceChecks: plan.acceptance_checks, filesAllowed: plan.files_allowed,
+          }),
+          usage: mergeUsage(...usages),
+          turns: turn,
+        };
+      } catch (error) {
+        if (!(error instanceof TypeError)) throw error;
+        failure = error.message;
+      }
+    }
+    if (turn === budget) throw new Error(`Planner turn budget (${budget}) exhausted: ${failure}`);
+    messages.push(
+      { role: 'assistant', content: message.content },
+      { role: 'user', content: `The plan is invalid (${failure}). Return only the required JSON object.` },
+    );
   }
-  if (!plan || typeof plan !== 'object' || Array.isArray(plan) ||
-      Object.keys(plan).sort().join(',') !== 'acceptance_checks,files_allowed,title') {
-    throw new Error('LLM planner returned an unsupported task plan');
-  }
-  return {
-    ...buildPlan(ask, {
-      reference,
-      title: title ?? plan.title,
-      acceptanceChecks: plan.acceptance_checks,
-      filesAllowed: plan.files_allowed,
-    }),
-    usage: response.usage ?? null,
-  };
 }
 
 export function renderAsk(ask) {
