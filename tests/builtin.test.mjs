@@ -614,7 +614,7 @@ test('detects a changed recipe after the coder runs tests and refuses publicatio
       return { stdout: 'passed', stderr: '' };
     },
     publisher: async () => { published = true; },
-  }), /RECIPE\.yml changed after planning/);
+  }), /Diff path is protected or outside TASK\.md allowed paths: RECIPE\.yml/);
   assert.equal(published, false);
   assert.equal(existsSync(path.join(options.target, '.worktrees', 'issue-42', 'RESULT.md')), true);
 });
