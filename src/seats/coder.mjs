@@ -1,15 +1,16 @@
-import path from 'node:path';
 import { taskFilesAllowed } from '../planner/stub.mjs';
 import { loadContext } from '../runtime/context.mjs';
 import { runLoop } from '../runtime/loop.mjs';
-import { appendMemory } from '../runtime/memory.mjs';
+import { appendMemory, seatMemoryPath } from '../runtime/memory.mjs';
 import { loadSkills } from '../runtime/skills.mjs';
 import { createTools } from '../runtime/tools.mjs';
 
 export async function runCoder({
   worktree, repoRoot, config, task, session, fetchImpl, env, vault, runTestCommand,
 }) {
-  const memoryPath = path.join(repoRoot, config.paths.memory);
+  const memoryPath = seatMemoryPath({
+    repoRoot, memoryPath: config.paths.memory, seat: 'coder',
+  });
   const [context, skills] = await Promise.all([
     loadContext({ worktree, memoryPath, repoRoot }),
     loadSkills({ repoRoot, skillsPath: config.paths.skills }),

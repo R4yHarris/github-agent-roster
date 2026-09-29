@@ -31,7 +31,9 @@ Git repository). Ignore a custom worktrees path yourself if you change it.
 - `seat.id` and `seat.principal` are both `coder`. The principal does not confer
   merge or deploy rights. `seat.turn_budget` limits coder responses to 1-64
   (example: 8). `seat.tools` can only name the four builtin tools.
-- `paths.memory` is JSONL (last 20 entries enter context); `paths.skills`
+- `paths.memory` selects the coder's append-only JSONL file; the planner uses
+  `planner.jsonl` beside it. Each seat loads only its own last 20 entries.
+  `paths.skills`
   loads immediate `*/SKILL.md` files from **this** checkout (including
   `implement-task` and `run-tests` when present). A missing or empty skills
   directory is allowed. `paths.asks` holds local drafts;

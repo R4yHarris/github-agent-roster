@@ -6,7 +6,7 @@ import test from 'node:test';
 import { parseConfig } from '../src/lib/config.mjs';
 import { planStub } from '../src/planner/stub.mjs';
 import { loadContext } from '../src/runtime/context.mjs';
-import { appendMemory, readMemory } from '../src/runtime/memory.mjs';
+import { appendMemory, readMemory, seatMemoryPath } from '../src/runtime/memory.mjs';
 import { loadSkills } from '../src/runtime/skills.mjs';
 import { runCoder } from '../src/seats/coder.mjs';
 
@@ -68,6 +68,16 @@ test('missing or empty skills directories are optional, but malformed skill file
   mkdirSync(path.join(skills, 'malformed'));
   mkdirSync(path.join(skills, 'malformed', 'SKILL.md'));
   await assert.rejects(loadSkills({ repoRoot }), /regular SKILL\.md/);
+});
+
+test('seat memory paths preserve a custom coder file and isolate the planner beside it', () => {
+  const repoRoot = path.resolve('example-roster');
+  assert.equal(seatMemoryPath({ repoRoot, memoryPath: 'custom/history.jsonl', seat: 'coder' }),
+    path.join(repoRoot, 'custom', 'history.jsonl'));
+  assert.equal(seatMemoryPath({ repoRoot, memoryPath: 'custom/history.jsonl', seat: 'planner' }),
+    path.join(repoRoot, 'custom', 'planner.jsonl'));
+  assert.throws(() => seatMemoryPath({ repoRoot, memoryPath: 'custom/history.jsonl', seat: 'merger' }),
+    /planner or coder/);
 });
 
 test('stub coder writes a deterministic result without contacting an LLM or running tests', async (context) => {

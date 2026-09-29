@@ -112,6 +112,11 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
     program === 'git' && args[0] === 'worktree').length, 1);
   assert.equal(JSON.parse(readFileSync(path.join(options.repoRoot,
     '.roster', 'memory', 'coder.jsonl'), 'utf8')).session, 'roster-42-coder');
+  assert.deepEqual(JSON.parse(readFileSync(path.join(options.repoRoot,
+    '.roster', 'memory', 'planner.jsonl'), 'utf8')), {
+    task: 'issue-42', session: 'roster-42-planner', status: 'stub',
+    summary: 'Prepared RECIPE.yml and TASK.md',
+  });
   await assert.rejects(stageReviewedFiles(result.worktreePath, ['README.md']),
     /No reviewed task files changed/);
 });
@@ -305,6 +310,53 @@ test('planner and coder use an environment key before the vault and fall back to
     assert.ok(!logs.join('\n').includes(key));
     assert.ok(!readFileSync(path.join(options.repoRoot, '.roster', 'memory', 'coder.jsonl'),
       'utf8').includes(key));
+  }
+});
+
+test('planner and coder read only their own last 20 memory lines and append separately', async (context) => {
+  const options = fixture(context);
+  const directory = path.join(options.repoRoot, '.roster', 'memory');
+  mkdirSync(directory, { recursive: true });
+  for (const seat of ['planner', 'coder']) {
+    writeFileSync(path.join(directory, `${seat}.jsonl`),
+      `${Array.from({ length: 25 }, (_, index) => JSON.stringify({ seat, index })).join('\n')}\n`);
+  }
+  let calls = 0;
+  const fetchImpl = async (_url, request) => {
+    calls += 1;
+    const body = JSON.parse(request.body);
+    const expected = calls === 1 ? 'planner' : 'coder';
+    const other = calls === 1 ? 'coder' : 'planner';
+    const context = body.messages[1].content;
+    assert.match(context, new RegExp(`"seat":"${expected}","index":5`));
+    assert.match(context, new RegExp(`"seat":"${expected}","index":24`));
+    assert.doesNotMatch(context, new RegExp(`"seat":"${expected}","index":4`));
+    assert.doesNotMatch(context, new RegExp(`"seat":"${other}"`));
+    if (calls === 1) {
+      return { status: 200, json: async () => ({ choices: [{ message: {
+        role: 'assistant', content: JSON.stringify({
+          title: 'Add status', acceptance_checks: ['node --test exits 0'],
+          files_allowed: ['README.md'],
+        }),
+      } }] }) };
+    }
+    return { status: 200, json: async () => ({ choices: [{
+      finish_reason: 'stop', message: { role: 'assistant', content: 'Done.' },
+    }] }) };
+  };
+  const result = await runBuiltinIssue(42, {
+    ...options, config: llmConfig, fetchImpl, log: () => {},
+    env: { ...options.env, ROSTER_API_KEY: 'test-only-key' },
+    runTestCommand: async () => ({ stdout: 'tests pass', stderr: '' }),
+  });
+  assert.equal(calls, 2);
+  for (const seat of ['planner', 'coder']) {
+    const records = readFileSync(path.join(directory, `${seat}.jsonl`), 'utf8')
+      .trimEnd().split('\n').map((line) => JSON.parse(line));
+    assert.equal(records.length, 26);
+    assert.deepEqual(records[0], { seat, index: 0 });
+    assert.equal(records.at(-1).session, result.sessions[seat]);
+    assert.equal(records.at(-1).status, 'llm');
   }
 });
 

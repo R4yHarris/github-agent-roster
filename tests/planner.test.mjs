@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -138,10 +138,12 @@ test('planner repairs invalid JSON within its configured budget and fails when e
 });
 
 test('planner rejects write_file requests without touching source or task files', async (t) => {
-  const worktree = mkdtempSync(join(tmpdir(), 'roster-planner-'));
-  t.after(() => rmSync(worktree, { recursive: true, force: true }));
+  const repoRoot = mkdtempSync(join(tmpdir(), 'roster-planner-'));
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  const worktree = join(repoRoot, 'worktree');
+  mkdirSync(worktree);
   await assert.rejects(runPlanner({
-    worktree,
+    worktree, repoRoot,
     issue: { number: 42, title: 'Protect the task', body: 'Edit `src/app.mjs`.' },
     config: llmConfig, env: {}, vault: { get: async () => undefined },
     fetchImpl: async (_url, request) => {
@@ -157,4 +159,6 @@ test('planner rejects write_file requests without touching source or task files'
   assert.equal(existsSync(join(worktree, 'src', 'app.mjs')), false);
   assert.equal(existsSync(join(worktree, 'RECIPE.yml')), false);
   assert.equal(existsSync(join(worktree, 'TASK.md')), false);
+  assert.equal(JSON.parse(readFileSync(join(repoRoot, '.roster', 'memory', 'planner.jsonl'), 'utf8')).status,
+    'failed');
 });

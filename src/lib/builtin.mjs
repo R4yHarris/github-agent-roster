@@ -127,7 +127,8 @@ export async function runBuiltinIssue(issueNumber, {
     coder: prepared.session,
   };
   const planner = await runPlanner({
-    worktree: worktreePath, issue: prepared.issue, config, fetchImpl, env, vault,
+    worktree: worktreePath, repoRoot, issue: prepared.issue, config,
+    task: prepared.task, session: sessions.planner, fetchImpl, env, vault,
   });
   const metricEnv = { ...commandEnv };
   for (const name of [...runNames, 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH',

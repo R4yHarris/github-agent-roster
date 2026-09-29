@@ -25,8 +25,10 @@ is created.
    including one targeting `src/`, fails instead of running. The planner
    renders the validated [SDLC templates](../templates/sdlc/) as root
    `RECIPE.yml` and `TASK.md`. One issue produces one task in this loop.
+   It reads and appends only its own recent planner memory outside the issue
+   worktree, not app code.
 3. The coder session `roster-N-coder` reads that `TASK.md`, the worktree's
-   `AGENTS.md`, this roster's skills, and recent memory. Its chat loop is
+   `AGENTS.md`, this roster's skills, and its own recent coder memory. Its chat loop is
    bounded by `seat.turn_budget`; writes follow the task's allowed paths
    and cannot rewrite `RECIPE.yml` or `TASK.md`. After the configured LLM
    finishes, `node --test` must pass and the plan artifacts must still
@@ -41,6 +43,12 @@ is created.
    completed seats are recorded there, not as a third preparation run.
    A single commit published through the contracts SDK can carry only the
    coder AI-Run trailer; the planner run remains in stdout/local records.
+
+The append-only seat journals default to `.roster/memory/planner.jsonl` and
+`.roster/memory/coder.jsonl` in the roster installation. Each prompt receives
+at most the last 20 lines of its own journal as data, not instructions.
+`paths.memory` preserves a custom coder filename; the planner journal stays
+beside it. These ignored files are not a second task board.
 
 After the coder, the default command **stops** and prints the reviewed
 `agent-pr.mjs` command for the issue worktree root. `--publish` retains the
