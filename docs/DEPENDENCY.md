@@ -23,6 +23,9 @@ from that checkout's root:
 git submodule update --init --recursive
 ```
 
+See [installation and bootstrap](INSTALL.md) for the local npm bin,
+private configuration, and preflight checks.
+
 ## Resolution
 
 [`resolveContractsPath`](../src/lib/paths.mjs) returns the first usable contracts

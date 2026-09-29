@@ -104,6 +104,8 @@ prerequisites are missing.
 `roster init` copies a config example and `ROSTER-POLICY-NOTE.md` into the
 current directory without replacing existing files or the human-owned
 `agent-policy.yml`.
+See [installation and bootstrap](docs/INSTALL.md) for persistent checkouts,
+local npm-exec usage, private config, and the preflight checks.
 
 [Contracts resolution](src/lib/paths.mjs) checks the submodule first, then
 `GITHUB_AGENT_CONTRACTS`, then the sibling clone at `../github-agent-contracts`.
@@ -158,6 +160,7 @@ See [the one-task loop](docs/ONE_TASK_LOOP.md), [same-session seats](docs/MULTIA
 [model routing](docs/ROUTING.md),
 [LLM configuration and the vault](docs/LLM.md), [builtin tools](docs/TOOLS.md),
 [the GitHub board](docs/BOARD.md),
+[installation](docs/INSTALL.md),
 [SDLC](docs/SDLC.md), and
 [principals](docs/PRINCIPALS.md) for details.
 
