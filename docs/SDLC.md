@@ -87,8 +87,11 @@ cannot touch `.env*`, `*.pem`, `.git`, `agent-policy.yml`,
 `.github/workflows`, the pinned contracts submodule, or the generated
 task/result files. Directory listings hide protected entries. `run_test` runs
 `node --test` in the worktree with a 60-second timeout and without the model
-API key or App credentials. A successful run records `RESULT.md` and appends
-memory. Turn exhaustion or failed tests return an error and do not publish.
+API key or App credentials. A nonzero exit returns captured stdout, stderr,
+and exit code to the coder as a failed tool result so it can correct the task
+within its turn budget; a timeout reports an explicit error. Final nonzero
+verification fails the run and records failed memory instead of claiming
+success. A successful run records `RESULT.md` and appends memory.
 
 With no endpoint, the stub writes a deterministic `RESULT.md` summary, exits
 zero, and **does not edit code or run tests**. It cannot deliver a software
