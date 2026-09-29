@@ -72,3 +72,9 @@ export async function loadSkills({ repoRoot, skillsPath = 'skills', task = '' })
   }
   return skills;
 }
+
+export function previewSkills(skills) {
+  return skills.map(({ name, content }) => ({
+    name, content: content.replace(/\r\n/g, '\n').split('\n').slice(0, 40).join('\n'),
+  }));
+}

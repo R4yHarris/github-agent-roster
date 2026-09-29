@@ -18,7 +18,7 @@ it does not replace Git.
    later, explicit profile using the same HTTP shape. With no endpoint, the
    deterministic stub does not edit code or run tests.
 5. **Code:** the coder uses worktree-scoped tools, skills, and recent memory,
-   then runs `node --test` after its last edit.
+   then runs `node --test` after its last edit unless the task explicitly waives tests.
 6. **Publish:** reviewed code goes through the required
    [github-agent-contracts](vendor/github-agent-contracts) Git submodule for
    GitHub App identity, human-owned policy, and `AI-Run` trailers.
@@ -40,8 +40,11 @@ with model capacity and redacted prior feedback. Zero defects is the target,
 not a claim inferred from passing tests.
 
 The builtin planner and coder run in one issue worktree when a model endpoint
-and model are configured. An empty endpoint produces a `RESULT.md` summary
-only; it never edits code or runs tests. The shell starts in a TTY. For the
+and model are configured. The [single SWE seat stack](docs/SEAT.md) runs
+**principal -> context pack -> research -> skills -> tool loop -> memory ->
+excellence -> RESULT.md**. An empty endpoint writes inspectable context,
+research, and a stub result, but never edits application code or runs tests.
+The shell starts in a TTY. For the
 `roster` bin, see [installation](docs/INSTALL.md); these are user commands,
 not paths to the CLI source:
 
@@ -55,6 +58,7 @@ roster run --ask-file templates/sdlc/ASK.md --runtime builtin
 roster run --issue 42
 roster run --issue 42 --auto-model
 roster run --issue 42 --publish
+roster run --seat coder --runtime builtin
 roster prepare --issue 42
 roster status --issue 42 --offline
 roster recipe validate recipe.yml
@@ -70,8 +74,10 @@ and printable issue command when it is not. `roster run --issue N` runs
 planner then coder by default; `roster prepare --issue N` preserves the
 manual handoff without executing seats. `--runtime builtin` remains accepted
 for agents and CI. The `--seats planner,coder` selection is optional;
+without `--issue`, `--seat coder --runtime builtin` instead executes the
+existing TASK.md in the current worktree, without replanning or publishing.
 `--publish` explicitly requests
-App publication after a model-backed run and passing tests. `--auto-model`
+App publication after a model-backed run and a passing excellence gate. `--auto-model`
 requires an empty configured model and at least three matching local human
 evaluations or keeps the stub. `roster status --issue N` queries GitHub;
 `--offline` uses cached worktree data only. The [offline demo](docs/DEMO.md)
@@ -155,7 +161,8 @@ See [the one-task loop](docs/ONE_TASK_LOOP.md), [same-session seats](docs/MULTIA
 ## Publish
 
 With an LLM configured, `--publish` additionally requires `GITHUB_APP_ID` and
-`GITHUB_APP_PRIVATE_KEY_PATH`. After a successful test run it stages only
+`GITHUB_APP_PRIVATE_KEY_PATH`. After a successful test run (or an explicit task
+test waiver) and a passing excellence gate it stages only
 task-allowed changes (never policy, workflows, secrets, or generated task
 files), then invokes the SDK from the **issue worktree root**. Without
 `--publish`, review the diff and publish manually from that same root:

@@ -1,8 +1,10 @@
 import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { ensureLocalPath } from '../lib/paths.mjs';
+import { isForbiddenRead } from './tools.mjs';
 
 export function seatMemoryPath({ repoRoot, memoryPath, seat }) {
+  if (isForbiddenRead(memoryPath)) throw new Error('Seat memory must not use a protected or secret path');
   const coder = path.join(repoRoot, memoryPath);
   if (seat === 'coder') return coder;
   if (seat === 'planner') return path.join(path.dirname(coder), 'planner.jsonl');

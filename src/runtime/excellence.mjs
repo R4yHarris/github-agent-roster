@@ -12,7 +12,12 @@ const execute = promisify(execFile);
 
 export function taskSkipsTests(task) {
   const { frontmatter } = splitTaskFrontmatter(task);
-  return /^tests: none[ \t]*$/m.test(frontmatter);
+  const declarations = frontmatter.split('\n').filter((line) => /^tests:/.test(line));
+  if (declarations.length > 1) throw new Error('TASK.md must not repeat tests');
+  if (!declarations.length) return false;
+  const value = /^tests: (none|required)[ \t]*$/.exec(declarations[0]);
+  if (!value) throw new Error('TASK.md tests must be none or required');
+  return value[1] === 'none';
 }
 
 export function redactEvidence(text, { env = process.env, apiKeyEnv = 'ROSTER_API_KEY' } = {}) {
@@ -29,17 +34,18 @@ export function redactEvidence(text, { env = process.env, apiKeyEnv = 'ROSTER_AP
       '[redacted credential]');
 }
 
-function ignoredNotebook(file) {
-  return file === '.roster/memory' || file.startsWith('.roster/memory/');
+function ignoredNotebook(file, worktree, memoryPath) {
+  return file === '.roster/memory' || file.startsWith('.roster/memory/') ||
+    (memoryPath && path.relative(path.resolve(worktree, file), path.resolve(memoryPath)) === '');
 }
 
-export async function snapshotWorktree(worktree) {
+export async function snapshotWorktree(worktree, { memoryPath } = {}) {
   const root = path.resolve(worktree);
   const snapshot = new Map();
   async function visit(directory = '') {
     for (const entry of await fs.readdir(path.join(root, directory), { withFileTypes: true })) {
       const file = path.posix.join(directory, entry.name);
-      if (file === '.git' || file === 'RESULT.md' || ignoredNotebook(file)) continue;
+      if (file === '.git' || file === 'RESULT.md' || ignoredNotebook(file, root, memoryPath)) continue;
       const target = path.join(root, file);
       const stat = await fs.lstat(target, { bigint: true });
       if (entry.isDirectory() && !entry.isSymbolicLink()) {
@@ -60,7 +66,7 @@ export async function snapshotWorktree(worktree) {
   return snapshot;
 }
 
-async function gitChanges(worktree) {
+async function gitChanges(worktree, memoryPath) {
   try {
     await fs.lstat(path.join(worktree, '.git'));
   } catch (error) {
@@ -75,7 +81,7 @@ async function gitChanges(worktree) {
     git(['ls-files', '--others', '--exclude-standard', '-z']),
   ]);
   const files = [...new Set(`${tracked}${untracked}`.split('\0').filter(Boolean))]
-    .filter((file) => !isManagedFile(file) && !ignoredNotebook(file));
+    .filter((file) => !isManagedFile(file) && !ignoredNotebook(file, worktree, memoryPath));
   const readable = files.filter((file) => !isForbiddenRead(file));
   const diff = readable.length ? await git([
     '--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--no-renames',
@@ -85,7 +91,7 @@ async function gitChanges(worktree) {
 }
 
 export async function checkExcellence({
-  worktree, task, result, baseline, verifiedSnapshot, env, apiKeyEnv,
+  worktree, task, result, baseline, verifiedSnapshot, memoryPath, env, apiKeyEnv,
 }) {
   const allowed = taskFilesAllowed(task);
   const reasons = [];
@@ -101,12 +107,12 @@ export async function checkExcellence({
     reasons.push('Coder model ID is missing or invalid for AI-Run.');
   }
   if (typeof result.summary !== 'string' || !result.summary.trim()) reasons.push('Coder result summary is missing.');
-  const current = await snapshotWorktree(worktree);
+  const current = await snapshotWorktree(worktree, { memoryPath });
   if (verifiedSnapshot && [...new Set([...verifiedSnapshot.keys(), ...current.keys()])]
     .some((file) => verifiedSnapshot.get(file) !== current.get(file))) {
     reasons.push('Worktree changed after final verification; rerun the coder checks before publication.');
   }
-  const git = await gitChanges(worktree);
+  const git = await gitChanges(worktree, memoryPath);
   const changed = baseline ? [...new Set([...baseline.keys(), ...current.keys()])]
     .filter((file) => baseline.get(file) !== current.get(file)) : [];
   const files = [...new Set([...changed, ...git.files])].sort();
@@ -144,6 +150,7 @@ export async function writeResult({ worktree, result, excellence, env, apiKeyEnv
       : excellence.reasons.map((reason, index) => `- ${index === 0 ? 'First failure: ' : ''}${reason}`).join('\n') + '\n') +
     `- ${tests}\n\n## Run\n\nModel: ${result.model}\nTool-loop turns: ${result.turns}\n` +
     `Research turns: ${result.research?.turns ?? 0}\n` +
+    (result.stages ? `Stages: ${result.stages.join(' -> ')} -> result\n` : '') +
     (run ? `AI-Run: ${run.line}\n` : result.mode === 'stub'
       ? 'AI-Run: not emitted for a deterministic stub.\n' : 'AI-Run: unavailable; metadata validation failed.\n') +
     `\n## ${excellence.pass ? 'Summary' : 'Unverified summary'}\n\n${result.summary}\n`;

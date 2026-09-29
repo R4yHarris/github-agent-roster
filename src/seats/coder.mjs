@@ -1,72 +1,108 @@
 import { taskFilesAllowed } from '../planner/stub.mjs';
 import { buildRun, mergeUsage } from '../metrics/run.mjs';
 import { loadContext } from '../runtime/context.mjs';
-import { checkExcellence, redactEvidence, snapshotWorktree, writeResult } from '../runtime/excellence.mjs';
+import { estimateTask, readTaskMetadata } from '../runtime/estimate.mjs';
+import { checkExcellence, redactEvidence, snapshotWorktree, taskSkipsTests, writeResult } from '../runtime/excellence.mjs';
 import { runLoop } from '../runtime/loop.mjs';
 import { appendMemory, coderMemoryRecord, seatMemoryPath } from '../runtime/memory.mjs';
 import { runResearch } from '../runtime/research.mjs';
+import { loadSkills, previewSkills } from '../runtime/skills.mjs';
 import { createTools } from '../runtime/tools.mjs';
 import { loadPrincipal } from './principal.mjs';
 
 export async function runCoder({
-  worktree, repoRoot, config, task, session, fetchImpl, env, vault, runTestCommand, priorFeedback = null,
+  worktree, repoRoot, config, task, session, fetchImpl, env = process.env, vault, runTestCommand,
+  priorFeedback = null,
 }) {
-  const principal = await loadPrincipal({ repoRoot, id: config.seat.principal });
+  const stages = [];
   const memoryPath = seatMemoryPath({
     repoRoot, memoryPath: config.paths.memory, seat: 'coder',
   });
-  const context = await loadContext({ worktree, memoryPath, repoRoot, config, principal, env, priorFeedback });
-  const tools = await createTools({
-    worktree, allowedFiles: taskFilesAllowed(context.task),
-    apiKeyEnv: config.llm.api_key_env, env, runCommand: runTestCommand,
-  });
-  const research = await runResearch({
-    worktree, tools, expectedTask: context.task, config, fetchImpl, env, vault,
-  });
-  const baseline = await snapshotWorktree(worktree);
   const changedFiles = new Set();
+  let context;
+  let research;
+  let baseline;
+  let metadata;
   let tests;
-  const trackedTools = {
-    ...tools,
-    async write_file(args) {
-      const written = await tools.write_file(args);
-      changedFiles.add(written.path);
-      return written;
-    },
-    async run_test(args) {
-      tests = undefined;
-      tests = await tools.run_test(args);
-      return tests;
-    },
+  let result = {
+    mode: config.llm.base_url ? 'llm' : 'stub',
+    model: config.llm.base_url ? config.llm.model : 'builtin-stub',
+    turns: 0, usage: null, summary: 'Coder preparation stopped before implementation.',
   };
+  try {
+    const principal = await loadPrincipal({ repoRoot, id: config.seat.principal });
+    stages.push('principal');
+    context = await loadContext({ worktree, memoryPath, repoRoot, config, principal, env, priorFeedback });
+    stages.push('context');
+    taskSkipsTests(context.task);
+    metadata = estimateTask(readTaskMetadata(context.task), [], config.llm.model || env?.ROSTER_MODEL || '');
+    if (config.llm.base_url && !metadata.model) throw new Error('Set config.llm.model or TASK.md model for the coder seat');
+    config = { ...config, llm: { ...config.llm, model: metadata.model } };
+    result.model = config.llm.base_url ? metadata.model : 'builtin-stub';
+    const tools = await createTools({
+      worktree, allowedFiles: taskFilesAllowed(context.task), memoryPath,
+      apiKeyEnv: config.llm.api_key_env, env, runCommand: runTestCommand,
+    });
+    research = await runResearch({
+      worktree, tools, expectedTask: context.task, config, fetchImpl, env, vault,
+    });
+    stages.push('research');
+    result.usage = research.usage;
+    const skills = await loadSkills({ repoRoot, skillsPath: config.paths.skills, task: context.task });
+    if (JSON.stringify(previewSkills(skills)) !== JSON.stringify(context.skills)) {
+      throw new Error('Task skills changed after the context pack; refusing coder edits');
+    }
+    stages.push('skills');
+    baseline = await snapshotWorktree(worktree, { memoryPath });
+    const trackedTools = {
+      ...tools,
+      async write_file(args) {
+        const written = await tools.write_file(args);
+        changedFiles.add(written.path);
+        return written;
+      },
+      async run_test(args) {
+        tests = undefined;
+        tests = await tools.run_test(args);
+        return tests;
+      },
+    };
+    result = await runLoop({ config, context, tools: trackedTools, fetchImpl, env, vault });
+    stages.push('tool_loop');
+    result = { ...result, tests: result.tests ?? tests,
+      usage: research.turns ? mergeUsage(research.usage, result.usage) : result.usage };
+  } catch (error) {
+    if (!(error instanceof Error)) throw error;
+    result = { ...result, error };
+  }
+  result = { ...result, research, stages };
   const remember = (result, error) => appendMemory({
     file: memoryPath, repoRoot, env, apiKeyEnv: config.llm.api_key_env,
     record: coderMemoryRecord({
       task, session, mode: result?.mode, changedFiles: [...changedFiles].sort(), tests, error,
     }),
   });
-  let result;
+  let memoryFailure;
   try {
-    result = await runLoop({ config, context, tools: trackedTools, worktree, fetchImpl, env, vault });
-    result = { ...result, research,
-      tests: result.tests ?? tests,
-      usage: research.turns ? mergeUsage(research.usage, result.usage) : result.usage };
+    await remember(result, result.error);
+    stages.push('memory');
   } catch (error) {
     if (!(error instanceof Error)) throw error;
-    await remember(undefined, error);
-    throw error;
+    memoryFailure = new Error(`Memory append failed: ${error.message}`, { cause: error });
+    result.error ??= memoryFailure;
   }
-  await remember(result, result.error);
   let excellence;
   try {
-    excellence = await checkExcellence({
-      worktree, task: context.task, result, baseline, env, apiKeyEnv: config.llm.api_key_env,
-    });
+    excellence = context ? await checkExcellence({
+      worktree, task: context.task, result, baseline, memoryPath, env, apiKeyEnv: config.llm.api_key_env,
+    }) : { pass: false, reasons: [result.error.message], files: [], model: result.model, turns: result.turns };
   } catch (error) {
     if (!(error instanceof Error)) throw error;
     excellence = { pass: false, reasons: [`Excellence inspection failed: ${error.message}`],
       files: [], model: result.model, turns: result.turns };
   }
+  if (memoryFailure && result.error !== memoryFailure) excellence.reasons.push(memoryFailure.message);
+  stages.push('excellence');
   let run = null;
   try {
     if (result.mode === 'llm') run = buildRun({
@@ -80,8 +116,10 @@ export async function runCoder({
   const resultPath = await writeResult({
     worktree, result, excellence, run, env, apiKeyEnv: config.llm.api_key_env,
   });
-  result = { ...result, excellence, resultPath, baseline };
-  if (!excellence.pass && result.mode !== 'stub') {
+  stages.push('result');
+  result = { ...result, excellence, resultPath, baseline, memoryPath, run, taskMetadata: metadata,
+    contextPath: context?.contextPath, researchPath: research?.researchPath };
+  if (!excellence.pass && (result.mode !== 'stub' || result.error)) {
     const failure = new Error(redactEvidence(excellence.reasons[0], {
       env, apiKeyEnv: config.llm.api_key_env,
     }), { cause: result.error });
