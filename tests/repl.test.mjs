@@ -53,6 +53,13 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
           command: 'node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue 42" --merge-when-green',
         };
       },
+      readStatus: async (options) => {
+        calls.push(['status', options.issue, options.offline]);
+        return { issue: { number: 42 }, openPr: null, offline: options.offline,
+          worktreePath: join(cwd, '.worktrees', 'issue-42'), worktreeExists: true };
+      },
+      formatStatus: (status) => `Issue: #${status.issue.number}\nOpen PR: none\n` +
+        `Worktree: ${status.worktreePath}\n`,
       recordEvaluation: async (target, verdict, difficulty, again, options) => {
         calls.push(['eval', target, verdict, difficulty, again, options.cwd]);
         return { session: target };
@@ -78,6 +85,7 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
   assert.equal(await dispatch('/run --issue 42'), true);
   assert.equal(state.lastRun.task, 'issue-42');
   await dispatch('/status');
+  await dispatch('/status --offline');
   await dispatch('/eval roster-42-coder accept 3 n');
   await dispatch('/stats HEAD');
   await dispatch('/recommend feat');
@@ -95,6 +103,8 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
   assert.deepEqual(calls, [
     ['ask', 'Add a status section.'],
     ['run', '42', false],
+    ['status', 42, false],
+    ['status', 42, true],
     ['eval', 'roster-42-coder', 'accept', '3', 'n', cwd],
     ['stats', 'HEAD'],
     ['stats', 'HEAD'],
@@ -107,7 +117,8 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
   assert.match(output.text, /Next: gh issue create --body-file ask\.md/);
   assert.match(output.text, /--message "feat: issue 42" --merge-when-green/);
   assert.doesNotMatch(output.text, /--merge-when-green --merge-when-green/);
-  assert.match(output.text, /Last run: issue-42/);
+  assert.match(output.text, /Issue: #42/);
+  assert.match(output.text, /Worktree: .+issue-42/);
   assert.match(output.text, /Commands:\n/);
   assert.ok(!output.text.includes('private-value'));
   assert.match(output.text, /ROSTER_TOKEN is stored \(value hidden/);

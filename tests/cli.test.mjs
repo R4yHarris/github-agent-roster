@@ -25,6 +25,7 @@ test("help lists every prompt's command", () => {
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /roster\s+run\s+--issue/);
+  assert.match(result.stdout, /roster\s+status\s+\[--issue N\]\s+\[--offline\]/);
   assert.match(result.stdout, /roster\s+recipe\s+validate/);
   assert.match(result.stdout, /roster\s+stats/);
   assert.match(result.stdout, /roster\s+vault\s+set\s+NAME/);
@@ -118,6 +119,15 @@ test("run without a numeric issue fails before GitHub access", () => {
   assert.ifError(result.error);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /issue/i);
+});
+
+test("status rejects invalid and repeated issue selectors without querying GitHub", () => {
+  const invalid = run(["status", "--issue", "0", "--offline"]);
+  assert.notEqual(invalid.status, 0);
+  assert.match(invalid.stderr, /positive safe issue number/);
+  const repeated = run(["status", "--issue", "42", "--issue", "43", "--offline"]);
+  assert.notEqual(repeated.status, 0);
+  assert.match(repeated.stderr, /Use roster status/);
 });
 
 test("vault CLI accepts only stdin secrets and lists names without values", async (t) => {

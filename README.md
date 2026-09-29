@@ -62,6 +62,8 @@ The Node 20 ESM CLI supports both the builtin loop and a manual handoff:
 - `run --issue N` reads a GitHub issue, creates one coder worktree, writes the
   assignment and ignored `.env`, and prints the next publishing command. It
   does not launch Hermes or any other worker.
+- `status --issue N [--offline]` shows that issue, its open PR, and worktree
+  path; offline mode uses only cached assignment data and never calls GitHub.
 - `recipe validate PATH` validates strict seat YAML. Worker labels are
   descriptive; validation neither executes a recipe nor grants permissions.
 - `stats` joins contracts `AI-Run` history with opt-in local runs and human

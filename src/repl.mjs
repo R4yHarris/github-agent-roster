@@ -9,13 +9,14 @@ import { recordEvaluation } from './lib/eval.mjs';
 import { formatRecommendation, recommend, repositoryRoot, TASK_CLASSES } from './lib/learn.mjs';
 import { formatMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
 import { resolveContractsPath } from './lib/paths.mjs';
+import { formatStatus, readStatus } from './lib/status.mjs';
 import { createFileVault, validateSecretName } from './vault/file.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const help = `Commands:
   /ask TEXT                 Create an issue, or draft one if gh is unavailable
   /run N                    Run the builtin planner and coder for issue N
-  /status                   Show this shell's repository and last run
+  /status [N] [--offline]   Show an issue, open PR, and local worktree
   /eval TARGET VERDICT 1-5 y|n
   /publish [SUBJECT]        Publish reviewed changes (conventional subject)
   /stats [REF]              Show AI-Run metrics
@@ -52,7 +53,7 @@ const defaultServices = {
   submitAsk, runBuiltinIssue, recordEvaluation, repositoryRoot, loadMetrics,
   summarizeMetrics, formatMetrics, recommend, formatRecommendation,
   resolveContractsPath, prepareBuiltinPublication, createFileVault,
-  validateSecretName, publisher: publishWithContracts,
+  validateSecretName, readStatus, formatStatus, publisher: publishWithContracts,
 };
 
 function conventionalSubject(value) {
@@ -129,12 +130,17 @@ export function createDispatcher({
         return true;
       }
       case 'status': {
-        if (args) throw new TypeError('Use /status.');
-        output.write(`Repository: ${basename(currentRoot())}\nRuntime: builtin\n` +
-          `LLM: ${config.llm.base_url || 'stub'}\n` +
-          `Last run: ${state.lastRun?.task ?? 'none'}\n` +
-          `Worktree: ${state.lastRun?.worktreePath ?? 'none'}\n` +
-          `Published: ${state.published ? 'yes' : 'no'}\n`);
+        const fields = args ? args.split(/\s+/) : [];
+        const offline = fields.includes('--offline');
+        const numbers = fields.filter((field) => field !== '--offline');
+        if (fields.filter((field) => field === '--offline').length > 1 ||
+            numbers.length > 1 || (numbers.length && !/^[1-9]\d*$/.test(numbers[0]))) {
+          throw new TypeError('Use /status [N] [--offline].');
+        }
+        const issue = numbers[0] ?? state.lastRun?.issue?.number ?? state.lastAsk?.number;
+        output.write(api.formatStatus(await api.readStatus({
+          issue, offline, cwd: currentRoot(), config,
+        })));
         return true;
       }
       case 'eval': {

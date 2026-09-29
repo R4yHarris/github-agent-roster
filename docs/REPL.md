@@ -11,7 +11,7 @@ agents and CI.
 | --- | --- |
 | `/ask TEXT` | Create an issue through `gh`, or write a local Ask, recipe, task, and create command when `gh` is missing. |
 | `/run N` or `/run --issue N` | Run the builtin planner then coder in one issue worktree. The stub writes a task and result, but does not edit code or test. |
-| `/status` | Show the repository, configured runtime/model endpoint, and the last run in this shell. |
+| `/status [N] [--offline]` | Show an issue, its open branch PR, and worktree path. Defaults to the last run or created issue; offline reads only the cached assignment and reports PR state as unknown. |
 | `/eval TARGET accept|reject|rework 1-5 y|n` | Record a human evaluation through the existing evaluation library. |
 | `/publish [SUBJECT]` | Publish reviewed changes using the pinned contracts SDK. After `/run N`, the default subject is `feat: issue N`; otherwise supply a conventional subject. |
 | `/stats [REF]` | Summarize contracts and local AI-Run records, optionally at a Git ref. |
@@ -27,6 +27,11 @@ accepted as part of `/vault set NAME` itself. The shell dispatches to existing
 library functions in the same Node process; those libraries may still invoke
 Git, GitHub CLI, tests, or the metrics exporter. It does not spawn another
 Roster CLI process or add a queue.
+
+The CLI equivalent is `roster status --issue N [--offline]`. Without an
+explicit number, status uses the current `issue-N` branch or a single issue
+worktree; multiple candidates require `--issue N`. `--offline` never calls
+GitHub and does not turn unknown PR state into `none`.
 
 ## Publish
 
