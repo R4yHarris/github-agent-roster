@@ -22,7 +22,9 @@ export async function runPlanner({
   const memoryPath = seatMemoryPath({
     repoRoot, memoryPath: config.paths.memory, seat: 'planner',
   });
-  const memory = await readMemory({ file: memoryPath, repoRoot, limit: 20 });
+  const memory = await readMemory({
+    file: memoryPath, repoRoot, limit: 20, env, apiKeyEnv: config.llm.api_key_env,
+  });
   let plan;
   const recipePath = path.join(worktree, 'RECIPE.yml');
   const taskPath = path.join(worktree, 'TASK.md');
@@ -41,12 +43,12 @@ export async function runPlanner({
     await fs.writeFile(taskPath, plan.task, { encoding: 'utf8', flag: 'wx' });
   } catch (error) {
     if (!(error instanceof Error)) throw error;
-    await appendMemory({ file: memoryPath, repoRoot, record: {
+    await appendMemory({ file: memoryPath, repoRoot, env, apiKeyEnv: config.llm.api_key_env, record: {
       task, session, status: 'failed', error: error.message,
     } });
     throw error;
   }
-  await appendMemory({ file: memoryPath, repoRoot, record: {
+  await appendMemory({ file: memoryPath, repoRoot, env, apiKeyEnv: config.llm.api_key_env, record: {
     task, session, status: config.llm.base_url ? 'llm' : 'stub',
     summary: 'Prepared RECIPE.yml and TASK.md',
   } });

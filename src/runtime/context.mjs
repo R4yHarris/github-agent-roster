@@ -46,7 +46,7 @@ function boundedPack(sections, budget) {
   return { pack: render(bodies), truncated };
 }
 
-export async function loadContext({ worktree, memoryPath, repoRoot, config, principal }) {
+export async function loadContext({ worktree, memoryPath, repoRoot, config, principal, env }) {
   principal ??= await loadPrincipal({ repoRoot });
   const budget = config?.seat?.context_chars ?? 8000;
   if (!Number.isSafeInteger(budget) || budget < 1) {
@@ -55,7 +55,7 @@ export async function loadContext({ worktree, memoryPath, repoRoot, config, prin
   const [agents, task, memory] = await Promise.all([
     requiredFile(path.join(worktree, 'AGENTS.md'), worktree),
     requiredFile(path.join(worktree, 'TASK.md'), worktree),
-    readMemory({ file: memoryPath, repoRoot, limit: 20 }),
+    readMemory({ file: memoryPath, repoRoot, limit: 20, env, apiKeyEnv: config?.llm?.api_key_env }),
   ]);
   const files = taskFilesAllowed(task);
   if (!/^# Task: .+$/m.test(task) || !/^## Acceptance checks\n(?:- .+\n)+/m.test(task)) {
