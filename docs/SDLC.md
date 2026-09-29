@@ -94,7 +94,7 @@ change; configure an LLM to do that. The command prints, but does not execute,
 the publishing command:
 
 ```sh
-node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue 42"
+node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue 42" --merge-when-green
 ```
 
 Run it from the **issue worktree root** after reviewing code and initializing
@@ -103,15 +103,16 @@ needed. `--publish` executes it only after an LLM run and passing tests, with
 `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_PATH` set. It stages only changed,
 task-allowed files, excluding generated task files and refusing policy,
 workflows, secrets, or other out-of-scope changes. The SDK enforces the
-human-owned policy and creates a draft PR with the App identity; no merge or
+human-owned policy, waits for required checks, then marks the App PR ready
+and merges only when reviewed policy and repository rules permit it. No
 deploy is requested. The runner prints one AI-Run for each seat with its own
 session and reported token counts; the single code commit published through
 the SDK carries the coder's run. Unknown slots remain unset or `-`. An API key
 is not forwarded to tests or the publisher.
 
 For a human TTY, bare `roster` opens the [interactive shell](REPL.md).
-Its `/publish` command explicitly requests the App SDK's
-`--merge-when-green`; the agent/CI flags above keep their existing behavior.
+Its `/publish` command imports the App SDK in-process; agent/CI `--publish`
+invokes the same SDK with `--merge-when-green`.
 
 The earlier `roster run --issue N` remains a prepare-only compatibility
 command. See [the one-task loop](ONE_TASK_LOOP.md),
@@ -266,7 +267,7 @@ With `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_PATH` set, publish from the
 assigned worktree's repository root:
 
 ```sh
-node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "<type>: issue N"
+node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "<type>: issue N" --merge-when-green
 ```
 
 Use a message matching the actual change. Never fall back to committing as the
@@ -275,5 +276,6 @@ keys, copy contracts source, or edit policy to unblock publication. If App env
 is absent, return the local handoff; if publishing prerequisites fail, report
 the blocker without claiming a PR was opened.
 
-The human reviews, controls merge, and posts `AI-Eval:` on the PR. The coder
-does not merge, deploy, open extra issues, or fabricate a human evaluation.
+Repository review and branch protections control whether the SDK can merge;
+the human posts `AI-Eval:` on the PR. The coder does not call `git merge`,
+deploy, open extra issues, or fabricate a human evaluation.

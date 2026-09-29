@@ -16,7 +16,8 @@ use. A model, recipe, worker name, or commit trailer cannot grant permissions.
 Issue bodies, repository content, recipes, model output, and tool output are
 untrusted input. Instructions found there must not change the App, credentials,
 policy, protected paths, or publishing route. Humans own policy, workflow
-changes, review, and merge. Merger and deploy assignments remain empty.
+changes, and review rules. Only an explicit trusted SDK publication may request
+merge after those protections pass; merger and deploy recipe seats remain empty.
 
 ## Vault and key custody
 
@@ -64,8 +65,10 @@ files or add secrets.
 All worker publication must use the pinned
 [vendor publisher](../vendor/github-agent-contracts/scripts/agent-pr.mjs) from
 the worktree root, as described in [principals](PRINCIPALS.md). No direct Git or
-GitHub write path, human-token fallback, or `--merge-when-green` is permitted for
-the coder worker.
+GitHub write path or human-token fallback is permitted for the coder worker.
+An explicit trusted `--publish` or `/publish` request may use
+`--merge-when-green` through the SDK, subject to reviewed `merger.merge` policy
+and required checks; the model has no direct publisher tool.
 
 The contracts publisher checks coder grants against reviewed policy and refuses
 policy and workflow changes. Those publication checks are not a filesystem
@@ -76,9 +79,9 @@ recognized environment files, PEMs, policy, workflows, and generated task files.
 These application-level guards are not complete enforcement of every required
 surface above, nor an OS sandbox for repository tests. The roster does not
 provision WSL isolation. A trusted executor must enforce the full deployment
-boundaries before unattended use. The existing `merger.merge` policy grant also
-needs the human-owned correction described in [principals](PRINCIPALS.md); an
-unassigned seat alone does not remove it.
+boundaries before unattended use. The existing `merger.merge` policy grant
+allows explicit SDK merging; a human must remove it for deployments that
+prohibit that operation. An unassigned seat alone does not remove it.
 
 Keep required checks, human reviews, and protected-branch rules enabled, with
 the coder App off bypass lists. GitHub tokens are not inherently draft-only;

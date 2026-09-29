@@ -18,7 +18,7 @@ or a new runtime. See the [GHCP bridge](../docs/GHCP.md).
 When `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_PATH` are set, publish reviewed
 GHCP changes from the feature worktree's repository root with
 `node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "<conventional subject>" --merge-when-green`.
-Never `git commit` as the signed-in human or use `gh pr create` or `git push`
+Never leave a draft PR for the human. Never `git commit` as the signed-in human or use `gh pr create` or `git push`
 with human credentials. If `--merge-when-green` fails with HTTP 422, stop and
 report that Checks permission is not accepted on the installation; do not use
 a workaround. Do not edit vendor sources, `agent-policy.yml`, or workflows.

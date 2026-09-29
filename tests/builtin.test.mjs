@@ -101,7 +101,7 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
   assert.match(result.result.summary, /Add Status to README/);
   assert.equal(result.run, result.runs.coder);
   assert.equal(result.result.mode, 'stub');
-  assert.ok(logs[0].includes('node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue 42"'));
+  assert.ok(logs[0].includes('node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue 42" --merge-when-green'));
   assert.equal((logs[0].match(/AI-Run:/g) ?? []).length, 2);
   assert.equal(result.runs.planner.line, packAgentRun(result.runs.planner.env));
   assert.equal(result.runs.coder.line, packAgentRun(result.runs.coder.env));
@@ -180,7 +180,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
       assert.equal(program, process.execPath);
       assert.deepEqual(args, [
         path.join(options.contracts, 'scripts', 'agent-pr.mjs'),
-        '--message', 'feat: issue 42',
+        '--message', 'feat: issue 42', '--merge-when-green',
       ]);
       assert.equal(publication.cwd, path.join(options.target, '.worktrees', 'issue-42'));
       assert.equal(publication.env.ROSTER_API_KEY, undefined);

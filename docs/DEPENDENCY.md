@@ -49,13 +49,14 @@ With `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_PATH` set, publish from the
 current feature worktree's repository root using the initialized submodule:
 
 ```sh
-node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "..."
+node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "..." --merge-when-green
 ```
 
 The publisher also requires a feature branch and a human-owned root
-`agent-policy.yml` granting the coder publishing capabilities, matching the
-reviewed policy on origin's default branch. Do not create or edit policy as
-part of dependency setup.
+`agent-policy.yml` granting the coder publishing capabilities and, for
+`--merge-when-green`, the merger capability, matching the reviewed policy on
+origin's default branch. Do not create or edit policy as part of dependency
+setup.
 
 A new issue worktree may need `git submodule update --init --recursive` run
 from its own root before manual publication. The builtin `--publish` path
