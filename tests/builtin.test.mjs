@@ -39,7 +39,7 @@ function fixture(context) {
   writeFileSync(path.join(repoRoot, 'roster.config.example.yml'), example);
   writeFileSync(path.join(repoRoot, 'skills', 'implement-task', 'SKILL.md'), '# Code and test\n');
   writeFileSync(path.join(contracts, 'scripts', 'agent-pr.mjs'), 'export {};\n');
-  writeFileSync(path.join(target, '.gitignore'), '.env\n.worktrees/\n');
+  writeFileSync(path.join(target, '.gitignore'), '.env\n.worktrees/\n.roster/runs/\n');
   writeFileSync(path.join(target, 'AGENTS.md'), '# Agent instructions\nStay in the worktree.\n');
   writeFileSync(path.join(target, 'README.md'), '# Example\n');
   writeFileSync(path.join(target, 'smoke.test.mjs'),
@@ -125,6 +125,13 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
     task: 'issue-42', session: 'roster-42-planner', status: 'stub',
     summary: 'Prepared RECIPE.yml and TASK.md',
   });
+  assert.deepEqual(loadLearning({ cwd: options.target }).runs, [
+    { session: result.sessions.planner, task: 'issue-42', task_class: 'feat' },
+    { session: result.sessions.coder, task: 'issue-42', task_class: 'feat' },
+  ]);
+  assert.equal(existsSync(path.join(options.target, '.roster', 'evals.jsonl')), false);
+  assert.doesNotThrow(() => git(options.target, 'check-ignore', '--quiet',
+    '.roster/runs/runs.jsonl'));
   await assert.rejects(stageReviewedFiles(result.worktreePath, ['README.md']),
     /No reviewed task files changed/);
 });
@@ -571,9 +578,8 @@ test('planner and coder read only their own last 20 memory lines and append sepa
   }
 });
 
-test('opt-in learning records exactly one run for each builtin seat', async (context) => {
+test('builtin seats record runs automatically without an AI-Eval', async (context) => {
   const options = fixture(context);
-  mkdirSync(path.join(options.target, '.roster', 'runs'), { recursive: true });
   const result = await runBuiltinIssue(42, {
     ...options, config: stubConfig, log: () => {},
     env: { ...options.env, GITHUB_AGENT_CONTRACTS: resolveContractsPath() },
@@ -583,6 +589,7 @@ test('opt-in learning records exactly one run for each builtin seat', async (con
     { session: result.sessions.planner, task: 'issue-42', task_class: 'feat' },
     { session: result.sessions.coder, task: 'issue-42', task_class: 'feat' },
   ]);
+  assert.equal(existsSync(path.join(options.target, '.roster', 'evals.jsonl')), false);
 });
 
 test('detects a changed recipe after the coder runs tests and refuses publication', async (context) => {

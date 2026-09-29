@@ -26,6 +26,7 @@ function isProtectedSurface(file) {
   return isSecret(file) || parts.includes('.git') || parts.includes('agent-policy.yml') ||
     parts.some((part, index) =>
       (part === '.github' && parts[index + 1] === 'workflows') ||
+      (part === '.roster' && parts[index + 1] === 'runs') ||
       (part === 'vendor' && parts[index + 1] === 'github-agent-contracts'));
 }
 

@@ -21,7 +21,8 @@ or directory pattern under `## Files allowed` in the generated
 the denylist.
 
 Writes cannot touch `.env` or `.env.*` anywhere, `*.pem`, Git metadata,
-`agent-policy.yml`, `.github/workflows`, or the pinned
+`agent-policy.yml`, `.github/workflows`, human `.roster/evals.jsonl`,
+automatic `.roster/runs/`, or the pinned
 `vendor/github-agent-contracts` dependency. Root `ASSIGNMENT.md`,
 `RECIPE.yml`, `TASK.md`, and `RESULT.md` are managed files that the coder
 cannot rewrite. `list_dir` refuses protected paths and hides their names

@@ -45,6 +45,9 @@ test('coder tools cannot write human evaluations even with broad task scope or a
   assert.equal(toolDefinitions.some(({ function: tool }) => /eval/i.test(tool.name)), false);
   await assert.rejects(tools.write_file({ path: '.roster/evals.jsonl', content: '{"verdict":"accept"}\n' }),
     /not allowed/);
+  await assert.rejects(tools.write_file({ path: '.roster/runs/runs.jsonl', content: '{"model":"fake"}\n' }),
+    /not allowed/);
+  assert.equal(isForbiddenWrite('.roster/runs/runs.jsonl'), true);
   const evaluator = new URL('../src/lib/eval.mjs', import.meta.url).href;
   writeFileSync(path.join(worktree, 'no-self-eval.test.mjs'),
     "import test from 'node:test';\nimport assert from 'node:assert/strict';\n" +

@@ -40,8 +40,8 @@ is created.
    refuses publication if either changed.
 4. The command prints one AI-Run line per configured LLM seat, using its session
    and only its own known usage. Stub runs omit AI-Run, model, and LLM counts.
-   When `.roster/runs` exists in the issue repository, the two
-   completed seats are recorded there, not as a third preparation run.
+   The two completed seats are recorded automatically in the issue
+   repository's ignored `.roster/runs`, not as a third preparation run.
    A single commit published through the contracts SDK can carry only the
    coder AI-Run trailer; the planner run remains in stdout/local records.
 

@@ -49,7 +49,8 @@ setup appends one local JSONL run record. It includes the generated session and
 task plus known model, effort, and context metadata; it does not pretend the
 starting HEAD is the eventual worker commit. Without that directory, run
 recording is disabled. No coder path writes human `AI-Eval` decisions. See
-[learning](LEARNING.md) for opt-in recording, human evaluations, and recommendations.
+[learning](LEARNING.md) for manual opt-in recording, automatic seat runs,
+human evaluations, and recommendations.
 
 It returns the issue, worktree and file paths, task, session, and `nextCommand`.
 It prints the worktree location and, for the worker **after editing inside the
