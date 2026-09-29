@@ -84,7 +84,7 @@ evaluations or keeps the stub. `roster status --issue N` queries GitHub;
 needs neither GitHub nor a model. See the [shell guide](docs/REPL.md) for
 `/model`, `/effort`, and `/publish`.
 
-`roster stats` combines contracts `AI-Run` history with opt-in local runs and
+`roster stats` combines contracts `AI-Run` history with recorded seat runs and
 local `roster eval` decisions. `roster recommend` does not route automatically
 or fetch evaluations from GitHub. `roster vault set NAME` reads piped stdin;
 `roster vault get NAME` writes a value only to redirected stdout. There are no
@@ -141,9 +141,10 @@ the coder, and prints a publishing command. The explicit `prepare` command
 writes only a manual assignment and ignored `.env`; load that environment into
 the worker before publishing. See [same-session seats](docs/MULTIAGENT.md).
 
-Create `.roster/runs` at the repository root to opt into successful-run JSONL
-recording. `stats` joins local Git history through the resolved contracts pack
-with local runs and `.roster/evals.jsonl`; `--ref` and `--evals` remain supported.
+Completed issue seats append ignored `.roster/runs/runs.jsonl` automatically;
+manual `roster prepare` and standalone coder recording remain opt-in. `stats` joins local Git
+history through the resolved contracts pack with local runs and
+`.roster/evals.jsonl`; `--ref` and `--evals` remain supported.
 Human `eval` appends a decision, never the coder path. `recommend` suggests the
 highest accept-rate only with at least three evaluated samples, otherwise
 printing `insufficient data`. Nothing fetches human evaluations from GitHub.

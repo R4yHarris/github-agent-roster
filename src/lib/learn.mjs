@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { promises as fs, readFileSync, readdirSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { resolveContractsPath } from './paths.mjs';
+import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
 
 export const EFFORTS = ['l', 'm', 'h', 'x'];
 export const TASK_CLASSES = ['feat', 'fix', 'docs', 'test'];
@@ -163,8 +163,19 @@ export async function recordRun(record, {
   cwd = process.cwd(),
   env = process.env,
   fileSystem = fs,
+  createDirectory = false,
 } = {}) {
+  if (typeof createDirectory !== 'boolean') throw new TypeError('createDirectory must be a boolean');
   const directory = resolve(cwd, '.roster', 'runs');
+  if (createDirectory) {
+    await ensureLocalPath(directory, cwd);
+    try {
+      await fileSystem.mkdir(directory, { recursive: true, mode: 0o700 });
+    } catch (error) {
+      throw new Error(`Could not create ${directory}: ${failureDetail(error)}`, { cause: error });
+    }
+    await ensureLocalPath(directory, cwd);
+  }
   let status;
   try {
     status = await fileSystem.stat(directory);

@@ -220,7 +220,7 @@ export async function runBuiltinIssue(issueNumber, {
   const recordSeat = async (session, run, excellence) => recordRun({
     session, task: prepared.task, task_class: taskClass,
     ...(excellence ? { excellence: excellence.pass ? 'pass' : 'fail' } : {}),
-  }, { cwd: prepared.repoRoot, env: { ...metricEnv, ...run?.env } });
+  }, { cwd: prepared.repoRoot, env: { ...metricEnv, ...run?.env }, createDirectory: true });
   const plannerRun = activeConfig.llm.base_url ? buildRun({
     config: activeConfig, usage: planner.usage ?? {}, session: sessions.planner, task: prepared.task,
     env,

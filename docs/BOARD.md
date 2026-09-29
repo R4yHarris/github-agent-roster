@@ -26,8 +26,8 @@ from GitHub and reports the local worktree path. `--offline` reads only the
 cached assignment and filesystem: it reports PR state as **unknown**, not
 `none`. The interactive shell offers the same behavior via `/status`.
 
-Ignored `.roster/memory/<seat>.jsonl` files are seat context; optional
-`.roster/runs/*.jsonl` and `.roster/evals.jsonl` are learning evidence.
+Ignored `.roster/memory/<seat>.jsonl` files are seat context; automatic seat
+`.roster/runs/*.jsonl` and human `.roster/evals.jsonl` are learning evidence.
 Worktrees and local Ask drafts are working material. None replaces the
 GitHub issue/PR queue. See [same-session seats](MULTIAGENT.md),
 [the issue loop](ONE_TASK_LOOP.md), [status in the shell](REPL.md), and

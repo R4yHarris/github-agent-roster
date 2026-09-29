@@ -44,7 +44,7 @@ function fixture(context) {
   writeFileSync(path.join(repoRoot, 'roster.config.example.yml'), example);
   writeFileSync(path.join(repoRoot, 'skills', 'implement-task', 'SKILL.md'), '# Code and test\n');
   writeFileSync(path.join(contracts, 'scripts', 'agent-pr.mjs'), 'export {};\n');
-  writeFileSync(path.join(target, '.gitignore'), '.env\n.worktrees/\n');
+  writeFileSync(path.join(target, '.gitignore'), '.env\n.worktrees/\n.roster/runs/\n');
   writeFileSync(path.join(target, 'AGENTS.md'), '# Agent instructions\nStay in the worktree.\n');
   writeFileSync(path.join(target, 'README.md'), '# Example\n');
   writeFileSync(path.join(target, 'smoke.test.mjs'),
@@ -130,6 +130,13 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
     task: 'issue-42', session: 'roster-42-planner', status: 'stub',
     summary: 'Prepared RECIPE.yml and TASK.md',
   });
+  assert.deepEqual(loadLearning({ cwd: options.target }).runs, [
+    { session: result.sessions.planner, task: 'issue-42', task_class: 'feat' },
+    { session: result.sessions.coder, task: 'issue-42', task_class: 'feat', excellence: 'fail' },
+  ]);
+  assert.equal(existsSync(path.join(options.target, '.roster', 'evals.jsonl')), false);
+  assert.doesNotThrow(() => git(options.target, 'check-ignore', '--quiet',
+    '.roster/runs/runs.jsonl'));
   await assert.rejects(stageReviewedFiles(result.worktreePath, ['README.md']),
     /No reviewed task files changed/);
 });
@@ -386,6 +393,14 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
   assert.equal(result.run.line, packAgentRun(result.run.env));
   assert.match(result.runs.planner.line, /\|5\/-\|2\|roster-42-planner\|issue-42$/);
   assert.match(result.runs.coder.line, /\|17\/-\|7\|roster-42-coder\|issue-42$/);
+  const seatRecords = loadLearning({ cwd: options.target }).runs;
+  assert.deepEqual(seatRecords.map(({ model, effort, context_used, context_out }) =>
+    ({ model, effort, context_used, context_out })), [
+    { model: 'local-model', effort: 'm', context_used: 5, context_out: 2 },
+    { model: 'local-model', effort: 'm', context_used: 17, context_out: 7 },
+  ]);
+  assert.ok(seatRecords.every(({ context_max }) => context_max === undefined));
+  assert.deepEqual(seatRecords.map(({ excellence }) => excellence), [undefined, 'pass']);
   assert.equal((logs[0].match(/AI-Run:/g) ?? []).length, 2);
   assert.ok(logs.some((line) => line.includes('Merged PR #7')));
   assert.ok(!logs.join('\n').includes('private-key'));
@@ -581,9 +596,8 @@ test('planner and coder read only their own last 20 memory lines and append sepa
   }
 });
 
-test('opt-in learning records exactly one run for each builtin seat', async (context) => {
+test('builtin seats record runs automatically without an AI-Eval', async (context) => {
   const options = fixture(context);
-  mkdirSync(path.join(options.target, '.roster', 'runs'), { recursive: true });
   const result = await runBuiltinIssue(42, {
     ...options, config: stubConfig, log: () => {},
     env: { ...options.env, GITHUB_AGENT_CONTRACTS: resolveContractsPath() },
@@ -593,6 +607,7 @@ test('opt-in learning records exactly one run for each builtin seat', async (con
     { session: result.sessions.planner, task: 'issue-42', task_class: 'feat' },
     { session: result.sessions.coder, task: 'issue-42', task_class: 'feat', excellence: 'fail' },
   ]);
+  assert.equal(existsSync(path.join(options.target, '.roster', 'evals.jsonl')), false);
 });
 
 test('detects a changed recipe after the coder runs tests and refuses publication', async (context) => {
@@ -622,6 +637,13 @@ test('detects a changed recipe after the coder runs tests and refuses publicatio
   }), /Diff path is protected or outside TASK\.md allowed paths: RECIPE\.yml/);
   assert.equal(published, false);
   assert.equal(existsSync(path.join(options.target, '.worktrees', 'issue-42', 'RESULT.md')), true);
+  const records = loadLearning({ cwd: options.target }).runs;
+  assert.deepEqual(records.map(({ session, excellence }) => ({ session, excellence })), [
+    { session: 'roster-42-planner', excellence: undefined },
+    { session: 'roster-42-coder', excellence: 'fail' },
+  ]);
+  assert.ok(records.every(({ model }) => model === 'local-model'));
+  assert.equal(existsSync(path.join(options.target, '.roster', 'evals.jsonl')), false);
 });
 
 test('staging refuses changes outside the task scope', async (context) => {
