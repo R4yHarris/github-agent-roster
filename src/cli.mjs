@@ -9,6 +9,7 @@ import { submitAsk } from './lib/ask.mjs';
 import { runBuiltinIssue } from './lib/builtin.mjs';
 import { loadConfig } from './lib/config.mjs';
 import { checkDoctor, formatDoctor } from './lib/doctor.mjs';
+import { formatInit, initializeRoster } from './lib/init.mjs';
 import { formatMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
 import { resolveContractsPath } from './lib/paths.mjs';
 import { formatStatus, readStatus } from './lib/status.mjs';
@@ -20,6 +21,7 @@ const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const help = `Usage:
   roster --help
   roster doctor
+  roster init
   roster ask "..."
   roster run --issue N
   roster run --issue N --runtime builtin [--seats planner,coder] [--auto-model] [--publish]
@@ -35,6 +37,7 @@ const help = `Usage:
 
 Ask creates a GitHub issue when gh is available; otherwise it saves a local draft.
 Doctor checks local prerequisites without contacting GitHub or printing App env values.
+Init copies review-only examples; it never overwrites agent-policy.yml.
 Bare run prepares the legacy worktree; builtin run
 plans and executes planner then coder in one worktree. Publishing is opt-in.
 Recipe validates strict v0 seat YAML. Stats joins contracts AI-Run history with local runs and human evals.
@@ -96,6 +99,8 @@ async function main(args) {
     const result = checkDoctor();
     process.stdout.write(formatDoctor(result));
     if (!result.ok) process.exitCode = 1;
+  } else if (args.length === 1 && args[0] === 'init') {
+    process.stdout.write(formatInit(await initializeRoster()));
   } else if (args.length === 3 && args[0] === 'run' && args[1] === '--issue') {
     await runIssue(args[2]);
   } else if (args[0] === 'run' && args.includes('--runtime')) {

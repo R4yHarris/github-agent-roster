@@ -101,6 +101,9 @@ Run `roster doctor` from the target repository root to check Node 20,
 the contracts publisher, App variable presence, policy, and trailer workflow.
 It is offline, prints no App values or key paths, and exits nonzero when
 prerequisites are missing.
+`roster init` copies a config example and `ROSTER-POLICY-NOTE.md` into the
+current directory without replacing existing files or the human-owned
+`agent-policy.yml`.
 
 [Contracts resolution](src/lib/paths.mjs) checks the submodule first, then
 `GITHUB_AGENT_CONTRACTS`, then the sibling clone at `../github-agent-contracts`.
@@ -117,6 +120,7 @@ Tests run with no API key or model endpoint.
 node src/cli.mjs
 node src/cli.mjs --help
 node src/cli.mjs doctor
+node src/cli.mjs init
 node src/cli.mjs ask "Add a Status section to README.md"
 node src/cli.mjs run --issue 42
 node src/cli.mjs run --issue 42 --runtime builtin
