@@ -10,6 +10,8 @@ agents and CI.
 | Command | Behavior |
 | --- | --- |
 | `/ask TEXT` | Create an issue through `gh`, or write a local Ask, recipe, task, and create command when `gh` is missing. |
+| `/model [MODEL]` | Show the current model or persist a new one to ignored `.roster/config.yml`. |
+| `/effort [l|m|h|x]` | Show the current effort or persist a new level to ignored `.roster/config.yml`. |
 | `/run N` or `/run --issue N` | Run the builtin planner then coder in one issue worktree. The stub writes a task and result, but does not edit code or test. |
 | `/status [N] [--offline]` | Show an issue, its open branch PR, and worktree path. Defaults to the last run or created issue; offline reads only the cached assignment and reports PR state as unknown. |
 | `/eval TARGET accept|reject|rework 1-5 y|n` | Record a human evaluation through the existing evaluation library. |
@@ -27,6 +29,13 @@ accepted as part of `/vault set NAME` itself. The shell dispatches to existing
 library functions in the same Node process; those libraries may still invoke
 Git, GitHub CLI, tests, or the metrics exporter. It does not spawn another
 Roster CLI process or add a queue.
+
+`/model MODEL` and `/effort h` validate and atomically replace only those
+fields in the private config, keeping the other fields and comments. The
+updated values apply to the next `/run` in this shell. With no selected
+endpoint or profile, setting a model alone still leaves the stub active.
+Running `/model` or `/effort` without a value shows the current setting.
+Do not put API key values in the config; it remains ignored by Git.
 
 The CLI equivalent is `roster status --issue N [--offline]`. Without an
 explicit number, status uses the current `issue-N` branch or a single issue

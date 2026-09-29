@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync,
+  symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { ConfigError, loadConfig, parseConfig } from '../src/lib/config.mjs';
+import { ConfigError, loadConfig, parseConfig, setConfigValue } from '../src/lib/config.mjs';
 
 const example = readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8');
 
@@ -81,6 +83,29 @@ test('private config overrides the example without resolving or logging the API 
     if (original === undefined) delete process.env.ROSTER_API_KEY;
     else process.env.ROSTER_API_KEY = original;
   }
+});
+
+test('model and effort settings persist privately and leave other config fields intact', async (context) => {
+  const repoRoot = fixture(context);
+  const model = await setConfigValue('model', 'local-model', { repoRoot });
+  assert.equal(model.llm.model, 'local-model');
+  const effort = await setConfigValue('effort', 'h', { repoRoot });
+  assert.equal(effort.llm.effort, 'h');
+  assert.equal(loadConfig({ repoRoot }).llm.model, 'local-model');
+  const file = join(repoRoot, '.roster', 'config.yml');
+  const contents = readFileSync(file, 'utf8');
+  assert.match(contents, /profiles:\n/);
+  assert.match(contents, /# maximum planner responses/);
+  await assert.rejects(setConfigValue('model', 'bad model', { repoRoot }), ConfigError);
+  await assert.rejects(setConfigValue('effort', 'max', { repoRoot }), ConfigError);
+  assert.equal(readFileSync(file, 'utf8'), contents);
+  assert.deepEqual(readdirSync(join(repoRoot, '.roster')).filter((name) =>
+    name.startsWith('config.yml.')), []);
+
+  copyFileSync(new URL('../.gitignore', import.meta.url), join(repoRoot, '.gitignore'));
+  execFileSync('git', ['init', '--quiet'], { cwd: repoRoot, stdio: 'pipe' });
+  assert.doesNotThrow(() => execFileSync('git',
+    ['check-ignore', '--quiet', '--', '.roster/config.yml'], { cwd: repoRoot, stdio: 'pipe' }));
 });
 
 test('rejects invalid schema, fields, roles, paths, tool names, and endpoint settings', () => {
