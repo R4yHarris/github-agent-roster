@@ -137,7 +137,7 @@ test('LLM coder uses only offered tools within the turn budget, then verifies te
     return { status: 200, json: async () => ({
       choices: [{ finish_reason: 'stop', message: {
         role: 'assistant',
-        content: 'Updated README Status; node --test passed.',
+        content: 'Updated README Status; node --test passed.\nMODEL_ONLY_SOURCE_BODY',
       } }],
       usage: { prompt_tokens: 26, completion_tokens: 9 },
     }) };
@@ -160,6 +160,14 @@ test('LLM coder uses only offered tools within the turn budget, then verifies te
   const memory = readFileSync(options.memoryPath, 'utf8');
   assert.match(memory, /"status":"llm"/);
   assert.ok(!memory.includes('private-value'));
+  assert.doesNotMatch(memory, /MODEL_ONLY_SOURCE_BODY/);
+  const record = JSON.parse(memory);
+  assert.ok(Number.isFinite(Date.parse(record.time)));
+  assert.equal(record.issue, 4);
+  assert.equal(record.task, 'issue-4');
+  assert.match(record.changed, /README\.md/);
+  assert.equal(record.tests, 'node --test exited 0');
+  assert.equal(record.next_gap, 'None reported.');
 });
 
 test('a nonzero run_test returns captured output for the coder to fix in the next turn', async (context) => {
