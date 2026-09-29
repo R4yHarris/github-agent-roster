@@ -1,7 +1,9 @@
-import { lstatSync, readFileSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { promises as fs, lstatSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TextDecoder } from 'node:util';
+import { ensureLocalPath } from './paths.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
 const profileNames = ['ollama', 'lmstudio', 'openai'];
@@ -251,4 +253,36 @@ export function loadConfig({ repoRoot = rosterRoot } = {}) {
     source = readConfigFile(path.join(repoRoot, 'roster.config.example.yml'));
   }
   return parseConfig(source);
+}
+
+export async function setConfigValue(field, value, { repoRoot = rosterRoot } = {}) {
+  if (!['model', 'effort'].includes(field) || typeof value !== 'string' ||
+      !value || /[\r\n\0]/.test(value)) {
+    throw new TypeError('Set a single-line llm.model or llm.effort value');
+  }
+  const file = path.join(repoRoot, '.roster', 'config.yml');
+  await ensureLocalPath(file, repoRoot);
+  let source;
+  try {
+    source = readConfigFile(file);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    source = readConfigFile(path.join(repoRoot, 'roster.config.example.yml'));
+  }
+  const text = source.replace(/\r\n/g, '\n');
+  const line = new RegExp(`^  ${field}: [^\\n]*$`, 'm');
+  if (!line.test(text)) invalid(`llm.${field} is missing`);
+  const next = text.replace(line, `  ${field}: ${field === 'model' ? JSON.stringify(value) : value}`);
+  const config = parseConfig(next);
+  const directory = path.dirname(file);
+  await fs.mkdir(directory, { recursive: true, mode: 0o700 });
+  await ensureLocalPath(file, repoRoot);
+  const temporary = path.join(directory, `config.yml.${randomBytes(8).toString('hex')}.tmp`);
+  try {
+    await fs.writeFile(temporary, next, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    await fs.rename(temporary, file);
+  } finally {
+    await fs.rm(temporary, { force: true });
+  }
+  return config;
 }

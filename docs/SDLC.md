@@ -14,6 +14,8 @@ tracked example is loaded. Config is a strict version 1 YAML subset: unknown,
 duplicate, missing, or malformed fields fail instead of silently defaulting.
 Paths are relative to this checkout (the worktrees path is used in the issue's
 Git repository). Ignore a custom worktrees path yourself if you change it.
+The human [shell](REPL.md) can atomically persist `/model` and `/effort`
+without editing the tracked example or storing credentials.
 
 - `llm.base_url`: OpenAI-compatible chat completions base (for example
   `http://localhost:1234/v1`). Empty with no selected `llm.profile` means a

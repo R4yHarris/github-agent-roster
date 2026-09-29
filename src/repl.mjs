@@ -7,7 +7,7 @@ import { prepareBuiltinPublication, runBuiltinIssue } from './lib/builtin.mjs';
 import {
   closeMergedIssue, issueMergeMessage, mergedPullNumber, mergedPullNumberFromFailure,
 } from './lib/issue-board.mjs';
-import { loadConfig } from './lib/config.mjs';
+import { loadConfig, setConfigValue } from './lib/config.mjs';
 import { recordEvaluation } from './lib/eval.mjs';
 import { formatRecommendation, recommend, repositoryRoot, TASK_CLASSES } from './lib/learn.mjs';
 import { formatMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
@@ -18,6 +18,8 @@ import { createFileVault, validateSecretName } from './vault/file.mjs';
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const help = `Commands:
   /ask TEXT                 Create an issue, or draft one if gh is unavailable
+  /model [MODEL]            Show or persist the LLM model
+  /effort [l|m|h|x]         Show or persist the effort level
   /run N                    Run the builtin planner and coder for issue N
   /status [N] [--offline]   Show an issue, open PR, and local worktree
   /eval TARGET VERDICT 1-5 y|n
@@ -72,7 +74,8 @@ const defaultServices = {
   submitAsk, runBuiltinIssue, recordEvaluation, repositoryRoot, loadMetrics,
   summarizeMetrics, formatMetrics, recommend, formatRecommendation,
   resolveContractsPath, prepareBuiltinPublication, createFileVault,
-  validateSecretName, readStatus, formatStatus, issueCloser: closeMergedIssue,
+  validateSecretName, readStatus, formatStatus, setConfigValue,
+  issueCloser: closeMergedIssue,
   publisher: publishWithContracts,
 };
 
@@ -94,7 +97,7 @@ export function createDispatcher({
   services = {},
 } = {}) {
   const api = { ...defaultServices, ...services };
-  const state = { lastAsk: null, lastRun: null, pendingSecret: null, published: false };
+  const state = { lastAsk: null, lastRun: null, pendingSecret: null, published: false, config };
   const currentRoot = () => state.lastRun?.repoRoot ?? api.repositoryRoot(cwd);
   const metrics = (ref) => api.loadMetrics({
     contractsPath: api.resolveContractsPath({ repoRoot, cwd, env }),
@@ -123,11 +126,29 @@ export function createDispatcher({
     switch (command) {
       case 'ask': {
         if (!args) throw new TypeError('Use /ask TEXT.');
-        const ask = await api.submitAsk(args, { cwd, repoRoot, config, env });
+        const ask = await api.submitAsk(args, { cwd, repoRoot, config: state.config, env });
         state.lastAsk = ask;
         output.write(ask.mode === 'issue'
           ? `Issue: ${ask.url}\n`
           : `Ask: ${ask.askPath}\nRECIPE: ${ask.recipePath}\nTASK: ${ask.taskPath}\nNext: ${ask.command}\n`);
+        return true;
+      }
+      case 'model': {
+        if (!args) {
+          output.write(`Model: ${state.config.llm.model || '(unset)'}\n`);
+          return true;
+        }
+        state.config = await api.setConfigValue('model', args, { repoRoot });
+        output.write(`Model: ${state.config.llm.model}\n`);
+        return true;
+      }
+      case 'effort': {
+        if (!args) {
+          output.write(`Effort: ${state.config.llm.effort}\n`);
+          return true;
+        }
+        state.config = await api.setConfigValue('effort', args, { repoRoot });
+        output.write(`Effort: ${state.config.llm.effort}\n`);
         return true;
       }
       case 'run': {
@@ -135,7 +156,7 @@ export function createDispatcher({
         if (!issue) throw new TypeError('Use /run N or /run --issue N.');
         const messages = [];
         state.lastRun = await api.runBuiltinIssue(issue[1], {
-          cwd, repoRoot, config, env, publish: false,
+          cwd, repoRoot, config: state.config, env, publish: false,
           log: (message) => messages.push(message),
         });
         state.published = false;
@@ -159,7 +180,7 @@ export function createDispatcher({
         }
         const issue = numbers[0] ?? state.lastRun?.issue?.number ?? state.lastAsk?.number;
         output.write(api.formatStatus(await api.readStatus({
-          issue, offline, cwd: currentRoot(), config,
+          issue, offline, cwd: currentRoot(), config: state.config,
         })));
         return true;
       }
@@ -195,12 +216,12 @@ export function createDispatcher({
         let publishRoot;
         if (state.lastRun) {
           ({ contractsPath, publishEnv, worktreePath: publishRoot } =
-            await api.prepareBuiltinPublication(state.lastRun, { cwd, config, env }));
+            await api.prepareBuiltinPublication(state.lastRun, { cwd, config: state.config, env }));
         } else {
           publishRoot = currentRoot();
           contractsPath = api.resolveContractsPath({ repoRoot: publishRoot, cwd, env });
           publishEnv = { ...env, GITHUB_APP_PRIVATE_KEY_PATH: resolve(cwd, env.GITHUB_APP_PRIVATE_KEY_PATH) };
-          delete publishEnv[config.llm.api_key_env];
+          delete publishEnv[state.config.llm.api_key_env];
         }
         const finishIssue = async (pullNumber) => {
           state.published = true;

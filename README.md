@@ -53,7 +53,8 @@ vault lookup is not wired into the builtin client.
 The Node 20 ESM CLI supports both the builtin loop and a manual handoff:
 
 - With no arguments in a TTY, `roster` opens the [interactive human shell](docs/REPL.md)
-  with slash commands; non-TTY usage and `--help` keep the standard help text.
+  with slash commands, including `/model` and `/effort` for ignored private
+  settings; non-TTY usage and `--help` keep the standard help text.
 - `ask "..."` creates an issue in the current GitHub repository when `gh`
   is available; without `gh` it writes a local ask, recipe, and task plus
   a printable `gh issue create` command.

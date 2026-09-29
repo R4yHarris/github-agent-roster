@@ -31,6 +31,7 @@ function dispatcher({ env = {}, services = {} } = {}) {
 
 test('slash dispatcher calls existing services and keeps one run in the shell', async () => {
   const calls = [];
+  let activeConfig = config;
   const vault = {
     async list() { calls.push(['vault-list']); return ['ROSTER_TOKEN']; },
     async set(name, value) { calls.push(['vault-set', name, value]); },
@@ -44,7 +45,8 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
           taskPath: 'TASK.md', command: 'gh issue create --body-file ask.md' };
       },
       runBuiltinIssue: async (issue, options) => {
-        calls.push(['run', issue, options.publish]);
+        calls.push(['run', issue, options.publish, options.config.llm.model,
+          options.config.llm.effort]);
         options.log('Worktree: issue-42\n' +
           'node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue 42" --merge-when-green');
         return {
@@ -77,12 +79,21 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
       },
       formatRecommendation: () => 'insufficient data\n',
       createFileVault: () => vault,
+      setConfigValue: async (field, value) => {
+        calls.push(['set-config', field, value]);
+        activeConfig = { ...activeConfig, llm: { ...activeConfig.llm, [field]: value } };
+        return activeConfig;
+      },
     },
   });
 
   assert.equal(banner, 'roster-repl-project | runtime builtin | llm stub');
   assert.equal(await dispatch('/ask Add a status section.'), true);
+  await dispatch('/model local-model');
+  await dispatch('/effort h');
   assert.equal(await dispatch('/run --issue 42'), true);
+  assert.equal(state.config.llm.model, 'local-model');
+  assert.equal(state.config.llm.effort, 'h');
   assert.equal(state.lastRun.task, 'issue-42');
   await dispatch('/status');
   await dispatch('/status --offline');
@@ -102,7 +113,9 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
 
   assert.deepEqual(calls, [
     ['ask', 'Add a status section.'],
-    ['run', '42', false],
+    ['set-config', 'model', 'local-model'],
+    ['set-config', 'effort', 'h'],
+    ['run', '42', false, 'local-model', 'h'],
     ['status', 42, false],
     ['status', 42, true],
     ['eval', 'roster-42-coder', 'accept', '3', 'n', cwd],
@@ -114,6 +127,8 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
     ['vault-get', 'ROSTER_TOKEN'],
   ]);
   assert.match(output.text, /Worktree: issue-42/);
+  assert.match(output.text, /Model: local-model/);
+  assert.match(output.text, /Effort: h/);
   assert.match(output.text, /Next: gh issue create --body-file ask\.md/);
   assert.match(output.text, /--message "feat: issue 42" --merge-when-green/);
   assert.doesNotMatch(output.text, /--merge-when-green --merge-when-green/);

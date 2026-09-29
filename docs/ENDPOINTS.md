@@ -42,6 +42,9 @@ Use the OpenAI-compatible `/v1` base URL, not a full `/chat/completions` URL.
 With the server running, `GET <base_url>/models` lists model IDs; use an
 available ID for `llm.model`. Keep local servers bound to loopback unless
 remote access is deliberately secured.
+In the interactive [Roster shell](REPL.md), `/model MODEL` and `/effort h`
+persist those two fields to ignored `.roster/config.yml` without editing the
+tracked example. Select the endpoint profile in that private config.
 
 ## Local profiles
 
