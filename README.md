@@ -81,6 +81,14 @@ No concurrent workers, automatic routing, or deploy are provided. The human
 shell's `/publish` explicitly requests App merge after green checks.
 Do not tag v0.1.0 until the one-task loop is reviewed and working in a published PR.
 
+## Status
+
+Roster's sequential planner and coder seats and interactive CLI are available.
+Try the [30-second offline stub demo](docs/DEMO.md) to inspect a RECIPE, TASK,
+and RESULT without GitHub or a model; the stub does not edit code or run tests.
+For daily use, see the [interactive shell guide](docs/REPL.md). CLI flags remain
+available for agents and CI.
+
 ## Setup
 
 `vault set NAME` reads a secret from stdin; `vault list` prints names only,
