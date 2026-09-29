@@ -82,8 +82,9 @@ test('LLM coder uses only offered tools within the turn budget, then verifies te
     assert.deepEqual(sent.tools.map((tool) => tool.function.name),
       ['read_file', 'write_file', 'list_dir', 'run_test']);
     if (calls === 1) {
-      return { ok: true, json: async () => ({
+      return { status: 200, json: async () => ({
         choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant',
           content: null,
           tool_calls: [
             { id: 'write-1', type: 'function', function: {
@@ -99,8 +100,9 @@ test('LLM coder uses only offered tools within the turn budget, then verifies te
     }
     assert.equal(sent.messages.at(-2).tool_call_id, 'write-1');
     assert.equal(sent.messages.at(-1).tool_call_id, 'test-1');
-    return { ok: true, json: async () => ({
+    return { status: 200, json: async () => ({
       choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant',
         content: 'Updated README Status; node --test passed.',
       } }],
       usage: { prompt_tokens: 26, completion_tokens: 9 },
@@ -131,8 +133,9 @@ test('budget exhaustion and a failed final test stop without claiming success', 
     .replace('model: ""', 'model: local-model').replace('turn_budget: 8', 'turn_budget: 1'));
   const options = fixture(context, budget);
   await assert.rejects(runCoder({
-    ...options, fetchImpl: async () => ({ ok: true, json: async () => ({
+    ...options, fetchImpl: async () => ({ status: 200, json: async () => ({
       choices: [{ finish_reason: 'tool_calls', message: {
+        role: 'assistant',
         tool_calls: [{ id: 'call-1', type: 'function', function: {
           name: 'write_file', arguments: '{"path":"README.md","content":"changed"}',
         } }],
@@ -144,8 +147,8 @@ test('budget exhaustion and a failed final test stop without claiming success', 
 
   const failing = fixture(context, llmConfig);
   await assert.rejects(runCoder({
-    ...failing, fetchImpl: async () => ({ ok: true, json: async () => ({
-      choices: [{ finish_reason: 'stop', message: { content: 'Done' } }],
+    ...failing, fetchImpl: async () => ({ status: 200, json: async () => ({
+      choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Done' } }],
     }) }),
     runTestCommand: async () => { throw Object.assign(new Error('failed'), {
       code: 1, stdout: 'not ok', stderr: 'one test failed',

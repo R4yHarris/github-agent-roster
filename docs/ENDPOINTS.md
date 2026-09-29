@@ -13,9 +13,9 @@ prepare-only. See [SDLC](SDLC.md) for execution and publishing.
 - `llm.base_url` and `llm.model` are deliberately empty strings. Choose both
   explicitly; the example does not select a provider or model.
 - `llm.api_key_env: ROSTER_API_KEY` names an environment variable, not a key.
-  The builtin client sends authorization only when that variable is populated.
-  Leave it unset for a keyless local server; supply it when authentication is
-  required.
+  The configured coder uses the [OpenAI-compatible client](LLM.md), which
+  sends authorization only for a resolved key. Leave the variable unset for
+  a keyless local server; the planner still needs it for a keyed endpoint.
 - `llm.effort: m` records medium effort and `llm.context_max: 0` means an unknown
   context limit. These are run metadata, not provider-specific request options.
 - `planner.turn_budget` bounds the planner's JSON responses; it has no file
