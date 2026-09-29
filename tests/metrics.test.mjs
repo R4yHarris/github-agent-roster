@@ -41,16 +41,20 @@ test("exports local AI-Run records, joins local evals by full SHA, and prints mo
     [null, null, "accept", "revise"]);
   assert.deepEqual(records[3].evaluation, JSON.parse(evalsJsonl.split("\n")[1]));
   const groups = summarizeMetrics(records);
+  const unknown = { task_class: null, n: 0, accepted: 0, acceptRate: null,
+    medianMinutes: null, medianDifficulty: null, estimate_min: null };
   assert.deepEqual(groups, [
-    { model: "model-a", effort: "l", runs: 2, evaluated: 2 },
-    { model: "model-a", effort: "h", runs: 1, evaluated: 0 },
-    { model: "model-b", effort: null, runs: 1, evaluated: 0 },
+    { ...unknown, model: "model-a", effort: "l", runs: 2, evaluated: 2,
+      n: 1, accepted: 1, acceptRate: 1, medianDifficulty: 3 },
+    { ...unknown, model: "model-a", effort: "h", runs: 1, evaluated: 0 },
+    { ...unknown, model: "model-b", effort: null, runs: 1, evaluated: 0 },
   ]);
-  assert.equal(formatMetrics(groups),
-    "MODEL    EFFORT  RUNS  EVALS\n" +
-    "model-a  l       2     2\n" +
-    "model-a  h       1     0\n" +
-    "model-b  -       1     0\n");
+  assert.deepEqual(formatMetrics(groups).trim().split('\n').map((line) => line.split(/\s+/)), [
+    ["MODEL", "EFFORT", "RUNS", "EVALS", "TASK_CLASS", "N", "ACCEPT", "MEDIAN_MIN", "MEDIAN_DIFFICULTY"],
+    ["model-a", "l", "2", "2", "-", "1", "100.0%", "-", "3"],
+    ["model-a", "h", "1", "0", "-", "0", "-", "-", "-"],
+    ["model-b", "-", "1", "0", "-", "0", "-", "-", "-"],
+  ]);
 });
 
 test("does not read evals unless a path is provided", () => {

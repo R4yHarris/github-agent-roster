@@ -36,7 +36,11 @@ contracts AI-Run history with local runs and explicit human evaluations;
 [`recommend`](../src/lib/learn.mjs) considers distinct evaluated samples
 for the same class, model, and effort. Unknown models and `builtin-stub`
 are not candidates. At least **three** evaluated samples must support a
-configuration. `roster recommend --task-class feat` remains read-only.
+configuration. `roster recommend --task-class feat` remains read-only. Add
+`--difficulty 4` to require median human-rated difficulty of at least four;
+insufficient evidence prints the config default without silently routing.
+Recorded excellence failures count as rejects; passing tests never fabricate
+acceptance. See [capacity statistics](LEARNING.md).
 
 When a qualifying model exists and an endpoint is configured, Roster
 uses that model and recommended effort for **both seats in the current

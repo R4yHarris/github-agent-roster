@@ -61,7 +61,8 @@ The additional legacy `--evals PATH` file is UTF-8 JSONL, one record per full
 and `again` is a boolean. This legacy schema and its duplicate-SHA rejection
 remain supported. `loadMetrics` returns joined run records with an `evaluation`
 object or `null` added to each. SHA matching is case-insensitive; unmatched
-evaluations do not create runs. An explicit `--evals` file's entries override
+legacy evaluations without model/class do not create runs. Self-contained local
+human evaluations can supply learning evidence without an exported run. An explicit `--evals` file's entries override
 local SHA evaluations.
 
 The default `.roster/evals.jsonl` uses the stricter human `roster eval` schema:
@@ -78,15 +79,19 @@ Malformed JSONL or fields, unreadable files, and exporter failures raise errors
 with source/line or command context. Missing default learning files are optional;
 a missing explicit `--evals` path is an error.
 
-`summarizeMetrics` counts runs and matched evaluations by `model` and `effort`
-across versions and providers; `formatMetrics` produces a table with `MODEL`,
-`EFFORT`, `RUNS`, and `EVALS` columns. Effort uses the exporter's `l`, `m`, `h`,
-`x`, or `-` for unknown, sorted in that order per model. An unknown local model
-also displays as `-`. Empty history with no local runs prints
-`No AI-Run records found.` Stats does not rank or select models. The separate
-`roster recommend --task-class feat|fix|docs|test` command suggests the best
-accept-rate only with at least three human-evaluated samples per configuration;
-it does not change the worker or invent quality scores.
+`summarizeMetrics` groups by model, task class, and effort across versions and
+providers. `formatMetrics` keeps `MODEL`, `EFFORT`, `RUNS`, `EVALS` and adds
+`TASK_CLASS`, unique sample `N`, `ACCEPT` rate, `MEDIAN_MIN`, and
+`MEDIAN_DIFFICULTY`. Unknown values display as `-`; known zero minutes stay zero.
+Effort uses the exporter's `l`, `m`, `h`, `x`, or `-`. Empty history with no local
+evidence prints `No AI-Run records found.` Stats does not select models.
+
+`roster recommend --task-class fix --difficulty 4` ranks accept-rate only among
+configurations with at least three distinct samples and median difficulty at
+least four. Recorded excellence failures are rejects, not accepts, even when
+tests passed. No qualifying candidate prints insufficient data and config's
+model/effort default. See [learning](LEARNING.md) for exact denominators and
+missing-data handling; there is no hidden score.
 
 Run the focused tests with
 `node --test tests/metrics.test.mjs tests/learn.test.mjs tests/eval.test.mjs`.

@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
-import { inferTaskClass, joinLearning, loadLearning, TASK_CLASSES, validateLocalEvaluation } from '../lib/learn.mjs';
+import { excellenceFailed, inferTaskClass, joinLearning, loadLearning, median, TASK_CLASSES, validateLocalEvaluation } from '../lib/learn.mjs';
 import { splitTaskFrontmatter } from './skills.mjs';
 
 const fields = ['difficulty', 'estimate_min', 'task_class', 'model'];
@@ -34,14 +34,11 @@ export function estimateTask(metadata = {}, evaluations = [], defaultModel = '')
   const samples = [...latest.values()].filter((evaluation) =>
     selectedModel && evaluation.model === selectedModel && evaluation.task_class === task_class &&
     evaluation.minutes != null);
-  const accepted = samples.filter(({ verdict }) => verdict === 'accept')
-    .map(({ minutes }) => minutes).sort((left, right) => left - right);
+  const accepted = samples.filter((evaluation) => evaluation.verdict === 'accept' && !excellenceFailed(evaluation))
+    .map(({ minutes }) => minutes);
   const history = samples.length >= 3 && accepted.length > 0;
-  const middle = Math.floor(accepted.length / 2);
-  const median = !history ? estimate_min : accepted.length % 2 ? accepted[middle]
-    : accepted[middle - 1] + (accepted[middle] - accepted[middle - 1]) / 2;
   return {
-    difficulty, estimate_min: history ? Math.round(median) : estimate_min,
+    difficulty, estimate_min: history ? Math.round(median(accepted)) : estimate_min,
     task_class, model: selectedModel, source: history ? 'history' : 'task/default',
     n: samples.length, accepted: accepted.length,
   };
@@ -85,8 +82,9 @@ export async function writeEstimate(task, {
     (evaluation.sha && run.sha?.toLowerCase() === evaluation.sha.toLowerCase()) ||
     (evaluation.session && run.session === evaluation.session)));
   const joined = joinLearning([], runs, evaluations).filter(({ evaluation }) => evaluation)
-    .map(({ model, task_class, task: runTask, evaluation }) => ({
+    .map(({ model, task_class, task: runTask, excellence, evaluation }) => ({
       ...evaluation, model: model ?? evaluation.model,
+      ...(excellence === undefined ? {} : { excellence }),
       task_class: task_class ?? inferTaskClass(runTask) ?? evaluation.task_class,
     }));
   const metadata = estimateTask(readMetadata(header), [...standalone, ...joined],
