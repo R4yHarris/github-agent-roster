@@ -1,23 +1,31 @@
-# Local-first chat and file vault
+# vLLM OpenAI API and file vault
 
 The client uses Node 20's built-in `fetch` and crypto; there are no runtime
 package dependencies. No endpoint is enabled by default, and nothing selects
 a hosted service implicitly.
 
-## Configuration and hook
+## First profile: vllm-local (DGX Spark)
 
 [`createChat`](../src/llm/openai.mjs) accepts an in-memory configuration object
-with an `llm` section. For a local OpenAI-compatible server:
+with an `llm` section. The first endpoint recipe uses the **vLLM OpenAI API
+on DGX Spark**. This loopback example assumes Roster runs on the same host:
 
 ```js
 const config = {
   llm: {
-    base_url: 'http://127.0.0.1:11434/v1',
-    model: 'your-local-model',
+    base_url: 'http://127.0.0.1:8000/v1',
+    model: 'your-served-model',
     api_key_optional: true,
   },
 };
 ```
+
+For the builtin YAML config, copy [`roster.config.example.yml`](../roster.config.example.yml),
+set `llm.base_url` to `http://127.0.0.1:8000/v1` and `llm.model` to an ID
+served by vLLM, and leave `llm.profile: ""`. `vllm-local` names this documented
+recipe, not a selectable schema 1 YAML profile. The named profiles are
+`ollama`, `lmstudio`, and `openai`; hosted APIs are a later opt-in profile
+using the same HTTP shape. See [endpoint profiles](ENDPOINTS.md).
 
 | Field | Default | Meaning |
 | --- | --- | --- |
@@ -35,7 +43,7 @@ factory; it does not add a separate runner, planner, or task queue.
 
 The builtin [planner](../src/planner/stub.mjs) and
 [coder](../src/runtime/loop.mjs) use this client through a shared adapter
-when `.roster/config.yml` sets a custom `llm.base_url` or selects
+when `.roster/config.yml` sets the vLLM URL in `llm.base_url` or selects
 `llm.profile` for Ollama, LM Studio, or OpenAI. The resolved
 `llm.api_key_env` is both the environment-variable and vault entry name:
 a non-empty environment value wins without reading the vault, while an
@@ -79,7 +87,7 @@ timeouts fail explicitly. Errors contain fixed descriptions or HTTP status
 numbers, never upstream bodies, URLs, keys or underlying error causes. The
 client does not log requests, responses or credentials.
 
-## Hosted API: same client, vault key
+## Later hosted profile: same HTTP shape, vault key
 
 Store a key through stdin, then use configuration such as:
 
@@ -110,14 +118,14 @@ checkout. Vault locations inside Git worktrees (including through symlinked
 parents) are rejected, as are symlinked vault directories and entry files.
 
 ```sh
-node src/cli.mjs vault set OPENAI_API_KEY
-node src/cli.mjs vault list
-node src/cli.mjs vault get OPENAI_API_KEY
+roster vault set OPENAI_API_KEY
+roster vault list
+roster vault get OPENAI_API_KEY
 ```
 
 `set` requires piped/redirected stdin and reads until EOF; it never accepts a
 secret argument or echoes the value. For example, pipe the output of your
-existing secret manager into `node src/cli.mjs vault set OPENAI_API_KEY`.
+existing secret manager into `roster vault set OPENAI_API_KEY`.
 Do not type literal credentials into shell history. One trailing LF or CRLF
 is removed; other whitespace is preserved. Empty values are rejected.
 `list` prints sorted names only, one per line. `get` emits the exact value
