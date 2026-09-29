@@ -146,19 +146,20 @@ files), then invokes the SDK from the **issue worktree root**. Without
 `--publish`, review the diff and publish manually from that same root:
 
 ```sh
-node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "..."
+node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "..." --merge-when-green
 ```
 
 Initialize the submodule in the worktree first if needed.
 The publisher requires a feature branch and a human-owned root
-`agent-policy.yml` authorizing coder publication. Neither a recipe nor this CLI
-grants merge or deploy rights; do not change consumer policy to bypass a denial.
+`agent-policy.yml` authorizing coder publication and explicit SDK merging.
+It waits for required checks and repository review rules before merging; neither
+a recipe nor this CLI grants policy capabilities or deploy rights.
 
 Never commit credentials or `.env`, or publish as the signed-in human when App
 env is set.
 
-The interactive shell's `/publish` command instead imports the SDK directly
-with `--merge-when-green`; see [the shell guide](docs/REPL.md).
+The interactive shell's `/publish` imports the same SDK directly rather than
+starting another Node process; see [the shell guide](docs/REPL.md).
 
 ## Layout
 

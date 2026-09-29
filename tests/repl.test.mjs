@@ -44,11 +44,11 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
       runBuiltinIssue: async (issue, options) => {
         calls.push(['run', issue, options.publish]);
         options.log('Worktree: issue-42\n' +
-          'node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue 42"');
+          'node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue 42" --merge-when-green');
         return {
           issue: { number: 42 }, repoRoot: cwd, task: 'issue-42',
           worktreePath: join(cwd, '.worktrees', 'issue-42'),
-          command: 'node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue 42"',
+          command: 'node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue 42" --merge-when-green',
         };
       },
       recordEvaluation: async (target, verdict, difficulty, again, options) => {
@@ -101,6 +101,7 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
   ]);
   assert.match(output.text, /Worktree: issue-42/);
   assert.match(output.text, /--message "feat: issue 42" --merge-when-green/);
+  assert.doesNotMatch(output.text, /--merge-when-green --merge-when-green/);
   assert.match(output.text, /Last run: issue-42/);
   assert.match(output.text, /Commands:\n/);
   assert.ok(!output.text.includes('private-value'));

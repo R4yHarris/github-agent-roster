@@ -17,9 +17,9 @@ needed, following the [dependency guide](DEPENDENCY.md):
 node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "<conventional subject>" --merge-when-green
 ```
 
-This GHCP-specific command does not change the builtin coder's default
-publication path, add a merger or deploy seat, or bypass human-owned policy,
-reviews, or required checks. Keep the [hard boundaries](../AGENTS.md): do not
+The same flag applies to explicit builtin publication. It does not add a
+merger or deploy seat or bypass human-owned policy, reviews, or required checks.
+Keep the [hard boundaries](../AGENTS.md): do not
 edit the contracts submodule, [agent-policy.yml](../agent-policy.yml), or
 [workflows](../.github/workflows/).
 

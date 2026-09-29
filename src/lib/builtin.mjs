@@ -152,7 +152,7 @@ export async function runBuiltinIssue(issueNumber, {
   });
   await recordSeat(sessions.coder, coderRun);
   const runs = { planner: plannerRun, coder: coderRun };
-  const command = `node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue ${prepared.issue.number}"`;
+  const command = `node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue ${prepared.issue.number}" --merge-when-green`;
   log(`Worktree: ${worktreePath}\nAssignment: ${prepared.assignmentPath}\n` +
     `RECIPE: ${planner.recipePath}\nTASK: ${planner.taskPath}\nRESULT: ${result.resultPath}\n` +
     `Planner session: ${sessions.planner}\nAI-Run: ${plannerRun.line}\n` +
@@ -169,7 +169,7 @@ export async function runBuiltinIssue(issueNumber, {
     });
     const { stdout } = await publisher(process.execPath,
       [path.join(contractsPath, 'scripts', 'agent-pr.mjs'),
-        '--message', `feat: issue ${prepared.issue.number}`],
+        '--message', `feat: issue ${prepared.issue.number}`, '--merge-when-green'],
       { cwd: worktreePath, env: publishEnv, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
     if (stdout?.trim()) log(stdout.trim());
   }

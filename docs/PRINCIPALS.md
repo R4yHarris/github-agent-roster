@@ -16,19 +16,20 @@ The required coder-only worker baseline is:
 | Roster seat | Contracts role | Assignment | Policy allow-list |
 | --- | --- | --- | --- |
 | `coder` | `coder` | One coder worker | `commit_branch`, `open_pr`, `comment`, `label` |
-| `merger` | `merger` | Empty; no worker or credentials | `[]` |
+| `merger` | `merger` | Empty; no recipe seat | `merge` in reviewed policy |
 | `deploy` | `deploy` | Empty; no worker or credentials | `[]` |
 
 Merger and deploy are reserved here, not supported v0 recipe seats. An optional
 planner also uses `principal: coder`; planning grants no merge or deploy
-authority. See [seats and recipes](SEATS.md). Merge remains human-controlled;
-the coder worker must not use `--merge-when-green`.
+authority. See [seats and recipes](SEATS.md). An explicit publish request
+uses `--merge-when-green` only through the SDK, which checks the separately
+reviewed `merger.merge` grant and required GitHub checks. The model cannot
+invoke publication through a coder tool.
 
 The checked-in, human-owned [policy](../agent-policy.yml) currently grants
 `merger` the `merge` capability. An empty roster assignment is not a policy
-denial. Before enabling the unattended WSL worker, a human must publish empty
-`merger.allow` and `deploy.allow` lists in the reviewed default-branch policy
-and ensure the worker checkout matches it. Workers must not edit policy.
+denial. A deployment that must forbid App merging needs a human to remove
+that grant and stop using `--merge-when-green`; workers must not edit policy.
 
 ## Publication boundary
 
@@ -37,7 +38,7 @@ Publish only through the pinned `v0.2.0`
 the current worktree's repository root:
 
 ```sh
-node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "..."
+node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "..." --merge-when-green
 ```
 
 The operator provisions `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_PATH` outside
@@ -49,13 +50,15 @@ See [dependency setup](DEPENDENCY.md) and [key custody](THREAT_MODEL.md).
 
 ## Later WSL worker
 
-- Give the approved publisher only the coder App credentials. Leave merger and
-  deploy credentials absent; the helper does not switch keys based on role names.
+- Give the approved publisher only the configured App credentials; it checks
+  the reviewed merger grant for explicit merge requests. Keep deploy credentials
+  absent; the helper does not switch keys based on role names.
 - No human `gh` login, human PAT, human Git credential helper, or forwarded human
   SSH identity may be available in the WSL worker. Do not share Windows `gh`
   authentication or inject human tokens as environment fallbacks.
 - Keep the operator's Windows authentication separate and unchanged. Human
-  review, merge, and `AI-Eval` happen outside the worker.
+  review and `AI-Eval` happen outside the worker; the SDK alone may merge
+  after policy, required checks, and repository protections allow it.
 - The [current one-task loop](ONE_TASK_LOOP.md) expects authenticated `gh` for
   issue reads. A trusted executor must arrange App-authenticated reads before
   using that loop in WSL; the CLI does not provision this credential isolation.

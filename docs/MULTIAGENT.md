@@ -43,6 +43,7 @@ After the coder, the default command **stops** and prints the reviewed
 `agent-pr.mjs` command for the issue worktree root. `--publish` retains the
 explicit opt-in for a configured LLM run with passing tests and App credentials;
 it stages only task-allowed code and delegates a draft PR to the pinned
-contracts SDK. Neither path merges or deploys. Human review and `AI-Eval:`
-remain outside the coder seat. See [SDLC](SDLC.md), [recipes](SEATS.md),
+contracts SDK, which marks the PR ready and merges only after required checks
+and repository protections permit it. Neither path deploys. Human review and
+`AI-Eval:` remain outside the coder seat. See [SDLC](SDLC.md), [recipes](SEATS.md),
 and [metrics](METRICS.md).

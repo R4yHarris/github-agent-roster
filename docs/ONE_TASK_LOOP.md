@@ -8,7 +8,7 @@ When no LLM endpoint
 is configured, the deterministic stub writes only the result summary and
 does **not** implement the ask or run tests. With an endpoint, the coder uses
 four guarded tools and must pass a final `node --test` run. It prints
-`node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue N"`
+`node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue N" --merge-when-green`
 for the issue worktree root; `--publish` alone opts into staging task-allowed
 changes and invoking the App SDK. Policy, workflows, and credentials are
 never staged by the coder seat.
@@ -55,7 +55,7 @@ It prints the worktree location and, for the worker **after editing inside the
 worktree and loading `.env` into its environment**, exactly:
 
 ```sh
-node $GITHUB_AGENT_CONTRACTS/scripts/agent-pr.mjs --message "feat: issue N"
+node $GITHUB_AGENT_CONTRACTS/scripts/agent-pr.mjs --message "feat: issue N" --merge-when-green
 ```
 
 Set `GITHUB_AGENT_CONTRACTS` to the resolved contracts pack's absolute path in
@@ -65,8 +65,9 @@ POSIX shell variable syntax; PowerShell
 users must use their shell's environment-variable syntax when executing it.
 Without `--runtime builtin`, this module only prepares a coder handoff and
 prints the legacy publishing command: it does not
-start a worker, merge, or open additional issues. Merge remains
-human-controlled. The builtin path reuses this issue lookup and assignment
+start a worker, merge, or open additional issues. A later explicit publish
+requests merge only after the SDK verifies reviewed policy and required checks.
+The builtin path reuses this issue lookup and assignment
 preparation, rendering `ASSIGNMENT.md` from the SDLC template, but sets the
 ignored `.env` session to `roster-N-coder` and records separate planner/coder
 sessions. See [same-session seats](MULTIAGENT.md).

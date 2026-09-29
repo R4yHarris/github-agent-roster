@@ -15,7 +15,7 @@ only. This repo does not replace git.
 - Do not invent a Kanban database. Issues + PRs are the queue.
 - Do not commit PEMs, tokens, or `.env`.
 - Do not edit `agent-policy.yml` in a consumer repo; humans own policy.
-- Publish reviewed code changes from the current feature worktree's repository root with `node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "..."` when App env is set.
+- Publish reviewed code changes from the current feature worktree's repository root with `node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "..." --merge-when-green` when App env is set. Never leave a draft PR for the human.
 - Never `git commit` as the signed-in human when App env is set.
 - Never use `gh pr create` or `git push` with human credentials for GHCP publication.
 - Never edit `.github/workflows/*` from the coder seat.

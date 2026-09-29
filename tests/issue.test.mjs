@@ -44,7 +44,7 @@ test('reads the issue in the current repository and prepares one coder worktree'
   const { calls, writes, messages, options } = harness();
   const result = await runIssue('42', options);
   const worktreePath = path.join(repoRoot, '.worktrees', 'issue-42');
-  const nextCommand = 'node $GITHUB_AGENT_CONTRACTS/scripts/agent-pr.mjs --message "feat: issue 42"';
+  const nextCommand = 'node $GITHUB_AGENT_CONTRACTS/scripts/agent-pr.mjs --message "feat: issue 42" --merge-when-green';
 
   assert.deepEqual(calls, [
     { program: 'git', args: ['rev-parse', '--show-toplevel'], cwd: options.cwd },

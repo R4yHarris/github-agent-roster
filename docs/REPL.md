@@ -50,7 +50,8 @@ not accepted on the installation; there is no human-credential fallback.
 The SDK may report that a PR merged but local cleanup failed when the default
 branch is checked out in another worktree. Inspect the PR and worktrees in
 that case; do not blindly retry publication or create a second commit.
-The separate agent/CI `--publish` flag retains its existing behavior.
+The separate agent/CI `--publish` flag also requests merge-when-green; unlike
+the REPL, it invokes the SDK through the builtin runner.
 
 See [same-session seats](MULTIAGENT.md), [the contracts dependency](DEPENDENCY.md),
 and [the SDLC](SDLC.md).

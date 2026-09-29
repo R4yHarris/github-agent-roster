@@ -100,7 +100,7 @@ export async function runIssue(issueNumber, {
   const assignmentPath = path.join(worktreePath, 'ASSIGNMENT.md');
   const envPath = path.join(worktreePath, '.env');
   const session = sessionId ?? `roster-${now().toISOString().replace(/[-:.]/g, '')}`;
-  const nextCommand = `node $GITHUB_AGENT_CONTRACTS/scripts/agent-pr.mjs --message "feat: issue ${number}"`;
+  const nextCommand = `node $GITHUB_AGENT_CONTRACTS/scripts/agent-pr.mjs --message "feat: issue ${number}" --merge-when-green`;
 
   await beforeWorktree(repoRoot, worktreePath);
   await fileSystem.mkdir(path.dirname(worktreePath), { recursive: true });
