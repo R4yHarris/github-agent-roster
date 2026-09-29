@@ -52,6 +52,8 @@ vault lookup is not wired into the builtin client.
 
 The Node 20 ESM CLI supports both the builtin loop and a manual handoff:
 
+- With no arguments in a TTY, `roster` opens the [interactive human shell](docs/REPL.md)
+  with slash commands; non-TTY usage and `--help` keep the standard help text.
 - `ask "..."` drafts a local ask, recipe, and task; it does not create an issue.
 - `run --issue N --runtime builtin` runs builtin planner then coder in one
   worktree. `--seats planner,coder` is optional; publishing requires `--publish`.
@@ -66,7 +68,8 @@ The Node 20 ESM CLI supports both the builtin loop and a manual handoff:
 - `vault set NAME` reads stdin and `vault list` prints names only. A local-first
   OpenAI-compatible chat hook is available independently of the builtin loop.
 
-No concurrent workers, automatic routing, merge, or deploy are provided.
+No concurrent workers, automatic routing, or deploy are provided. The human
+shell's `/publish` explicitly requests App merge after green checks.
 Do not tag v0.1.0 until the one-task loop is reviewed and working in a published PR.
 
 ## Setup
@@ -97,6 +100,7 @@ Tests run with no API key or model endpoint.
 ## Current CLI
 
 ```sh
+node src/cli.mjs
 node src/cli.mjs --help
 node src/cli.mjs ask "Add a Status section to README.md"
 node src/cli.mjs run --issue 42
@@ -128,7 +132,7 @@ highest accept-rate only with at least three evaluated samples, otherwise
 printing `insufficient data`. Nothing fetches human evaluations from GitHub.
 
 See [the one-task loop](docs/ONE_TASK_LOOP.md), [same-session seats](docs/MULTIAGENT.md),
-[recipes](docs/SEATS.md), and
+[the human shell](docs/REPL.md), [recipes](docs/SEATS.md), and
 [metrics](docs/METRICS.md), [learning](docs/LEARNING.md),
 [LLM configuration and the vault](docs/LLM.md), [SDLC](docs/SDLC.md), and
 [principals](docs/PRINCIPALS.md) for details.
@@ -152,6 +156,9 @@ grants merge or deploy rights; do not change consumer policy to bypass a denial.
 
 Never commit credentials or `.env`, or publish as the signed-in human when App
 env is set.
+
+The interactive shell's `/publish` command instead imports the SDK directly
+with `--merge-when-green`; see [the shell guide](docs/REPL.md).
 
 ## Layout
 

@@ -109,6 +109,10 @@ session and reported token counts; the single code commit published through
 the SDK carries the coder's run. Unknown slots remain unset or `-`. An API key
 is not forwarded to tests or the publisher.
 
+For a human TTY, bare `roster` opens the [interactive shell](REPL.md).
+Its `/publish` command explicitly requests the App SDK's
+`--merge-when-green`; the agent/CI flags above keep their existing behavior.
+
 The earlier `roster run --issue N` remains a prepare-only compatibility
 command. See [the one-task loop](ONE_TASK_LOOP.md),
 [same-session seats](MULTIAGENT.md), [recipes](SEATS.md), and

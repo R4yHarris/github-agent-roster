@@ -10,6 +10,7 @@ import { runBuiltinIssue } from './lib/builtin.mjs';
 import { formatMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
 import { resolveContractsPath } from './lib/paths.mjs';
 import { validateRecipe } from './lib/recipe.mjs';
+import { startRepl } from './repl.mjs';
 import { createFileVault, validateSecretName } from './vault/file.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
@@ -63,7 +64,9 @@ function statsOptions(args) {
 }
 
 async function main(args) {
-  if (args.length === 0 || (args.length === 1 && ['--help', '-h'].includes(args[0]))) {
+  if (args.length === 0 && process.stdin.isTTY) {
+    process.exitCode = await startRepl({ repoRoot: rosterRoot });
+  } else if (args.length === 0 || (args.length === 1 && ['--help', '-h'].includes(args[0]))) {
     process.stdout.write(help);
   } else if (args.length === 2 && args[0] === 'ask') {
     const result = await writeAsk(args[1], {
