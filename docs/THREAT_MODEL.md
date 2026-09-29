@@ -68,11 +68,15 @@ the coder worker.
 
 The contracts publisher checks coder grants against reviewed policy and refuses
 policy and workflow changes. Those publication checks are not a filesystem
-write sandbox: the roster does not currently enforce the tool deny-list or
-provision WSL isolation. A trusted executor must enforce those controls before
-unattended use. The existing `merger.merge` policy grant also needs the
-human-owned correction described in [principals](PRINCIPALS.md); an unassigned
-seat alone does not remove it.
+write sandbox. The [builtin tools](../src/runtime/tools.mjs) enforce task
+allowlists, reject path and symlink escapes, and deny writes to Git metadata,
+recognized environment files, PEMs, policy, workflows, and generated task files.
+These application-level guards are not complete enforcement of every required
+surface above, nor an OS sandbox for repository tests. The roster does not
+provision WSL isolation. A trusted executor must enforce the full deployment
+boundaries before unattended use. The existing `merger.merge` policy grant also
+needs the human-owned correction described in [principals](PRINCIPALS.md); an
+unassigned seat alone does not remove it.
 
 Keep required checks, human reviews, and protected-branch rules enabled, with
 the coder App off bypass lists. GitHub tokens are not inherently draft-only;
