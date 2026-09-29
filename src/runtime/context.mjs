@@ -4,7 +4,7 @@ import { ensureLocalPath } from '../lib/paths.mjs';
 import { taskFilesAllowed } from '../planner/stub.mjs';
 import { loadPrincipal } from '../seats/principal.mjs';
 import { readMemory } from './memory.mjs';
-import { loadSkills, taskSkillNames } from './skills.mjs';
+import { loadSkills } from './skills.mjs';
 
 async function requiredFile(file, worktree) {
   await ensureLocalPath(file, worktree);
@@ -61,14 +61,10 @@ export async function loadContext({ worktree, memoryPath, repoRoot, config, prin
   if (!/^# Task: .+$/m.test(task) || !/^## Acceptance checks\n(?:- .+\n)+/m.test(task)) {
     throw new Error('TASK.md needs a title and acceptance checks');
   }
-  const names = taskSkillNames(task);
-  const available = names.length
-    ? await loadSkills({ repoRoot, skillsPath: config?.paths?.skills }) : [];
-  const skills = names.map((name) => {
-    const skill = available.find((entry) => entry.name === name);
-    if (!skill) throw new Error(`Unknown task skill: ${name}`);
-    return { name, content: skill.content.replace(/\r\n/g, '\n').split('\n').slice(0, 40).join('\n') };
-  });
+  const skills = (await loadSkills({ repoRoot, skillsPath: config?.paths?.skills, task }))
+    .map(({ name, content }) => ({
+      name, content: content.replace(/\r\n/g, '\n').split('\n').slice(0, 40).join('\n'),
+    }));
   const { pack, truncated } = boundedPack([
     { heading: `Principal ${principal.id}:`, body: principal.content.trim(), required: true },
     { heading: 'TASK.md', body: task.trim(), required: true },

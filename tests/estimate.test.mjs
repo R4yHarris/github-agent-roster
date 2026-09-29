@@ -72,6 +72,7 @@ test('ESTIMATE.md and TASK fields use repository history, including legacy joine
     JSON.stringify({ session, model, task_class, ...(index === 0 ? { sha } : {}) })).join('\n') + '\n');
   const source = planStub('Fix README.md.', { title: 'fix: typo' }).task;
   const result = await writeEstimate(source, { worktree, learningRoot: root, config, env: {} });
+  assert.match(result.task, /^---\nskills: \[implement-task, run-tests, read-before-write, small-diff, result-report\]\n---\n# Task: fix: typo/);
   assert.match(result.task, /estimate_min: 15\ntask_class: fix\nmodel: served-model\n/);
   assert.equal(result.metadata.source, 'history');
   assert.equal(readFileSync(join(worktree, 'ESTIMATE.md'), 'utf8'), result.estimate);

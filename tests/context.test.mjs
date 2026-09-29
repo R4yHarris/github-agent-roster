@@ -17,7 +17,7 @@ function fixture(context) {
   mkdirSync(path.join(repoRoot, 'principals'));
   writeFileSync(path.join(repoRoot, 'principals', 'coder.md'), '# Conduct\nStay within scope.\n');
   writeFileSync(path.join(worktree, 'TASK.md'),
-    planStub('Update README.md.', { reference: 'issue:4' }).task);
+    planStub('Update README.md.', { reference: 'issue:4' }).task.replace(/^skills:.*$/m, 'skills: []'));
   writeFileSync(path.join(worktree, 'AGENTS.md'), '# Instructions\nRead before editing.\n');
   for (const file of ['.env', 'app.pem', 'agent-policy.yml', 'unrelated.txt']) {
     writeFileSync(path.join(worktree, file), `body-of-${file}`);
@@ -28,7 +28,7 @@ function fixture(context) {
 test('packs ordered task-scoped context, forty-line skills and the latest twenty memory entries', async (context) => {
   const options = fixture(context);
   const taskPath = path.join(options.worktree, 'TASK.md');
-  writeFileSync(taskPath, '---\nskills: [implement-task]\n---\n' + readFileSync(taskPath, 'utf8'));
+  writeFileSync(taskPath, readFileSync(taskPath, 'utf8').replace('skills: []', 'skills: [implement-task]'));
   for (const name of ['implement-task', 'unrequested']) {
     const directory = path.join(options.repoRoot, 'skills', name);
     mkdirSync(directory, { recursive: true });
@@ -87,7 +87,7 @@ test('context refuses undersized budgets, protected scope, and unknown requested
     writeFileSync(taskPath, task.replace('- `README.md`', `- \`${file}\``));
     await assert.rejects(loadContext(options), /exclude protected files/);
   }
-  writeFileSync(taskPath, '---\nskills: [missing]\n---\n' + task);
+  writeFileSync(taskPath, task.replace('skills: []', 'skills: [missing]'));
   await assert.rejects(loadContext(options), /Unknown task skill: missing/);
 });
 
