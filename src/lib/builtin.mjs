@@ -19,7 +19,7 @@ import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
 
 const execFileAsync = promisify(execFile);
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
-const generated = new Set(['ASSIGNMENT.md', 'TASK.md', 'RECIPE.yml', 'CONTEXT.md', 'RESULT.md']);
+const generated = new Set(['ASSIGNMENT.md', 'TASK.md', 'RECIPE.yml', 'CONTEXT.md', 'RESULT.md', 'ESTIMATE.md']);
 
 async function git(worktree, args, env = process.env) {
   const { stdout } = await execFileAsync('git', args, {
@@ -78,6 +78,7 @@ export async function prepareBuiltinPublication(run, {
   }
   await ensureUnchanged(run.recipePath, run.planner.recipe);
   await ensureUnchanged(run.taskPath, run.planner.task);
+  await ensureUnchanged(run.planner.estimatePath, run.planner.estimate);
   const commandEnv = { ...env };
   delete commandEnv[config.llm.api_key_env];
   await git(run.worktreePath, ['submodule', 'update', '--init', '--recursive'], commandEnv);
@@ -164,12 +165,12 @@ export async function runBuiltinIssue(issueNumber, {
   };
   const planner = await runPlanner({
     worktree: worktreePath, repoRoot, issue: prepared.issue, config: activeConfig,
-    task: prepared.task, session: sessions.planner, fetchImpl, env, vault,
+    task: prepared.task, session: sessions.planner, fetchImpl, env, vault, learningRoot: prepared.repoRoot,
   });
   const metricEnv = { ...commandEnv };
   for (const name of [...RUN_ENV_NAMES, 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH',
     'GH_TOKEN', 'GITHUB_TOKEN']) delete metricEnv[name];
-  const taskClass = inferTaskClass(prepared.issue.title);
+  const taskClass = planner.metadata.task_class;
   const recordSeat = async (session, run) => recordRun({
     session, task: prepared.task, task_class: taskClass,
   }, { cwd: prepared.repoRoot, env: { ...metricEnv, ...run?.env } });
@@ -178,14 +179,18 @@ export async function runBuiltinIssue(issueNumber, {
     env,
   }) : null;
   await recordSeat(sessions.planner, plannerRun);
+  const coderConfig = planner.metadata.model && planner.metadata.model !== activeConfig.llm.model
+    ? { ...activeConfig, llm: Object.freeze({ ...activeConfig.llm, model: planner.metadata.model }) }
+    : activeConfig;
   const result = await runCoder({
-    worktree: worktreePath, repoRoot, config: activeConfig, task: prepared.task, session: sessions.coder,
+    worktree: worktreePath, repoRoot, config: coderConfig, task: prepared.task, session: sessions.coder,
     fetchImpl, env, vault, runTestCommand,
   });
   await ensureUnchanged(planner.recipePath, planner.recipe);
   await ensureUnchanged(planner.taskPath, planner.task);
+  await ensureUnchanged(planner.estimatePath, planner.estimate);
   const coderRun = result.mode === 'llm' ? buildRun({
-    config: activeConfig, usage: result.usage ?? {}, session: sessions.coder, task: prepared.task,
+    config: coderConfig, usage: result.usage ?? {}, session: sessions.coder, task: prepared.task,
     env,
   }) : null;
   await recordSeat(sessions.coder, coderRun);
@@ -193,7 +198,7 @@ export async function runBuiltinIssue(issueNumber, {
   const publishMessage = issueMergeMessage(`feat: issue ${prepared.issue.number}`, prepared.issue.number);
   const command = `node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "${publishMessage}" --merge-when-green`;
   log(`Worktree: ${worktreePath}\nAssignment: ${prepared.assignmentPath}\n` +
-    `RECIPE: ${planner.recipePath}\nTASK: ${planner.taskPath}\nRESULT: ${result.resultPath}\n` +
+    `RECIPE: ${planner.recipePath}\nTASK: ${planner.taskPath}\nESTIMATE: ${planner.estimatePath}\nRESULT: ${result.resultPath}\n` +
     `Planner session: ${sessions.planner}\n` +
     (plannerRun ? `AI-Run: ${plannerRun.line}\n` : '') +
     `Coder session: ${sessions.coder}\n` +
@@ -209,7 +214,7 @@ export async function runBuiltinIssue(issueNumber, {
   };
   if (publish) {
     const { contractsPath, publishEnv } = await prepareBuiltinPublication(completed, {
-      cwd, config: activeConfig, env,
+      cwd, config: coderConfig, env,
     });
     let stdout;
     try {
