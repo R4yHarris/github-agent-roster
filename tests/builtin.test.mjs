@@ -388,6 +388,13 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
   assert.equal(result.run.line, packAgentRun(result.run.env));
   assert.match(result.runs.planner.line, /\|5\/-\|2\|roster-42-planner\|issue-42$/);
   assert.match(result.runs.coder.line, /\|17\/-\|7\|roster-42-coder\|issue-42$/);
+  const seatRecords = loadLearning({ cwd: options.target }).runs;
+  assert.deepEqual(seatRecords.map(({ model, effort, context_used, context_out }) =>
+    ({ model, effort, context_used, context_out })), [
+    { model: 'local-model', effort: 'm', context_used: 5, context_out: 2 },
+    { model: 'local-model', effort: 'm', context_used: 17, context_out: 7 },
+  ]);
+  assert.ok(seatRecords.every(({ context_max }) => context_max === undefined));
   assert.equal((logs[0].match(/AI-Run:/g) ?? []).length, 2);
   assert.ok(logs.some((line) => line.includes('Merged PR #7')));
   assert.ok(!logs.join('\n').includes('private-key'));
