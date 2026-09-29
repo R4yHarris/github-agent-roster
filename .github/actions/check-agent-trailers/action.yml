@@ -22,4 +22,4 @@ runs:
         HEAD_SHA: ${{ inputs.head-sha }}
         REQUIRE_ON_ALL_COMMITS: ${{ inputs.require-on-all-commits }}
         ACTION_PATH: ${{ github.action_path }}
-      run: node "$ACTION_PATH/../../../scripts/check-pr-agent-trailers.mjs"
+      run: node "$ACTION_PATH/../../../vendor/github-agent-contracts/scripts/check-pr-agent-trailers.mjs"
