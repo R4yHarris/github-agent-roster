@@ -29,6 +29,7 @@ test("help lists every prompt's command", () => {
   assert.match(result.stdout, /roster\s+stats/);
   assert.match(result.stdout, /roster\s+vault\s+set\s+NAME/);
   assert.match(result.stdout, /roster\s+vault\s+list/);
+  assert.match(result.stdout, /roster\s+vault\s+get\s+NAME/);
   assert.match(result.stdout, /roster\s+eval/);
   assert.match(result.stdout, /roster\s+recommend\s+--task-class/);
   assert.match(result.stdout, /roster\s+ask/);
@@ -132,12 +133,21 @@ test("vault CLI accepts only stdin secrets and lists names without values", asyn
   assert.equal(listed.status, 0, listed.stderr);
   assert.equal(listed.stdout, "ROSTER_TEST_TOKEN\n");
   assert.equal(listed.stderr, "");
+  const fetched = run(["vault", "get", "ROSTER_TEST_TOKEN"], env);
+  assert.ifError(fetched.error);
+  assert.equal(fetched.status, 0, fetched.stderr);
+  assert.equal(fetched.stdout, secret);
+  assert.equal(fetched.stderr, "");
+  const missing = run(["vault", "get", "MISSING"], env);
+  assert.notEqual(missing.status, 0);
+  assert.equal(missing.stdout, "");
+  assert.match(missing.stderr, /No secret stored/);
 
   for (const [args, input] of [
     [["vault", "set", "TOKEN", secret], ""],
     [["vault", "set", "TOKEN"], "\n"],
     [["vault", "set", "../TOKEN"], secret],
-    [["vault", "get", "ROSTER_TEST_TOKEN"], ""],
+    [["vault", "set", "GITHUB_APP_PRIVATE_KEY_PATH"], secret],
   ]) {
     const result = run(args, env, cli, input);
     assert.ifError(result.error);

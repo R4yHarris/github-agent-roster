@@ -113,7 +113,10 @@ export function parseConfig(source) {
   llm.api_key_env = stringValue(llm.api_key_env, 'llm.api_key_env');
   llm.effort = stringValue(llm.effort, 'llm.effort');
   llm.context_max = integerValue(llm.context_max, 'llm.context_max');
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(llm.api_key_env)) invalid('llm.api_key_env must name an environment variable');
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(llm.api_key_env) ||
+      /^GITHUB_APP_/i.test(llm.api_key_env)) {
+    invalid('llm.api_key_env must name an LLM environment variable, not a GitHub App credential');
+  }
   if (!['l', 'm', 'h', 'x'].includes(llm.effort)) invalid('llm.effort must be l, m, h, or x');
   if (llm.model && !/^[A-Za-z0-9._:/-]+$/.test(llm.model)) invalid('llm.model must be a model name without whitespace');
   if (llm.base_url) {

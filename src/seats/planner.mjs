@@ -3,9 +3,9 @@ import path from 'node:path';
 import { parseRecipe } from '../lib/recipe.mjs';
 import { planAsk } from '../planner/stub.mjs';
 
-export async function runPlanner({ worktree, issue, config, fetchImpl, env }) {
+export async function runPlanner({ worktree, issue, config, fetchImpl, env, vault }) {
   const plan = await planAsk(issue.body, {
-    config, reference: `issue:${issue.number}`, title: issue.title, fetchImpl, env,
+    config, reference: `issue:${issue.number}`, title: issue.title, fetchImpl, env, vault,
   });
   const recipe = parseRecipe(plan.recipe);
   if (recipe.ask !== `issue:${issue.number}` || recipe.seats.length !== 2 ||

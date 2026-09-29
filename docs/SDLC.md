@@ -18,8 +18,9 @@ Git repository). Ignore a custom worktrees path yourself if you change it.
 - `llm.base_url`: OpenAI-compatible chat completions base (for example
   `http://localhost:1234/v1`). Empty means a network-free deterministic stub.
   Set `llm.model` when the URL is nonempty. Local endpoints may work without
-  a key; if needed, set the environment variable named by `llm.api_key_env`.
-  Put only its **name** in config, never the key. HTTP errors report status,
+  a key; when needed, set the environment variable named by `llm.api_key_env`
+  or store an API key under that name in the file vault. A non-empty environment
+  value wins. Put only its **name** in config, never the key. HTTP errors report status,
   not the response body or Authorization header.
 - `llm.effort` (`l|m|h|x`) and `llm.context_max` (zero means unknown) describe
   provenance for AI-Run. They are not guessed from the endpoint or sent as a

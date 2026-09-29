@@ -100,6 +100,7 @@ export async function runBuiltinIssue(issueNumber, {
   log = console.log,
   runCommand,
   fetchImpl,
+  vault,
   runTestCommand,
   publisher = execFileAsync,
   now,
@@ -126,7 +127,7 @@ export async function runBuiltinIssue(issueNumber, {
     coder: prepared.session,
   };
   const planner = await runPlanner({
-    worktree: worktreePath, issue: prepared.issue, config, fetchImpl, env,
+    worktree: worktreePath, issue: prepared.issue, config, fetchImpl, env, vault,
   });
   const metricEnv = { ...commandEnv };
   for (const name of [...runNames, 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH',
@@ -142,7 +143,7 @@ export async function runBuiltinIssue(issueNumber, {
   await recordSeat(sessions.planner, plannerRun);
   const result = await runCoder({
     worktree: worktreePath, repoRoot, config, task: prepared.task, session: sessions.coder,
-    fetchImpl, env, runTestCommand,
+    fetchImpl, env, vault, runTestCommand,
   });
   await ensureUnchanged(planner.recipePath, planner.recipe);
   await ensureUnchanged(planner.taskPath, planner.task);

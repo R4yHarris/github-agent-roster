@@ -7,7 +7,7 @@ import { loadSkills } from '../runtime/skills.mjs';
 import { createTools } from '../runtime/tools.mjs';
 
 export async function runCoder({
-  worktree, repoRoot, config, task, session, fetchImpl, env, runTestCommand,
+  worktree, repoRoot, config, task, session, fetchImpl, env, vault, runTestCommand,
 }) {
   const memoryPath = path.join(repoRoot, config.paths.memory);
   const [context, skills] = await Promise.all([
@@ -20,7 +20,7 @@ export async function runCoder({
   });
   let result;
   try {
-    result = await runLoop({ config, context, skills, tools, worktree, fetchImpl, env });
+    result = await runLoop({ config, context, skills, tools, worktree, fetchImpl, env, vault });
   } catch (error) {
     await appendMemory({ file: memoryPath, repoRoot, record: {
       task, session, status: 'failed', error: error.message,

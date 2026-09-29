@@ -1,24 +1,23 @@
-export async function chatCompletion({ config, messages, tools, env = process.env, fetchImpl = globalThis.fetch }) {
-  if (!config.llm.base_url) throw new Error('An LLM base_url is required for chat completion');
-  const url = new URL('chat/completions', `${config.llm.base_url.replace(/\/+$/, '')}/`);
-  const headers = { 'Content-Type': 'application/json' };
-  const key = env[config.llm.api_key_env];
-  if (key) headers.Authorization = `Bearer ${key}`;
-  let response;
-  try {
-    response = await fetchImpl(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ model: config.llm.model, messages, ...(tools ? { tools } : {}) }),
-      signal: AbortSignal.timeout(60_000),
-    });
-  } catch {
-    throw new Error('LLM chat request failed (check the endpoint and connection)');
-  }
-  if (!response.ok) throw new Error(`LLM chat request failed with HTTP ${response.status}`);
-  try {
-    return await response.json();
-  } catch {
-    throw new Error('LLM chat endpoint returned invalid JSON');
-  }
+import { createChat } from '../llm/openai.mjs';
+
+export function createBuiltinChat(config, {
+  fetchImpl = globalThis.fetch, env = process.env, vault,
+} = {}) {
+  return createChat({ llm: {
+    base_url: config.llm.base_url,
+    model: config.llm.model,
+    api_key_name: config.llm.api_key_env,
+    api_key_optional: true,
+    timeout_ms: 60_000,
+  } }, { fetch: fetchImpl, env, vault });
+}
+
+export async function chatCompletion({ config, messages, tools, env, fetchImpl, vault }) {
+  const chat = createBuiltinChat(config, { fetchImpl, env, vault });
+  if (chat === null) throw new Error('An LLM base_url is required for chat completion');
+  const response = await chat({ messages, ...(tools ? { tools } : {}) });
+  return {
+    choices: [{ message: response.message, finish_reason: response.finish_reason }],
+    usage: response.usage,
+  };
 }

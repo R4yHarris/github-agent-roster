@@ -106,7 +106,7 @@ export function planStub(ask, { reference = 'local:draft', title } = {}) {
   });
 }
 
-export async function planAsk(ask, { config, reference = 'local:draft', title, fetchImpl, env } = {}) {
+export async function planAsk(ask, { config, reference = 'local:draft', title, fetchImpl, env, vault } = {}) {
   const cleanAsk = cleanAskText(ask);
   if (!config.llm.base_url) return { ...planStub(cleanAsk, { reference, title }), usage: null, turns: 0 };
   const budget = config.planner?.turn_budget;
@@ -120,7 +120,7 @@ export async function planAsk(ask, { config, reference = 'local:draft', title, f
   ];
   const usages = [];
   for (let turn = 1; turn <= budget; turn += 1) {
-    const response = await chatCompletion({ config, fetchImpl, env, messages });
+    const response = await chatCompletion({ config, fetchImpl, env, vault, messages });
     usages.push(response?.usage ?? null);
     const choice = response?.choices?.[0];
     const message = choice?.message;

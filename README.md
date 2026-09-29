@@ -65,7 +65,8 @@ The Node 20 ESM CLI supports both the builtin loop and a manual handoff:
 - `stats` joins contracts `AI-Run` history with opt-in local runs and human
   evaluations. `eval` records a human decision; `recommend` needs at least
   three evaluated samples. Neither fetches evaluations from GitHub.
-- `vault set NAME` reads stdin and `vault list` prints names only. A local-first
+- `vault set NAME` reads stdin, `vault list` prints names only, and
+  `vault get NAME` writes a value only to a pipe or redirected stdout. A local-first
   OpenAI-compatible chat hook is available independently of the builtin loop.
 
 No concurrent workers, automatic routing, or deploy are provided. The human
@@ -74,7 +75,8 @@ Do not tag v0.1.0 until the one-task loop is reviewed and working in a published
 
 ## Setup
 
-`vault set NAME` reads a secret from stdin; `vault list` prints names only.
+`vault set NAME` reads a secret from stdin; `vault list` prints names only,
+and `vault get NAME` refuses interactive stdout.
 The vault stays under your home directory, never in a Git worktree.
 
 Use Node 20+ and clone with the required contracts submodule:
@@ -108,6 +110,7 @@ node src/cli.mjs run --issue 42 --runtime builtin
 node src/cli.mjs recipe validate recipe.yml
 node src/cli.mjs stats --ref HEAD --evals evals.jsonl
 node src/cli.mjs vault list
+node src/cli.mjs vault get ROSTER_API_KEY
 node src/cli.mjs eval roster-20260928T120000000Z accept 3 n
 node src/cli.mjs recommend --task-class feat
 npm test
