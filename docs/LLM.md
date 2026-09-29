@@ -35,7 +35,8 @@ factory; it does not add a separate runner, planner, or task queue.
 
 The builtin [planner](../src/planner/stub.mjs) and
 [coder](../src/runtime/loop.mjs) use this client through a shared adapter
-when `.roster/config.yml` sets `llm.base_url`. The configured
+when `.roster/config.yml` sets a custom `llm.base_url` or selects
+`llm.profile` for Ollama, LM Studio, or OpenAI. The resolved
 `llm.api_key_env` is both the environment-variable and vault entry name:
 a non-empty environment value wins without reading the vault, while an
 unset or empty value falls back to the vault. Keys are optional for local
