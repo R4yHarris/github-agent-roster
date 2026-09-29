@@ -6,11 +6,16 @@ import path from 'node:path';
 import test from 'node:test';
 import { parseConfig } from '../src/lib/config.mjs';
 import { writeAsk } from '../src/lib/ask.mjs';
-import { runBuiltinIssue, stageReviewedFiles } from '../src/lib/builtin.mjs';
+import { runBuiltinIssue as runIssueWithSeats, stageReviewedFiles } from '../src/lib/builtin.mjs';
 import { loadLearning } from '../src/lib/learn.mjs';
 import { resolveContractsPath } from '../src/lib/paths.mjs';
 import { parseRecipe } from '../src/lib/recipe.mjs';
 import { packAgentRun } from '../vendor/github-agent-contracts/scripts/parse-agent-run.mjs';
+import { withResearchSummary } from './helpers/research.mjs';
+
+function runBuiltinIssue(issue, options) {
+  return runIssueWithSeats(issue, { ...options, fetchImpl: withResearchSummary(options.fetchImpl) });
+}
 
 const example = readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8');
 const stubConfig = parseConfig(example);
@@ -515,7 +520,7 @@ test('planner and coder use an environment key before the vault and fall back to
       log: (message) => logs.push(message),
     });
     assert.equal(requests, 2);
-    assert.equal(vaultReads, source === 'environment' ? 0 : 2);
+    assert.equal(vaultReads, source === 'environment' ? 0 : 3);
     assert.equal(result.runs.planner.env.AI_CONTEXT_USED, '3');
     assert.equal(result.runs.coder.env.AI_CONTEXT_USED, '5');
     assert.ok(!logs.join('\n').includes(key));

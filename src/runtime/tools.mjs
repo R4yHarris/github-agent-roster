@@ -5,7 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 const execute = promisify(execFile);
-const managedFiles = new Set(['assignment.md', 'task.md', 'recipe.yml', 'context.md', 'result.md', 'estimate.md']);
+const managedFiles = new Set(['assignment.md', 'task.md', 'recipe.yml', 'context.md', 'research.md', 'result.md', 'estimate.md']);
 
 function partsOf(file) {
   return file.replaceAll('\\', '/').toLowerCase().split('/');
@@ -67,7 +67,8 @@ export const toolDefinitions = [
       name: 'read_file',
       description: 'Read a UTF-8 file inside the worktree.',
       parameters: {
-        type: 'object', properties: { path: { type: 'string' } },
+        type: 'object',
+        properties: { path: { type: 'string' }, max_lines: { type: 'integer', minimum: 1 } },
         required: ['path'], additionalProperties: false,
       },
     },
@@ -187,13 +188,18 @@ export async function createTools({
 
   const tools = {
     async read_file(args) {
-      argumentsFor(args, ['path']);
+      argumentsFor(args, ['path'], ['max_lines']);
+      if (args.max_lines !== undefined &&
+          (!Number.isSafeInteger(args.max_lines) || args.max_lines < 1)) {
+        throw new TypeError('read_file max_lines must be a positive safe integer');
+      }
       const { file, relative } = locate(args.path);
       await checkComponents(relative);
       const entry = await fs.lstat(file);
       if (!entry.isFile()) throw new Error('read_file requires a regular file');
       await checkParent(file);
-      return await fs.readFile(file, 'utf8');
+      const text = await fs.readFile(file, 'utf8');
+      return args.max_lines === undefined ? text : text.split(/\r?\n/).slice(0, args.max_lines).join('\n');
     },
 
     async write_file(args) {

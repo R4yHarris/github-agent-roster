@@ -1,7 +1,9 @@
 import { taskFilesAllowed } from '../planner/stub.mjs';
+import { mergeUsage } from '../metrics/run.mjs';
 import { loadContext } from '../runtime/context.mjs';
 import { runLoop } from '../runtime/loop.mjs';
 import { appendMemory, coderMemoryRecord, seatMemoryPath } from '../runtime/memory.mjs';
+import { runResearch } from '../runtime/research.mjs';
 import { createTools } from '../runtime/tools.mjs';
 import { loadPrincipal } from './principal.mjs';
 
@@ -16,6 +18,9 @@ export async function runCoder({
   const tools = await createTools({
     worktree, allowedFiles: taskFilesAllowed(context.task),
     apiKeyEnv: config.llm.api_key_env, env, runCommand: runTestCommand,
+  });
+  const research = await runResearch({
+    worktree, tools, expectedTask: context.task, config, fetchImpl, env, vault,
   });
   const changedFiles = new Set();
   let tests;
@@ -40,6 +45,8 @@ export async function runCoder({
   let result;
   try {
     result = await runLoop({ config, context, tools: trackedTools, worktree, fetchImpl, env, vault });
+    result = { ...result, research,
+      usage: research.turns ? mergeUsage(research.usage, result.usage) : result.usage };
   } catch (error) {
     if (!(error instanceof Error)) throw error;
     await remember(undefined, error);

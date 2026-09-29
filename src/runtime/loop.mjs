@@ -30,6 +30,7 @@ export async function runLoop({ config, context, tools, worktree, fetchImpl, env
   const messages = [
     { role: 'system', content: context.pack },
     { role: 'user', content: 'Complete this task using only the offered tools. ' +
+      'Read RESEARCH.md for the pre-edit inventory and gaps. ' +
       'Do not claim acceptance checks passed without evidence. ' +
       'Finish with a concise summary of changes, test results, and blockers.' },
   ];
