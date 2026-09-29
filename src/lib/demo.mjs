@@ -71,6 +71,7 @@ export async function runDemo({
     const coder = await runCoder({
       worktree: worktreePath, repoRoot, config: stubConfig, task,
       session: `roster-${task}-coder`, env: {},
+      priorFeedback: planner.feedback?.context,
       fetchImpl: () => { throw new Error('Stub coder must not contact an LLM'); },
       runTestCommand: () => { throw new Error('Stub coder must not run tests'); },
     });

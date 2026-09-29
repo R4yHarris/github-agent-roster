@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   EFFORTS, failureDetail, isObject, joinLearning, loadLearning, parseJsonl, summarizeLearning, validateSha,
@@ -80,6 +80,23 @@ export function loadMetrics({
   const exported = parseJsonl(output, EXPORT_SOURCE, validateRun, true);
   const local = loadLearning({ cwd, readFile });
   return joinLearning(exported, local.runs, [...local.evaluations, ...evaluations], ref === undefined);
+}
+
+export function loadAvailableMetrics({ cwd = process.cwd(), run = execFileSync } = {}) {
+  if (statSync(resolve(cwd, ".git"), { throwIfNoEntry: false })) {
+    try {
+      run("git", ["rev-parse", "--verify", "--quiet", "HEAD"], {
+        cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+      });
+      return loadMetrics({ cwd, run });
+    } catch (error) {
+      if (error.status !== 1) {
+        throw new Error(`Could not inspect local metrics: ${failureDetail(error)}`, { cause: error });
+      }
+    }
+  }
+  const local = loadLearning({ cwd });
+  return joinLearning([], local.runs, local.evaluations);
 }
 
 export function summarizeMetrics(records) {

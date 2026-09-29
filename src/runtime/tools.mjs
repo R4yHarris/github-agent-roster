@@ -38,8 +38,14 @@ function isProtectedSurface(file) {
 
 export function isForbiddenWrite(file) {
   const parts = partsOf(file);
-  return isProtectedSurface(file) || (parts.length === 1 && managedFiles.has(parts[0])) ||
-    parts.some((part, index) => part === '.roster' && parts[index + 1] === 'evals.jsonl');
+  return isProtectedSurface(file) || isManagedFile(file) ||
+    parts.some((part, index) => part === '.roster' &&
+      ['evals.jsonl', 'memory'].includes(parts[index + 1]));
+}
+
+export function isManagedFile(file) {
+  const parts = partsOf(file);
+  return parts.length === 1 && managedFiles.has(parts[0]);
 }
 
 export function isAllowedFile(file, allowedFiles) {
@@ -123,6 +129,7 @@ export async function createTools({
   allowedFiles,
   env = process.env,
   apiKeyEnv = 'ROSTER_API_KEY',
+  memoryPath,
   runCommand = execute,
 } = {}) {
   const root = path.resolve(worktree);
@@ -150,7 +157,8 @@ export async function createTools({
       throw new Error('Tool path must stay inside the worktree');
     }
     const normalized = relative.split(path.sep).join('/');
-    if (write && !isAllowedFile(normalized, allowedFiles)) {
+    if (write && (!isAllowedFile(normalized, allowedFiles) ||
+        (memoryPath && path.relative(file, path.resolve(memoryPath)) === ''))) {
       throw new Error(`Writing ${normalized} is not allowed by TASK.md or worktree policy`);
     }
     if (isForbiddenRead(normalized)) {

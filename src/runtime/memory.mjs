@@ -1,23 +1,35 @@
 import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { ensureLocalPath } from '../lib/paths.mjs';
+import { isForbiddenRead } from './tools.mjs';
 
 export function seatMemoryPath({ repoRoot, memoryPath, seat }) {
+  if (isForbiddenRead(memoryPath)) throw new Error('Seat memory must not use a protected or secret path');
   const coder = path.join(repoRoot, memoryPath);
   if (seat === 'coder') return coder;
   if (seat === 'planner') return path.join(path.dirname(coder), 'planner.jsonl');
   throw new TypeError('Memory seat must be planner or coder');
 }
 
-function safeRecord(record, { env = process.env, apiKeyEnv = 'ROSTER_API_KEY' } = {}) {
-  if (!record || typeof record !== 'object' || Array.isArray(record) ||
-      ![Object.prototype, null].includes(Object.getPrototypeOf(record))) {
-    throw new TypeError('Memory record must be a plain JSON object');
-  }
+export function redactSecrets(text, { env = process.env, apiKeyEnv = 'ROSTER_API_KEY' } = {}) {
+  if (typeof text !== 'string') throw new TypeError('Redaction requires text');
   const secrets = Object.entries(env)
     .filter(([name, value]) => typeof value === 'string' && value &&
       (name === apiKeyEnv || /TOKEN|PASSWORD|SECRET|PRIVATE_KEY|API_KEY/i.test(name)))
     .map(([, value]) => value).sort((left, right) => right.length - left.length);
+  for (const secret of secrets) text = text.split(secret).join('[redacted]');
+  return text.replace(/-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*/g, '[redacted]')
+    .replace(/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,})\b/g, '[redacted]')
+    .replace(/(\bhttps?:\/\/)[^/\s]+@/gi, '$1[redacted]@')
+    .replace(/\b(Bearer\s+|[A-Za-z0-9_-]*(?:api[_-]?key|password|secret|token)[A-Za-z0-9_-]*["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
+      '$1[redacted]');
+}
+
+function safeRecord(record, options = {}) {
+  if (!record || typeof record !== 'object' || Array.isArray(record) ||
+      ![Object.prototype, null].includes(Object.getPrototypeOf(record))) {
+    throw new TypeError('Memory record must be a plain JSON object');
+  }
   const safe = {};
   for (const [key, value] of Object.entries(record)) {
     if (!/^[a-z][a-z0-9_]*$/i.test(key) ||
@@ -30,12 +42,7 @@ function safeRecord(record, { env = process.env, apiKeyEnv = 'ROSTER_API_KEY' } 
       continue;
     }
     if (typeof value !== 'string') throw new TypeError('Memory values must be compact scalar summaries');
-    let text = value;
-    for (const secret of secrets) text = text.split(secret).join('[redacted]');
-    text = text.replace(/-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*/g, '[redacted]')
-      .replace(/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g, '[redacted]')
-      .replace(/\b(Bearer\s+|(?:api[_-]?key|password|secret|token)\s*[:=]\s*)[^\s,;"']+/gi,
-        '$1[redacted]');
+    const text = redactSecrets(value, options);
     const first = text.split(/\r?\n/)[0].trim();
     safe[key] = first.length > 480 || first !== text.trim()
       ? `${first.slice(0, 480)} [details omitted]` : first;

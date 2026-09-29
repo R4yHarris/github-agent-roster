@@ -90,7 +90,8 @@ test('a missing task skill stops the coder before any model or tool turn', async
     runTestCommand: () => { calls += 1; throw new Error('Unexpected test call'); },
   }), /Unknown task skill: missing/);
   assert.equal(calls, 0);
-  assert.throws(() => readFileSync(path.join(options.worktree, 'RESULT.md')), /ENOENT/);
+  assert.match(readFileSync(path.join(options.worktree, 'RESULT.md'), 'utf8'),
+    /Checks: FAIL[\s\S]*Unknown task skill: missing/);
 });
 
 test('seat memory paths preserve a custom coder file and isolate the planner beside it', () => {
@@ -101,6 +102,8 @@ test('seat memory paths preserve a custom coder file and isolate the planner bes
     path.join(repoRoot, 'custom', 'planner.jsonl'));
   assert.throws(() => seatMemoryPath({ repoRoot, memoryPath: 'custom/history.jsonl', seat: 'merger' }),
     /planner or coder/);
+  assert.throws(() => seatMemoryPath({ repoRoot, memoryPath: '.env.jsonl', seat: 'coder' }),
+    /protected or secret path/);
 });
 
 test('stub coder writes a deterministic result without contacting an LLM or running tests', async (context) => {
@@ -115,6 +118,8 @@ test('stub coder writes a deterministic result without contacting an LLM or runn
   assert.match(result.summary, /no implementation or tests were run/);
   assert.match(readFileSync(result.resultPath, 'utf8'), /Update `README\.md`/);
   assert.equal(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), '# Example\n');
+  assert.equal(result.excellence.pass, false);
+  assert.match(readFileSync(result.resultPath, 'utf8'), /Checks: FAIL/);
   assert.deepEqual(JSON.parse((await readMemory({
     file: options.memoryPath, repoRoot: options.repoRoot,
   }))[0]).status, 'stub');
@@ -261,6 +266,7 @@ test('budget exhaustion and a failed final test stop without claiming success', 
   }), /turn budget .* exhausted/);
   assert.equal(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), '# Example\n');
   assert.equal(JSON.parse(readFileSync(options.memoryPath, 'utf8')).status, 'failed');
+  assert.match(readFileSync(path.join(options.worktree, 'RESULT.md'), 'utf8'), /First failure: Coder turn budget/);
 
   const failing = fixture(context, llmConfig);
   await assert.rejects(runCoder({
@@ -273,4 +279,5 @@ test('budget exhaustion and a failed final test stop without claiming success', 
     }); },
   }), /Final node --test failed [\s\S]*one test failed/);
   assert.equal(JSON.parse(readFileSync(failing.memoryPath, 'utf8')).status, 'failed');
+  assert.match(readFileSync(path.join(failing.worktree, 'RESULT.md'), 'utf8'), /Checks: FAIL[\s\S]*one test failed/);
 });

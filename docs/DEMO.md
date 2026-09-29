@@ -17,6 +17,9 @@ Open the printed `RECIPE.yml` to see the planner and coder seats, `TASK.md` to
 see the requested change, and `RESULT.md` to see the stub's outcome. This is
 a temporary demo directory, not a Git worktree; it remains after the command
 so you can inspect it. The copied `README.md` is deliberately unchanged.
+The same directory also contains the bounded `CONTEXT.md`, read-only
+`RESEARCH.md`, and planner `ESTIMATE.md`. RESULT.md labels the stub's
+unexecuted checks as unverified rather than claiming a completed implementation.
 
 The deterministic stub proves that the planner passes a task to the coder and
 the coder writes a result in the same run. It **does not** implement the

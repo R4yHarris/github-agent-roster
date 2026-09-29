@@ -7,14 +7,17 @@ analytics service, or separate task database. GitHub Issues and PRs remain the q
 
 ## Automatic seat runs and optional preparation records
 
-Each completed planner or coder seat automatically creates and appends to
-`.roster/runs/runs.jsonl` in the issue repository. Stub seats record session,
+For paired issue runs, each completed planner or coder seat automatically creates
+and appends to `.roster/runs/runs.jsonl` in the issue repository. Stub seats record session,
 task, and a recognized task class, but no model or LLM counts. Configured
 seats include model, effort, and token counts only when known. If recording
 fails, the run reports the error instead of claiming a completed seat. A
-coder failure can leave a planner record.
+coder failure can leave a planner record. Coder records retain the excellence
+outcome, including configured failures with result evidence, before the error
+is propagated. A recorded failure is never treated as a human acceptance.
 
-Manual `roster prepare --issue N` remains opt-in. Create `.roster/runs` in
+Manual `roster prepare --issue N` and the standalone
+`roster run --seat coder --runtime builtin` remain opt-in. Create `.roster/runs` in
 the repository root before preparing an assignment, for example in PowerShell:
 
 ```powershell
@@ -194,7 +197,10 @@ configured fallback. `roster recommend` is read-only.
 model applies a qualifying suggestion to that run's planner and coder without
 editing private config or policy. Fewer than three samples keep that opt-in run
 on the deterministic stub. An explicit task model can select the coder as
-described in [estimation](ESTIMATION.md). See [routing](ROUTING.md).
+described in [estimation](ESTIMATION.md). The [next planner task](NEXT.md) also
+uses qualifying capacity evidence and carries forward redacted human feedback.
+One acceptance can seed an otherwise unconfigured baseline, not a recommendation.
+See [routing](ROUTING.md).
 
 Both `.roster/runs/` and `.roster/evals.jsonl` are ignored by this repository.
 When running Roster against another repository, ignore these paths there

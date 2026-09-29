@@ -1,8 +1,7 @@
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
 import { createBuiltinChat } from '../lib/llm.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
 import { toolDefinitions } from './tools.mjs';
+import { taskSkipsTests } from './excellence.mjs';
 
 function stubSummary(task) {
   const title = /^# Task: (.+)$/m.exec(task)?.[1];
@@ -12,18 +11,11 @@ function stubSummary(task) {
     'Deterministic stub only: no implementation or tests were run. Configure llm.base_url to run a coder.';
 }
 
-async function saveResult(worktree, body) {
-  const file = path.join(worktree, 'RESULT.md');
-  await fs.writeFile(file, `# Result\n\n${body}\n`, { encoding: 'utf8', flag: 'wx' });
-  return file;
-}
-
-export async function runLoop({ config, context, tools, worktree, fetchImpl, env, vault }) {
+async function executeLoop({ config, context, tools, fetchImpl, env, vault }, progress) {
   if (!config.llm.base_url) {
     const summary = stubSummary(context.task);
     return {
       mode: 'stub', summary, usage: null, turns: 0,
-      resultPath: await saveResult(worktree, summary),
     };
   }
 
@@ -40,8 +32,11 @@ export async function runLoop({ config, context, tools, worktree, fetchImpl, env
   const usages = [];
   const ids = new Set();
   for (let turn = 1; turn <= config.seat.turn_budget; turn += 1) {
+    progress.turns = turn;
+    progress.usage = null;
     const response = await chat({ messages, tools: definitions });
     usages.push(response.usage);
+    progress.usage = mergeUsage(...usages);
     const { message, finish_reason: finishReason } = response;
     if (!message || typeof message !== 'object' || !['stop', 'tool_calls', undefined, null]
       .includes(finishReason)) {
@@ -87,16 +82,33 @@ export async function runLoop({ config, context, tools, worktree, fetchImpl, env
       throw new Error('LLM coder did not return a final summary');
     }
     const usage = mergeUsage(...usages);
-    const tests = await tools.run_test({});
-    if (tests.exit_code !== 0) {
+    const testsSkipped = taskSkipsTests(context.task);
+    const tests = testsSkipped ? undefined : await tools.run_test({});
+    progress.tests = tests;
+    if (tests && tests.exit_code !== 0) {
       throw new Error(`Final node --test failed (exit ${tests.exit_code}):\n` +
         `${tests.stderr || tests.stdout}`.slice(0, 4096));
     }
     const summary = message.content.trim();
     return {
-      mode: 'llm', summary, usage, turns: turn, tests,
-      resultPath: await saveResult(worktree, `${summary}\n\n## Verification\n- node --test exited 0`),
+      mode: 'llm', summary, usage, turns: turn, tests, testsSkipped,
     };
   }
+
   throw new Error(`Coder turn budget (${config.seat.turn_budget}) exhausted`);
+}
+
+export async function runLoop(options) {
+  const progress = {
+    mode: options.config.llm.base_url ? 'llm' : 'stub',
+    model: options.config.llm.base_url ? options.config.llm.model : 'builtin-stub',
+    turns: 0, usage: null,
+  };
+  try {
+    const result = await executeLoop(options, progress);
+    return { ...progress, ...result };
+  } catch (error) {
+    if (!(error instanceof Error)) throw error;
+    return { ...progress, summary: 'Coder execution stopped before a verified result.', error };
+  }
 }

@@ -4,9 +4,9 @@
 Ask (GitHub issue; local draft when gh is absent)
   → Planner seat (stub or configured LLM): RECIPE + TASK, no file tools
   → Coder seat (principal: coder; no merge/deploy), same process/worktree
-       AGENTS.md, TASK.md, last 20 memory lines, this repo's skills
+       principal -> context pack -> research -> task-selected skills
        bounded chat loop with read_file, write_file, list_dir, run_test, search_text
-       issue worktree, RESULT.md, AI_* provenance
+       append memory -> excellence gate -> RESULT.md, AI_* provenance
   → Optional publish: contracts agent-pr.mjs (GitHub App, human-owned policy)
   → Evidence: per-seat AI-Run records, coder trailer + check-agent-trailers
   → Eval: human AI-Eval comment

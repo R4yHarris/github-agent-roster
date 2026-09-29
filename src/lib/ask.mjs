@@ -30,7 +30,7 @@ export async function writeAsk(ask, {
   if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
     throw new TypeError('Ask ID must be an opaque local identifier');
   }
-  const plan = await planAsk(ask, { config, reference: `local:${id}`, fetchImpl, env, vault });
+  const plan = await planAsk(ask, { config, reference: `local:${id}`, fetchImpl, env, vault, learningRoot: repoRoot });
   const directory = path.join(repoRoot, config.paths.asks);
   const draft = path.join(directory, id);
   const askPath = path.join(directory, `${id}.md`);
