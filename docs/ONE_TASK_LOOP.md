@@ -28,6 +28,13 @@ AI_TASK=issue-N
 AI_SESSION=roster-<UTC timestamp>
 ```
 
+If the repository root already contains `.roster/runs`, successful assignment
+setup appends one local JSONL run record. It includes the generated session and
+task plus known model, effort, and context metadata; it does not pretend the
+starting HEAD is the eventual worker commit. Without that directory, run
+recording is disabled. No coder path writes human `AI-Eval` decisions. See
+[learning](LEARNING.md) for opt-in recording, human evaluations, and recommendations.
+
 It returns the issue, worktree and file paths, task, session, and `nextCommand`.
 It prints the worktree location and, for the worker **after editing inside the
 worktree and loading `.env` into its environment**, exactly:
@@ -36,13 +43,15 @@ worktree and loading `.env` into its environment**, exactly:
 node $GITHUB_AGENT_CONTRACTS/scripts/agent-pr.mjs --message "feat: issue N"
 ```
 
-Set `GITHUB_AGENT_CONTRACTS` to the sibling contracts clone path in the worker
-environment. The printed command uses POSIX shell variable syntax; PowerShell
+Set `GITHUB_AGENT_CONTRACTS` to the resolved contracts pack's absolute path in
+the worker environment, normally the initialized `vendor/github-agent-contracts`
+submodule; see [dependency resolution](DEPENDENCY.md). The printed command uses
+POSIX shell variable syntax; PowerShell
 users must use their shell's environment-variable syntax when executing it.
 This module only prepares one coder seat and prints the publishing command: it
 does not start a worker, merge, or open additional issues. Merge remains
 human-controlled.
 
-Tests inject `runCommand`, `fileSystem`, `now`, and `log` into `runIssue` to
+Tests inject `runCommand`, `fileSystem`, `env`, `now`, and `log` into `runIssue` to
 simulate git, gh, file writes, timestamps, and output without a network call.
-Run the focused suite with `node --test tests/issue.test.mjs`.
+Run the focused suite with `node --test tests/issue.test.mjs tests/learn.test.mjs`.

@@ -1,0 +1,11 @@
+{"sha":"1111111111111111111111111111111111111111","schema":1,"model":"careful-model","effort":"h","session":"feat-one","task":"issue-11","context_used":18,"context_max":null}
+{"sha":"2222222222222222222222222222222222222222","schema":1,"model":"careful-model","effort":"h","session":"feat-two","task":"feat-second"}
+{"sha":"3333333333333333333333333333333333333333","schema":1,"model":"careful-model","effort":"h","session":"feat-three","task":"feat-third"}
+{"sha":"4444444444444444444444444444444444444444","schema":1,"model":"fast-model","effort":"l","session":"quick-one","task":"feat-first"}
+{"sha":"5555555555555555555555555555555555555555","schema":1,"model":"fast-model","effort":"l","session":"quick-two","task":"feat-second"}
+{"sha":"6666666666666666666666666666666666666666","schema":1,"model":"fast-model","effort":"l","session":"quick-three","task":"feat-third"}
+{"sha":"7777777777777777777777777777777777777777","schema":1,"model":"sparse-model","effort":"m","session":"sparse-one","task":"feat-first"}
+{"sha":"8888888888888888888888888888888888888888","schema":1,"model":"sparse-model","effort":"m","session":"sparse-two","task":"feat-second"}
+{"sha":"9999999999999999999999999999999999999999","schema":1,"model":"careful-model","effort":"h","session":"fix-one","task":"fix-problem"}
+{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","schema":1,"model":"careful-model","effort":"h","session":"feat-one","task":"issue-11"}
+{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","schema":1,"model":"careful-model","effort":"h","session":"unreviewed","task":"feat-unreviewed"}

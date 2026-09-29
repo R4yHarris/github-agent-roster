@@ -1,0 +1,10 @@
+{"session":"feat-one","verdict":"reject","difficulty":3,"again":false}
+{"sha":"2222222222222222222222222222222222222222","verdict":"accept","difficulty":2,"again":true}
+{"sha":"3333333333333333333333333333333333333333","verdict":"rework","difficulty":4,"again":false}
+{"session":"quick-one","verdict":"reject","difficulty":3,"again":false}
+{"session":"quick-two","verdict":"accept","difficulty":2,"again":true}
+{"session":"quick-three","verdict":"reject","difficulty":3,"again":false}
+{"session":"sparse-one","verdict":"accept","difficulty":1,"again":true}
+{"session":"sparse-two","verdict":"accept","difficulty":1,"again":true}
+{"session":"fix-one","verdict":"accept","difficulty":2,"again":true}
+{"session":"feat-one","verdict":"accept","difficulty":3,"again":true}

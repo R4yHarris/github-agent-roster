@@ -5,15 +5,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { createFileVault } from "../src/vault/file.mjs";
 
 const cli = fileURLToPath(new URL("../src/cli.mjs", import.meta.url));
 const root = fileURLToPath(new URL("..", import.meta.url));
 
-function run(args, env = process.env, cliPath = cli) {
+function run(args, env = process.env, cliPath = cli, input) {
   return spawnSync(process.execPath, [cliPath, ...args], {
     cwd: root,
     encoding: "utf8",
     env,
+    input,
     timeout: 10_000,
   });
 }
@@ -25,6 +27,10 @@ test("help lists every prompt's command", () => {
   assert.match(result.stdout, /roster\s+run\s+--issue/);
   assert.match(result.stdout, /roster\s+recipe\s+validate/);
   assert.match(result.stdout, /roster\s+stats/);
+  assert.match(result.stdout, /roster\s+vault\s+set\s+NAME/);
+  assert.match(result.stdout, /roster\s+vault\s+list/);
+  assert.match(result.stdout, /roster\s+eval/);
+  assert.match(result.stdout, /roster\s+recommend\s+--task-class/);
 });
 
 test("recipe validation accepts the documented shape and rejects unknown keys", () => {
@@ -61,6 +67,49 @@ test("run without a numeric issue fails before GitHub access", () => {
   assert.ifError(result.error);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /issue/i);
+});
+
+test("vault CLI accepts only stdin secrets and lists names without values", async (t) => {
+  const home = mkdtempSync(join(tmpdir(), "roster-vault-cli-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  const env = { ...process.env, HOME: home, USERPROFILE: home };
+  const secret = "test-only-cli-secret with trailing space ";
+  const stored = run(["vault", "set", "ROSTER_TEST_TOKEN"], env, cli, `${secret}\r\n`);
+  assert.ifError(stored.error);
+  assert.equal(stored.status, 0, stored.stderr);
+  assert.equal(stored.stdout, "Stored secret ROSTER_TEST_TOKEN.\n");
+  assert.equal(stored.stderr, "");
+  const vault = createFileVault({ directory: join(home, ".roster", "vault") });
+  assert.equal(await vault.get("ROSTER_TEST_TOKEN"), secret);
+  const listed = run(["vault", "list"], env);
+  assert.ifError(listed.error);
+  assert.equal(listed.status, 0, listed.stderr);
+  assert.equal(listed.stdout, "ROSTER_TEST_TOKEN\n");
+  assert.equal(listed.stderr, "");
+
+  for (const [args, input] of [
+    [["vault", "set", "TOKEN", secret], ""],
+    [["vault", "set", "TOKEN"], "\n"],
+    [["vault", "set", "../TOKEN"], secret],
+    [["vault", "get", "ROSTER_TEST_TOKEN"], ""],
+  ]) {
+    const result = run(args, env, cli, input);
+    assert.ifError(result.error);
+    assert.notEqual(result.status, 0);
+    assert.equal(result.stdout, "");
+    assert.ok(!result.stderr.includes(secret));
+  }
+});
+
+test("vault CLI refuses a home directory inside a Git worktree", (t) => {
+  const home = mkdtempSync(join(tmpdir(), "roster-vault-cli-git-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  mkdirSync(join(home, ".git"));
+  const result = run(["vault", "set", "TOKEN"], { ...process.env, HOME: home, USERPROFILE: home }, cli, "test-secret");
+  assert.ifError(result.error);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /outside a Git worktree/);
+  assert.equal(result.stdout, "");
 });
 
 test("stats prints grouped model and effort counts with optional local evals", () => {

@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { inferTaskClass, recordRun } from './learn.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -33,6 +34,7 @@ export async function runIssue(issueNumber, {
   cwd = process.cwd(),
   runCommand = execute,
   fileSystem = fs,
+  env = process.env,
   now = () => new Date(),
   log = console.log,
 } = {}) {
@@ -106,6 +108,14 @@ ${issue.body}
     });
   } catch (error) {
     throw new Error(`Worktree ${worktreePath} was created but assignment setup failed: ${error.message}`, { cause: error });
+  }
+
+  try {
+    await recordRun({ session, task, task_class: inferTaskClass(issue.title) }, {
+      cwd: repoRoot, env, fileSystem,
+    });
+  } catch (error) {
+    throw new Error(`Worktree ${worktreePath} was prepared but run recording failed: ${error.message}`, { cause: error });
   }
 
   log(`Worktree: ${worktreePath}

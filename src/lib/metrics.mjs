@@ -1,20 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import {
+  EFFORTS, failureDetail, isObject, joinLearning, loadLearning, parseJsonl, validateSha,
+} from "./learn.mjs";
+import { resolveContractsPath } from "./paths.mjs";
 
-const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
-const EFFORTS = ["l", "m", "h", "x"];
 const EXPORT_SOURCE = "export-agent-metrics.mjs output";
-
-function isObject(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function validateSha(record, source) {
-  if (typeof record.sha !== "string" || !SHA.test(record.sha)) {
-    throw new Error(`${source}: sha must be a full 40- or 64-character hexadecimal Git SHA`);
-  }
-}
 
 function validateRun(record, source) {
   if (!isObject(record)) throw new Error(`${source}: expected a JSON object`);
@@ -42,39 +34,10 @@ function validateEvaluation(record, source) {
   }
 }
 
-function parseJsonl(text, source, validate) {
-  if (typeof text !== "string") throw new TypeError(`${source}: expected UTF-8 JSONL text`);
-  if (text === "") return [];
-  const lines = text.split(/\r?\n/);
-  if (lines.at(-1) === "") lines.pop();
-  const seen = new Set();
-  return lines.map((line, index) => {
-    const location = `${source}:${index + 1}`;
-    if (!line.trim()) throw new Error(`${location}: blank JSONL line`);
-    let record;
-    try {
-      record = JSON.parse(line);
-    } catch (error) {
-      throw new Error(`${location}: invalid JSON`, { cause: error });
-    }
-    validate(record, location);
-    const sha = record.sha.toLowerCase();
-    if (seen.has(sha)) throw new Error(`${location}: duplicate sha ${record.sha}`);
-    seen.add(sha);
-    return record;
-  });
-}
-
-function failureDetail(error) {
-  const stderr = isObject(error) && error.stderr != null ? String(error.stderr).trim() : "";
-  const message = error instanceof Error ? error.message : String(error);
-  return stderr ? `${stderr} (${message})` : message;
-}
-
 export function loadMetrics({
-  contractsPath = process.env.GITHUB_AGENT_CONTRACTS,
+  contractsPath = resolveContractsPath(),
   cwd = process.cwd(),
-  ref = "HEAD",
+  ref,
   evalsPath,
   run = execFileSync,
   readFile = readFileSync,
@@ -82,31 +45,30 @@ export function loadMetrics({
   if (typeof contractsPath !== "string" || !contractsPath.trim()) {
     throw new Error("Set GITHUB_AGENT_CONTRACTS to the sibling contracts clone or pass contractsPath.");
   }
-  if (typeof ref !== "string" || !ref.trim() || ref.startsWith("-")) {
+  const revision = ref === undefined ? "HEAD" : ref;
+  if (typeof revision !== "string" || !revision.trim() || revision.startsWith("-")) {
     throw new Error("ref must be a nonempty Git revision or range, not an option.");
   }
 
-  const evaluations = new Map();
+  const evaluations = [];
   if (evalsPath !== undefined && evalsPath !== null) {
     if (typeof evalsPath !== "string" || !evalsPath.trim()) {
       throw new Error("evalsPath must be a nonempty local file path.");
     }
-    const file = resolve(evalsPath);
+    const file = resolve(cwd, evalsPath);
     let text;
     try {
       text = readFile(file, "utf8");
     } catch (error) {
       throw new Error(`Could not read AI-Eval file ${file}: ${failureDetail(error)}`, { cause: error });
     }
-    for (const evaluation of parseJsonl(text, file, validateEvaluation)) {
-      evaluations.set(evaluation.sha.toLowerCase(), evaluation);
-    }
+    evaluations.push(...parseJsonl(text, file, validateEvaluation, true));
   }
 
   const exporter = resolve(contractsPath, "scripts", "export-agent-metrics.mjs");
   let output;
   try {
-    output = run(process.execPath, [exporter, "--ref", ref], {
+    output = run(process.execPath, [exporter, "--ref", revision], {
       cwd,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -115,27 +77,28 @@ export function loadMetrics({
   } catch (error) {
     throw new Error(`Metrics exporter failed (${exporter}): ${failureDetail(error)}`, { cause: error });
   }
-  return parseJsonl(output, EXPORT_SOURCE, validateRun).map((record) => ({
-    ...record,
-    evaluation: evaluations.get(record.sha.toLowerCase()) ?? null,
-  }));
+  const exported = parseJsonl(output, EXPORT_SOURCE, validateRun, true);
+  const local = loadLearning({ cwd, readFile });
+  return joinLearning(exported, local.runs, [...local.evaluations, ...evaluations], ref === undefined);
 }
 
 export function summarizeMetrics(records) {
   if (!Array.isArray(records)) throw new TypeError("Expected an array of joined metrics records.");
   const groups = new Map();
   for (const record of records) {
-    const key = JSON.stringify([record.model, record.effort]);
+    const model = record.model ?? null;
+    const effort = record.effort ?? null;
+    const key = JSON.stringify([model, effort]);
     let group = groups.get(key);
     if (!group) {
-      group = { model: record.model, effort: record.effort, runs: 0, evaluated: 0 };
+      group = { model, effort, runs: 0, evaluated: 0 };
       groups.set(key, group);
     }
     group.runs += 1;
-    if (record.evaluation !== null) group.evaluated += 1;
+    if (record.evaluation != null) group.evaluated += 1;
   }
   return [...groups.values()].sort((left, right) =>
-    left.model.localeCompare(right.model) ||
+    (left.model ?? "").localeCompare(right.model ?? "") ||
     [ ...EFFORTS, null ].indexOf(left.effort) - [ ...EFFORTS, null ].indexOf(right.effort));
 }
 
@@ -145,7 +108,7 @@ export function formatMetrics(groups) {
   const rows = [
     ["MODEL", "EFFORT", "RUNS", "EVALS"],
     ...groups.map(({ model, effort, runs, evaluated }) =>
-      [model, effort ?? "-", String(runs), String(evaluated)]),
+      [model ?? "-", effort ?? "-", String(runs), String(evaluated)]),
   ];
   const widths = rows[0].map((_, index) =>
     rows.reduce((width, row) => Math.max(width, row[index].length), 0));

@@ -27,11 +27,13 @@ function harness(issueResponse = issue) {
   const fileSystem = {
     async mkdir(directory, options) { writes.push({ directory, options }); },
     async writeFile(file, content, options) { writes.push({ file, content, options }); },
+    async stat() { throw Object.assign(new Error('not found'), { code: 'ENOENT' }); },
   };
   const options = {
     cwd: path.join(repoRoot, 'nested'),
     runCommand,
     fileSystem,
+    env: {},
     now: () => new Date('2026-09-28T22:25:50.149Z'),
     log: (message) => messages.push(message),
   };
