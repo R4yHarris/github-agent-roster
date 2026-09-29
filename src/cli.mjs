@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { runIssue } from './lib/issue.mjs';
 import { recordEvaluation } from './lib/eval.mjs';
 import { formatRecommendation, recommend, repositoryRoot, TASK_CLASSES } from './lib/learn.mjs';
-import { writeAsk } from './lib/ask.mjs';
+import { submitAsk } from './lib/ask.mjs';
 import { runBuiltinIssue } from './lib/builtin.mjs';
 import { formatMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
 import { resolveContractsPath } from './lib/paths.mjs';
@@ -28,7 +28,8 @@ const help = `Usage:
   roster eval <sha-or-session> <accept|reject|rework> <1-5> <y|n>
   roster recommend --task-class feat|fix|docs|test
 
-Ask drafts an offline task. Bare run prepares the legacy worktree; builtin run
+Ask creates a GitHub issue when gh is available; otherwise it saves a local draft.
+Bare run prepares the legacy worktree; builtin run
 plans and executes planner then coder in one worktree. Publishing is opt-in.
 Recipe validates strict v0 seat YAML. Stats joins contracts AI-Run history with local runs and human evals.
 Eval records a human decision locally. Recommend needs at least 3 evaluated runs.
@@ -79,10 +80,12 @@ async function main(args) {
     process.stdout.write(help);
     if (args.length === 0) process.exitCode = 2;
   } else if (args.length === 2 && args[0] === 'ask') {
-    const result = await writeAsk(args[1], {
+    const result = await submitAsk(args[1], {
       repoRoot: rosterRoot,
     });
-    process.stdout.write(`Ask: ${result.askPath}\nRECIPE: ${result.recipePath}\nTASK: ${result.taskPath}\n`);
+    process.stdout.write(result.mode === 'issue'
+      ? `Issue: ${result.url}\n`
+      : `Ask: ${result.askPath}\nRECIPE: ${result.recipePath}\nTASK: ${result.taskPath}\nNext: ${result.command}\n`);
   } else if (args.length === 3 && args[0] === 'run' && args[1] === '--issue') {
     await runIssue(args[2]);
   } else if (args[0] === 'run' && args.includes('--runtime')) {

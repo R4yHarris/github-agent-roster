@@ -9,7 +9,7 @@ agents and CI.
 
 | Command | Behavior |
 | --- | --- |
-| `/ask TEXT` | Draft a local Ask, recipe, and task without creating an issue. |
+| `/ask TEXT` | Create an issue through `gh`, or write a local Ask, recipe, task, and create command when `gh` is missing. |
 | `/run N` or `/run --issue N` | Run the builtin planner then coder in one issue worktree. The stub writes a task and result, but does not edit code or test. |
 | `/status` | Show the repository, configured runtime/model endpoint, and the last run in this shell. |
 | `/eval TARGET accept|reject|rework 1-5 y|n` | Record a human evaluation through the existing evaluation library. |

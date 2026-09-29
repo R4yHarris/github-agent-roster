@@ -55,11 +55,17 @@ capabilities.
 node src/cli.mjs ask "Add a Status section to README.md"
 ```
 
-This writes `.roster/asks/<id>.md` and an adjacent
-`.roster/asks/<id>/RECIPE.yml` and `TASK.md`, printing both plan paths. It
-does not create an issue or contact a model when `base_url` is empty. A local
-draft uses `ask: local:<id>`; a real issue run generates `ask: issue:N`.
-Without an LLM, the stub uses the first ask line as the title, picks up
+When `gh` is installed, this creates an issue in the current GitHub origin
+using the first Ask line as its title and the Ask as its body, then prints
+the issue URL. It does not plan locally first. A failed authenticated issue
+creation is an error, not an offline fallback. When `gh` is missing, it
+writes `.roster/asks/<id>.md` and adjacent `RECIPE.yml` and `TASK.md`, then
+prints a `gh issue create --body-file` command for later use. The offline
+draft uses the deterministic stub even if an LLM endpoint is configured:
+it makes no network request. A local draft uses `ask: local:<id>`; a real
+issue run generates `ask: issue:N`. Run the printed command from the same
+Git repository; its body file path is absolute. The stub uses the first ask
+line as the title, picks up
 explicit **Acceptance checks** and **Files allowed** bullet sections when
 present, and otherwise lists `node --test exits 0` plus the Ask, with
 referenced filenames or `**/*` subject to the tool denylist. Review broad
