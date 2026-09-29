@@ -2,6 +2,13 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { ensureLocalPath } from '../lib/paths.mjs';
 
+export function seatMemoryPath({ repoRoot, memoryPath, seat }) {
+  const coder = path.join(repoRoot, memoryPath);
+  if (seat === 'coder') return coder;
+  if (seat === 'planner') return path.join(path.dirname(coder), 'planner.jsonl');
+  throw new TypeError('Memory seat must be planner or coder');
+}
+
 export async function readMemory({ file, repoRoot, limit = 20 }) {
   await ensureLocalPath(file, repoRoot);
   let contents;

@@ -35,8 +35,8 @@ Fail if no candidate contains the `scripts/agent-pr.mjs` file. See
 ## First loop (v0)
 
 1. Human states an ask (GitHub issue; a local `roster ask` draft does not create one).
-2. Stub or configured LLM planner writes a two-seat RECIPE and one TASK in the issue worktree, without app-code tools.
-3. Builtin coder loads AGENTS.md, TASK.md, skills, and recent memory into a separate bounded loop in that worktree.
+2. Stub or configured LLM planner reads its own recent memory and writes a two-seat RECIPE and one TASK in the issue worktree, without app-code tools.
+3. Builtin coder loads AGENTS.md, TASK.md, skills, and its own recent memory into a separate bounded loop in that worktree.
 4. Configured coder runs `node --test`; publication uses `agent-pr.mjs` only on explicit request.
 5. Human posts `AI-Eval:` on the PR.
 
