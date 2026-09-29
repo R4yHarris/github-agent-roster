@@ -23,8 +23,8 @@ worktree path; inspect that worktree rather than blindly rerunning setup.
 For `run --issue N --runtime builtin`, setup adds no preparation record. It
 records one run per completed seat (`roster-N-planner`, then
 `roster-N-coder`) with only that seat's reported metrics. If the coder fails,
-the planner record may remain. The deterministic stub uses model
-`builtin-stub`, with no fabricated tokens.
+the planner record may remain. The deterministic stub records the session and
+task only, with no model, AI-Run, or fabricated tokens.
 
 The bare run command prepares a worker, not a completed commit. Its generated
 `session` and `task` are known, but the eventual commit SHA is not: the starting

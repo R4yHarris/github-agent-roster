@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { buildRun } from '../metrics/run.mjs';
+import { buildPublishEnv, buildRun, RUN_ENV_NAMES } from '../metrics/run.mjs';
 import { taskFilesAllowed } from '../planner/stub.mjs';
 import { runCoder } from '../seats/coder.mjs';
 import { runPlanner } from '../seats/planner.mjs';
@@ -20,10 +20,6 @@ import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
 const execFileAsync = promisify(execFile);
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
 const generated = new Set(['ASSIGNMENT.md', 'TASK.md', 'RECIPE.yml', 'CONTEXT.md', 'RESULT.md']);
-const runNames = [
-  'AI_PROVIDER', 'AI_MODEL', 'AI_MODEL_VERSION', 'AI_EFFORT', 'AI_CONTEXT_USED',
-  'AI_CONTEXT_MAX', 'AI_CONTEXT_OUT', 'AI_SESSION', 'AI_TASK',
-];
 
 async function git(worktree, args, env = process.env) {
   const { stdout } = await execFileAsync('git', args, {
@@ -87,10 +83,8 @@ export async function prepareBuiltinPublication(run, {
   await git(run.worktreePath, ['submodule', 'update', '--init', '--recursive'], commandEnv);
   const contractsPath = resolveContractsPath({ repoRoot: run.worktreePath, cwd, env });
   await stageReviewedFiles(run.worktreePath, taskFilesAllowed(run.planner.task), { env: commandEnv });
-  const publishEnv = { ...commandEnv };
-  for (const name of runNames) delete publishEnv[name];
+  const publishEnv = buildPublishEnv({ config, env, run: run.runs.coder });
   publishEnv.GITHUB_APP_PRIVATE_KEY_PATH = path.resolve(cwd, env.GITHUB_APP_PRIVATE_KEY_PATH);
-  Object.assign(publishEnv, run.runs.coder.env);
   return { contractsPath, worktreePath: run.worktreePath, publishEnv };
 }
 
@@ -112,6 +106,9 @@ export async function runBuiltinIssue(issueNumber, {
   metricsLoader = loadMetrics,
   now,
 } = {}) {
+  if (!config.llm.model && env.ROSTER_MODEL) {
+    config = { ...config, llm: Object.freeze({ ...config.llm, model: env.ROSTER_MODEL }) };
+  }
   if (seats !== 'planner,coder') {
     throw new TypeError('Builtin seats must be planner,coder in that order');
   }
@@ -122,6 +119,7 @@ export async function runBuiltinIssue(issueNumber, {
   if (!autoModel && config.llm.base_url && !config.llm.model) {
     throw new Error('Set config.llm.model or use --auto-model');
   }
+  if (config.llm.base_url && config.llm.model) buildRun({ config, env });
   if (publish && (!config.llm.base_url || !env.GITHUB_APP_ID || !env.GITHUB_APP_PRIVATE_KEY_PATH)) {
     throw new Error('--publish requires an LLM endpoint and GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH');
   }
@@ -169,16 +167,16 @@ export async function runBuiltinIssue(issueNumber, {
     task: prepared.task, session: sessions.planner, fetchImpl, env, vault,
   });
   const metricEnv = { ...commandEnv };
-  for (const name of [...runNames, 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH',
+  for (const name of [...RUN_ENV_NAMES, 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH',
     'GH_TOKEN', 'GITHUB_TOKEN']) delete metricEnv[name];
   const taskClass = inferTaskClass(prepared.issue.title);
   const recordSeat = async (session, run) => recordRun({
     session, task: prepared.task, task_class: taskClass,
-  }, { cwd: prepared.repoRoot, env: { ...metricEnv, ...run.env } });
-  const plannerRun = buildRun({
+  }, { cwd: prepared.repoRoot, env: { ...metricEnv, ...run?.env } });
+  const plannerRun = activeConfig.llm.base_url ? buildRun({
     config: activeConfig, usage: planner.usage ?? {}, session: sessions.planner, task: prepared.task,
-    includeStub: true,
-  });
+    env,
+  }) : null;
   await recordSeat(sessions.planner, plannerRun);
   const result = await runCoder({
     worktree: worktreePath, repoRoot, config: activeConfig, task: prepared.task, session: sessions.coder,
@@ -186,18 +184,23 @@ export async function runBuiltinIssue(issueNumber, {
   });
   await ensureUnchanged(planner.recipePath, planner.recipe);
   await ensureUnchanged(planner.taskPath, planner.task);
-  const coderRun = buildRun({
+  const coderRun = result.mode === 'llm' ? buildRun({
     config: activeConfig, usage: result.usage ?? {}, session: sessions.coder, task: prepared.task,
-    includeStub: true,
-  });
+    env,
+  }) : null;
   await recordSeat(sessions.coder, coderRun);
   const runs = { planner: plannerRun, coder: coderRun };
   const publishMessage = issueMergeMessage(`feat: issue ${prepared.issue.number}`, prepared.issue.number);
   const command = `node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "${publishMessage}" --merge-when-green`;
   log(`Worktree: ${worktreePath}\nAssignment: ${prepared.assignmentPath}\n` +
     `RECIPE: ${planner.recipePath}\nTASK: ${planner.taskPath}\nRESULT: ${result.resultPath}\n` +
-    `Planner session: ${sessions.planner}\nAI-Run: ${plannerRun.line}\n` +
-    `Coder session: ${sessions.coder}\nAI-Run: ${coderRun.line}\n` +
+    `Planner session: ${sessions.planner}\n` +
+    (plannerRun ? `AI-Run: ${plannerRun.line}\n` : '') +
+    `Coder session: ${sessions.coder}\n` +
+    (coderRun ? `AI-Run: ${coderRun.line}\n` +
+      `For manual publication, set these environment variables:\n` +
+      Object.entries(coderRun.env).map(([name, value]) => `${name}=${value}\n`).join('')
+      : 'Stub run: no AI-Run metadata and no code to publish.\n') +
     `From the worktree root, publish only after reviewing changes:\n${command}`);
 
   const completed = {

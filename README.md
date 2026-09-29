@@ -110,13 +110,13 @@ Run tests with `npm test`; there are no runtime package dependencies.
 Tests run with no API key or model endpoint.
 
 Copy [the example config](roster.config.example.yml) to ignored
-`.roster/config.yml`. The first documented profile, `vllm-local`, uses the
+`.roster/config.yml`. The first named profile, `vllm-local`, uses the
 **vLLM OpenAI API on DGX Spark** at `http://127.0.0.1:8000/v1`: set
-`llm.base_url` to that URL, choose a served `llm.model`, and keep
-`llm.profile: ""`. Schema 1 does not accept `vllm-local` as a named YAML
-profile; the other local profiles and the later opt-in hosted profile are
-documented under [endpoints](docs/ENDPOINTS.md). The tracked example keeps
-the endpoint empty so the default is the offline stub; never put keys in it.
+`llm.profile: vllm-local`, leave `llm.base_url: ""`, and choose the served
+HF handle for `llm.model`. The profile permits a keyless local server;
+other profiles are documented under [endpoints](docs/ENDPOINTS.md). The
+tracked example keeps the profile empty so the default is the offline
+stub; never put keys in it.
 
 Both issue run modes need Git and authenticated `gh` access to an existing issue on
 the current repository's GitHub origin. The builtin path creates

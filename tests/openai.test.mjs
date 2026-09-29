@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import test from 'node:test';
 import { inspect } from 'node:util';
+import { parseConfig } from '../src/lib/config.mjs';
+import { createBuiltinChat } from '../src/lib/llm.mjs';
 import { createChat } from '../src/llm/openai.mjs';
 
 const secret = 'test-only-private-api-key';
@@ -14,7 +17,7 @@ const completion = {
 function client(fetch, { llm = {}, env = {}, vault = { get: async () => undefined } } = {}) {
   return createChat({
     llm: {
-      base_url: 'http://127.0.0.1:11434/v1/',
+      base_url: 'http://127.0.0.1:8000/v1/',
       model: 'local-test-model',
       api_key_optional: true,
       ...llm,
@@ -38,7 +41,7 @@ test('empty base_url disables the hook without touching secrets or fetch', () =>
   }
 });
 
-test('local chat POSTs to the configured API root without Authorization or logging', async (t) => {
+test('vLLM chat POSTs to the configured API root without Authorization or logging', async (t) => {
   const logs = [];
   for (const method of ['log', 'info', 'warn', 'error', 'debug']) {
     t.mock.method(console, method, (...args) => logs.push(args));
@@ -51,7 +54,7 @@ test('local chat POSTs to the configured API root without Authorization or loggi
   const result = await chat({ messages, temperature: 0.2, max_tokens: 64 });
   assert.deepEqual(result, { message: completion.choices[0].message, usage: completion.usage });
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, 'http://127.0.0.1:11434/v1/chat/completions');
+  assert.equal(calls[0].url, 'http://127.0.0.1:8000/v1/chat/completions');
   assert.equal(calls[0].options.method, 'POST');
   assert.equal(calls[0].options.redirect, 'error');
   assert.deepEqual(calls[0].options.headers, { 'Content-Type': 'application/json' });
@@ -61,6 +64,31 @@ test('local chat POSTs to the configured API root without Authorization or loggi
   assert.deepEqual(logs, []);
 });
 
+test('builtin vllm-local profile preserves usage and its optional-key setting', async () => {
+  const example = readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8');
+  const selected = parseConfig(example.replace('profile: ""', 'profile: vllm-local')
+    .replace('model: ""', 'model: owner/served-model'));
+  const chat = createBuiltinChat(selected, {
+    env: {}, vault: { get: async () => undefined },
+    fetchImpl: async (url, options) => {
+      assert.equal(url, 'http://127.0.0.1:8000/v1/chat/completions');
+      assert.equal(options.headers.Authorization, undefined);
+      assert.equal(JSON.parse(options.body).model, 'owner/served-model');
+      return Response.json(completion);
+    },
+  });
+  assert.deepEqual(await chat({ messages }),
+    { message: completion.choices[0].message, usage: completion.usage });
+
+  const keyRequired = parseConfig(example.replace('profile: ""', 'profile: vllm-local')
+    .replace('model: ""', 'model: owner/served-model')
+    .replace('api_key_optional: true', 'api_key_optional: false'));
+  const securedChat = createBuiltinChat(keyRequired, {
+    env: {}, vault: { get: async () => undefined },
+    fetchImpl: () => assert.fail('Missing a required key must prevent HTTP'),
+  });
+  await assert.rejects(securedChat({ messages }), /API key is required/);
+});
 test('hosted chat uses an environment key before the vault and supports model overrides', async () => {
   const chat = client(async (url, options) => {
     assert.equal(url, 'https://api.example.test/v1/chat/completions');

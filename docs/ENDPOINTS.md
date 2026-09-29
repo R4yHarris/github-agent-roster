@@ -16,12 +16,13 @@ prepare-only. See [SDLC](SDLC.md) for execution and publishing.
   human-evaluated runs; without it, a configured endpoint fails before
   creating a worktree. The example does not select a provider or contact
   an endpoint.
-- The first documented profile, `vllm-local`, uses `llm.base_url` at
-  `http://127.0.0.1:8000/v1`; it is not a selectable schema 1 YAML profile.
-  `profiles.ollama`, `profiles.lmstudio`, and `profiles.openai` define
-  validated named base URLs and API-key environment names. Selecting
-  `llm.profile` uses that endpoint and key name; `llm.base_url` must then
-  remain empty. An explicit base URL requires an empty profile.
+- `profiles.vllm-local` is the first named profile, with URL
+  `http://127.0.0.1:8000/v1` and `api_key_optional: true`.
+  `profiles.ollama`, `profiles.lmstudio`, and `profiles.openai` are
+  alternatives. Selecting `llm.profile` uses that endpoint and key name;
+  `llm.base_url` must then remain empty. An explicit base URL requires an
+  empty profile. Older configs without `vllm-local` can still select its
+  built-in default.
 - `llm.api_key_env: ROSTER_API_KEY` names an environment variable, not a key.
   Both seats use the [OpenAI-compatible client](LLM.md): a non-empty environment
   value wins over the same-named vault entry, and authorization is sent only
@@ -41,7 +42,8 @@ Keep every field in the example when overriding configuration. Older private
 configs without `planner` or `profiles` remain valid; the planner gets one
 turn and the named profiles retain their documented defaults. The underlying
 [chat factory and vault](LLM.md) accept an in-memory API with
-`llm.api_key_optional` and `llm.api_key_name`; those are not builtin YAML fields.
+`llm.api_key_optional` and `llm.api_key_name`; these are not top-level builtin
+YAML fields. Use `profiles.vllm-local.api_key_optional` in the YAML example.
 
 Use the OpenAI-compatible `/v1` base URL, not a full `/chat/completions` URL.
 With the server running, `GET <base_url>/models` lists model IDs; use an
@@ -59,11 +61,12 @@ See [model routing](ROUTING.md) for the three-evaluation threshold.
 ### vllm-local (DGX Spark)
 
 Run vLLM on DGX Spark. When Roster runs on the same host, set
-`llm.base_url: http://127.0.0.1:8000/v1` and `llm.profile: ""` in the
-copied config, then set `llm.model` to a model ID returned by `/v1/models`.
-Leave the API-key environment variable unset only when server authentication
-is disabled. This first profile is a custom-URL recipe until schema 1 supports
-`vllm-local` as a named YAML profile.
+`llm.profile: vllm-local` and keep `llm.base_url: ""` in the copied config,
+then set `llm.model` to the served HF handle returned by `/v1/models`.
+The profile permits a keyless local server and sends a key when one resolves.
+If server authentication is required, configure `ROSTER_API_KEY` or set
+`profiles.vllm-local.api_key_optional: false`. See the [curl and networking
+guide](LLM.md) when Roster runs under WSL or away from the DGX Spark.
 
 ### Ollama
 

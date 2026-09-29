@@ -7,7 +7,7 @@ export function createBuiltinChat(config, {
     base_url: config.llm.base_url,
     model: config.llm.model,
     api_key_name: config.llm.api_key_env,
-    api_key_optional: true,
+    api_key_optional: config.llm.api_key_optional ?? true,
     timeout_ms: 60_000,
   } }, { fetch: fetchImpl, env, vault });
 }

@@ -1,15 +1,19 @@
 schema: 1
-# First documented profile: vllm-local (vLLM OpenAI API on DGX Spark).
-# Set llm.base_url to http://127.0.0.1:8000/v1 and llm.model to a served ID.
-# Keep llm.profile empty; only the named profiles below are selectable.
+# First named profile: vllm-local (vLLM OpenAI API on DGX Spark).
+# Select it and set llm.model to the HF handle that vLLM is serving.
+# The example leaves the profile unset for the deterministic stub.
 llm:
   base_url: ""          # empty = deterministic stub
   model: ""
   api_key_env: ROSTER_API_KEY
   effort: m             # l|m|h|x
   context_max: 0        # 0 = unknown
-  profile: ""            # ollama|lmstudio|openai; empty uses base_url
+  profile: ""            # vllm-local|ollama|lmstudio|openai; empty uses base_url
 profiles:
+  vllm-local:
+    base_url: http://127.0.0.1:8000/v1
+    api_key_env: ROSTER_API_KEY
+    api_key_optional: true
   ollama:
     base_url: http://127.0.0.1:11434/v1
     api_key_env: ROSTER_API_KEY

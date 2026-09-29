@@ -19,11 +19,11 @@ function capture() {
   return { write(value) { text += String(value); }, get text() { return text; } };
 }
 
-function dispatcher({ env = {}, services = {} } = {}) {
+function dispatcher({ env = {}, services = {}, config: activeConfig = config } = {}) {
   const output = capture();
   const errorOutput = capture();
   const commands = createDispatcher({
-    cwd, repoRoot: root, config, env, output, errorOutput,
+    cwd, repoRoot: root, config: activeConfig, env, output, errorOutput,
     services: { repositoryRoot: () => cwd, ...services },
   });
   return { ...commands, output, errorOutput };
@@ -242,9 +242,32 @@ test('an issue publish without a confirmed merge leaves the issue untouched', as
       issueCloser: () => assert.fail('Unmerged PR must not close its issue'),
     },
   });
+
   await shell.dispatch('/run 42');
   await assert.rejects(shell.dispatch('/publish'), /did not confirm a merged PR/);
   assert.equal(shell.state.published, false);
+});
+
+test('/publish without a run forwards the configured model or ROSTER_MODEL to agent-pr', async () => {
+  for (const model of ['configured-model', '']) {
+    const shell = dispatcher({
+      config: { ...config, llm: { ...config.llm, model, effort: 'h' } },
+      env: { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'key.pem',
+        AI_MODEL: 'unknown', ROSTER_MODEL: 'served-model', ROSTER_API_KEY: 'private-value' },
+      services: {
+        resolveContractsPath: () => 'contracts',
+        publisher: async ({ env }) => {
+          assert.equal(env.AI_MODEL, model || 'served-model');
+          assert.equal(env.AI_PROVIDER, 'local');
+          assert.equal(env.AI_MODEL_VERSION, '-');
+          assert.equal(env.AI_EFFORT, 'h');
+          assert.equal(env.ROSTER_API_KEY, undefined);
+        },
+      },
+    });
+    await shell.dispatch('/publish fix: metadata');
+    assert.equal(shell.state.published, true);
+  }
 });
 
 test('a merged PR with local cleanup failure still finishes its issue without a duplicate publish', async () => {

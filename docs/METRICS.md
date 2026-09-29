@@ -3,13 +3,31 @@
 [`buildRun`](../src/metrics/run.mjs) constructs two compact schema 1 AI-Run
 lines in a builtin issue run: one for `roster-N-planner` from planner token
 reports and one for `roster-N-coder` from coder token reports. Both use task
-`issue-N`. Unknown provider, version, context, or counts stay unset (`-` in
+`issue-N`. Unknown version, context, or counts stay unset (`-` in
 the compact line); a missing usage report never becomes an estimate. The
-empty-URL stub emits both seat records labeled `builtin-stub`, with no
-invented LLM usage. The publisher receives the coder's known `AI_*` fields
+empty-URL stub emits no AI-Run trailer and records no model or LLM usage.
+The publisher receives the coder's known `AI_*` fields
 only, not the model API key: the contracts SDK supports one AI-Run trailer per
 published code commit. Both seat runs are printed and, when local learning
 is enabled, recorded separately. Contracts owns the trailer format.
+
+An `unknown` model is a bug, not a default. Both builtin publication and
+standalone `/publish` pass the configured `llm.model` as `AI_MODEL`, falling
+back to `ROSTER_MODEL` when config has no model. Builtin seats use that same
+selection for their LLM requests. Publication clears inherited run metadata
+and never forwards the LLM API key. A completed coder's metadata wins over
+later configuration changes. With no model, all `AI_*` run fields are omitted,
+so the SDK adds no AI-Run. The SDK's separate required `AI-Model` trailer still
+has its legacy fallback when no model is supplied; Roster does not invent a
+model to replace it.
+
+The pinned contracts `v0.2.0` schema does **not** accept `AI_PROVIDER=vllm`.
+Roster encodes vLLM as its supported `local` provider (`openai` for the explicit
+OpenAI profile), without modifying the submodule. `AI_MODEL_VERSION` is the
+known environment value or `-`; `AI_EFFORT` comes from config. Builtin sessions
+are `roster-N-planner` and `roster-N-coder`, with `AI_TASK=issue-N`.
+The printed manual publication instructions include the coder's environment
+fields; set those before running the SDK command directly.
 
 `src/lib/metrics.mjs` reads compact AI-Run JSONL by invoking contracts
 `scripts/export-agent-metrics.mjs` with Node. Contracts resolution checks the
