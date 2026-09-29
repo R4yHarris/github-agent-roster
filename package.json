@@ -5,6 +5,15 @@
   "bin": {
     "roster": "src/cli.mjs"
   },
+  "files": [
+    "src/",
+    "templates/",
+    "skills/",
+    "docs/",
+    "roster.config.example.yml",
+    "AGENTS.md",
+    "vendor/github-agent-contracts/scripts/"
+  ],
   "scripts": {
     "test": "node --test tests/*.test.mjs"
   },
