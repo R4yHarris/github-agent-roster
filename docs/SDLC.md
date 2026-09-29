@@ -32,7 +32,9 @@ Git repository). Ignore a custom worktrees path yourself if you change it.
   merge or deploy rights. `seat.turn_budget` limits coder responses to 1-64
   (example: 8). `seat.tools` can only name the four builtin tools.
 - `paths.memory` is JSONL (last 20 entries enter context); `paths.skills`
-  loads `*/SKILL.md` from **this** checkout; `paths.asks` holds local drafts;
+  loads immediate `*/SKILL.md` files from **this** checkout (including
+  `implement-task` and `run-tests` when present). A missing or empty skills
+  directory is allowed. `paths.asks` holds local drafts;
   `paths.worktrees` selects a path inside the issue repository.
 
 ## Task files and planning

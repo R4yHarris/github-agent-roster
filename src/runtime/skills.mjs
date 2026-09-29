@@ -10,7 +10,13 @@ export async function loadSkills({ repoRoot, skillsPath = 'skills' }) {
     throw new Error('Skills must be loaded from this roster repository');
   }
   await ensureLocalPath(directory, root);
-  const status = await fs.lstat(directory);
+  let status;
+  try {
+    status = await fs.lstat(directory);
+  } catch (error) {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  }
   if (!status.isDirectory() || status.isSymbolicLink()) {
     throw new Error('Skills path must be a directory, not a symlink');
   }
@@ -19,12 +25,17 @@ export async function loadSkills({ repoRoot, skillsPath = 'skills' }) {
     .sort((left, right) => left.name.localeCompare(right.name))) {
     if (!entry.isDirectory()) continue;
     const file = path.join(directory, entry.name, 'SKILL.md');
-    const skillStatus = await fs.lstat(file);
+    let skillStatus;
+    try {
+      skillStatus = await fs.lstat(file);
+    } catch (error) {
+      if (error.code === 'ENOENT') continue;
+      throw error;
+    }
     if (!skillStatus.isFile() || skillStatus.isSymbolicLink()) {
       throw new Error(`Skill ${entry.name} must contain a regular SKILL.md file`);
     }
     skills.push({ name: entry.name, content: await fs.readFile(file, 'utf8') });
   }
-  if (!skills.length) throw new Error('No skills/*/SKILL.md files found in the roster repository');
   return skills;
 }
