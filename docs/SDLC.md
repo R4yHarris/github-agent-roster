@@ -22,7 +22,8 @@ without editing the tracked example or storing credentials.
   network-free deterministic stub. Select `ollama`, `lmstudio`, or `openai`
   from `profiles` instead of setting a custom URL, then set `llm.model` or
   explicitly use `--auto-model` with an empty model. With fewer than three
-  matching human evaluations, auto-model runs the deterministic stub.
+  matching human evaluations, auto-model runs the deterministic stub; see
+  [routing](ROUTING.md).
   Local endpoints may work without
   a key; when needed, set the environment variable named by `llm.api_key_env`
   or store an API key under that name in the file vault. A non-empty environment
