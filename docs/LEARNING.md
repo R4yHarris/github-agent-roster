@@ -159,9 +159,9 @@ feat: careful-model effort=h accept-rate=66.7% n=3
 If no configuration qualifies, the exact output is `insufficient data`.
 `roster recommend` is read-only. Only
 `roster run --issue N --runtime builtin --auto-model` with an empty configured
-model applies a qualifying suggestion
-to that run's planner and coder, without editing private config or policy.
-Fewer than three evaluated samples keep the run on the deterministic stub.
+model applies a qualifying suggestion to that run's planner and coder,
+without editing private config or policy. Fewer than three evaluated
+samples keep the run on the deterministic stub. See [routing](ROUTING.md).
 
 Both `.roster/runs/` and `.roster/evals.jsonl` are ignored by Git. Keep human
 feedback local unless the human explicitly posts the optional PR comment.
