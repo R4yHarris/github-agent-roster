@@ -23,6 +23,7 @@ test('loads the tracked example when private config is absent', (context) => {
     llm: {
       base_url: '', model: '', api_key_env: 'ROSTER_API_KEY', effort: 'm', context_max: 0,
     },
+    planner: { turn_budget: 2 },
     seat: {
       id: 'coder', principal: 'coder', turn_budget: 8,
       tools: ['read_file', 'write_file', 'list_dir', 'run_test'],
@@ -34,6 +35,7 @@ test('loads the tracked example when private config is absent', (context) => {
   });
   assert.equal(Object.isFrozen(config.seat.tools), true);
   assert.equal(Object.isFrozen(config.llm), true);
+  assert.equal(Object.isFrozen(config.planner), true);
 });
 
 test('private config overrides the example without resolving or logging the API key', (context) => {
@@ -42,12 +44,14 @@ test('private config overrides the example without resolving or logging the API 
   writeFileSync(join(repoRoot, '.roster', 'config.yml'),
     example.replace('base_url: ""', 'base_url: "http://localhost:1234/v1"')
       .replace('model: ""', 'model: local-model')
+      .replace('turn_budget: 2', 'turn_budget: 4')
       .replace('turn_budget: 8', 'turn_budget: 3'));
   const original = process.env.ROSTER_API_KEY;
   process.env.ROSTER_API_KEY = 'do-not-print-this-secret';
   try {
     const config = loadConfig({ repoRoot });
     assert.equal(config.llm.base_url, 'http://localhost:1234/v1');
+    assert.equal(config.planner.turn_budget, 4);
     assert.equal(config.seat.turn_budget, 3);
     assert.ok(!JSON.stringify(config).includes(process.env.ROSTER_API_KEY));
   } finally {
@@ -65,6 +69,9 @@ test('rejects invalid schema, fields, roles, paths, tool names, and endpoint set
     ['principal', example.replace('principal: coder', 'principal: merger')],
     ['tools', example.replace('run_test]', 'git_push]')],
     ['budget', example.replace('turn_budget: 8', 'turn_budget: 0')],
+    ['planner budget', example.replace('turn_budget: 2', 'turn_budget: 65')],
+    ['planner missing budget', example.replace(/  turn_budget: 2[^\r\n]*\r?\n/, '')],
+    ['planner unknown field', example.replace('planner:', 'planner:\n  tools: [write_file]')],
     ['effort', example.replace('effort: m ', 'effort: max ')],
     ['traversal', example.replace('skills: skills', 'skills: ../outside')],
     ['absolute', example.replace('skills: skills', 'skills: C:\\outside')],
@@ -75,6 +82,8 @@ test('rejects invalid schema, fields, roles, paths, tool names, and endpoint set
     assert.throws(() => parseConfig(source), ConfigError, name);
   }
   assert.throws(() => parseConfig('x'.repeat(65_537)), /at most 64 KiB/);
+  const legacy = example.replace(/planner:\r?\n  turn_budget: 2[^\r\n]*\r?\n/, '');
+  assert.equal(parseConfig(legacy).planner.turn_budget, 1);
 });
 
 test('only a missing private config triggers the example fallback', (context) => {

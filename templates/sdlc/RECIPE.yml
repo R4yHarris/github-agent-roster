@@ -1,6 +1,10 @@
 version: 1
 ask: issue:N
 seats:
+  - id: planner
+    principal: coder
+    worker: builtin
+    sequence: [read_ask, plan, write_task]
   - id: coder
     principal: coder
     worker: builtin

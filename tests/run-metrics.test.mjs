@@ -37,6 +37,18 @@ test('does not invent unknown model, provider, context, or token counts', () => 
   assert.deepEqual(mergeUsage(null, { prompt_tokens: 2 }), {});
 });
 
+test('records deterministic stub seats without inventing LLM usage', () => {
+  const stub = buildRun({
+    config: parseConfig(example), includeStub: true,
+    session: 'roster-42-planner', task: 'issue-42',
+  });
+  assert.equal(stub.line, '1|-|builtin-stub@unknown|-|-/-|-|roster-42-planner|issue-42');
+  assert.deepEqual(stub.env, {
+    AI_MODEL: 'builtin-stub', AI_SESSION: 'roster-42-planner', AI_TASK: 'issue-42',
+  });
+  assert.equal(packAgentRun(stub.env), stub.line);
+});
+
 test('rejects invalid or overflowing returned counts and unsafe identifiers', () => {
   assert.throws(() => mergeUsage({ prompt_tokens: -1 }), /nonnegative safe integer/);
   assert.throws(() => mergeUsage({ completion_tokens: '12' }), /nonnegative safe integer/);

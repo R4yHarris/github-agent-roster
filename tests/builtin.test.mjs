@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { parseConfig } from '../src/lib/config.mjs';
 import { writeAsk } from '../src/lib/ask.mjs';
 import { runBuiltinIssue, stageReviewedFiles } from '../src/lib/builtin.mjs';
+import { loadLearning } from '../src/lib/learn.mjs';
+import { resolveContractsPath } from '../src/lib/paths.mjs';
 import { parseRecipe } from '../src/lib/recipe.mjs';
 import { packAgentRun } from '../vendor/github-agent-contracts/scripts/parse-agent-run.mjs';
 
@@ -87,15 +89,29 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
   assert.equal(git(result.worktreePath, 'branch', '--show-current'), 'issue-42');
   assert.match(readFileSync(result.assignmentPath, 'utf8'), /Issue URL: https:\/\/github.com\/example\/project\/issues\/42/);
   assert.match(readFileSync(result.assignmentPath, 'utf8'), /README has a Status section/);
-  assert.equal(parseRecipe(readFileSync(result.recipePath, 'utf8')).ask, 'issue:42');
+  const recipe = parseRecipe(readFileSync(result.recipePath, 'utf8'));
+  assert.equal(recipe.ask, 'issue:42');
+  assert.deepEqual(recipe.seats.map(({ id }) => id), ['planner', 'coder']);
   assert.match(readFileSync(result.taskPath, 'utf8'), /## Acceptance checks/);
+  assert.equal(readFileSync(result.taskPath, 'utf8'), result.planner.task);
+  assert.deepEqual(result.sessions, { planner: 'roster-42-planner', coder: 'roster-42-coder' });
+  assert.equal(readFileSync(result.envPath, 'utf8'),
+    'AI_TASK=issue-42\nAI_SESSION=roster-42-coder\n');
   assert.match(readFileSync(result.result.resultPath, 'utf8'), /Deterministic stub only/);
-  assert.equal(result.run, null);
+  assert.match(result.result.summary, /Add Status to README/);
+  assert.equal(result.run, result.runs.coder);
   assert.equal(result.result.mode, 'stub');
   assert.ok(logs[0].includes('node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue 42"'));
+  assert.equal((logs[0].match(/AI-Run:/g) ?? []).length, 2);
+  assert.equal(result.runs.planner.line, packAgentRun(result.runs.planner.env));
+  assert.equal(result.runs.coder.line, packAgentRun(result.runs.coder.env));
+  assert.match(result.runs.planner.line, /\|roster-42-planner\|issue-42$/);
+  assert.match(result.runs.coder.line, /\|roster-42-coder\|issue-42$/);
   assert.deepEqual(options.calls.map(({ program }) => program), ['git', 'git', 'gh', 'git']);
+  assert.equal(options.calls.filter(({ program, args }) =>
+    program === 'git' && args[0] === 'worktree').length, 1);
   assert.equal(JSON.parse(readFileSync(path.join(options.repoRoot,
-    '.roster', 'memory', 'coder.jsonl'), 'utf8')).status, 'stub');
+    '.roster', 'memory', 'coder.jsonl'), 'utf8')).session, 'roster-42-coder');
   await assert.rejects(stageReviewedFiles(result.worktreePath, ['README.md']),
     /No reviewed task files changed/);
 });
@@ -108,6 +124,7 @@ test('--publish requires an LLM and App environment before any GitHub or worktre
   }), /requires an LLM endpoint/);
   await assert.rejects(runBuiltinIssue(42, {
     ...options, config: llmConfig, publish: true,
+    env: { ...options.env, GITHUB_APP_ID: undefined, GITHUB_APP_PRIVATE_KEY_PATH: undefined },
   }), /GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH/);
   assert.deepEqual(options.calls, []);
 });
@@ -124,6 +141,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
     assert.equal(request.headers.Authorization, 'Bearer private-key');
     assert.ok(!request.body.includes('private-key'));
     if (completion === 1) {
+      assert.equal(body.tools, undefined);
       return { ok: true, json: async () => ({
         choices: [{ message: { content: JSON.stringify({
           title: 'Add Status to README',
@@ -134,6 +152,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
       }) };
     }
     if (completion === 2) {
+      assert.match(body.messages[1].content, /TASK\.md:\n# Task: Add Status to README/);
       assert.deepEqual(body.tools.map(({ function: tool }) => tool.name),
         ['read_file', 'write_file', 'list_dir', 'run_test']);
       return { ok: true, json: async () => ({
@@ -167,8 +186,9 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
       assert.equal(publication.env.ROSTER_API_KEY, undefined);
       assert.equal(publication.env.GITHUB_APP_ID, '123');
       assert.equal(publication.env.AI_MODEL, 'local-model');
-      assert.equal(publication.env.AI_CONTEXT_USED, '22');
-      assert.equal(publication.env.AI_CONTEXT_OUT, '9');
+      assert.equal(publication.env.AI_CONTEXT_USED, '17');
+      assert.equal(publication.env.AI_CONTEXT_OUT, '7');
+      assert.equal(publication.env.AI_SESSION, 'roster-42-coder');
       assert.equal(git(publication.cwd, 'diff', '--cached', '--name-only'), 'README.md');
       return { stdout: 'Published via test SDK\n' };
     },
@@ -178,9 +198,53 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
   assert.match(readFileSync(path.join(result.worktreePath, 'README.md'), 'utf8'), /## Status\nReady/);
   assert.equal(result.result.tests.exit_code, 0);
   assert.equal(result.run.line, packAgentRun(result.run.env));
-  assert.match(result.run.line, /\|22\/-\|9\|/);
+  assert.match(result.runs.planner.line, /\|5\/-\|2\|roster-42-planner\|issue-42$/);
+  assert.match(result.runs.coder.line, /\|17\/-\|7\|roster-42-coder\|issue-42$/);
+  assert.equal((logs[0].match(/AI-Run:/g) ?? []).length, 2);
   assert.ok(logs.some((line) => line.includes('Published via test SDK')));
   assert.ok(!logs.join('\n').includes('private-key'));
+});
+
+test('opt-in learning records exactly one run for each builtin seat', async (context) => {
+  const options = fixture(context);
+  mkdirSync(path.join(options.target, '.roster', 'runs'), { recursive: true });
+  const result = await runBuiltinIssue(42, {
+    ...options, config: stubConfig, log: () => {},
+    env: { ...options.env, GITHUB_AGENT_CONTRACTS: resolveContractsPath() },
+    fetchImpl: () => { throw new Error('stub must not contact an LLM'); },
+  });
+  assert.deepEqual(loadLearning({ cwd: options.target }).runs, [
+    { session: result.sessions.planner, task: 'issue-42', model: 'builtin-stub' },
+    { session: result.sessions.coder, task: 'issue-42', model: 'builtin-stub' },
+  ]);
+});
+
+test('detects a changed recipe after the coder runs tests and refuses publication', async (context) => {
+  const options = fixture(context);
+  let published = false;
+  const fetchImpl = async (_url, request) => {
+    const body = JSON.parse(request.body);
+    if (!body.tools) {
+      return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({
+        title: 'Update README', acceptance_checks: ['node --test exits 0'],
+        files_allowed: ['README.md'],
+      }) } }] }) };
+    }
+    return { ok: true, json: async () => ({
+      choices: [{ finish_reason: 'stop', message: { content: 'Done' } }],
+    }) };
+  };
+  await assert.rejects(runBuiltinIssue(42, {
+    ...options, config: llmConfig, publish: true, fetchImpl,
+    env: { ...options.env, GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'app.pem' },
+    runTestCommand: async (_program, _args, { cwd }) => {
+      writeFileSync(path.join(cwd, 'RECIPE.yml'), 'tampered');
+      return { stdout: 'passed', stderr: '' };
+    },
+    publisher: async () => { published = true; },
+  }), /RECIPE\.yml changed after planning/);
+  assert.equal(published, false);
+  assert.equal(existsSync(path.join(options.target, '.worktrees', 'issue-42', 'RESULT.md')), true);
 });
 
 test('staging refuses changes outside the task scope', async (context) => {

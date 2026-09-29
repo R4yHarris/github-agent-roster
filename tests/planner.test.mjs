@@ -1,30 +1,38 @@
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 import { parseConfig } from '../src/lib/config.mjs';
 import { parseRecipe } from '../src/lib/recipe.mjs';
 import { planAsk, planStub, renderAsk, renderAssignment, taskFilesAllowed } from '../src/planner/stub.mjs';
+import { runPlanner } from '../src/seats/planner.mjs';
 
 const configExample = readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8');
 const stubConfig = parseConfig(configExample);
 const llmConfig = parseConfig(configExample.replace('base_url: ""', 'base_url: "http://localhost:1234/v1"')
   .replace('model: ""', 'model: test-model'));
 
-test('stub creates an executable single-coder recipe and task without an LLM request', async () => {
+test('stub creates an executable planner/coder recipe and task without an LLM request', async () => {
   const ask = 'Add a Status section to `README.md`.\n\nKeep the text short.';
   const plan = await planAsk(ask, { config: stubConfig, reference: 'issue:42', title: 'Update project status',
     fetchImpl: () => { throw new Error('stub must not make a network request'); } });
   assert.deepEqual(parseRecipe(plan.recipe), {
     version: 1,
     ask: 'issue:42',
-    seats: [{ id: 'coder', principal: 'coder', worker: 'builtin',
-      sequence: ['load_context', 'implement', 'run_tests', 'summarize'] }],
+    seats: [
+      { id: 'planner', principal: 'coder', worker: 'builtin',
+        sequence: ['read_ask', 'plan', 'write_task'] },
+      { id: 'coder', principal: 'coder', worker: 'builtin',
+        sequence: ['load_context', 'implement', 'run_tests', 'summarize'] },
+    ],
   });
   assert.match(plan.task, /^# Task: Update project status/m);
   assert.match(plan.task, /- node --test exits 0/);
   assert.match(plan.task, /## Ask\nAdd a Status section to `README\.md`/);
   assert.deepEqual(taskFilesAllowed(plan.task), ['README.md']);
   assert.equal(plan.usage, null);
+  assert.equal(plan.turns, 0);
   assert.equal(renderAsk(ask), `# Ask\n\n${ask}\n`);
   assert.equal(renderAssignment({
     number: 42, url: 'https://github.com/example/roster/issues/42',
@@ -75,6 +83,7 @@ test('LLM planner validates JSON before generating a recipe and never exposes th
   assert.equal(parseRecipe(plan.recipe).ask, 'issue:8');
   assert.deepEqual(taskFilesAllowed(plan.task), ['README.md']);
   assert.deepEqual(plan.usage, { prompt_tokens: 30, completion_tokens: 11 });
+  assert.equal(plan.turns, 1);
   await assert.rejects(planAsk('Add status to README.', {
     config: llmConfig, fetchImpl: async () => ({ ok: false, status: 401 }),
     env: { ROSTER_API_KEY: 'secret-value' },
@@ -90,4 +99,61 @@ test('LLM planner validates JSON before generating a recipe and never exposes th
       }) } }],
     }) }),
   }), /protected files/);
+});
+
+test('planner repairs invalid JSON within its configured budget and fails when exhausted', async () => {
+  let calls = 0;
+  const plan = await planAsk('Update README.md.', {
+    config: llmConfig,
+    fetchImpl: async (_url, request) => {
+      calls += 1;
+      const body = JSON.parse(request.body);
+      assert.equal(body.tools, undefined);
+      if (calls === 2) assert.match(body.messages.at(-1).content, /invalid JSON/);
+      return { ok: true, json: async () => ({
+        choices: [{ message: { content: calls === 1 ? '{' : JSON.stringify({
+          title: 'Update README', acceptance_checks: ['node --test exits 0'],
+          files_allowed: ['README.md'],
+        }) } }],
+        usage: { prompt_tokens: calls, completion_tokens: 2 },
+      }) };
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(plan.turns, 2);
+  assert.deepEqual(plan.usage, { prompt_tokens: 3, completion_tokens: 4 });
+
+  const singleTurn = parseConfig(configExample.replace('base_url: ""', 'base_url: http://localhost:1234/v1')
+    .replace('model: ""', 'model: test-model').replace('turn_budget: 2', 'turn_budget: 1'));
+  let failures = 0;
+  await assert.rejects(planAsk('Update README.md.', {
+    config: singleTurn,
+    fetchImpl: async () => {
+      failures += 1;
+      return { ok: true, json: async () => ({ choices: [{ message: { content: '{' } }] }) };
+    },
+  }), /Planner turn budget \(1\) exhausted: LLM planner returned invalid JSON/);
+  assert.equal(failures, 1);
+});
+
+test('planner rejects write_file requests without touching source or task files', async (t) => {
+  const worktree = mkdtempSync(join(tmpdir(), 'roster-planner-'));
+  t.after(() => rmSync(worktree, { recursive: true, force: true }));
+  await assert.rejects(runPlanner({
+    worktree,
+    issue: { number: 42, title: 'Protect the task', body: 'Edit `src/app.mjs`.' },
+    config: llmConfig,
+    fetchImpl: async (_url, request) => {
+      assert.equal(JSON.parse(request.body).tools, undefined);
+      return { ok: true, json: async () => ({ choices: [{ finish_reason: 'tool_calls',
+        message: { tool_calls: [{ id: 'write', type: 'function', function: {
+          name: 'write_file',
+          arguments: JSON.stringify({ path: 'src/app.mjs', content: 'bad' }),
+        } }] },
+      }] }) };
+    },
+  }), /planner cannot call tools/i);
+  assert.equal(existsSync(join(worktree, 'src', 'app.mjs')), false);
+  assert.equal(existsSync(join(worktree, 'RECIPE.yml')), false);
+  assert.equal(existsSync(join(worktree, 'TASK.md')), false);
 });

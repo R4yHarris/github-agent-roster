@@ -3,12 +3,14 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { buildRun, mergeUsage } from '../metrics/run.mjs';
-import { planAsk, taskFilesAllowed } from '../planner/stub.mjs';
+import { buildRun } from '../metrics/run.mjs';
+import { taskFilesAllowed } from '../planner/stub.mjs';
 import { runCoder } from '../seats/coder.mjs';
+import { runPlanner } from '../seats/planner.mjs';
 import { isAllowedFile, isForbiddenWrite } from '../runtime/tools.mjs';
 import { loadConfig } from './config.mjs';
 import { runIssue } from './issue.mjs';
+import { inferTaskClass, recordRun } from './learn.mjs';
 import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -24,6 +26,13 @@ async function git(worktree, args, env = process.env) {
     cwd: worktree, env, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
   });
   return stdout;
+}
+
+async function ensureUnchanged(file, content) {
+  const status = await fs.lstat(file);
+  if (!status.isFile() || status.isSymbolicLink() || await fs.readFile(file, 'utf8') !== content) {
+    throw new Error(`${path.basename(file)} changed after planning; refusing to publish`);
+  }
 }
 
 export async function stageReviewedFiles(worktree, allowedFiles, { env = process.env } = {}) {
@@ -58,6 +67,7 @@ export async function runBuiltinIssue(issueNumber, {
   config = loadConfig({ repoRoot }),
   env = process.env,
   publish = false,
+  seats = 'planner,coder',
   log = console.log,
   runCommand,
   fetchImpl,
@@ -65,6 +75,9 @@ export async function runBuiltinIssue(issueNumber, {
   publisher = execFileAsync,
   now,
 } = {}) {
+  if (seats !== 'planner,coder') {
+    throw new TypeError('Builtin seats must be planner,coder in that order');
+  }
   if (publish && (!config.llm.base_url || !env.GITHUB_APP_ID || !env.GITHUB_APP_PRIVATE_KEY_PATH)) {
     throw new Error('--publish requires an LLM endpoint and GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH');
   }
@@ -76,42 +89,63 @@ export async function runBuiltinIssue(issueNumber, {
   const prepared = await runIssue(issueNumber, {
     cwd, runCommand: issueCommand, worktrees: config.paths.worktrees, log: () => {}, now,
     beforeWorktree: (root, worktreePath) => ensureLocalPath(worktreePath, root),
+    sessionId: `roster-${issueNumber}-coder`, recordPreparation: false,
   });
   const { worktreePath } = prepared;
-  const plan = await planAsk(prepared.issue.body, {
-    config, reference: `issue:${prepared.issue.number}`, title: prepared.issue.title, fetchImpl, env,
+  const sessions = {
+    planner: `roster-${prepared.issue.number}-planner`,
+    coder: prepared.session,
+  };
+  const planner = await runPlanner({
+    worktree: worktreePath, issue: prepared.issue, config, fetchImpl, env,
   });
-  const recipePath = path.join(worktreePath, 'RECIPE.yml');
-  const taskPath = path.join(worktreePath, 'TASK.md');
-  await fs.writeFile(recipePath, plan.recipe, { encoding: 'utf8', flag: 'wx' });
-  await fs.writeFile(taskPath, plan.task, { encoding: 'utf8', flag: 'wx' });
+  const metricEnv = { ...commandEnv };
+  for (const name of [...runNames, 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH',
+    'GH_TOKEN', 'GITHUB_TOKEN']) delete metricEnv[name];
+  const taskClass = inferTaskClass(prepared.issue.title);
+  const recordSeat = async (session, run) => recordRun({
+    session, task: prepared.task, task_class: taskClass,
+  }, { cwd: prepared.repoRoot, env: { ...metricEnv, ...run.env } });
+  const plannerRun = buildRun({
+    config, usage: planner.usage ?? {}, session: sessions.planner, task: prepared.task,
+    includeStub: true,
+  });
+  await recordSeat(sessions.planner, plannerRun);
   const result = await runCoder({
-    worktree: worktreePath, repoRoot, config, task: prepared.task, session: prepared.session,
+    worktree: worktreePath, repoRoot, config, task: prepared.task, session: sessions.coder,
     fetchImpl, env, runTestCommand,
   });
-  const run = buildRun({
-    config, usage: config.llm.base_url ? mergeUsage(plan.usage, result.usage) : {},
-    session: prepared.session, task: prepared.task,
+  await ensureUnchanged(planner.recipePath, planner.recipe);
+  await ensureUnchanged(planner.taskPath, planner.task);
+  const coderRun = buildRun({
+    config, usage: result.usage ?? {}, session: sessions.coder, task: prepared.task,
+    includeStub: true,
   });
+  await recordSeat(sessions.coder, coderRun);
+  const runs = { planner: plannerRun, coder: coderRun };
   const command = `node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue ${prepared.issue.number}"`;
   log(`Worktree: ${worktreePath}\nAssignment: ${prepared.assignmentPath}\n` +
-    `RECIPE: ${recipePath}\nTASK: ${taskPath}\nRESULT: ${result.resultPath}\n` +
-    (run ? `AI-Run: ${run.line}\n` : '') +
+    `RECIPE: ${planner.recipePath}\nTASK: ${planner.taskPath}\nRESULT: ${result.resultPath}\n` +
+    `Planner session: ${sessions.planner}\nAI-Run: ${plannerRun.line}\n` +
+    `Coder session: ${sessions.coder}\nAI-Run: ${coderRun.line}\n` +
     `From the worktree root, publish only after reviewing changes:\n${command}`);
 
   if (publish) {
     await git(worktreePath, ['submodule', 'update', '--init', '--recursive'], commandEnv);
     const contractsPath = resolveContractsPath({ repoRoot: worktreePath, cwd, env });
-    await stageReviewedFiles(worktreePath, taskFilesAllowed(plan.task), { env: commandEnv });
+    await stageReviewedFiles(worktreePath, taskFilesAllowed(planner.task), { env: commandEnv });
     const publishEnv = { ...commandEnv };
     for (const name of runNames) delete publishEnv[name];
     publishEnv.GITHUB_APP_PRIVATE_KEY_PATH = path.resolve(cwd, env.GITHUB_APP_PRIVATE_KEY_PATH);
-    Object.assign(publishEnv, run.env);
+    Object.assign(publishEnv, coderRun.env);
     const { stdout } = await publisher(process.execPath,
       [path.join(contractsPath, 'scripts', 'agent-pr.mjs'),
         '--message', `feat: issue ${prepared.issue.number}`],
       { cwd: worktreePath, env: publishEnv, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
     if (stdout?.trim()) log(stdout.trim());
   }
-  return { ...prepared, recipePath, taskPath, result, run, command };
+  return {
+    ...prepared, recipePath: planner.recipePath, taskPath: planner.taskPath,
+    planner, result, sessions, runs, run: coderRun, command,
+  };
 }

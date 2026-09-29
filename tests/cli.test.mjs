@@ -32,7 +32,7 @@ test("help lists every prompt's command", () => {
   assert.match(result.stdout, /roster\s+eval/);
   assert.match(result.stdout, /roster\s+recommend\s+--task-class/);
   assert.match(result.stdout, /roster\s+ask/);
-  assert.match(result.stdout, /--seat coder --runtime builtin/);
+  assert.match(result.stdout, /--runtime builtin \[--seats planner,coder\]/);
 });
 
 test("ask CLI creates an offline draft with recipe and task paths", () => {
@@ -57,14 +57,23 @@ test("ask CLI creates an offline draft with recipe and task paths", () => {
   }
 });
 
-test("builtin CLI rejects unsupported seats and refuses stub publication without GitHub access", () => {
+test("builtin CLI defaults to paired seats, rejects unsupported selections, and refuses stub publication", () => {
   const invalid = run(["run", "--issue", "42", "--seat", "merger", "--runtime", "builtin"]);
   assert.notEqual(invalid.status, 0);
-  assert.match(invalid.stderr, /--seat coder --runtime builtin/);
-  const noIssue = run(["run", "--issue", "n/a", "--seat", "coder", "--runtime", "builtin"]);
+  assert.match(invalid.stderr, /--seats planner,coder/);
+  const invalidOrder = run(["run", "--issue", "42", "--runtime", "builtin",
+    "--seats", "coder,planner"]);
+  assert.notEqual(invalidOrder.status, 0);
+  assert.match(invalidOrder.stderr, /--seats planner,coder/);
+  const noIssue = run(["run", "--issue", "n/a", "--runtime", "builtin",
+    "--seats", "planner,coder"]);
   assert.notEqual(noIssue.status, 0);
   assert.match(noIssue.stderr, /Issue number must be a positive safe integer/);
-  const noPublish = run(["run", "--issue", "42", "--seat", "coder", "--runtime", "builtin", "--publish"]);
+  const defaultSeats = run(["run", "--issue", "n/a", "--runtime", "builtin"]);
+  assert.match(defaultSeats.stderr, /Issue number must be a positive safe integer/);
+  const legacySeat = run(["run", "--issue", "n/a", "--seat", "coder", "--runtime", "builtin"]);
+  assert.match(legacySeat.stderr, /Issue number must be a positive safe integer/);
+  const noPublish = run(["run", "--issue", "42", "--runtime", "builtin", "--publish"]);
   assert.notEqual(noPublish.status, 0);
   assert.match(noPublish.stderr, /--publish requires an LLM endpoint/);
 });

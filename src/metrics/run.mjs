@@ -21,15 +21,20 @@ export function mergeUsage(...samples) {
   return totals;
 }
 
-export function buildRun({ config, usage = {}, session, task }) {
-  if (!config.llm.base_url) return null;
-  const { model, effort, context_max: contextMax } = config.llm;
-  if (!/^[A-Za-z0-9._:/-]+$/.test(model) || !['l', 'm', 'h', 'x'].includes(effort) ||
+export function buildRun({ config, usage = {}, session, task, includeStub = false }) {
+  const stub = !config.llm.base_url;
+  if (stub && !includeStub) return null;
+  const model = stub ? 'builtin-stub' : config.llm.model;
+  const effort = stub ? '-' : config.llm.effort;
+  const contextMax = stub ? 0 : config.llm.context_max;
+  if (!/^[A-Za-z0-9._:/-]+$/.test(model) ||
+      !['l', 'm', 'h', 'x', '-'].includes(effort) ||
       !Number.isSafeInteger(contextMax) || contextMax < 0) {
     throw new TypeError('Invalid LLM model, effort, or context_max for AI-Run');
   }
   const counts = mergeUsage(usage);
-  const env = { AI_MODEL: model, AI_EFFORT: effort };
+  const env = { AI_MODEL: model };
+  if (!stub) env.AI_EFFORT = effort;
   if (contextMax > 0) env.AI_CONTEXT_MAX = String(contextMax);
   if (counts.prompt_tokens !== undefined) env.AI_CONTEXT_USED = String(counts.prompt_tokens);
   if (counts.completion_tokens !== undefined) env.AI_CONTEXT_OUT = String(counts.completion_tokens);

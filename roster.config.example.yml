@@ -5,6 +5,8 @@ llm:
   api_key_env: ROSTER_API_KEY
   effort: m             # l|m|h|x
   context_max: 0        # 0 = unknown
+planner:
+  turn_budget: 2         # maximum planner responses; no file tools
 seat:
   id: coder
   principal: coder      # contracts role; no merge, no deploy
