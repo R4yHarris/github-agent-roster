@@ -19,7 +19,7 @@ import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
 
 const execFileAsync = promisify(execFile);
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
-const generated = new Set(['ASSIGNMENT.md', 'TASK.md', 'RECIPE.yml', 'RESULT.md']);
+const generated = new Set(['ASSIGNMENT.md', 'TASK.md', 'RECIPE.yml', 'CONTEXT.md', 'RESULT.md']);
 
 async function git(worktree, args, env = process.env) {
   const { stdout } = await execFileAsync('git', args, {
