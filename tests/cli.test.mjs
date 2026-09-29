@@ -25,6 +25,7 @@ test("help lists every prompt's command", () => {
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /roster\s+run\s+--issue/);
+  assert.match(result.stdout, /roster\s+doctor/);
   assert.match(result.stdout, /roster\s+status\s+\[--issue N\]\s+\[--offline\]/);
   assert.match(result.stdout, /roster\s+recipe\s+validate/);
   assert.match(result.stdout, /roster\s+stats/);
@@ -39,6 +40,19 @@ test("help lists every prompt's command", () => {
   assert.match(result.stdout, /^  roster run --issue N --runtime builtin --seats planner,coder$/m);
 });
 
+test("doctor checks prerequisites without network calls or leaking App env values", () => {
+  const ready = run(["doctor"], { ...process.env,
+    GITHUB_APP_ID: 'test-only-app-marker', GITHUB_APP_PRIVATE_KEY_PATH: 'test-only-path-marker' });
+  assert.ifError(ready.error);
+  assert.equal(ready.status, 0, ready.stderr);
+  assert.equal((ready.stdout.match(/^OK /gm) ?? []).length, 5);
+  assert.ok(!ready.stdout.includes('test-only-app-marker'));
+  assert.ok(!ready.stdout.includes('test-only-path-marker'));
+  const missing = run(["doctor"], { ...process.env,
+    GITHUB_APP_ID: '', GITHUB_APP_PRIVATE_KEY_PATH: '' });
+  assert.equal(missing.status, 1);
+  assert.match(missing.stdout, /^FAIL GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH present$/m);
+});
 test("ask CLI creates an offline draft with a create command when gh is missing", () => {
   const directory = mkdtempSync(join(tmpdir(), "roster-ask-cli-"));
   try {
