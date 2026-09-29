@@ -6,7 +6,7 @@ export function taskSkillNames(task) {
   if (typeof task !== 'string') throw new TypeError('TASK.md must be text');
   const text = task.replace(/\r\n/g, '\n');
   if (!text.startsWith('---\n')) return [];
-  const end = text.indexOf('\n---\n', 4);
+  const end = text.indexOf('\n---\n', 3);
   if (end < 0) throw new Error('TASK.md frontmatter must end with ---');
   const lines = text.slice(4, end).split('\n');
   const entries = lines.flatMap((line, index) => /^skills:/.test(line) ? [index] : []);

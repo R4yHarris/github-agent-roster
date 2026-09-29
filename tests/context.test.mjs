@@ -111,6 +111,7 @@ test('task skill names support inline and block frontmatter without accepting pa
     'implement-task', 'run-tests',
   ]);
   assert.deepEqual(taskSkillNames('# Task'), []);
+  assert.deepEqual(taskSkillNames('---\n---\n# Task'), []);
   for (const source of ['skills: [../outside]', 'skills: [x, x]',
     'skills: []\nskills: [x]', 'skills: not-a-list']) {
     assert.throws(() => taskSkillNames(`---\n${source}\n---\n# Task`), /TASK\.md/);
