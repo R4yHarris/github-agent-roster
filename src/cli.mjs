@@ -1,17 +1,23 @@
 #!/usr/bin/env node
 
 import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { runIssue } from './lib/issue.mjs';
 import { recordEvaluation } from './lib/eval.mjs';
 import { formatRecommendation, recommend, repositoryRoot, TASK_CLASSES } from './lib/learn.mjs';
+import { writeAsk } from './lib/ask.mjs';
+import { runBuiltinIssue } from './lib/builtin.mjs';
 import { formatMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
 import { resolveContractsPath } from './lib/paths.mjs';
 import { validateRecipe } from './lib/recipe.mjs';
 import { createFileVault, validateSecretName } from './vault/file.mjs';
 
+const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const help = `Usage:
   roster --help
+  roster ask "..."
   roster run --issue N
+  roster run --issue N --seat coder --runtime builtin [--publish]
   roster recipe validate PATH
   roster stats [--ref REVISION_OR_RANGE] [--evals PATH]
   roster vault set NAME
@@ -19,7 +25,8 @@ const help = `Usage:
   roster eval <sha-or-session> <accept|reject|rework> <1-5> <y|n>
   roster recommend --task-class feat|fix|docs|test
 
-Run assigns one GitHub issue to a coder worktree. Recipe validates strict v0
+Ask drafts an offline task. Bare run prepares the legacy worktree; builtin run
+plans and executes one coder. Publishing is opt-in. Recipe validates strict v0
 seat YAML. Stats joins contracts AI-Run history with local runs and human evals.
 Eval records a human decision locally. Recommend needs at least 3 evaluated runs.
 Vault set reads a secret from stdin; vault list prints names, never values.
@@ -57,8 +64,17 @@ function statsOptions(args) {
 async function main(args) {
   if (args.length === 0 || (args.length === 1 && ['--help', '-h'].includes(args[0]))) {
     process.stdout.write(help);
+  } else if (args.length === 2 && args[0] === 'ask') {
+    const result = await writeAsk(args[1], {
+      repoRoot: rosterRoot,
+    });
+    process.stdout.write(`Ask: ${result.askPath}\nRECIPE: ${result.recipePath}\nTASK: ${result.taskPath}\n`);
   } else if (args.length === 3 && args[0] === 'run' && args[1] === '--issue') {
     await runIssue(args[2]);
+  } else if (args[0] === 'run' && args.includes('--runtime')) {
+    const options = runOptions(args.slice(1));
+    await runBuiltinIssue(options.issue, { publish: options.publish,
+      repoRoot: rosterRoot });
   } else if (args.length === 3 && args[0] === 'recipe' && args[1] === 'validate') {
     validateRecipe(args[2]);
     process.stdout.write(`Valid recipe: ${args[2]}\n`);
@@ -90,6 +106,24 @@ async function main(args) {
     process.stdout.write(formatRecommendation(recommend(records, args[2]), args[2]));
   } else {
     throw new TypeError('Unknown arguments. Run roster --help for usage.');
+  }
+
+  function runOptions(args) {
+    const options = {};
+    const seen = new Set();
+    for (let index = 0; index < args.length; index += 1) {
+      const flag = args[index];
+      if (!['--issue', '--seat', '--runtime', '--publish'].includes(flag) || seen.has(flag)) {
+        throw new TypeError('Use roster run --issue N --seat coder --runtime builtin [--publish].');
+      }
+      seen.add(flag);
+      if (flag === '--publish') options.publish = true;
+      else options[flag.slice(2)] = args[++index];
+    }
+    if (!options.issue || options.seat !== 'coder' || options.runtime !== 'builtin') {
+      throw new TypeError('Use roster run --issue N --seat coder --runtime builtin [--publish].');
+    }
+    return options;
   }
 }
 

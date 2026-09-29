@@ -1,5 +1,14 @@
 # Local metrics
 
+The builtin coder's [`buildRun`](../src/metrics/run.mjs) constructs a compact
+schema 1 AI-Run line from configured model/effort/context limit, issue
+session/task IDs, and token counts **reported** by the planner and coder chat
+responses. Unknown provider, version, context, or counts stay unset (`-` in
+the compact line); a missing usage report makes the corresponding aggregate
+count unknown rather than an estimate. The publisher receives only known
+`AI_*` environment fields, not the model API key. The empty-URL stub produces
+no AI-Run line. Contracts still owns the trailer format and publication.
+
 `src/lib/metrics.mjs` reads compact AI-Run JSONL by invoking contracts
 `scripts/export-agent-metrics.mjs` with Node. Contracts resolution checks the
 required `v0.2.0` submodule first, then `GITHUB_AGENT_CONTRACTS`, then the sibling

@@ -3,7 +3,8 @@ import { TextDecoder } from "node:util";
 
 const MAX_RECIPE_BYTES = 65_536;
 const SEAT_IDS = ["planner", "coder"];
-const WORKERS = ["copilot", "hermes"];
+const WORKERS = ["copilot", "hermes", "builtin"];
+const BUILTIN_SEQUENCE = ["load_context", "implement", "run_tests", "summarize"];
 
 export class RecipeError extends Error {}
 
@@ -29,7 +30,16 @@ export function parseRecipe(source) {
       fields.principal !== "coder" || !WORKERS.includes(fields.worker) ||
       seatIds.has(fields.id) || (fields.id === "planner" && seatIds.has("coder"))
     ) invalidRecipe();
-    seats.push(Object.freeze({ id: fields.id, principal: fields.principal, worker: fields.worker }));
+    const builtin = fields.worker === "builtin";
+    if (builtin !== Object.hasOwn(fields, "sequence") ||
+        (builtin && (fields.id !== "coder" ||
+          fields.sequence !== `[${BUILTIN_SEQUENCE.join(", ")}]`))) invalidRecipe();
+    seats.push(Object.freeze({
+      id: fields.id,
+      principal: fields.principal,
+      worker: fields.worker,
+      ...(builtin ? { sequence: Object.freeze([...BUILTIN_SEQUENCE]) } : {}),
+    }));
     seatIds.add(fields.id);
     fields = undefined;
   };
@@ -56,13 +66,14 @@ export function parseRecipe(source) {
         if (root[2] !== "1") invalidRecipe();
       } else {
         const issue = /^issue:([1-9][0-9]*)$/.exec(root[2] ?? "");
-        if (!issue || !Number.isSafeInteger(Number(issue[1]))) invalidRecipe();
+        const draft = /^local:[A-Za-z0-9_-]{1,64}$/.test(root[2] ?? "");
+        if (!draft && (!issue || !Number.isSafeInteger(Number(issue[1])))) invalidRecipe();
         ask = root[2];
       }
       continue;
     }
 
-    const item = /^  - (id|principal|worker): (.*)$/.exec(line);
+    const item = /^  - (id|principal|worker|sequence): (.*)$/.exec(line);
     if (item) {
       if (!inSeats) invalidRecipe();
       finishSeat();
@@ -71,7 +82,7 @@ export function parseRecipe(source) {
       continue;
     }
 
-    const field = /^    (id|principal|worker): (.*)$/.exec(line);
+    const field = /^    (id|principal|worker|sequence): (.*)$/.exec(line);
     if (!field || !inSeats || !fields) invalidRecipe();
     addField(field[1], field[2]);
   }

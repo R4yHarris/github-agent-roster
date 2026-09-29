@@ -1,9 +1,11 @@
 # LLM endpoints
 
 Start with a local OpenAI-compatible server. The
-[schema 1 config example](../roster.config.example.yml) is documentation for
-configuration; the current CLI does not load it or make LLM requests. These
-profiles do not add runtime behavior.
+[schema 1 config example](../roster.config.example.yml) supplies defaults for
+the builtin planner and coder. Copy it to ignored `.roster/config.yml` to
+configure the opt-in `run --issue N --seat coder --runtime builtin` path.
+An empty endpoint keeps the deterministic stub; bare `run --issue N` remains
+prepare-only. See [SDLC](SDLC.md) for execution and publishing.
 
 ## Schema 1
 
@@ -11,18 +13,22 @@ profiles do not add runtime behavior.
 - `llm.base_url` and `llm.model` are deliberately empty strings. Choose both
   explicitly; the example does not select a provider or model.
 - `llm.api_key_env: ROSTER_API_KEY` names an environment variable, not a key.
-  `llm.api_key_optional: true` describes a server that permits requests without
-  authentication. If a server requires authentication, set it to `false` and
-  supply the key through that environment variable.
-- Top-level `effort: m` means medium effort. It is not a guarantee that a server
-  supports a provider-specific reasoning parameter.
-- Top-level `seat: coder` selects the coder seat, not GitHub permissions. The
-  human-owned policy and contracts pack still govern publishing.
-- `paths.memory`, `paths.skills`, and `paths.asks` name repository-relative
-  local directories (`./memory`, `./skills`, and `./asks`). `paths.worktrees`
-  names `./.worktrees`, matching the existing one-task loop. The example does
-  not create directories or change the CLI's paths. GitHub issues and PRs
+  The builtin client sends authorization only when that variable is populated.
+  Leave it unset for a keyless local server; supply it when authentication is
+  required.
+- `llm.effort: m` records medium effort and `llm.context_max: 0` means an unknown
+  context limit. These are run metadata, not provider-specific request options.
+- `seat.id: coder` and `seat.principal: coder` select the builtin seat and
+  contracts role. `seat.turn_budget` bounds the loop and `seat.tools` lists its
+  allowed tools. The human-owned policy still governs publishing.
+- `paths.memory` names the `.roster/memory/coder.jsonl` memory file.
+  `paths.skills`, `paths.asks`, and `paths.worktrees` name repository-relative
+  directories (`skills`, `.roster/asks`, and `.worktrees`). GitHub issues and PRs
   remain the work queue.
+
+Keep every field in the example when overriding configuration. The separate
+[chat factory and vault](LLM.md) accept an in-memory API with
+`llm.api_key_optional` and `llm.api_key_name`; those are not builtin YAML fields.
 
 Use the OpenAI-compatible `/v1` base URL, not a full `/chat/completions` URL.
 With the server running, `GET <base_url>/models` lists model IDs; use an
@@ -36,22 +42,22 @@ remote access is deliberately secured.
 Set `llm.base_url` to `http://127.0.0.1:11434/v1`. Start Ollama and pull a model,
 then set `llm.model` to that installed model's ID. Use its OpenAI-compatible
 `/v1` API, not the native `/api` endpoints. For an unauthenticated local server,
-leave `llm.api_key_optional: true`.
+leave the API-key environment variable unset.
 
 ### llama.cpp
 
 Start `llama-server` with a GGUF model and a loopback listener. For port `8080`,
 set `llm.base_url` to `http://127.0.0.1:8080/v1`; adjust the port if configured
-differently. Set `llm.model` to an ID returned by `/v1/models`. Leave
-`llm.api_key_optional: true` only when server authentication is disabled.
+differently. Set `llm.model` to an ID returned by `/v1/models`. Leave the API-key
+environment variable unset only when server authentication is disabled.
 
 ### LM Studio
 
 Load a model and start the local OpenAI-compatible server in LM Studio. For
 port `1234`, set `llm.base_url` to `http://127.0.0.1:1234/v1`; use the port
 shown by LM Studio if different. Set `llm.model` to an ID returned by
-`/v1/models`. Leave `llm.api_key_optional: true` only when server authentication
-is disabled.
+`/v1/models`. Leave the API-key environment variable unset only when server
+authentication is disabled.
 
 ## Later profile: OpenAI
 
@@ -64,7 +70,8 @@ llm:
   base_url: "https://api.openai.com/v1"
   model: ""
   api_key_env: ROSTER_API_KEY
-  api_key_optional: false
+  effort: m
+  context_max: 0
 ```
 
 Choose a model available to your OpenAI account and fill in `llm.model`.

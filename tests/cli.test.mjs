@@ -31,6 +31,42 @@ test("help lists every prompt's command", () => {
   assert.match(result.stdout, /roster\s+vault\s+list/);
   assert.match(result.stdout, /roster\s+eval/);
   assert.match(result.stdout, /roster\s+recommend\s+--task-class/);
+  assert.match(result.stdout, /roster\s+ask/);
+  assert.match(result.stdout, /--seat coder --runtime builtin/);
+});
+
+test("ask CLI creates an offline draft with recipe and task paths", () => {
+  const directory = mkdtempSync(join(tmpdir(), "roster-ask-cli-"));
+  try {
+    const fixtureRoot = join(directory, "roster");
+    cpSync(join(root, "src"), join(fixtureRoot, "src"), { recursive: true });
+    cpSync(join(root, "templates"), join(fixtureRoot, "templates"), { recursive: true });
+    cpSync(join(root, "roster.config.example.yml"), join(fixtureRoot, "roster.config.example.yml"));
+    const result = run(["ask", "Add a Status section to README.md."], process.env,
+      join(fixtureRoot, "src", "cli.mjs"));
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    const [ask, recipe, task] = result.stdout.trim().split(/\r?\n/);
+    assert.match(ask, /^Ask: .*\.roster[\\/]asks[\\/].+\.md$/);
+    assert.match(recipe, /^RECIPE: .*RECIPE\.yml$/);
+    assert.match(task, /^TASK: .*TASK\.md$/);
+    assert.match(readFileSync(recipe.slice("RECIPE: ".length), "utf8"), /worker: builtin/);
+    assert.match(readFileSync(task.slice("TASK: ".length), "utf8"), /node --test exits 0/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("builtin CLI rejects unsupported seats and refuses stub publication without GitHub access", () => {
+  const invalid = run(["run", "--issue", "42", "--seat", "merger", "--runtime", "builtin"]);
+  assert.notEqual(invalid.status, 0);
+  assert.match(invalid.stderr, /--seat coder --runtime builtin/);
+  const noIssue = run(["run", "--issue", "n/a", "--seat", "coder", "--runtime", "builtin"]);
+  assert.notEqual(noIssue.status, 0);
+  assert.match(noIssue.stderr, /Issue number must be a positive safe integer/);
+  const noPublish = run(["run", "--issue", "42", "--seat", "coder", "--runtime", "builtin", "--publish"]);
+  assert.notEqual(noPublish.status, 0);
+  assert.match(noPublish.stderr, /--publish requires an LLM endpoint/);
 });
 
 test("recipe validation accepts the documented shape and rejects unknown keys", () => {

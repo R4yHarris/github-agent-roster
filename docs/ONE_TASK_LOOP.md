@@ -1,5 +1,19 @@
 # One-task loop
 
+The builtin path is `roster run --issue N --seat coder --runtime builtin`
+([SDLC](SDLC.md)). It reads the existing issue, creates one coder worktree,
+generates `RECIPE.yml` and `TASK.md`, loads roster context/skills/memory,
+executes the bounded coder loop, and writes `RESULT.md`. When no LLM endpoint
+is configured, the deterministic stub writes only the result summary and
+does **not** implement the ask or run tests. With an endpoint, the coder uses
+four guarded tools and must pass a final `node --test` run. It prints
+`node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue N"`
+for the issue worktree root; `--publish` alone opts into staging task-allowed
+changes and invoking the App SDK. Policy, workflows, and credentials are
+never staged by the coder seat.
+
+The earlier bare command remains prepare-only for compatibility:
+
 `runIssue(issueNumber)` in `src/lib/issue.mjs` implements
 `roster run --issue N`. It can also be called directly:
 
@@ -48,9 +62,11 @@ the worker environment, normally the initialized `vendor/github-agent-contracts`
 submodule; see [dependency resolution](DEPENDENCY.md). The printed command uses
 POSIX shell variable syntax; PowerShell
 users must use their shell's environment-variable syntax when executing it.
-This module only prepares one coder seat and prints the publishing command: it
-does not start a worker, merge, or open additional issues. Merge remains
-human-controlled.
+Without the explicit `--seat coder --runtime builtin` flags, this module only
+prepares one coder seat and prints the legacy publishing command: it does not
+start a worker, merge, or open additional issues. Merge remains
+human-controlled. The builtin path reuses this issue lookup and assignment
+preparation, rendering `ASSIGNMENT.md` from the SDLC template.
 
 Tests inject `runCommand`, `fileSystem`, `env`, `now`, and `log` into `runIssue` to
 simulate git, gh, file writes, timestamps, and output without a network call.

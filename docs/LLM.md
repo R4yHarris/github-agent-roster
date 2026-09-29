@@ -34,6 +34,10 @@ prepares a worker worktree: it has **no LLM call or config loader**. It remains
 unchanged by this integration. This factory is the hook for a future caller,
 not a new run loop, planner, recommendation system or evaluation command.
 
+The opt-in [builtin runtime](SDLC.md) has a separate client configured by
+`.roster/config.yml`. It reads `llm.api_key_env` from the environment; it does
+not use this factory's vault lookup or in-memory configuration fields.
+
 An enabled hook is used as follows:
 
 ```js
