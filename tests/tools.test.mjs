@@ -209,3 +209,14 @@ test('literal search caps results at fifty lines and never shells out or reveals
   await assert.rejects(tools.search_text({ query: 'one\ntwo' }), /single-line/);
   await assert.rejects(tools.search_text({ query: marker, command: 'arbitrary' }), /Tool arguments/);
 });
+
+test('read_file limits research excerpts without changing ordinary reads', async (context) => {
+  const worktree = fixture(context);
+  writeFileSync(path.join(worktree, 'README.md'), 'first\r\nsecond\r\nthird\r\n');
+  const tools = await createTools({ worktree, allowedFiles: ['README.md'] });
+  assert.equal(await tools.read_file({ path: 'README.md', max_lines: 2 }), 'first\nsecond');
+  assert.equal(await tools.read_file({ path: 'README.md' }), 'first\r\nsecond\r\nthird\r\n');
+  for (const max_lines of [0, -1, 1.5, '2', null]) {
+    await assert.rejects(tools.read_file({ path: 'README.md', max_lines }), /positive safe integer/);
+  }
+});

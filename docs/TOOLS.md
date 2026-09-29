@@ -8,7 +8,7 @@ exactly five functions:
 
 | Tool | Input | Result |
 | --- | --- | --- |
-| `read_file` | `{ "path": "README.md" }` | UTF-8 text from a regular worktree file. |
+| `read_file` | `{ "path": "README.md", "max_lines": 200 }` (`max_lines` optional) | UTF-8 text from a regular worktree file, optionally limited to the first positive integer number of lines. |
 | `write_file` | `{ "path": "src/app.mjs", "content": "..." }` | Creates or replaces task-allowed UTF-8 text; returns path and byte count. |
 | `list_dir` | `{ "path": "src" }` or `{}` for root | Sorted entry names and types, excluding protected entries. |
 | `run_test` | `{}` | Runs `node --test` from the worktree root; returns `exit_code`, captured `stdout`, and `stderr`. |
@@ -27,7 +27,7 @@ All file tools deny `.env`, `.env.*`, and `*.env` anywhere, `*.pem`, vault
 storage under `.roster/vault`, Git metadata,
 `agent-policy.yml`, `.github/workflows`, or the pinned
 `vendor/github-agent-contracts` dependency. Root `ASSIGNMENT.md`,
-`RECIPE.yml`, `TASK.md`, `CONTEXT.md`, `ESTIMATE.md`, and `RESULT.md` are managed files that the coder
+`RECIPE.yml`, `TASK.md`, `CONTEXT.md`, `RESEARCH.md`, `ESTIMATE.md`, and `RESULT.md` are managed files that the coder
 cannot rewrite. `list_dir` refuses protected paths and hides their names
 when listing a parent. Policy and workflow bodies are no longer readable
 as task context; both reads and writes are denied.

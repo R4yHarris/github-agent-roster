@@ -8,7 +8,12 @@ import { planStub } from '../src/planner/stub.mjs';
 import { loadContext } from '../src/runtime/context.mjs';
 import { appendMemory, readMemory, seatMemoryPath } from '../src/runtime/memory.mjs';
 import { loadSkills } from '../src/runtime/skills.mjs';
-import { runCoder } from '../src/seats/coder.mjs';
+import { runCoder as runCoderSeat } from '../src/seats/coder.mjs';
+import { withResearchSummary } from './helpers/research.mjs';
+
+function runCoder(options) {
+  return runCoderSeat({ ...options, fetchImpl: withResearchSummary(options.fetchImpl) });
+}
 
 const example = readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8');
 const stubConfig = parseConfig(example);
