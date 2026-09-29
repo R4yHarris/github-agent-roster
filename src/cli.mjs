@@ -1,19 +1,43 @@
 #!/usr/bin/env node
 
+import { resolve } from 'node:path';
 import { runIssue } from './lib/issue.mjs';
+import { recordEvaluation } from './lib/eval.mjs';
+import { formatRecommendation, recommend, repositoryRoot, TASK_CLASSES } from './lib/learn.mjs';
 import { formatMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
 import { resolveContractsPath } from './lib/paths.mjs';
 import { validateRecipe } from './lib/recipe.mjs';
+import { createFileVault, validateSecretName } from './vault/file.mjs';
 
 const help = `Usage:
   roster --help
   roster run --issue N
   roster recipe validate PATH
   roster stats [--ref REVISION_OR_RANGE] [--evals PATH]
+  roster vault set NAME
+  roster vault list
+  roster eval <sha-or-session> <accept|reject|rework> <1-5> <y|n>
+  roster recommend --task-class feat|fix|docs|test
 
 Run assigns one GitHub issue to a coder worktree. Recipe validates strict v0
-seat YAML. Stats reads local AI-Run history from the sibling contracts pack.
+seat YAML. Stats joins contracts AI-Run history with local runs and human evals.
+Eval records a human decision locally. Recommend needs at least 3 evaluated runs.
+Vault set reads a secret from stdin; vault list prints names, never values.
 `;
+
+async function setVaultSecret(name) {
+  validateSecretName(name);
+  if (process.stdin.isTTY) throw new TypeError('Pipe the secret to roster vault set NAME through stdin.');
+  process.stdin.setEncoding('utf8');
+  let value = '';
+  try {
+    for await (const chunk of process.stdin) value += chunk;
+  } catch {
+    throw new Error('Unable to read the secret from stdin.');
+  }
+  await createFileVault().set(name, value.replace(/\r?\n$/, ''));
+  process.stdout.write(`Stored secret ${name}.\n`);
+}
 
 function statsOptions(args) {
   const options = {};
@@ -38,10 +62,32 @@ async function main(args) {
   } else if (args.length === 3 && args[0] === 'recipe' && args[1] === 'validate') {
     validateRecipe(args[2]);
     process.stdout.write(`Valid recipe: ${args[2]}\n`);
+  } else if (args.length === 3 && args[0] === 'vault' && args[1] === 'set') {
+    await setVaultSecret(args[2]);
+  } else if (args.length === 2 && args[0] === 'vault' && args[1] === 'list') {
+    const names = await createFileVault().list();
+    if (names.length) process.stdout.write(`${names.join('\n')}\n`);
   } else if (args[0] === 'stats') {
     const options = statsOptions(args.slice(1));
-    const records = loadMetrics({ ...options, contractsPath: resolveContractsPath() });
+    const records = loadMetrics({
+      ...options,
+      evalsPath: options.evalsPath === undefined ? undefined : resolve(options.evalsPath),
+      contractsPath: resolveContractsPath(),
+      cwd: repositoryRoot(),
+    });
     process.stdout.write(formatMetrics(summarizeMetrics(records)));
+  } else if (args[0] === 'eval') {
+    if (args.length !== 5) {
+      throw new TypeError('Use roster eval <sha-or-session> <accept|reject|rework> <1-5> <y|n>.');
+    }
+    const evaluation = await recordEvaluation(...args.slice(1));
+    process.stdout.write(`Recorded AI-Eval for ${evaluation.sha ?? evaluation.session}.\n`);
+  } else if (args[0] === 'recommend') {
+    if (args.length !== 3 || args[1] !== '--task-class' || !TASK_CLASSES.includes(args[2])) {
+      throw new TypeError('Use roster recommend --task-class feat|fix|docs|test.');
+    }
+    const records = loadMetrics({ contractsPath: resolveContractsPath(), cwd: repositoryRoot() });
+    process.stdout.write(formatRecommendation(recommend(records, args[2]), args[2]));
   } else {
     throw new TypeError('Unknown arguments. Run roster --help for usage.');
   }

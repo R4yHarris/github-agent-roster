@@ -1,6 +1,8 @@
 .DS_Store
 node_modules/
 .worktrees/
+.roster/runs/
+.roster/evals.jsonl
 /evals.jsonl
 .venv/
 __pycache__/
