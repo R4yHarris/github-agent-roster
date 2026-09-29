@@ -20,6 +20,7 @@ import { createFileVault, validateSecretName } from './vault/file.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const help = `Usage:
+  roster                     Open the interactive shell in a TTY
   roster --help
   roster doctor
   roster init

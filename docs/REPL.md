@@ -1,8 +1,9 @@
 # Interactive Roster shell
 
-Run `roster` or `node src/cli.mjs` with no arguments from a Git worktree and
-an interactive terminal. The banner names the repository, `runtime builtin`,
-and the configured `llm.base_url` (or `stub`); the prompt is `roster> `.
+Run `roster` with no arguments from a Git worktree and an interactive terminal
+after [installing it](INSTALL.md). The banner names the repository, `seat coder`,
+`runtime builtin`, and the configured `llm.base_url` (or `stub`); the prompt
+is `roster> `.
 `--help` still prints the existing CLI usage and exits 0; empty arguments
 with non-TTY stdin print that usage and exit 2. Flags remain available for
 agents and CI.

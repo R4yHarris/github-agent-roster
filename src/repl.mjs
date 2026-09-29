@@ -301,7 +301,7 @@ export function createDispatcher({
   return {
     dispatch,
     state,
-    banner: `${basename(api.repositoryRoot(cwd))} | runtime builtin | llm ${config.llm.base_url || 'stub'}`,
+    banner: `${basename(api.repositoryRoot(cwd))} | seat ${config.seat.id} | runtime builtin | llm ${config.llm.base_url || 'stub'}`,
   };
 }
 

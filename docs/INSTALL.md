@@ -1,15 +1,18 @@
 # Install and bootstrap
 
 Roster uses Node 20+ ESM, Git, and `gh`; it has no runtime npm dependencies.
-For the complete task loop and App publication, keep a persistent source
-checkout with its pinned `v0.2.0` contracts submodule:
+For the complete task loop and App publication, install from a persistent
+source checkout with its pinned `v0.2.0` contracts submodule:
 
 ```sh
 git clone --recurse-submodules https://github.com/R4yHarris/github-agent-roster.git
 cd github-agent-roster
-node src/cli.mjs --help
-node --test
+npm install -g .
+roster --help
 ```
+
+Run `roster` in an interactive terminal to open the human shell; `/quit` or
+Ctrl+C exits. Run `node --test` in the clone to check the source.
 
 For an existing checkout or new worktree, run
 `git submodule update --init --recursive` from its root. The publisher is
