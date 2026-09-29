@@ -1,0 +1,16 @@
+schema: 1
+
+llm:
+  base_url: ""
+  model: ""
+  api_key_env: ROSTER_API_KEY
+  api_key_optional: true
+
+effort: m
+seat: coder
+
+paths:
+  memory: ./memory
+  skills: ./skills
+  asks: ./asks
+  worktrees: ./.worktrees
