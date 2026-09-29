@@ -142,7 +142,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
     assert.ok(!request.body.includes('private-key'));
     if (completion === 1) {
       assert.equal(body.tools, undefined);
-      return { ok: true, json: async () => ({
+      return { ok: true, status: 200, json: async () => ({
         choices: [{ message: { content: JSON.stringify({
           title: 'Add Status to README',
           acceptance_checks: ['node --test exits 0', 'README has a Status section'],
@@ -155,8 +155,9 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
       assert.match(body.messages[1].content, /TASK\.md:\n# Task: Add Status to README/);
       assert.deepEqual(body.tools.map(({ function: tool }) => tool.name),
         ['read_file', 'write_file', 'list_dir', 'run_test']);
-      return { ok: true, json: async () => ({
+      return { ok: true, status: 200, json: async () => ({
         choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant',
           tool_calls: [{ id: 'update', type: 'function', function: {
             name: 'write_file',
             arguments: JSON.stringify({ path: 'README.md', content: '# Example\n\n## Status\nReady.\n' }),
@@ -165,8 +166,8 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
         usage: { prompt_tokens: 10, completion_tokens: 3 },
       }) };
     }
-    return { ok: true, json: async () => ({
-      choices: [{ finish_reason: 'stop', message: { content: 'Updated README; tests pass.' } }],
+    return { ok: true, status: 200, json: async () => ({
+      choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Updated README; tests pass.' } }],
       usage: { prompt_tokens: 7, completion_tokens: 4 },
     }) };
   };
@@ -216,7 +217,7 @@ test('default planner/coder run preserves the task handoff while the coder edits
     const body = JSON.parse(request.body);
     if (completion === 1) {
       assert.equal(body.tools, undefined);
-      return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: JSON.stringify({
         title: 'Implement the app',
         acceptance_checks: ['node --test exits 0'],
         files_allowed: ['src/app.mjs'],
@@ -228,9 +229,9 @@ test('default planner/coder run preserves the task handoff while the coder edits
         id, type: 'function',
         function: { name: 'write_file', arguments: JSON.stringify({ path: file, content }) },
       });
-      return { ok: true, json: async () => ({ choices: [{
+      return { ok: true, status: 200, json: async () => ({ choices: [{
         finish_reason: 'tool_calls',
-        message: { tool_calls: [
+        message: { role: 'assistant', tool_calls: [
           write('code', 'src/app.mjs', 'export const ready = true;\n'),
           write('recipe', 'RECIPE.yml', 'tampered'),
           write('task', 'TASK.md', 'tampered'),
@@ -241,8 +242,8 @@ test('default planner/coder run preserves the task handoff while the coder edits
     assert.match(body.messages.at(-3).content, /src\/app\.mjs/);
     assert.match(body.messages.at(-2).content, /not allowed/);
     assert.match(body.messages.at(-1).content, /not allowed/);
-    return { ok: true, json: async () => ({
-      choices: [{ finish_reason: 'stop', message: { content: 'Implemented the planned task.' } }],
+    return { ok: true, status: 200, json: async () => ({
+      choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Implemented the planned task.' } }],
     }) };
   };
   const run = await runBuiltinIssue(42, {
@@ -280,13 +281,13 @@ test('detects a changed recipe after the coder runs tests and refuses publicatio
   const fetchImpl = async (_url, request) => {
     const body = JSON.parse(request.body);
     if (!body.tools) {
-      return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: JSON.stringify({
         title: 'Update README', acceptance_checks: ['node --test exits 0'],
         files_allowed: ['README.md'],
       }) } }] }) };
     }
-    return { ok: true, json: async () => ({
-      choices: [{ finish_reason: 'stop', message: { content: 'Done' } }],
+    return { ok: true, status: 200, json: async () => ({
+      choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Done' } }],
     }) };
   };
   await assert.rejects(runBuiltinIssue(42, {

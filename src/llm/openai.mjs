@@ -30,11 +30,16 @@ function retryDelay(response, timeoutMs) {
 }
 
 function parseCompletion(payload) {
-  const message = payload?.choices?.[0]?.message;
+  const choice = payload?.choices?.[0];
+  const message = choice?.message;
   if (!isObject(message) || typeof message.role !== 'string' || !message.role ||
       !(typeof message.content === 'string' || message.content === null ||
         Array.isArray(message.content) || Array.isArray(message.tool_calls) || isObject(message.function_call))) {
     throw new ChatError('The LLM response did not contain a valid message.');
+  }
+  if (choice.finish_reason !== undefined && choice.finish_reason !== null &&
+      !['stop', 'tool_calls'].includes(choice.finish_reason)) {
+    throw new ChatError('The LLM response had an unsupported finish reason.');
   }
   const usage = payload.usage ?? null;
   if (usage !== null && (!isObject(usage) ||
@@ -42,7 +47,10 @@ function parseCompletion(payload) {
         usage[field] !== undefined && (!Number.isSafeInteger(usage[field]) || usage[field] < 0)))) {
     throw new ChatError('The LLM response contained invalid usage.');
   }
-  return { message, usage };
+  return {
+    message, usage,
+    ...(choice.finish_reason === undefined ? {} : { finish_reason: choice.finish_reason }),
+  };
 }
 
 export function createChat(config = {}, { fetch: fetchImpl = globalThis.fetch, env = process.env, vault } = {}) {

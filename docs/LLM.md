@@ -29,14 +29,18 @@ const config = {
 
 An absent, empty or whitespace-only `base_url` makes `createChat` return
 `null`, without accessing the vault or network. Keep the caller's existing
-stub in that case. The current [`runIssue`](../src/lib/issue.mjs) path only
-prepares a worker worktree: it has **no LLM call or config loader**. It remains
-unchanged by this integration. This factory is the hook for a future caller,
-not a new run loop, planner, recommendation system or evaluation command.
+stub in that case. The prepare-only [`runIssue`](../src/lib/issue.mjs) path has
+no LLM call or config loader. The existing builtin coder loop calls this
+factory; it does not add a separate runner, planner, or task queue.
 
-The opt-in [builtin runtime](SDLC.md) has a separate client configured by
-`.roster/config.yml`. It reads `llm.api_key_env` from the environment; it does
-not use this factory's vault lookup or in-memory configuration fields.
+The opt-in [builtin coder loop](../src/runtime/loop.mjs) now uses this client
+when `.roster/config.yml` sets `llm.base_url`, mapping `llm.api_key_env` to
+the client's key name. Keys are optional for local endpoints such as Ollama
+at `http://127.0.0.1:11434/v1`; a resolved key is still sent when present.
+The empty-URL stub makes no chat request. The coder returns reported token
+usage to the per-seat AI-Run metadata, without logging keys or prompts.
+The planner currently uses its existing JSON planner client, so a keyed
+end-to-end run still needs its configured environment key.
 
 An enabled hook is used as follows:
 
@@ -52,10 +56,12 @@ if (chat !== null) {
 }
 ```
 
-The result is `{ message, usage }`: `message` is the first choice's message
-object, including tool calls when present, and `usage` is the provider's
-usage object or `null` if omitted. Extra non-streaming request fields, such
-as `temperature` and `max_tokens`, pass through. Streaming is not supported.
+The result is `{ message, usage }` with an optional `finish_reason` of `stop`
+or `tool_calls`. `message` is the first choice's message object, including
+tool calls when present, and `usage` is the provider's usage object or
+`null` if omitted. Truncated or unsupported finish reasons are errors.
+Extra non-streaming request fields, such as `temperature` and `max_tokens`,
+pass through. Streaming is not supported.
 
 The client POSTs JSON to `{base_url}/chat/completions`. It sends
 `Authorization: Bearer ...` **only** when a non-empty key resolves, even when
