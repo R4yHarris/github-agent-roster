@@ -100,6 +100,8 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
   assert.deepEqual(recipe.seats.map(({ id }) => id), ['planner', 'coder']);
   assert.match(readFileSync(result.taskPath, 'utf8'), /## Acceptance checks/);
   assert.equal(readFileSync(result.taskPath, 'utf8'), result.planner.task);
+  assert.equal(readFileSync(result.planner.estimatePath, 'utf8'), result.planner.estimate);
+  assert.match(result.planner.estimate, /difficulty: 2\nestimate_min: 15/);
   assert.deepEqual(result.sessions, { planner: 'roster-42-planner', coder: 'roster-42-coder' });
   assert.equal(readFileSync(result.envPath, 'utf8'),
     'AI_TASK=issue-42\nAI_SESSION=roster-42-coder\n');
@@ -201,6 +203,42 @@ test('ROSTER_MODEL selects the same served model for both seats and their metada
   assert.equal(config.llm.model, '');
 });
 
+test('task metadata selects the coder model and writes its historical estimate before coding', async (context) => {
+  const options = fixture(context);
+  mkdirSync(path.join(options.target, '.roster'), { recursive: true });
+  writeFileSync(path.join(options.target, '.roster', 'evals.jsonl'), [60, 25, 10].map((minutes, index) =>
+    JSON.stringify({ session: `previous-${index}`, model: 'task-model', task_class: 'fix',
+      verdict: 'accept', difficulty: 4, again: true, minutes })).join('\n') + '\n');
+  let requests = 0;
+  const result = await runBuiltinIssue(42, {
+    ...options, config: llmConfig, log: () => {},
+    env: { ...options.env, ROSTER_API_KEY: 'test-only-key' },
+    fetchImpl: async (_url, request) => {
+      requests += 1;
+      const body = JSON.parse(request.body);
+      assert.equal(body.model, requests === 1 ? 'local-model' : 'task-model');
+      if (requests === 2) {
+        assert.match(body.messages[1].content,
+          /difficulty: 4\nestimate_min: 25\ntask_class: fix\nmodel: task-model\n/);
+        assert.match(readFileSync(path.join(options.target, '.worktrees', 'issue-42', 'ESTIMATE.md'), 'utf8'),
+          /Source: history/);
+      }
+      return { status: 200, json: async () => ({
+        choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+          content: requests === 1 ? JSON.stringify({
+            title: 'Fix status', acceptance_checks: ['node --test exits 0'], files_allowed: ['README.md'],
+            difficulty: 4, estimate_min: 90, task_class: 'fix', model: 'task-model',
+          }) : 'Done.',
+        } }],
+      }) };
+    },
+    runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+  });
+  assert.equal(requests, 2);
+  assert.equal(result.runs.planner.env.AI_MODEL, 'local-model');
+  assert.equal(result.runs.coder.env.AI_MODEL, 'task-model');
+});
+
 test('auto-model uses a three-evaluation recommendation for both seats without editing config', async (context) => {
   const options = fixture(context);
   options.issue.title = 'feat: Add status';
@@ -270,6 +308,8 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
     }
     if (completion === 2) {
       assert.match(body.messages[1].content, /TASK\.md:\n# Task: Add Status to README/);
+      assert.match(readFileSync(path.join(options.target, '.worktrees', 'issue-42', 'ESTIMATE.md'), 'utf8'),
+        /model: local-model/);
       assert.deepEqual(body.tools.map(({ function: tool }) => tool.name),
         ['read_file', 'write_file', 'list_dir', 'run_test']);
       return { ok: true, status: 200, json: async () => ({
@@ -537,8 +577,8 @@ test('opt-in learning records exactly one run for each builtin seat', async (con
     fetchImpl: () => { throw new Error('stub must not contact an LLM'); },
   });
   assert.deepEqual(loadLearning({ cwd: options.target }).runs, [
-    { session: result.sessions.planner, task: 'issue-42' },
-    { session: result.sessions.coder, task: 'issue-42' },
+    { session: result.sessions.planner, task: 'issue-42', task_class: 'feat' },
+    { session: result.sessions.coder, task: 'issue-42', task_class: 'feat' },
   ]);
 });
 

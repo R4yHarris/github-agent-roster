@@ -5,7 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 const execute = promisify(execFile);
-const managedFiles = new Set(['assignment.md', 'task.md', 'recipe.yml', 'result.md']);
+const managedFiles = new Set(['assignment.md', 'task.md', 'recipe.yml', 'result.md', 'estimate.md']);
 
 function partsOf(file) {
   return file.replaceAll('\\', '/').toLowerCase().split('/');
