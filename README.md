@@ -1,72 +1,72 @@
 # github-agent-roster
 
-A standalone Node 20 ESM orchestrator for software tasks. Its **builtin coder
-seat** can plan an issue, edit a worktree with an OpenAI-compatible model, run
-tests, and prepare a PR. No Hermes, Claude Code, or Copilot worker is required.
+A standalone Node 20 ESM coding-agent orchestrator for software tasks.
+Roster is the team control plane: its **builtin coder seat** can plan an issue,
+edit an isolated worktree with an OpenAI-compatible model, run tests, and
+prepare a PR. No Hermes, Claude Code, or Copilot worker is required. GitHub
+Issues and PRs remain the board and forge.
+
 [github-agent-contracts](https://github.com/R4yHarris/github-agent-contracts)
-is the GitHub **publish SDK only**: it owns identity, policy, trailers, and
-`agent-pr.mjs`, not planning or coding. GitHub Issues and PRs remain the board
-and forge; there is no Kanban database.
+is the **GitHub publish SDK**, consumed as a required
+[Git submodule](vendor/github-agent-contracts). It owns App identity, policy
+checks, attribution trailers, and `agent-pr.mjs`; it is not the orchestrator.
 
-| Layer | Owner |
+| Responsibility | Owner |
 | --- | --- |
-| Identity, policy, trailers, PR publication | `github-agent-contracts` |
-| Planner, coder loop, tools, skills, memory, worktrees | this repo |
-| Board | GitHub Issues + PRs |
+| Team control plane: configuration, planner, coder loop, tools, skills, memory, worktrees | Roster |
+| Model inference | Explicitly configured OpenAI-compatible endpoint |
+| Optional secret storage for the standalone chat hook | Local encrypted file vault |
+| GitHub publication, App identity, policy enforcement, trailers | Contracts submodule |
+| Durable queue, review, human evaluation | GitHub Issues + PRs |
+| Policy, merge, deploy decisions | Humans and repository protections |
 
-First loop: **issue** → one coder seat → tests → optional App-published draft
-PR → human **eval** (`AI-Eval` comment). The empty-URL configuration provides
-an offline deterministic stub for setup and tests, not a code-writing worker.
+There is no separate Kanban database, and Roster does not replace Git.
 
-## Status
+## MVP path
 
-The builtin coder seat adds SDLC task files and an opt-in LLM execution path to
-the original one-task loop. Local learning adds opt-in run records, human
-evaluations, and evidence-based recommendations. Do not tag v0.1.0 until the
-loop is reviewed and working in a published PR.
-
-## CLI
-
-A separate local-first OpenAI-compatible chat hook and encrypted file vault
-are also available; see [LLM configuration and the vault](docs/LLM.md).
-Bare `run` remains prepare-only; the builtin runtime is the opt-in LLM path.
-
-```sh
-node src/cli.mjs --help
-node src/cli.mjs ask "Add a Status section to README.md"
-node src/cli.mjs run --issue 42
-node src/cli.mjs run --issue 42 --seat coder --runtime builtin
-node src/cli.mjs recipe validate recipe.yml
-node src/cli.mjs stats --ref HEAD --evals evals.jsonl
-node src/cli.mjs vault list
-node src/cli.mjs eval roster-20260928T120000000Z accept 3 n
-node src/cli.mjs recommend --task-class feat
-npm test
+```text
+config -> explicit /v1 endpoint -> one builtin coder seat -> tests -> agent-pr -> AI-Eval
 ```
 
-Copy [the example config](roster.config.example.yml) to ignored
-`.roster/config.yml` to set `llm.base_url`, `llm.model`, and optionally the name
-of an API-key environment variable. An empty `base_url` uses the stub planner
-and writes a task summary to `RESULT.md` **without changing code or running
-tests**. `ask` creates a local draft only; it does not create a GitHub issue.
-To execute a task, provide an existing issue on the current repository's GitHub
-origin to the builtin `run` command. It creates `.worktrees/issue-N`, writes
-`ASSIGNMENT.md`, `RECIPE.yml`, and `TASK.md`, runs the coder, and prints a
-publishing command. It never publishes without `--publish`.
+1. **Config:** select the model, endpoint, and single coder seat. The CLI uses
+   the current repository's GitHub origin and the supplied issue number.
+   Keep secrets out of committed configuration.
+2. **Local or hosted `/v1` endpoint:** explicitly connect the coder to an
+   OpenAI-compatible model, with any required key supplied through the configured
+   environment variable. No hosted service is selected by default.
+3. **One coder seat:** work on the issue in an isolated Git worktree with the
+   assignment, recipe, acceptance checks, skills, and bounded recent memory.
+   The LLM path must pass `node --test` after its last edit.
+4. **`agent-pr`:** optionally publish reviewed changes through the contracts SDK
+   under the GitHub App identity, subject to human-owned policy.
+5. **`AI-Eval`:** a human reviews the PR and posts an `AI-Eval:` comment.
 
-Bare `run --issue N` retains the earlier prepare-only behavior. Both run modes
-need Git and authenticated `gh` access. Create `.roster/runs` at the repository
-root to opt into successful-run JSONL recording. `stats` joins local Git
-history through the contracts dependency with local runs and
-`.roster/evals.jsonl`; `--ref` and `--evals` remain supported. Human `eval`
-appends a decision, never the coder path. `recommend` suggests the highest
-accept-rate only with at least three evaluated samples, otherwise printing
-`insufficient data`. Nothing fetches human evaluations from GitHub.
+Configuration loading and builtin execution are implemented as an opt-in path.
+An empty endpoint uses an offline deterministic stub that writes a `RESULT.md`
+summary **without editing code or running tests**; it is not a code-writing
+worker. A separate vault-aware [chat hook](docs/LLM.md) is available, but its
+vault lookup is not wired into the builtin client.
 
-The human-owned `agent-policy.yml` must authorize coder publication; the
-recipe and CLI grant neither merge nor deploy rights. See [SDLC](docs/SDLC.md),
-[the one-task loop](docs/ONE_TASK_LOOP.md), [seats](docs/SEATS.md),
-[metrics](docs/METRICS.md), and [learning](docs/LEARNING.md).
+## Available today
+
+The Node 20 ESM CLI supports both the builtin loop and a manual handoff:
+
+- `ask "..."` drafts a local ask, recipe, and task; it does not create an issue.
+- `run --issue N --seat coder --runtime builtin` plans and executes the builtin
+  coder. Publishing requires the explicit `--publish` flag.
+- `run --issue N` reads a GitHub issue, creates one coder worktree, writes the
+  assignment and ignored `.env`, and prints the next publishing command. It
+  does not launch Hermes or any other worker.
+- `recipe validate PATH` validates strict seat YAML. Worker labels are
+  descriptive; validation neither executes a recipe nor grants permissions.
+- `stats` joins contracts `AI-Run` history with opt-in local runs and human
+  evaluations. `eval` records a human decision; `recommend` needs at least
+  three evaluated samples. Neither fetches evaluations from GitHub.
+- `vault set NAME` reads stdin and `vault list` prints names only. A local-first
+  OpenAI-compatible chat hook is available independently of the builtin loop.
+
+No concurrent workers, automatic routing, merge, or deploy are provided.
+Do not tag v0.1.0 until the one-task loop is reviewed and working in a published PR.
 
 ## Setup
 
@@ -84,13 +84,52 @@ For an existing checkout, run `git submodule update --init --recursive`.
 The submodule at [`vendor/github-agent-contracts`](vendor/github-agent-contracts)
 is pinned to `v0.2.0`; do not copy or rewrite its source.
 
-Contracts resolution checks the submodule first, then `GITHUB_AGENT_CONTRACTS`,
-then the sibling clone at `../github-agent-contracts`. It fails if no candidate
-contains `scripts/agent-pr.mjs`. See [the dependency guide](docs/DEPENDENCY.md)
-for path semantics and initialization instructions.
+[Contracts resolution](src/lib/paths.mjs) checks the submodule first, then
+`GITHUB_AGENT_CONTRACTS`, then the sibling clone at `../github-agent-contracts`.
+It fails if no candidate contains the `scripts/agent-pr.mjs` file. See
+[the dependency guide](docs/DEPENDENCY.md) for path semantics and initialization
+instructions.
 
 Run tests with `npm test`; there are no runtime package dependencies.
 Tests run with no API key or model endpoint.
+
+## Current CLI
+
+```sh
+node src/cli.mjs --help
+node src/cli.mjs ask "Add a Status section to README.md"
+node src/cli.mjs run --issue 42
+node src/cli.mjs run --issue 42 --seat coder --runtime builtin
+node src/cli.mjs recipe validate recipe.yml
+node src/cli.mjs stats --ref HEAD --evals evals.jsonl
+node src/cli.mjs vault list
+node src/cli.mjs eval roster-20260928T120000000Z accept 3 n
+node src/cli.mjs recommend --task-class feat
+npm test
+```
+
+Copy [the example config](roster.config.example.yml) to ignored
+`.roster/config.yml` to set `llm.base_url`, `llm.model`, and the API-key
+environment variable's name. See [endpoint profiles](docs/ENDPOINTS.md).
+
+Both run modes need Git and authenticated `gh` access to an existing issue on
+the current repository's GitHub origin. The builtin path creates
+`.worktrees/issue-N`, writes `ASSIGNMENT.md`, `RECIPE.yml`, and `TASK.md`, runs
+the coder, and prints a publishing command. Bare `run --issue N` remains
+prepare-only. For a manual handoff, load the generated ignored `.env` into the
+worker environment before publishing.
+
+Create `.roster/runs` at the repository root to opt into successful-run JSONL
+recording. `stats` joins local Git history through the resolved contracts pack
+with local runs and `.roster/evals.jsonl`; `--ref` and `--evals` remain supported.
+Human `eval` appends a decision, never the coder path. `recommend` suggests the
+highest accept-rate only with at least three evaluated samples, otherwise
+printing `insufficient data`. Nothing fetches human evaluations from GitHub.
+
+See [the one-task loop](docs/ONE_TASK_LOOP.md), [seats](docs/SEATS.md), and
+[metrics](docs/METRICS.md), [learning](docs/LEARNING.md),
+[LLM configuration and the vault](docs/LLM.md), [SDLC](docs/SDLC.md), and
+[principals](docs/PRINCIPALS.md) for details.
 
 ## Publish
 
@@ -104,8 +143,13 @@ files), then invokes the SDK from the **issue worktree root**. Without
 node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "..."
 ```
 
-Initialize the submodule in the worktree first if needed. Never commit
-credentials or publish as the signed-in human when App env is set.
+Initialize the submodule in the worktree first if needed.
+The publisher requires a feature branch and a human-owned root
+`agent-policy.yml` authorizing coder publication. Neither a recipe nor this CLI
+grants merge or deploy rights; do not change consumer policy to bypass a denial.
+
+Never commit credentials or `.env`, or publish as the signed-in human when App
+env is set.
 
 ## Layout
 
@@ -113,7 +157,7 @@ credentials or publish as the signed-in human when App env is set.
 prompts/          implementation prompts
 src/              CLI, planner, builtin runtime, and metrics
 skills/           coder instructions loaded from this repo
-templates/sdlc/   ask, recipe, task, and assignment templates
+templates/sdlc/   renderer templates and expanded manual handoff forms
 tests/            Node test suite and fixtures
 docs/             architecture, SDLC, seats, run loop, metrics
 AGENTS.md         harness contract
