@@ -10,9 +10,9 @@ import { createFileVault } from "../src/vault/file.mjs";
 const cli = fileURLToPath(new URL("../src/cli.mjs", import.meta.url));
 const root = fileURLToPath(new URL("..", import.meta.url));
 
-function run(args, env = process.env, cliPath = cli, input) {
+function run(args, env = process.env, cliPath = cli, input, cwd = root) {
   return spawnSync(process.execPath, [cliPath, ...args], {
-    cwd: root,
+    cwd,
     encoding: "utf8",
     env,
     input,
@@ -37,9 +37,9 @@ test("help lists every prompt's command", () => {
   assert.match(result.stdout, /roster\s+eval/);
   assert.match(result.stdout, /roster\s+recommend\s+--task-class/);
   assert.match(result.stdout, /roster\s+ask/);
-  assert.match(result.stdout, /--runtime builtin \[--seats planner,coder\]/);
+  assert.match(result.stdout, /^  roster run --issue N \[--runtime builtin\] \[--seats planner,coder\] \[--auto-model\] \[--publish\]$/m);
   assert.match(result.stdout, /--auto-model/);
-  assert.match(result.stdout, /^  roster run --issue N --runtime builtin --seats planner,coder$/m);
+  assert.match(result.stdout, /^  roster prepare --issue N$/m);
 });
 
 test("the package exposes the roster bin", () => {
@@ -102,11 +102,38 @@ test("builtin CLI defaults to paired seats, rejects unsupported selections, and 
   assert.match(autoIssue.stderr, /Issue number must be a positive safe integer/);
   const defaultSeats = run(["run", "--issue", "n/a", "--runtime", "builtin"]);
   assert.match(defaultSeats.stderr, /Issue number must be a positive safe integer/);
+  const bareRun = run(["run", "--issue", "n/a"]);
+  assert.match(bareRun.stderr, /Issue number must be a positive safe integer/);
   const legacySeat = run(["run", "--issue", "n/a", "--seat", "coder", "--runtime", "builtin"]);
   assert.match(legacySeat.stderr, /Issue number must be a positive safe integer/);
   const noPublish = run(["run", "--issue", "42", "--runtime", "builtin", "--publish"]);
   assert.notEqual(noPublish.status, 0);
   assert.match(noPublish.stderr, /--publish requires an LLM endpoint/);
+});
+
+test("bare run uses the builtin planner and coder while prepare keeps manual handoff explicit", (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "roster-default-run-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const fixtureRoot = join(directory, "roster");
+  cpSync(join(root, "src"), join(fixtureRoot, "src"), { recursive: true });
+  const example = readFileSync(join(root, "roster.config.example.yml"), "utf8");
+  writeFileSync(join(fixtureRoot, "roster.config.example.yml"),
+    example.replace('profile: ""', "profile: vllm-local"));
+  const fixtureCli = join(fixtureRoot, "src", "cli.mjs");
+  const env = { ...process.env, ROSTER_MODEL: "" };
+  const bareRun = run(["run", "--issue", "42"], env, fixtureCli, undefined, fixtureRoot);
+  assert.ifError(bareRun.error);
+  assert.equal(bareRun.status, 1);
+  assert.match(bareRun.stderr, /Set config\.llm\.model or use --auto-model/);
+  assert.equal(bareRun.stdout, "");
+  const explicitBuiltin = run(["run", "--issue", "42", "--runtime", "builtin"],
+    env, fixtureCli, undefined, fixtureRoot);
+  assert.match(explicitBuiltin.stderr, /Set config\.llm\.model or use --auto-model/);
+  const manual = run(["prepare", "--issue", "0"], env, fixtureCli, undefined, fixtureRoot);
+  assert.match(manual.stderr, /Issue number must be a positive safe integer/);
+  const invalid = run(["run", "--issue", "42", "--runtime", "prepare"],
+    env, fixtureCli, undefined, fixtureRoot);
+  assert.match(invalid.stderr, /Use roster run --issue N/);
 });
 
 test("recipe validation accepts the documented shape and rejects unknown keys", () => {

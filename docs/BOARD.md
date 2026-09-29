@@ -8,7 +8,7 @@ a second scheduling service. An issue number identifies one human Ask.
    is available. Without `gh`, it writes an ignored `.roster/asks/<id>.md`
    draft and prints a `gh issue create` command. The draft is **not** queued
    until a human creates the issue.
-2. `roster run --issue N --runtime builtin` reads that issue, creates one
+2. `roster run --issue N` reads that issue, creates one
    `issue-N` worktree, and runs planner then coder in sequence. Its local
    `ASSIGNMENT.md`, `RECIPE.yml`, `TASK.md`, and `RESULT.md` describe execution,
    not board state. An empty LLM endpoint produces only a stub result.

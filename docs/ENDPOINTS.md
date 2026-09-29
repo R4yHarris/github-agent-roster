@@ -3,9 +3,9 @@
 Start with the vLLM OpenAI API on DGX Spark. The
 [schema 1 config example](../roster.config.example.yml) supplies defaults for
 the builtin planner and coder. Copy it to ignored `.roster/config.yml` to
-configure the opt-in `run --issue N --runtime builtin` path.
-An empty endpoint keeps the deterministic stub; bare `run --issue N` remains
-prepare-only. See [SDLC](SDLC.md) for execution and publishing.
+configure a model-backed `roster run --issue N`.
+An empty endpoint keeps the deterministic stub; `roster prepare --issue N`
+is the manual handoff path. See [SDLC](SDLC.md) for execution and publishing.
 
 ## Schema 1
 

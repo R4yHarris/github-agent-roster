@@ -44,10 +44,10 @@ roster doctor
 roster init
 roster ask "Add a Status section to README.md"
 roster run --ask-file templates/sdlc/ASK.md --runtime builtin
-roster run --issue 42 --runtime builtin
-roster run --issue 42 --runtime builtin --auto-model
-roster run --issue 42 --runtime builtin --publish
 roster run --issue 42
+roster run --issue 42 --auto-model
+roster run --issue 42 --publish
+roster prepare --issue 42
 roster status --issue 42 --offline
 roster recipe validate recipe.yml
 roster stats --ref HEAD --evals evals.jsonl
@@ -58,9 +58,11 @@ npm test
 ```
 
 `roster ask` creates a GitHub issue when `gh` is available, or a local draft
-and printable issue command when it is not. Bare `roster run --issue N`
-prepares a manual handoff without launching a coder. The builtin
-`--seats planner,coder` selection is optional; `--publish` explicitly requests
+and printable issue command when it is not. `roster run --issue N` runs
+planner then coder by default; `roster prepare --issue N` preserves the
+manual handoff without executing seats. `--runtime builtin` remains accepted
+for agents and CI. The `--seats planner,coder` selection is optional;
+`--publish` explicitly requests
 App publication after a model-backed run and passing tests. `--auto-model`
 requires an empty configured model and at least three matching local human
 evaluations or keeps the stub. `roster status --issue N` queries GitHub;
@@ -118,12 +120,12 @@ other profiles are documented under [endpoints](docs/ENDPOINTS.md). The
 tracked example keeps the profile empty so the default is the offline
 stub; never put keys in it.
 
-Both issue run modes need Git and authenticated `gh` access to an existing issue on
-the current repository's GitHub origin. The builtin path creates
+Both issue commands need Git and authenticated `gh` access to an existing
+issue on the current repository's GitHub origin. The default run creates
 `.worktrees/issue-N`, writes `ASSIGNMENT.md`, `RECIPE.yml`, and `TASK.md`, runs
-the coder, and prints a publishing command. Bare `run --issue N` remains
-prepare-only. For a manual handoff, load the generated ignored `.env` into the
-worker environment before publishing. See [same-session seats](docs/MULTIAGENT.md).
+the coder, and prints a publishing command. The explicit `prepare` command
+writes only a manual assignment and ignored `.env`; load that environment into
+the worker before publishing. See [same-session seats](docs/MULTIAGENT.md).
 
 Create `.roster/runs` at the repository root to opt into successful-run JSONL
 recording. `stats` joins local Git history through the resolved contracts pack

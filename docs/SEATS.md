@@ -48,7 +48,14 @@ coder cannot rewrite those files. Older single-coder builtin recipes and
 `copilot`/`hermes` labels remain valid for read-only validation, without being
 selected for execution. Validation alone does not start any worker.
 
-There is no reviewer, merger, or deploy seat, no deploy or merge capability, and no arbitrary role or capability field. In particular, `planner` with `principal: coder` does **not** inherit merge permission. The recipe confers no permissions at all: a trusted executor must separately use the human-owned `agent-policy.yml` and GitHub App/repository protections from the sibling contracts pack before taking action. Missing or invalid recipe data fails closed; nothing falls back to an example or grants a capability.
+The reviewer seat is a documented future role, not an executable v0 seat;
+humans review PRs today. There is no merger or deploy seat, no deploy or merge
+capability, and no arbitrary role or capability field. In particular, `planner`
+with `principal: coder` does **not** inherit merge permission. The recipe
+confers no permissions at all: a trusted executor must separately use the
+human-owned `agent-policy.yml` and GitHub App/repository protections from the
+contracts pack before taking action. Missing or invalid recipe data fails
+closed; nothing falls back to an example or grants a capability.
 
 Only a small YAML subset is supported: plain unquoted values, root keys at
 column zero, list items indented two spaces, and remaining seat keys indented
