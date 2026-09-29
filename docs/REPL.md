@@ -13,7 +13,7 @@ agents and CI.
 | `/run N` or `/run --issue N` | Run the builtin planner then coder in one issue worktree. The stub writes a task and result, but does not edit code or test. |
 | `/status [N] [--offline]` | Show an issue, its open branch PR, and worktree path. Defaults to the last run or created issue; offline reads only the cached assignment and reports PR state as unknown. |
 | `/eval TARGET accept|reject|rework 1-5 y|n` | Record a human evaluation through the existing evaluation library. |
-| `/publish [SUBJECT]` | Publish reviewed changes using the pinned contracts SDK. After `/run N`, the default subject is `feat: issue N`; otherwise supply a conventional subject. |
+| `/publish [SUBJECT]` | Publish reviewed changes using the pinned contracts SDK. After `/run N`, the default subject is `feat: issue N`; a confirmed merge comments on and closes that issue. Otherwise supply a conventional subject. |
 | `/stats [REF]` | Summarize contracts and local AI-Run records, optionally at a Git ref. |
 | `/recommend feat|fix|docs|test` | Recommend from evaluated local runs. |
 | `/vault` or `/vault list` | List vault entry names, never values. |
@@ -56,6 +56,11 @@ not accepted on the installation; there is no human-credential fallback.
 The SDK may report that a PR merged but local cleanup failed when the default
 branch is checked out in another worktree. Inspect the PR and worktrees in
 that case; do not blindly retry publication or create a second commit.
+For an issue run, the PR body includes `Closes #N`. Only after the SDK reports
+a merge does Roster verify the PR, comment with the coder AI-Run if present,
+and close the issue if GitHub has not already done so. This requires App
+Issues write and Pull requests read permissions; a failed issue operation
+is reported rather than retried with human credentials.
 The separate agent/CI `--publish` flag also requests merge-when-green; unlike
 the REPL, it invokes the SDK through the builtin runner.
 

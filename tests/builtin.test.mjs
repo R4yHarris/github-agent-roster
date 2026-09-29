@@ -101,7 +101,7 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
   assert.match(result.result.summary, /Add Status to README/);
   assert.equal(result.run, result.runs.coder);
   assert.equal(result.result.mode, 'stub');
-  assert.ok(logs[0].includes('node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue 42" --merge-when-green'));
+  assert.ok(logs[0].includes('node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue 42\n\nCloses #42" --merge-when-green'));
   assert.equal((logs[0].match(/AI-Run:/g) ?? []).length, 2);
   assert.equal(result.runs.planner.line, packAgentRun(result.runs.planner.env));
   assert.equal(result.runs.coder.line, packAgentRun(result.runs.coder.env));
@@ -139,6 +139,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
   const logs = [];
   let completion = 0;
   let published = 0;
+  let closed = 0;
   const fetchImpl = async (_url, request) => {
     completion += 1;
     const body = JSON.parse(request.body);
@@ -186,7 +187,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
       assert.equal(program, process.execPath);
       assert.deepEqual(args, [
         path.join(options.contracts, 'scripts', 'agent-pr.mjs'),
-        '--message', 'feat: issue 42', '--merge-when-green',
+        '--message', 'feat: issue 42\n\nCloses #42', '--merge-when-green',
       ]);
       assert.equal(publication.cwd, path.join(options.target, '.worktrees', 'issue-42'));
       assert.equal(publication.env.ROSTER_API_KEY, undefined);
@@ -196,10 +197,19 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
       assert.equal(publication.env.AI_CONTEXT_OUT, '7');
       assert.equal(publication.env.AI_SESSION, 'roster-42-coder');
       assert.equal(git(publication.cwd, 'diff', '--cached', '--name-only'), 'README.md');
-      return { stdout: 'Published via test SDK\n' };
+      return { stdout: 'Merged PR #7 with a merge commit, removed its branch.\n' };
+    },
+    issueCloser: async ({ issue, pullNumber, runLine }) => {
+      closed += 1;
+      assert.equal(issue.number, 42);
+      assert.equal(pullNumber, 7);
+      assert.equal(runLine, packAgentRun({ AI_MODEL: 'local-model', AI_EFFORT: 'm',
+        AI_CONTEXT_USED: '17', AI_CONTEXT_OUT: '7',
+        AI_SESSION: 'roster-42-coder', AI_TASK: 'issue-42' }));
     },
   });
   assert.equal(published, 1);
+  assert.equal(closed, 1);
   assert.equal(completion, 3);
   assert.match(readFileSync(path.join(result.worktreePath, 'README.md'), 'utf8'), /## Status\nReady/);
   assert.equal(result.result.tests.exit_code, 0);
@@ -207,8 +217,49 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
   assert.match(result.runs.planner.line, /\|5\/-\|2\|roster-42-planner\|issue-42$/);
   assert.match(result.runs.coder.line, /\|17\/-\|7\|roster-42-coder\|issue-42$/);
   assert.equal((logs[0].match(/AI-Run:/g) ?? []).length, 2);
-  assert.ok(logs.some((line) => line.includes('Published via test SDK')));
+  assert.ok(logs.some((line) => line.includes('Merged PR #7')));
   assert.ok(!logs.join('\n').includes('private-key'));
+});
+
+test('a merged PR still receives an issue comment when publisher local cleanup fails', async (context) => {
+  const options = fixture(context);
+  let turns = 0;
+  let closed = false;
+  await assert.rejects(runBuiltinIssue(42, {
+    ...options, config: llmConfig, publish: true, log: () => {},
+    env: { ...options.env, ROSTER_API_KEY: 'test-only-key',
+      GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'app.pem' },
+    fetchImpl: async () => {
+      turns += 1;
+      if (turns === 1) return { status: 200, json: async () => ({ choices: [{
+        message: { role: 'assistant', content: JSON.stringify({
+          title: 'Add status', acceptance_checks: ['node --test exits 0'],
+          files_allowed: ['README.md'],
+        }) },
+      }] }) };
+      if (turns === 2) return { status: 200, json: async () => ({ choices: [{
+        finish_reason: 'tool_calls', message: { role: 'assistant', tool_calls: [{
+          id: 'write', type: 'function', function: { name: 'write_file',
+            arguments: JSON.stringify({ path: 'README.md', content: '# Updated\n' }) },
+        }] },
+      }] }) };
+      return { status: 200, json: async () => ({ choices: [{
+        finish_reason: 'stop', message: { role: 'assistant', content: 'Done.' },
+      }] }) };
+    },
+    runTestCommand: async () => ({ stdout: 'passed', stderr: '' }),
+    publisher: async () => { throw Object.assign(new Error('publisher failed'), {
+      stderr: 'PR #7 was merged; local cleanup is incomplete.',
+    }); },
+    issueCloser: async ({ issue, pullNumber, runLine }) => {
+      assert.equal(issue.number, 42);
+      assert.equal(pullNumber, 7);
+      assert.match(runLine, /\|roster-42-coder\|issue-42$/);
+      closed = true;
+    },
+  }), /PR #7 merged and issue closed, but local publisher cleanup failed/);
+  assert.equal(turns, 3);
+  assert.equal(closed, true);
 });
 
 test('default planner/coder run preserves the task handoff while the coder edits only allowed code', async (context) => {

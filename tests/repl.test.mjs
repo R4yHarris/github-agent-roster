@@ -163,13 +163,18 @@ test('/publish prints the SDK command without App env and uses the reviewed work
       runBuiltinIssue: async () => ({
         issue: { number: 42 }, repoRoot: cwd, task: 'issue-42',
         worktreePath: join(cwd, '.worktrees', 'issue-42'),
+        runs: { coder: { line: '1|-|local@unknown|m|3/-|2|roster-42-coder|issue-42' } },
       }),
       prepareBuiltinPublication: async (run, options) => {
         calls.push(['prepare', run.task, options.env.GITHUB_APP_ID]);
         return { contractsPath: 'contracts', worktreePath: run.worktreePath,
           publishEnv: { GITHUB_APP_ID: '123', AI_SESSION: 'roster-42-coder' } };
       },
-      publisher: async (options) => { calls.push(['publisher', options]); },
+      publisher: async (options) => {
+        calls.push(['publisher', options]);
+        return { mergedPullRequest: 7 };
+      },
+      issueCloser: async (options) => { calls.push(['close', options]); },
     },
   });
   await withApp.dispatch('/run 42');
@@ -178,9 +183,62 @@ test('/publish prints the SDK command without App env and uses the reviewed work
   assert.equal(withApp.state.published, true);
   assert.deepEqual(calls[0], ['prepare', 'issue-42', '123']);
   assert.equal(calls[1][1].cwd, join(cwd, '.worktrees', 'issue-42'));
-  assert.equal(calls[1][1].message, 'feat: issue 42');
+  assert.equal(calls[1][1].message, 'feat: issue 42\n\nCloses #42');
   assert.equal(calls[1][1].env.AI_SESSION, 'roster-42-coder');
+  assert.equal(calls[2][0], 'close');
+  assert.equal(calls[2][1].pullNumber, 7);
+  assert.match(calls[2][1].runLine, /\|roster-42-coder\|issue-42$/);
   await assert.rejects(withApp.dispatch('/publish'), /already published/);
+});
+
+test('an issue publish without a confirmed merge leaves the issue untouched', async () => {
+  const shell = dispatcher({
+    env: { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'key.pem' },
+    services: {
+      runBuiltinIssue: async () => ({
+        issue: { number: 42 }, repoRoot: cwd, task: 'issue-42',
+        worktreePath: join(cwd, '.worktrees', 'issue-42'),
+      }),
+      prepareBuiltinPublication: async (run) => ({
+        contractsPath: 'contracts', worktreePath: run.worktreePath, publishEnv: {},
+      }),
+      publisher: async () => ({ mergedPullRequest: null }),
+      issueCloser: () => assert.fail('Unmerged PR must not close its issue'),
+    },
+  });
+  await shell.dispatch('/run 42');
+  await assert.rejects(shell.dispatch('/publish'), /did not confirm a merged PR/);
+  assert.equal(shell.state.published, false);
+});
+
+test('a merged PR with local cleanup failure still finishes its issue without a duplicate publish', async () => {
+  let closed = 0;
+  const shell = dispatcher({
+    env: { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'key.pem' },
+    services: {
+      runBuiltinIssue: async () => ({
+        issue: { number: 42 }, repoRoot: cwd, task: 'issue-42',
+        worktreePath: join(cwd, '.worktrees', 'issue-42'),
+      }),
+      prepareBuiltinPublication: async (run) => ({
+        contractsPath: 'contracts', worktreePath: run.worktreePath, publishEnv: {},
+      }),
+      publisher: async () => {
+        const error = new Error('Local cleanup failed');
+        error.mergedPullRequest = 7;
+        throw error;
+      },
+      issueCloser: async ({ pullNumber }) => {
+        assert.equal(pullNumber, 7);
+        closed += 1;
+      },
+    },
+  });
+  await shell.dispatch('/run 42');
+  await assert.rejects(shell.dispatch('/publish'), /Local cleanup failed/);
+  assert.equal(closed, 1);
+  assert.equal(shell.state.published, true);
+  await assert.rejects(shell.dispatch('/publish'), /already published/);
 });
 
 test('imported contracts publisher receives merge-when-green and reports HTTP 422 without fallback', async (t) => {

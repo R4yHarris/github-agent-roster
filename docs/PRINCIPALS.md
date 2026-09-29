@@ -46,6 +46,10 @@ git. Review and stage only intended changes and pass applicable checks before
 publishing a feature branch. Missing App configuration or denied policy means
 stop with changes uncommitted: no direct `git commit`, `git push`, `gh pr create`,
 or signed-in human fallback. Do not copy, rewrite, or replace the vendor helper.
+Post-merge issue closure uses a separate, narrowly scoped App token with
+Issues write and Pull requests read permissions. Roster checks the reviewed
+coder comment and merger merge grants, verifies the merged issue-branch PR,
+and never uses human GitHub credentials for that comment or closure.
 See [dependency setup](DEPENDENCY.md) and [key custody](THREAT_MODEL.md).
 
 ## Later WSL worker
