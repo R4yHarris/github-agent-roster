@@ -37,9 +37,9 @@ is created.
    `write_file` rejects the root recipe and task even if a model requests
    them. The runner rechecks both files after the coder's final tests and
    refuses publication if either changed.
-4. The command prints one AI-Run line per seat, using its session and only
-   its own known usage. Stub lines say `builtin-stub`, without invented LLM
-   counts. When `.roster/runs` exists in the issue repository, the two
+4. The command prints one AI-Run line per configured LLM seat, using its session
+   and only its own known usage. Stub runs omit AI-Run, model, and LLM counts.
+   When `.roster/runs` exists in the issue repository, the two
    completed seats are recorded there, not as a third preparation run.
    A single commit published through the contracts SDK can carry only the
    coder AI-Run trailer; the planner run remains in stdout/local records.

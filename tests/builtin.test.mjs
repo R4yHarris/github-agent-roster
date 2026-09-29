@@ -50,7 +50,8 @@ function fixture(context) {
   git(target, 'remote', 'add', 'origin', 'https://github.com/example/project.git');
   const cwd = path.join(target, 'nested');
   mkdirSync(cwd);
-  const env = { ...process.env, GITHUB_AGENT_CONTRACTS: contracts };
+  const env = { ...process.env, ROSTER_MODEL: '', AI_MODEL_VERSION: '',
+    GITHUB_AGENT_CONTRACTS: contracts };
   const issue = {
     number: 42, title: 'Add Status to README',
     body: 'Add a Status section to README.md.\n\n## Acceptance checks\n' +
@@ -105,11 +106,8 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
   assert.equal(result.run, result.runs.coder);
   assert.equal(result.result.mode, 'stub');
   assert.ok(logs[0].includes('node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue 42\n\nCloses #42" --merge-when-green'));
-  assert.equal((logs[0].match(/AI-Run:/g) ?? []).length, 2);
-  assert.equal(result.runs.planner.line, packAgentRun(result.runs.planner.env));
-  assert.equal(result.runs.coder.line, packAgentRun(result.runs.coder.env));
-  assert.match(result.runs.planner.line, /\|roster-42-planner\|issue-42$/);
-  assert.match(result.runs.coder.line, /\|roster-42-coder\|issue-42$/);
+  assert.equal((logs[0].match(/AI-Run:/g) ?? []).length, 0);
+  assert.deepEqual(result.runs, { planner: null, coder: null });
   assert.deepEqual(options.calls.map(({ program }) => program), ['git', 'git', 'gh', 'git']);
   assert.equal(options.calls.filter(({ program, args }) =>
     program === 'git' && args[0] === 'worktree').length, 1);
@@ -169,9 +167,36 @@ test('auto-model with fewer than three evaluated runs stays a network-free stub'
   });
   assert.equal(result.autoRecommendation, null);
   assert.equal(result.result.mode, 'stub');
-  assert.equal(result.runs.coder.env.AI_MODEL, 'builtin-stub');
+  assert.equal(result.runs.coder, null);
   assert.equal(config.llm.model, '');
   assert.ok(logs.some((line) => line.includes('insufficient evaluated data')));
+});
+
+test('ROSTER_MODEL selects the same served model for both seats and their metadata', async (context) => {
+  const options = fixture(context);
+  const config = parseConfig(example.replace('profile: ""', 'profile: ollama'));
+  let requests = 0;
+  const result = await runBuiltinIssue(42, {
+    ...options, config, log: () => {},
+    env: { ...options.env, ROSTER_MODEL: 'served-model', ROSTER_API_KEY: 'test-only-key' },
+    fetchImpl: async (_url, request) => {
+      requests += 1;
+      assert.equal(JSON.parse(request.body).model, 'served-model');
+      return { status: 200, json: async () => ({
+        choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+          content: requests === 1 ? JSON.stringify({
+            title: 'Add status', acceptance_checks: ['node --test exits 0'],
+            files_allowed: ['README.md'],
+          }) : 'Done.',
+        } }],
+      }) };
+    },
+    runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+  });
+  assert.equal(requests, 2);
+  assert.equal(result.runs.planner.env.AI_MODEL, 'served-model');
+  assert.equal(result.runs.coder.env.AI_MODEL, 'served-model');
+  assert.equal(config.llm.model, '');
 });
 
 test('auto-model uses a three-evaluation recommendation for both seats without editing config', async (context) => {
@@ -263,6 +288,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
   const result = await runBuiltinIssue(42, {
     ...options, config: llmConfig,
     env: { ...options.env, ROSTER_API_KEY: 'private-key', GITHUB_APP_ID: '123',
+      AI_MODEL: 'unknown', AI_PROVIDER: 'vllm',
       GITHUB_APP_PRIVATE_KEY_PATH: path.join(options.base, 'app.pem') },
     publish: true, log: (line) => logs.push(line), fetchImpl,
     publisher: async (program, args, publication) => {
@@ -276,9 +302,13 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
       assert.equal(publication.env.ROSTER_API_KEY, undefined);
       assert.equal(publication.env.GITHUB_APP_ID, '123');
       assert.equal(publication.env.AI_MODEL, 'local-model');
+      assert.equal(publication.env.AI_PROVIDER, 'local');
+      assert.equal(publication.env.AI_MODEL_VERSION, '-');
+      assert.equal(publication.env.AI_EFFORT, 'm');
       assert.equal(publication.env.AI_CONTEXT_USED, '17');
       assert.equal(publication.env.AI_CONTEXT_OUT, '7');
       assert.equal(publication.env.AI_SESSION, 'roster-42-coder');
+      assert.equal(publication.env.AI_TASK, 'issue-42');
       assert.equal(git(publication.cwd, 'diff', '--cached', '--name-only'), 'README.md');
       return { stdout: 'Merged PR #7 with a merge commit, removed its branch.\n' };
     },
@@ -286,7 +316,8 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
       closed += 1;
       assert.equal(issue.number, 42);
       assert.equal(pullNumber, 7);
-      assert.equal(runLine, packAgentRun({ AI_MODEL: 'local-model', AI_EFFORT: 'm',
+      assert.equal(runLine, packAgentRun({ AI_PROVIDER: 'local', AI_MODEL: 'local-model',
+        AI_MODEL_VERSION: '-', AI_EFFORT: 'm',
         AI_CONTEXT_USED: '17', AI_CONTEXT_OUT: '7',
         AI_SESSION: 'roster-42-coder', AI_TASK: 'issue-42' }));
     },
@@ -503,8 +534,8 @@ test('opt-in learning records exactly one run for each builtin seat', async (con
     fetchImpl: () => { throw new Error('stub must not contact an LLM'); },
   });
   assert.deepEqual(loadLearning({ cwd: options.target }).runs, [
-    { session: result.sessions.planner, task: 'issue-42', model: 'builtin-stub' },
-    { session: result.sessions.coder, task: 'issue-42', model: 'builtin-stub' },
+    { session: result.sessions.planner, task: 'issue-42' },
+    { session: result.sessions.coder, task: 'issue-42' },
   ]);
 });
 

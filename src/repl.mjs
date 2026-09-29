@@ -14,6 +14,7 @@ import { formatMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs'
 import { resolveContractsPath } from './lib/paths.mjs';
 import { formatStatus, readStatus } from './lib/status.mjs';
 import { createFileVault, validateSecretName } from './vault/file.mjs';
+import { buildPublishEnv } from './metrics/run.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const help = `Commands:
@@ -221,8 +222,8 @@ export function createDispatcher({
         } else {
           publishRoot = currentRoot();
           contractsPath = api.resolveContractsPath({ repoRoot: publishRoot, cwd, env });
-          publishEnv = { ...env, GITHUB_APP_PRIVATE_KEY_PATH: resolve(cwd, env.GITHUB_APP_PRIVATE_KEY_PATH) };
-          delete publishEnv[state.config.llm.api_key_env];
+          publishEnv = buildPublishEnv({ config: state.config, env });
+          publishEnv.GITHUB_APP_PRIVATE_KEY_PATH = resolve(cwd, env.GITHUB_APP_PRIVATE_KEY_PATH);
         }
         const finishIssue = async (pullNumber) => {
           state.published = true;
