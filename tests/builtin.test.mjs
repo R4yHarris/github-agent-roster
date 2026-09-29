@@ -205,6 +205,61 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
   assert.ok(!logs.join('\n').includes('private-key'));
 });
 
+test('default planner/coder run preserves the task handoff while the coder edits only allowed code', async (context) => {
+  const options = fixture(context);
+  options.issue.title = 'Implement the app';
+  options.issue.body = 'Add src/app.mjs.\n\n## Acceptance checks\n- node --test exits 0\n' +
+    '\n## Files allowed\n- `src/app.mjs`\n';
+  let completion = 0;
+  const fetchImpl = async (_url, request) => {
+    completion += 1;
+    const body = JSON.parse(request.body);
+    if (completion === 1) {
+      assert.equal(body.tools, undefined);
+      return { ok: true, json: async () => ({ choices: [{ message: { content: JSON.stringify({
+        title: 'Implement the app',
+        acceptance_checks: ['node --test exits 0'],
+        files_allowed: ['src/app.mjs'],
+      }) } }] }) };
+    }
+    if (completion === 2) {
+      assert.match(body.messages[1].content, /## Files allowed\n- `src\/app\.mjs`/);
+      const write = (id, file, content) => ({
+        id, type: 'function',
+        function: { name: 'write_file', arguments: JSON.stringify({ path: file, content }) },
+      });
+      return { ok: true, json: async () => ({ choices: [{
+        finish_reason: 'tool_calls',
+        message: { tool_calls: [
+          write('code', 'src/app.mjs', 'export const ready = true;\n'),
+          write('recipe', 'RECIPE.yml', 'tampered'),
+          write('task', 'TASK.md', 'tampered'),
+        ] },
+      }] }) };
+    }
+    assert.equal(completion, 3);
+    assert.match(body.messages.at(-3).content, /src\/app\.mjs/);
+    assert.match(body.messages.at(-2).content, /not allowed/);
+    assert.match(body.messages.at(-1).content, /not allowed/);
+    return { ok: true, json: async () => ({
+      choices: [{ finish_reason: 'stop', message: { content: 'Implemented the planned task.' } }],
+    }) };
+  };
+  const run = await runBuiltinIssue(42, {
+    ...options, config: llmConfig, fetchImpl, log: () => {},
+    runTestCommand: async () => ({ stdout: 'tests passed', stderr: '' }),
+  });
+  assert.equal(completion, 3);
+  assert.deepEqual(parseRecipe(readFileSync(run.recipePath, 'utf8')).seats.map(({ id }) => id),
+    ['planner', 'coder']);
+  assert.equal(readFileSync(path.join(run.worktreePath, 'src', 'app.mjs'), 'utf8'),
+    'export const ready = true;\n');
+  assert.equal(readFileSync(run.recipePath, 'utf8'), run.planner.recipe);
+  assert.equal(readFileSync(run.taskPath, 'utf8'), run.planner.task);
+  assert.equal(options.calls.filter(({ program, args }) =>
+    program === 'git' && args[0] === 'worktree').length, 1);
+});
+
 test('opt-in learning records exactly one run for each builtin seat', async (context) => {
   const options = fixture(context);
   mkdirSync(path.join(options.target, '.roster', 'runs'), { recursive: true });
