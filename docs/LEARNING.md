@@ -146,6 +146,10 @@ For each configuration:
 - Difficulty, `again`, and context are retained as evidence, not invented
   quality scores or ranking weights.
 
+Two evaluations still print `insufficient data`, even if a third run exists
+without a human evaluation. A third distinct evaluated sample for the same
+task class, model, and effort makes that configuration eligible.
+
 Example output:
 
 ```text

@@ -291,6 +291,25 @@ process.stdout.write(${JSON.stringify(exported)});
   const insufficient = invoke(['recommend', '--task-class', 'docs']);
   assert.equal(insufficient.status, 0, insufficient.stderr);
   assert.equal(insufficient.stdout, 'insufficient data\n');
+
+  const evalsFile = join(cwd, '.roster', 'evals.jsonl');
+  const originalEvals = readFileSync(evalsFile, 'utf8');
+  const twoEvals = [
+    { session: 'feat-one', verdict: 'accept', difficulty: 3, again: true },
+    { sha: '2222222222222222222222222222222222222222',
+      verdict: 'accept', difficulty: 2, again: true },
+  ];
+  writeFileSync(evalsFile, `${twoEvals.map((evaluation) => JSON.stringify(evaluation)).join('\n')}\n`);
+  const belowThreshold = invoke(['recommend', '--task-class', 'feat']);
+  assert.equal(belowThreshold.status, 0, belowThreshold.stderr);
+  assert.equal(belowThreshold.stdout, 'insufficient data\n');
+  writeFileSync(evalsFile, `${twoEvals.map((evaluation) => JSON.stringify(evaluation)).join('\n')}\n` +
+    '{"sha":"3333333333333333333333333333333333333333","verdict":"accept","difficulty":3,"again":true}\n');
+  const atThreshold = invoke(['recommend', '--task-class', 'feat']);
+  assert.equal(atThreshold.status, 0, atThreshold.stderr);
+  assert.equal(atThreshold.stdout, 'feat: careful-model effort=h accept-rate=100.0% n=3\n');
+  writeFileSync(evalsFile, originalEvals);
+
   for (const args of [
     ['recommend'], ['recommend', '--task-class', 'chore'],
     ['recommend', '--task-class', 'feat', '--extra'],
