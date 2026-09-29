@@ -4,6 +4,33 @@ The **GitHub App is the principal, not the LLM**. GitHub authenticates the App
 through its installation token. The contracts policy constrains operations;
 worker names, model choices, and `AI_*` run metadata do not grant authority.
 
+## Builtin coder conduct
+
+A seat is a bounded principal, not a chat or the human GitHub user. Its
+[conduct file](../principals/coder.md) requires work products: TASK.md, a scoped
+diff, test evidence, and an honest RESULT.md, not status theater.
+
+[`loadPrincipal`](../src/seats/principal.mjs) reads the roster installation's
+`principals/coder.md` before execution. Missing, empty, oversized, and
+symlinked files fail explicitly. Markdown is conduct, not a policy parser:
+text claiming merge permission cannot change the fixed `coder` role,
+`commit_branch`/`open_pr` capabilities, or frozen deny rules.
+
+The returned `deny.read` and `deny.write` predicates are the same rules used
+by the [runtime tools](../src/runtime/tools.mjs). Secrets (`.env`, `.env.*`,
+`*.pem`, and `.roster/vault`), Git metadata, worktree escapes, and symlinks
+cannot be accessed. Policy, workflows, the contracts submodule, and
+harness-owned task/result files cannot be edited. Writes must also match
+TASK.md's allowed paths. The loop offers only configured builtin tools;
+principal prose cannot add a tool, increase the turn budget, or grant merge,
+protected-branch push, or deploy.
+
+The coder stops at a verified result or its turn budget and states what
+failed or remains unverified. With no LLM endpoint the deterministic stub
+remains non-editing and reports that implementation and tests were not run.
+Publication remains a separate reviewed harness action; a parent-requested
+`--merge-when-green` does not grant merger authority to the coder.
+
 ## Seats and contracts roles
 
 The roster seat `coder` maps to the contracts role `coder`. A recipe's

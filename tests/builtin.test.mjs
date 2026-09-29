@@ -28,6 +28,9 @@ function fixture(context) {
   const target = path.join(base, 'project');
   const contracts = path.join(base, 'contracts');
   mkdirSync(repoRoot);
+  mkdirSync(path.join(repoRoot, 'principals'));
+  writeFileSync(path.join(repoRoot, 'principals', 'coder.md'),
+    readFileSync(new URL('../principals/coder.md', import.meta.url), 'utf8'));
   mkdirSync(target);
   mkdirSync(path.join(repoRoot, 'skills', 'implement-task'), { recursive: true });
   mkdirSync(path.join(contracts, 'scripts'), { recursive: true });

@@ -21,6 +21,9 @@ function fixture(context, config = stubConfig) {
   const worktree = path.join(repoRoot, 'worktree');
   const skillDirectory = path.join(repoRoot, 'skills', 'implement-task');
   mkdirSync(worktree);
+  mkdirSync(path.join(repoRoot, 'principals'));
+  writeFileSync(path.join(repoRoot, 'principals', 'coder.md'),
+    readFileSync(new URL('../principals/coder.md', import.meta.url), 'utf8'));
   mkdirSync(skillDirectory, { recursive: true });
   mkdirSync(path.join(repoRoot, 'skills', 'run-tests'));
   writeFileSync(path.join(skillDirectory, 'SKILL.md'), '# Implement task\nRun tests.\n');
@@ -106,6 +109,7 @@ test('LLM coder uses only offered tools within the turn budget, then verifies te
     assert.equal(String(url), 'http://localhost:3456/v1/chat/completions');
     assert.equal(request.headers.Authorization, 'Bearer private-value');
     const sent = JSON.parse(request.body);
+    assert.match(sent.messages[0].content, /Principal coder:[\s\S]*No merge, no deploy/);
     assert.deepEqual(sent.tools.map((tool) => tool.function.name),
       ['read_file', 'write_file', 'list_dir', 'run_test']);
     if (calls === 1) {

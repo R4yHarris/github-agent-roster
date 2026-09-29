@@ -12,8 +12,13 @@ function partsOf(file) {
 }
 
 function isSecret(file) {
-  return partsOf(file).some((part) => part === '.env' || part.startsWith('.env.') ||
-    part.endsWith('.pem'));
+  const parts = partsOf(file);
+  return parts.some((part, index) => part === '.env' || part.startsWith('.env.') ||
+    part.endsWith('.pem') || (part === '.roster' && parts[index + 1] === 'vault'));
+}
+
+export function isForbiddenRead(file) {
+  return isSecret(file) || partsOf(file).includes('.git');
 }
 
 function isProtectedSurface(file) {
@@ -121,7 +126,7 @@ export async function createTools({
       throw new Error('Tool path must stay inside the worktree');
     }
     const normalized = relative.split(path.sep).join('/');
-    if (isSecret(normalized) || partsOf(normalized).includes('.git')) {
+    if (isForbiddenRead(normalized)) {
       throw new Error('Tool access to secrets and Git metadata is refused');
     }
     if (directory && isProtectedSurface(normalized)) {
