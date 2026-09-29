@@ -54,6 +54,13 @@ test('stub uses explicit acceptance checks and allowed paths, or a broad local d
   assert.throws(() => planStub(' '), /Ask must be nonempty/);
 });
 
+test('planner accepts CRLF Ask templates while rejecting lone control characters', () => {
+  const plan = planStub('Update README.md.\r\n\r\n## Acceptance checks\r\n- node --test exits 0\r\n');
+  assert.match(plan.task, /## Ask\nUpdate README\.md\.\n\n## Acceptance checks/);
+  assert.doesNotMatch(plan.task, /\r/);
+  assert.throws(() => planStub('Invalid\rlone return'), /Ask must be nonempty UTF-8/);
+});
+
 test('LLM planner validates JSON before generating a recipe and never exposes the key in failures', async () => {
   let calls = 0;
   const fetchImpl = async (url, options) => {

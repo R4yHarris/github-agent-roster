@@ -8,6 +8,7 @@ import { formatRecommendation, recommend, repositoryRoot, TASK_CLASSES } from '.
 import { submitAsk } from './lib/ask.mjs';
 import { runBuiltinIssue } from './lib/builtin.mjs';
 import { loadConfig } from './lib/config.mjs';
+import { runDemo } from './lib/demo.mjs';
 import { checkDoctor, formatDoctor } from './lib/doctor.mjs';
 import { formatInit, initializeRoster } from './lib/init.mjs';
 import { formatMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
@@ -24,6 +25,7 @@ const help = `Usage:
   roster init
   roster ask "..."
   roster run --issue N
+  roster run --ask-file PATH --runtime builtin
   roster run --issue N --runtime builtin [--seats planner,coder] [--auto-model] [--publish]
   roster run --issue N --runtime builtin --seats planner,coder
   roster status [--issue N] [--offline]
@@ -103,6 +105,21 @@ async function main(args) {
     process.stdout.write(formatInit(await initializeRoster()));
   } else if (args.length === 3 && args[0] === 'run' && args[1] === '--issue') {
     await runIssue(args[2]);
+  } else if (args[0] === 'run' && args.includes('--ask-file')) {
+    const flags = args.slice(1);
+    if (flags.length !== 4 ||
+        !['--ask-file', '--runtime'].includes(flags[0]) ||
+        !['--ask-file', '--runtime'].includes(flags[2]) ||
+        flags[0] === flags[2]) {
+      throw new TypeError('Use roster run --ask-file PATH --runtime builtin');
+    }
+    const options = { [flags[0]]: flags[1], [flags[2]]: flags[3] };
+    if (!options['--ask-file'] || options['--runtime'] !== 'builtin') {
+      throw new TypeError('Use roster run --ask-file PATH --runtime builtin');
+    }
+    const demo = await runDemo({ askFile: options['--ask-file'], repoRoot: rosterRoot });
+    process.stdout.write(`Worktree: ${demo.worktreePath}\nRECIPE: ${demo.recipePath}\n` +
+      `TASK: ${demo.taskPath}\nRESULT: ${demo.resultPath}\nMode: ${demo.mode}\n`);
   } else if (args[0] === 'run' && args.includes('--runtime')) {
     const options = runOptions(args.slice(1));
     await runBuiltinIssue(options.issue, { publish: options.publish, seats: options.seats,
