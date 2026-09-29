@@ -24,6 +24,7 @@ test("help lists every prompt's command", () => {
   const result = run(["--help"]);
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^  roster\s+Open the interactive shell in a TTY$/m);
   assert.match(result.stdout, /roster\s+run\s+--issue/);
   assert.match(result.stdout, /roster\s+doctor/);
   assert.match(result.stdout, /roster\s+init/);
@@ -39,6 +40,11 @@ test("help lists every prompt's command", () => {
   assert.match(result.stdout, /--runtime builtin \[--seats planner,coder\]/);
   assert.match(result.stdout, /--auto-model/);
   assert.match(result.stdout, /^  roster run --issue N --runtime builtin --seats planner,coder$/m);
+});
+
+test("the package exposes the roster bin", () => {
+  const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  assert.deepEqual(packageJson.bin, { roster: "src/cli.mjs" });
 });
 
 test("doctor checks prerequisites without network calls or leaking App env values", () => {
