@@ -32,6 +32,9 @@ is created.
    finishes, `node --test` must pass and the plan artifacts must still
    match before optional publication. With no endpoint, the coder writes
    only a stub `RESULT.md`: it does not edit app code or run tests.
+   `write_file` rejects the root recipe and task even if a model requests
+   them. The runner rechecks both files after the coder's final tests and
+   refuses publication if either changed.
 4. The command prints one AI-Run line per seat, using its session and only
    its own known usage. Stub lines say `builtin-stub`, without invented LLM
    counts. When `.roster/runs` exists in the issue repository, the two
