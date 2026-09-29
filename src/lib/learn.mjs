@@ -11,7 +11,7 @@ export const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 export const IDENTIFIER = /^(?!-$)[A-Za-z0-9._-]{1,64}$/;
 const RUN_FIELDS = [
   'sha', 'session', 'task', 'task_class', 'model', 'effort',
-  'context_used', 'context_max', 'context_out',
+  'context_used', 'context_max', 'context_out', 'excellence',
 ];
 
 export function isObject(value) {
@@ -83,6 +83,10 @@ function validateLocalRun(record, source) {
         !(typeof value === 'string' && /^\d+$/.test(value))) {
       throw new Error(`${source}: ${field} must be a nonnegative integer or decimal string`);
     }
+  }
+  if (record.excellence != null && !['pass', 'fail'].includes(record.excellence) &&
+      (!isObject(record.excellence) || typeof record.excellence.pass !== 'boolean')) {
+    throw new Error(`${source}: excellence must be pass, fail, or a report with boolean pass`);
   }
 }
 
@@ -223,6 +227,15 @@ function knownFields(record) {
     value != null && !(key === 'model' && value === 'unknown')));
 }
 
+export function excellenceFailed(record) {
+  return record.excellence === 'fail' || record.excellence?.pass === false;
+}
+
+function matchesEvaluation(record, evaluation) {
+  if (record.sha && evaluation.sha) return record.sha.toLowerCase() === evaluation.sha.toLowerCase();
+  return Boolean(record.session && record.session === evaluation.session);
+}
+
 export function joinLearning(exported, local, evaluations, includeUnpublished = true) {
   const records = exported.map((record) => ({ record: { ...record }, git: record }));
   for (const run of local) {
@@ -233,7 +246,10 @@ export function joinLearning(exported, local, evaluations, includeUnpublished = 
     });
     if (matches.length) {
       for (const entry of matches) {
+        const failure = excellenceFailed(run) ? run.excellence
+          : excellenceFailed(entry.record) ? entry.record.excellence : undefined;
         entry.record = { ...entry.record, ...knownFields(run), ...knownFields(entry.git ?? {}) };
+        if (failure !== undefined) entry.record.excellence = failure;
       }
     } else if (includeUnpublished) {
       records.push({ record: { ...run } });
@@ -244,46 +260,130 @@ export function joinLearning(exported, local, evaluations, includeUnpublished = 
   for (const evaluation of evaluations) {
     if (evaluation.sha) bySha.set(evaluation.sha.toLowerCase(), evaluation);
     if (evaluation.session) bySession.set(evaluation.session, evaluation);
+    const metadata = knownFields(Object.fromEntries(RUN_FIELDS
+      .filter((field) => Object.hasOwn(evaluation, field))
+      .map((field) => [field, evaluation[field]])));
+    const matches = records.filter(({ record }) => matchesEvaluation(record, evaluation));
+    for (const entry of matches) {
+      const failure = [metadata, entry.record].find(excellenceFailed)?.excellence;
+      entry.record = entry.evaluationOnly ? { ...entry.record, ...metadata }
+        : { ...entry.record, ...metadata, ...knownFields(entry.record) };
+      if (failure !== undefined) entry.record.excellence = failure;
+    }
+    if (!matches.length && includeUnpublished && metadata.model && metadata.task_class) {
+      records.push({ record: metadata, evaluationOnly: true });
+    }
   }
-  return records.map(({ record }) => ({
-    ...record,
-    evaluation: bySha.get(record.sha?.toLowerCase()) ?? bySession.get(record.session) ?? null,
-  }));
+  return records.map(({ record }) => {
+    const sessionEvaluation = bySession.get(record.session);
+    return {
+      ...record,
+      evaluation: bySha.get(record.sha?.toLowerCase()) ??
+        (sessionEvaluation && matchesEvaluation(record, sessionEvaluation) ? sessionEvaluation : null),
+    };
+  });
 }
 
-export function recommend(records, taskClass) {
+export function median(values) {
+  if (!Array.isArray(values) || values.some((value) => !Number.isFinite(value))) {
+    throw new TypeError('Median requires finite numeric samples');
+  }
+  if (!values.length) return null;
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle]
+    : sorted[middle - 1] + (sorted[middle] - sorted[middle - 1]) / 2;
+}
+
+export function summarizeLearning(records) {
+  if (!Array.isArray(records)) throw new TypeError('Expected an array of joined metrics records.');
+  const groups = new Map();
+  for (const record of records) {
+    const model = record.model ?? null;
+    const taskClass = record.task_class ?? inferTaskClass(record.task) ?? null;
+    const effort = record.effort ?? null;
+    const key = JSON.stringify([model, taskClass, effort]);
+    if (!groups.has(key)) {
+      groups.set(key, { model, task_class: taskClass, effort, runs: 0, evaluated: 0, samples: new Map() });
+    }
+    const group = groups.get(key);
+    group.runs += 1;
+    const evaluation = record.evaluation;
+    if (evaluation != null) group.evaluated += 1;
+    const failed = excellenceFailed(record);
+    const verdict = failed ? 'reject' : evaluation?.verdict;
+    if (!VERDICTS.includes(verdict)) continue;
+    const target = evaluation ?? record;
+    const id = target.sha ? `sha:${target.sha.toLowerCase()}` : target.session && `session:${target.session}`;
+    if (!id) throw new TypeError('An evaluated result needs a SHA or session');
+    const prior = group.samples.get(id);
+    group.samples.set(id, {
+      verdict: failed || prior?.failed ? 'reject' : verdict,
+      failed: failed || prior?.failed || false,
+      minutes: Number.isSafeInteger(evaluation?.minutes) && evaluation.minutes >= 0 ? evaluation.minutes : null,
+      difficulty: Number.isInteger(evaluation?.difficulty) &&
+        evaluation.difficulty >= 1 && evaluation.difficulty <= 5 ? evaluation.difficulty : null,
+    });
+  }
+  return [...groups.values()].map(({ samples, ...group }) => {
+    const values = [...samples.values()];
+    const accepted = values.filter(({ verdict }) => verdict === 'accept');
+    const acceptedMinutes = median(accepted.map(({ minutes }) => minutes).filter((value) => value !== null));
+    return {
+      ...group, n: values.length, accepted: accepted.length,
+      acceptRate: values.length ? accepted.length / values.length : null,
+      medianMinutes: median(values.map(({ minutes }) => minutes).filter((value) => value !== null)),
+      medianDifficulty: median(values.map(({ difficulty }) => difficulty).filter((value) => value !== null)),
+      estimate_min: acceptedMinutes === null ? null : Math.round(acceptedMinutes),
+    };
+  }).sort((left, right) => (left.model ?? '').localeCompare(right.model ?? '') ||
+    (left.task_class ?? '').localeCompare(right.task_class ?? '') ||
+    [...EFFORTS, null].indexOf(left.effort) - [...EFFORTS, null].indexOf(right.effort));
+}
+
+export function recommend(records, taskClass, difficulty = null) {
   if (!TASK_CLASSES.includes(taskClass)) {
     throw new TypeError('task class must be feat, fix, docs, or test');
   }
-  const groups = new Map();
-  for (const record of records) {
-    if ((record.task_class ?? inferTaskClass(record.task)) !== taskClass ||
-        !record.model || ['unknown', 'builtin-stub'].includes(record.model) ||
-        !VERDICTS.includes(record.evaluation?.verdict)) {
-      continue;
-    }
-    const effort = record.effort ?? null;
-    const key = JSON.stringify([record.model, effort]);
-    if (!groups.has(key)) {
-      groups.set(key, { model: record.model, effort, samples: new Map() });
-    }
-    const evaluation = record.evaluation;
-    const id = evaluation.sha ? `sha:${evaluation.sha.toLowerCase()}` : `session:${evaluation.session}`;
-    groups.get(key).samples.set(id, evaluation.verdict);
+  if (difficulty !== null && (!Number.isInteger(difficulty) || difficulty < 1 || difficulty > 5)) {
+    throw new TypeError('difficulty must be an integer from 1 to 5');
   }
-  const eligible = [...groups.values()].filter(({ samples }) => samples.size >= 3)
-    .map(({ model, effort, samples }) => {
-      const accepted = [...samples.values()].filter((verdict) => verdict === 'accept').length;
-      return { model, effort, n: samples.size, accepted, acceptRate: accepted / samples.size };
-    });
+  const eligible = summarizeLearning(records).filter((group) =>
+    group.task_class === taskClass && group.model && !['unknown', 'builtin-stub'].includes(group.model) &&
+    group.n >= 3 && (difficulty === null || (group.medianDifficulty !== null && group.medianDifficulty >= difficulty)))
+    .map(({ model, effort, n, accepted, acceptRate, medianMinutes, medianDifficulty, estimate_min }) => ({
+      model, effort, n, accepted, acceptRate, medianMinutes, medianDifficulty, estimate_min,
+    }));
   eligible.sort((left, right) => right.acceptRate - left.acceptRate || right.n - left.n ||
     left.model.localeCompare(right.model) ||
     [...EFFORTS, null].indexOf(left.effort) - [...EFFORTS, null].indexOf(right.effort));
   return eligible[0] ?? null;
 }
 
-export function formatRecommendation(recommendation, taskClass) {
-  if (!recommendation) return 'insufficient data\n';
-  const { model, effort, acceptRate, n } = recommendation;
-  return `${taskClass}: ${model} effort=${effort ?? '-'} accept-rate=${(acceptRate * 100).toFixed(1)}% n=${n}\n`;
+export function parseRecommendationArgs(args) {
+  const usage = 'Use recommend --task-class feat|fix|docs|test [--difficulty 1-5].';
+  if (!Array.isArray(args) || args.some((value) => typeof value !== 'string')) throw new TypeError(usage);
+  const values = new Map();
+  for (let index = 0; index < args.length; index += 2) {
+    const flag = args[index];
+    if (!['--task-class', '--difficulty'].includes(flag) || args[index + 1] === undefined || values.has(flag)) {
+      throw new TypeError(usage);
+    }
+    values.set(flag, args[index + 1]);
+  }
+  const taskClass = values.get('--task-class');
+  const difficulty = values.has('--difficulty') ? values.get('--difficulty') : null;
+  if (!TASK_CLASSES.includes(taskClass) || (difficulty !== null && !/^[1-5]$/.test(difficulty))) {
+    throw new TypeError(usage);
+  }
+  return { taskClass, difficulty: difficulty === null ? null : Number(difficulty) };
+}
+
+export function formatRecommendation(recommendation, taskClass, config, env = process.env) {
+  if (!recommendation) {
+    return `insufficient data; config default: ${config?.llm?.model || env.ROSTER_MODEL || '(unset)'} effort=${config?.llm?.effort ?? '-'}\n`;
+  }
+  const { model, effort, acceptRate, n, medianMinutes, medianDifficulty } = recommendation;
+  return `${taskClass}: ${model} effort=${effort ?? '-'} accept-rate=${(acceptRate * 100).toFixed(1)}% n=${n}` +
+    ` median-min=${medianMinutes ?? '-'} median-difficulty=${medianDifficulty ?? '-'}\n`;
 }

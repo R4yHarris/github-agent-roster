@@ -9,7 +9,7 @@ import {
 } from './lib/issue-board.mjs';
 import { loadConfig, setConfigValue } from './lib/config.mjs';
 import { parseEvaluationArgs, recordEvaluation } from './lib/eval.mjs';
-import { formatRecommendation, recommend, repositoryRoot, TASK_CLASSES } from './lib/learn.mjs';
+import { formatRecommendation, parseRecommendationArgs, recommend, repositoryRoot } from './lib/learn.mjs';
 import { formatMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
 import { resolveContractsPath } from './lib/paths.mjs';
 import { formatStatus, readStatus } from './lib/status.mjs';
@@ -26,7 +26,7 @@ const help = `Commands:
   /eval TARGET VERDICT 1-5 y|n [--minutes N] [--comment "TEXT"]
   /publish [SUBJECT]        Publish reviewed changes (conventional subject)
   /stats [REF]              Show AI-Run metrics
-  /recommend feat|fix|docs|test
+  /recommend feat|fix|docs|test [--difficulty 1-5]
   /vault [list]             List secret names
   /vault get NAME           Check whether a secret is stored, without revealing it
   /vault set NAME           Enter a secret with input hidden
@@ -260,8 +260,8 @@ export function createDispatcher({
         return true;
       }
       case 'recommend': {
-        if (!TASK_CLASSES.includes(args)) throw new TypeError('Use /recommend feat|fix|docs|test.');
-        output.write(api.formatRecommendation(api.recommend(metrics(), args), args));
+        const { taskClass, difficulty } = parseRecommendationArgs(['--task-class', ...args.split(/\s+/)]);
+        output.write(api.formatRecommendation(api.recommend(metrics(), taskClass, difficulty), taskClass, state.config, env));
         return true;
       }
       case 'vault': {

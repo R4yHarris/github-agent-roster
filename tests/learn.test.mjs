@@ -9,7 +9,8 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { runIssue } from '../src/lib/issue.mjs';
 import {
-  formatRecommendation, inferTaskClass, loadLearning, recommend, recordRun,
+  formatRecommendation, inferTaskClass, joinLearning, loadLearning, median,
+  parseRecommendationArgs, recommend, recordRun, summarizeLearning,
 } from '../src/lib/learn.mjs';
 import { formatMetrics, loadMetrics, summarizeMetrics } from '../src/lib/metrics.mjs';
 import { resolveContractsPath } from '../src/lib/paths.mjs';
@@ -35,6 +36,14 @@ function metrics(cwd, options = {}) {
   return loadMetrics({ cwd, contractsPath, run: () => exported, ...options });
 }
 
+function capacitySamples(model, observations) {
+  return observations.map((evaluation, index) => {
+    const session = `${model}-${index}`;
+    return { model, effort: 'h', task_class: 'fix', session,
+      evaluation: { session, verdict: 'accept', difficulty: 4, again: true, ...evaluation } };
+  });
+}
+
 test('joins Git, local runs, and latest human evals without duplicating recorded runs', (t) => {
   const cwd = fixture(t);
   writeFileSync(join(cwd, '.roster', 'runs', 'duplicate.jsonl'), runs);
@@ -51,9 +60,10 @@ test('joins Git, local runs, and latest human evals without duplicating recorded
   assert.equal(records.find((record) => record.session === 'unknown-model').model, undefined);
   const table = formatMetrics(summarizeMetrics(records));
   assert.match(table, /MODEL\s+EFFORT\s+RUNS\s+EVALS/);
-  assert.match(table, /careful-model\s+h\s+6\s+5/);
+  assert.match(table, /careful-model\s+h\s+5\s+4\s+feat\s+3/);
+  assert.match(table, /careful-model\s+h\s+1\s+1\s+fix\s+1/);
   assert.match(table, /writer\s+-\s+1\s+0/);
-  assert.match(table, /^-\s+-\s+1\s+0$/m);
+  assert.match(table, /^-\s+-\s+1\s+0\s+-\s+0/m);
 });
 
 test('keeps --ref restricted to exported history and lets --evals override matching SHA evals', (t) => {
@@ -80,15 +90,17 @@ test('chooses the highest accept-rate with n >= 3, excluding unevaluated and dup
   const result = recommend(metrics(fixture(t)), 'feat');
   assert.deepEqual(result, {
     model: 'careful-model', effort: 'h', n: 3, accepted: 2, acceptRate: 2 / 3,
+    medianMinutes: null, medianDifficulty: 3, estimate_min: null,
   });
   assert.equal(formatRecommendation(result, 'feat'),
-    'feat: careful-model effort=h accept-rate=66.7% n=3\n');
+    'feat: careful-model effort=h accept-rate=66.7% n=3 median-min=- median-difficulty=3\n');
 });
 
 test('requires three evaluations of the same task class and model/effort pair', (t) => {
   const records = metrics(fixture(t));
   for (const taskClass of ['fix', 'docs', 'test']) {
-    assert.equal(formatRecommendation(recommend(records, taskClass), taskClass), 'insufficient data\n');
+    assert.equal(formatRecommendation(recommend(records, taskClass), taskClass),
+      'insufficient data; config default: (unset) effort=-\n');
   }
   const samples = records.filter((record) => ['feat-one', 'feat-two'].includes(record.session));
   assert.equal(recommend(samples, 'feat'), null);
@@ -110,6 +122,95 @@ test('uses deterministic ties, with larger evaluated samples ahead of model name
   assert.equal(recommend([...samples('z', 3), ...samples('a', 3)], 'test').model, 'a');
   assert.equal(recommend(samples('unknown', 3), 'test'), null);
   assert.equal(recommend(samples('builtin-stub', 3), 'test'), null);
+});
+
+test('capacity requires three distinct samples and the requested median difficulty before ranking acceptance', () => {
+  const capable = capacitySamples('capable', [{ minutes: 30 }, { minutes: 10 }, { minutes: 20, difficulty: 5 }]);
+  const easy = capacitySamples('easy', Array(3).fill({ minutes: 1, difficulty: 2 }));
+  const harder = capacitySamples('harder', [
+    { minutes: 5, difficulty: 5, verdict: 'reject' }, { minutes: 7, difficulty: 5 }, { minutes: 9, difficulty: 5 },
+  ]);
+  assert.equal(recommend(capable.slice(0, 2), 'fix', 4), null);
+  assert.equal(recommend([capable[0], capable[1], capable[0]], 'fix', 4), null);
+  assert.deepEqual(recommend([...easy, ...capable, ...harder], 'fix', 4), {
+    model: 'capable', effort: 'h', n: 3, accepted: 3, acceptRate: 1,
+    medianMinutes: 20, medianDifficulty: 4, estimate_min: 20,
+  });
+  const hard = recommend([...capable, ...harder], 'fix', 5);
+  assert.equal(hard.model, 'harder');
+  assert.equal(hard.estimate_min, 8);
+  assert.equal(recommend(capable, 'fix', 5), null);
+  for (const difficulty of [0, 6, 1.5, '4']) {
+    assert.throws(() => recommend(capable, 'fix', difficulty), /difficulty must be/);
+  }
+  assert.deepEqual(parseRecommendationArgs(['--difficulty', '4', '--task-class', 'fix']),
+    { taskClass: 'fix', difficulty: 4 });
+  assert.equal(median([1, 2, 3, 4]), 2.5);
+  assert.equal(median([]), null);
+  assert.throws(() => median([1, NaN]), /finite numeric/);
+  assert.equal(formatRecommendation(null, 'fix', { llm: { model: '', effort: 'h' } },
+    { ROSTER_MODEL: 'environment-model' }),
+  'insufficient data; config default: environment-model effort=h\n');
+});
+
+test('recorded excellence failures count as rejects without rewriting human evaluations', () => {
+  const unsafe = capacitySamples('unsafe', Array(3).fill({ minutes: 10 }));
+  unsafe[0].excellence = { pass: false, reasons: ['secret in diff'] };
+  const clean = capacitySamples('clean', Array(3).fill({ minutes: 20 }));
+  const group = summarizeLearning(unsafe)[0];
+  assert.equal(group.n, 3);
+  assert.equal(group.accepted, 2);
+  assert.equal(group.acceptRate, 2 / 3);
+  assert.equal(unsafe[0].evaluation.verdict, 'accept');
+  assert.equal(recommend([...unsafe, ...clean], 'fix', 4).model, 'clean');
+  const automated = summarizeLearning([
+    { model: 'flagged', task_class: 'fix', session: 'failed', excellence: 'fail' },
+    { model: 'flagged', task_class: 'fix', session: 'passed', excellence: 'pass' },
+  ])[0];
+  assert.equal(automated.n, 1);
+  assert.equal(automated.accepted, 0);
+  assert.equal(automated.medianDifficulty, null);
+  assert.equal(automated.medianMinutes, null);
+});
+
+test('self-contained evals work without run exports and corrections never add samples', (t) => {
+  const cwd = fixture(t, { learning: false });
+  mkdirSync(join(cwd, '.roster'));
+  const evidence = capacitySamples('from-evals', [{ minutes: 10 }, { minutes: 20 }, { minutes: 30 }])
+    .map(({ model, effort, task_class, evaluation }) => ({ ...evaluation, model, effort, task_class }));
+  const file = join(cwd, '.roster', 'evals.jsonl');
+  writeFileSync(file, evidence.map((record) => JSON.stringify(record)).join('\n') + '\n');
+  const records = metrics(cwd, { run: () => '' });
+  assert.equal(records.length, 3);
+  assert.equal(recommend(records, 'fix', 4).medianMinutes, 20);
+  assert.equal(recommend(records, 'fix', 4).estimate_min, 20);
+  assert.deepEqual(metrics(cwd, { run: () => '', ref: 'HEAD' }), []);
+  writeFileSync(file, readFileSync(file, 'utf8') + JSON.stringify({ ...evidence[2], verdict: 'rework' }) + '\n');
+  const corrected = recommend(metrics(cwd, { run: () => '' }), 'fix', 4);
+  assert.equal(corrected.n, 3);
+  assert.equal(corrected.accepted, 2);
+  assert.equal(corrected.estimate_min, 15);
+});
+
+test('SHA-linked evaluations do not credit other commits and recorded failures survive duplicate run reports', async (t) => {
+  const runs = ['a', 'b'].map((letter) => ({
+    sha: letter.repeat(40), session: 'shared-session', model: 'known', task_class: 'fix',
+  }));
+  const evaluation = { sha: runs[0].sha, session: 'shared-session',
+    verdict: 'accept', difficulty: 4, again: true };
+  const joined = joinLearning(runs, [], [evaluation]);
+  assert.equal(joined[0].evaluation, evaluation);
+  assert.equal(joined[1].evaluation, null);
+  const duplicate = joinLearning([], [
+    { ...runs[0], excellence: 'fail' }, { ...runs[0], excellence: 'pass' },
+  ], [evaluation]);
+  assert.equal(summarizeLearning(duplicate)[0].accepted, 0);
+  const cwd = fixture(t);
+  await recordRun({ session: 'recorded-fail', model: 'known', task_class: 'fix',
+    excellence: { pass: false, reasons: ['policy edit'] } }, { cwd, env: {} });
+  assert.equal(loadLearning({ cwd }).runs.find(({ session }) => session === 'recorded-fail').excellence.pass, false);
+  await assert.rejects(recordRun({ session: 'invalid', excellence: { pass: 'false' } }, { cwd, env: {} }),
+    /excellence must be/);
 });
 
 test('recognizes only explicit classes and conventional task/title prefixes', () => {
@@ -264,6 +365,9 @@ test('CLI stats and recommend use the repository root, retain flags, and report 
   execFileSync('git', ['init', '--quiet'], { cwd, stdio: 'pipe' });
   const roster = join(cwd, 'roster');
   cpSync(source, join(roster, 'src'), { recursive: true });
+  writeFileSync(join(roster, 'roster.config.example.yml'),
+    readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8')
+      .replace('model: ""', 'model: fallback-model'));
   const scripts = join(roster, 'vendor', 'github-agent-contracts', 'scripts');
   mkdirSync(scripts, { recursive: true });
   writeFileSync(join(scripts, 'agent-pr.mjs'), 'export {};\n');
@@ -284,14 +388,18 @@ process.stdout.write(${JSON.stringify(exported)});
   };
   const stats = invoke(['stats', '--ref', 'main..HEAD', '--evals', 'extra.jsonl']);
   assert.equal(stats.status, 0, stats.stderr);
-  assert.match(stats.stdout, /careful-model\s+h\s+6\s+5/);
+  assert.match(stats.stdout, /careful-model\s+h\s+5\s+4\s+feat\s+3/);
   assert.doesNotMatch(stats.stdout, /writer/);
   const suggestion = invoke(['recommend', '--task-class', 'feat']);
   assert.equal(suggestion.status, 0, suggestion.stderr);
-  assert.equal(suggestion.stdout, 'feat: careful-model effort=h accept-rate=66.7% n=3\n');
+  assert.equal(suggestion.stdout, 'feat: careful-model effort=h accept-rate=66.7% n=3 median-min=- median-difficulty=3\n');
   const insufficient = invoke(['recommend', '--task-class', 'docs']);
   assert.equal(insufficient.status, 0, insufficient.stderr);
-  assert.equal(insufficient.stdout, 'insufficient data\n');
+  const fallback = 'insufficient data; config default: fallback-model effort=m\n';
+  assert.equal(insufficient.stdout, fallback);
+  const tooHard = invoke(['recommend', '--task-class', 'feat', '--difficulty', '4']);
+  assert.equal(tooHard.status, 0, tooHard.stderr);
+  assert.equal(tooHard.stdout, fallback);
 
   const evalsFile = join(cwd, '.roster', 'evals.jsonl');
   const originalEvals = readFileSync(evalsFile, 'utf8');
@@ -303,17 +411,29 @@ process.stdout.write(${JSON.stringify(exported)});
   writeFileSync(evalsFile, `${twoEvals.map((evaluation) => JSON.stringify(evaluation)).join('\n')}\n`);
   const belowThreshold = invoke(['recommend', '--task-class', 'feat']);
   assert.equal(belowThreshold.status, 0, belowThreshold.stderr);
-  assert.equal(belowThreshold.stdout, 'insufficient data\n');
+  assert.equal(belowThreshold.stdout, fallback);
   writeFileSync(evalsFile, `${twoEvals.map((evaluation) => JSON.stringify(evaluation)).join('\n')}\n` +
     '{"sha":"3333333333333333333333333333333333333333","verdict":"accept","difficulty":3,"again":true}\n');
   const atThreshold = invoke(['recommend', '--task-class', 'feat']);
   assert.equal(atThreshold.status, 0, atThreshold.stderr);
-  assert.equal(atThreshold.stdout, 'feat: careful-model effort=h accept-rate=100.0% n=3\n');
+  assert.equal(atThreshold.stdout, 'feat: careful-model effort=h accept-rate=100.0% n=3 median-min=- median-difficulty=3\n');
+  const timed = capacitySamples('cli-capacity', [{ minutes: 10 }, { minutes: 20 }, { minutes: 30 }])
+    .map(({ model, effort, task_class, evaluation }) => ({ ...evaluation, model, effort, task_class }));
+  writeFileSync(evalsFile, timed.map((record) => JSON.stringify(record)).join('\n') + '\n');
+  const capacityTable = invoke(['stats']);
+  assert.equal(capacityTable.status, 0, capacityTable.stderr);
+  assert.match(capacityTable.stdout, /cli-capacity\s+h\s+3\s+3\s+fix\s+3\s+100\.0%\s+20\s+4/);
+  const capacity = invoke(['recommend', '--task-class', 'fix', '--difficulty', '4']);
+  assert.equal(capacity.status, 0, capacity.stderr);
+  assert.equal(capacity.stdout, 'fix: cli-capacity effort=h accept-rate=100.0% n=3 median-min=20 median-difficulty=4\n');
   writeFileSync(evalsFile, originalEvals);
 
   for (const args of [
     ['recommend'], ['recommend', '--task-class', 'chore'],
     ['recommend', '--task-class', 'feat', '--extra'],
+    ['recommend', '--task-class', 'feat', '--difficulty', '0'],
+    ['recommend', '--task-class', 'feat', '--difficulty', '6'],
+    ['recommend', '--task-class', 'feat', '--difficulty'],
     ['stats', '--ref'], ['stats', '--evals'], ['stats', '--ref', 'HEAD', '--ref', 'HEAD'],
   ]) {
     assert.notEqual(invoke(args).status, 0);

@@ -156,6 +156,22 @@ test('/eval passes quoted feedback and actual minutes to the human-only writer',
   await shell.dispatch('/eval roster-42-coder rework 4 n --minutes 25 --comment "Keep the  regression test."');
 });
 
+test('/recommend forwards requested capacity and displays the actual config default on insufficient data', async () => {
+  const shell = dispatcher({
+    config: { ...config, llm: { ...config.llm, model: 'fallback-model', effort: 'h' } },
+    services: {
+      resolveContractsPath: () => 'contracts', loadMetrics: () => [],
+      recommend: (_records, taskClass, difficulty) => {
+        assert.equal(taskClass, 'fix');
+        assert.equal(difficulty, 4);
+        return null;
+      },
+    },
+  });
+  await shell.dispatch('/recommend fix --difficulty 4');
+  assert.equal(shell.output.text, 'insufficient data; config default: fallback-model effort=h\n');
+});
+
 test('/model clear and /run --auto-model opt into routing without persisting a selection', async () => {
   const calls = [];
   const shell = dispatcher({

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import {
-  EFFORTS, failureDetail, isObject, joinLearning, loadLearning, parseJsonl, validateSha,
+  EFFORTS, failureDetail, isObject, joinLearning, loadLearning, parseJsonl, summarizeLearning, validateSha,
 } from "./learn.mjs";
 import { resolveContractsPath } from "./paths.mjs";
 
@@ -83,32 +83,18 @@ export function loadMetrics({
 }
 
 export function summarizeMetrics(records) {
-  if (!Array.isArray(records)) throw new TypeError("Expected an array of joined metrics records.");
-  const groups = new Map();
-  for (const record of records) {
-    const model = record.model ?? null;
-    const effort = record.effort ?? null;
-    const key = JSON.stringify([model, effort]);
-    let group = groups.get(key);
-    if (!group) {
-      group = { model, effort, runs: 0, evaluated: 0 };
-      groups.set(key, group);
-    }
-    group.runs += 1;
-    if (record.evaluation != null) group.evaluated += 1;
-  }
-  return [...groups.values()].sort((left, right) =>
-    (left.model ?? "").localeCompare(right.model ?? "") ||
-    [ ...EFFORTS, null ].indexOf(left.effort) - [ ...EFFORTS, null ].indexOf(right.effort));
+  return summarizeLearning(records);
 }
 
 export function formatMetrics(groups) {
   if (!Array.isArray(groups)) throw new TypeError("Expected an array of metrics groups.");
   if (groups.length === 0) return "No AI-Run records found.\n";
   const rows = [
-    ["MODEL", "EFFORT", "RUNS", "EVALS"],
-    ...groups.map(({ model, effort, runs, evaluated }) =>
-      [model ?? "-", effort ?? "-", String(runs), String(evaluated)]),
+    ["MODEL", "EFFORT", "RUNS", "EVALS", "TASK_CLASS", "N", "ACCEPT", "MEDIAN_MIN", "MEDIAN_DIFFICULTY"],
+    ...groups.map(({ model, effort, runs, evaluated, task_class, n, acceptRate, medianMinutes, medianDifficulty }) =>
+      [model ?? "-", effort ?? "-", String(runs), String(evaluated), task_class ?? "-", String(n),
+        acceptRate === null ? "-" : `${(acceptRate * 100).toFixed(1)}%`,
+        String(medianMinutes ?? "-"), String(medianDifficulty ?? "-")]),
   ];
   const widths = rows[0].map((_, index) =>
     rows.reduce((width, row) => Math.max(width, row[index].length), 0));
