@@ -53,8 +53,9 @@ server to an untrusted network.
 
 An absent, empty or whitespace-only `base_url` makes `createChat` return
 `null`, without accessing the vault or network. Keep the caller's existing
-stub in that case. The prepare-only [`runIssue`](../src/lib/issue.mjs) path has
-no LLM call or config loader. The existing builtin coder loop calls this
+stub in that case. `roster prepare` uses
+[`runIssue`](../src/lib/issue.mjs) without an LLM call or config loader.
+The existing builtin coder loop calls this
 factory; it does not add a separate runner, planner, or task queue.
 
 The builtin [planner](../src/planner/stub.mjs) and

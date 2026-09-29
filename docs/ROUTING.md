@@ -27,7 +27,7 @@ configured endpoint is an explicit error on a normal run.
 `--auto-model` is the **only** opt-in path that can fill an empty model:
 
 ```sh
-roster run --issue N --runtime builtin --auto-model
+roster run --issue N --auto-model
 ```
 
 The shell equivalent is `/run N --auto-model`. The issue title supplies a

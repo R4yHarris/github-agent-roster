@@ -5,6 +5,21 @@ The roster is the planner and executor. The required
 the GitHub publish SDK; no external coding harness, Kanban DB, or runtime npm
 dependency is needed. Use Node 20+ ESM.
 
+## Agile mapping
+
+An **epic** is the GitHub issue containing the Ask, a **story** is the
+generated `TASK.md` with acceptance checks and allowed paths, and a **seat**
+is its assigned owner. One issue produces one task in this sequential loop:
+
+```text
+Issue or shell /ask -> RECIPE.yml -> TASK.md -> planner then coder -> PR -> human AI-Eval
+```
+
+The planner writes only the recipe and task; the coder implements that task
+without rewriting the plan. A reviewer seat is documented as a future role,
+not executed in v0; the human reviews the PR. GitHub Issues and PRs are the
+board and forge, not a separate Kanban database.
+
 ## Configuration
 
 Copy [`roster.config.example.yml`](../roster.config.example.yml) to
@@ -59,7 +74,7 @@ The generated recipe has builtin `planner` then `coder` seats with principal
 capabilities.
 
 ```sh
-node src/cli.mjs ask "Add a Status section to README.md"
+roster ask "Add a Status section to README.md"
 ```
 
 When `gh` is installed, this creates an issue in the current GitHub origin
@@ -89,8 +104,8 @@ must be reported, not treated as success.
 ## Execute and publish
 
 ```sh
-node src/cli.mjs run --issue 42 --runtime builtin
-node src/cli.mjs run --issue 42 --runtime builtin --auto-model
+roster run --issue 42
+roster run --issue 42 --auto-model
 ```
 
 `--auto-model` is opt-in and requires an empty configured model. It uses
@@ -99,7 +114,7 @@ pair with at least three distinct samples. The selection is only in memory:
 it does not rewrite `.roster/config.yml`. Insufficient data, an unknown
 task class, or no configured endpoint leaves the run in stub mode.
 
-Use `node src/cli.mjs status --issue 42` to read the issue, its open
+Use `roster status --issue 42` to read the issue, its open
 `issue-42` branch PR, and the local worktree path. Add `--offline` to read
 only the cached assignment and filesystem; an unavailable PR is shown as
 unknown, not absent. See the [interactive shell](REPL.md) for `/status`.
@@ -158,10 +173,12 @@ For a human TTY, bare `roster` opens the [interactive shell](REPL.md).
 Its `/publish` command imports the App SDK in-process; agent/CI `--publish`
 invokes the same SDK with `--merge-when-green`.
 
-The earlier `roster run --issue N` remains a prepare-only compatibility
-command. See [the one-task loop](ONE_TASK_LOOP.md),
+`roster prepare --issue N` retains the manual handoff without running seats.
+Explicit `--runtime builtin` remains accepted on `roster run` for CI and
+agents. See [the one-task loop](ONE_TASK_LOOP.md),
 [same-session seats](MULTIAGENT.md), [recipes](SEATS.md), and
 [local metrics](METRICS.md).
+
 ## Manual planning and acceptance checks
 
 The v0 software loop is:
@@ -188,7 +205,7 @@ no merge or deploy rights.
 These expanded forms live in `templates/sdlc/manual/` so human handoff guidance
 does not replace the renderer placeholders or change generated task formats.
 They are not additional CLI inputs. The builtin path above generates its own
-recipe and task and loads these skills; the legacy prepare-only
+recipe and task and loads these skills; the explicit prepare-only
 [one-task loop](ONE_TASK_LOOP.md) creates an assignment and ignored `.env`
 without executing a coder. If a worktree is already assigned, stay there;
 do not run the loop again to create another one.
@@ -268,7 +285,7 @@ to the YAML. That context belongs in the Markdown handoff. The existing
 read-only validator can check the copied file from the repository root:
 
 ```sh
-node src/cli.mjs recipe validate RECIPE.yml
+roster recipe validate RECIPE.yml
 ```
 
 Use the assignment template for a manual handoff. A human can append its handoff

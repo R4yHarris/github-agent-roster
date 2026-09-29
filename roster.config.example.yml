@@ -29,6 +29,7 @@ seat:
   id: coder
   principal: coder      # contracts role; no merge, no deploy
   turn_budget: 8
+  context_chars: 8000    # context-pack budget without a tokenizer
   tools: [read_file, write_file, list_dir, run_test]
 paths:
   memory: .roster/memory/coder.jsonl

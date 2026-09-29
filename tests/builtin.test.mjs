@@ -102,11 +102,14 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
   assert.equal(readFileSync(result.taskPath, 'utf8'), result.planner.task);
   assert.equal(readFileSync(result.planner.estimatePath, 'utf8'), result.planner.estimate);
   assert.match(result.planner.estimate, /difficulty: 2\nestimate_min: 15/);
+  assert.equal(readFileSync(result.recipePath, 'utf8'), result.planner.recipe);
   assert.deepEqual(result.sessions, { planner: 'roster-42-planner', coder: 'roster-42-coder' });
   assert.equal(readFileSync(result.envPath, 'utf8'),
     'AI_TASK=issue-42\nAI_SESSION=roster-42-coder\n');
   assert.match(readFileSync(result.result.resultPath, 'utf8'), /Deterministic stub only/);
   assert.match(result.result.summary, /Add Status to README/);
+  assert.match(result.result.summary, /README has a Status section/);
+  assert.equal(readFileSync(path.join(options.target, 'README.md'), 'utf8'), '# Example\n');
   assert.equal(result.run, result.runs.coder);
   assert.equal(result.result.mode, 'stub');
   assert.ok(logs[0].includes('node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue 42\n\nCloses #42" --merge-when-green'));
@@ -218,7 +221,7 @@ test('task metadata selects the coder model and writes its historical estimate b
       const body = JSON.parse(request.body);
       assert.equal(body.model, requests === 1 ? 'local-model' : 'task-model');
       if (requests === 2) {
-        assert.match(body.messages[1].content,
+        assert.match(body.messages[0].content,
           /difficulty: 4\nestimate_min: 25\ntask_class: fix\nmodel: task-model\n/);
         assert.match(readFileSync(path.join(options.target, '.worktrees', 'issue-42', 'ESTIMATE.md'), 'utf8'),
           /Source: history/);
@@ -307,7 +310,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
       }) };
     }
     if (completion === 2) {
-      assert.match(body.messages[1].content, /TASK\.md:\n# Task: Add Status to README/);
+      assert.match(body.messages[0].content, /## TASK\.md\n\n# Task: Add Status to README/);
       assert.match(readFileSync(path.join(options.target, '.worktrees', 'issue-42', 'ESTIMATE.md'), 'utf8'),
         /model: local-model/);
       assert.deepEqual(body.tools.map(({ function: tool }) => tool.name),
@@ -437,7 +440,7 @@ test('default planner/coder run preserves the task handoff while the coder edits
       }) } }] }) };
     }
     if (completion === 2) {
-      assert.match(body.messages[1].content, /## Files allowed\n- `src\/app\.mjs`/);
+      assert.match(body.messages[0].content, /## Files allowed\n- `src\/app\.mjs`/);
       const write = (id, file, content) => ({
         id, type: 'function',
         function: { name: 'write_file', arguments: JSON.stringify({ path: file, content }) },
@@ -535,7 +538,7 @@ test('planner and coder read only their own last 20 memory lines and append sepa
     const body = JSON.parse(request.body);
     const expected = calls === 1 ? 'planner' : 'coder';
     const other = calls === 1 ? 'coder' : 'planner';
-    const context = body.messages[1].content;
+    const context = body.messages[calls === 1 ? 1 : 0].content;
     assert.match(context, new RegExp(`"seat":"${expected}","index":5`));
     assert.match(context, new RegExp(`"seat":"${expected}","index":24`));
     assert.doesNotMatch(context, new RegExp(`"seat":"${expected}","index":4`));

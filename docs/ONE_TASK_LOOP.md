@@ -1,7 +1,8 @@
 # One-task loop
 
-The builtin path is `roster run --issue N --runtime builtin`
-([SDLC](SDLC.md)). It reads the existing issue, creates one worktree, runs a
+The default builtin path is `roster run --issue N` ([SDLC](SDLC.md)).
+`--runtime builtin` remains accepted for agents and CI. A run reads the
+existing issue, creates one worktree, runs a
 builtin planner to write `RECIPE.yml` and `TASK.md`, then loads roster
 context/skills/memory into the bounded coder loop and writes `RESULT.md`.
 When no LLM endpoint
@@ -13,10 +14,10 @@ root; `--publish` alone opts into staging task-allowed
 changes and invoking the App SDK. Policy, workflows, and credentials are
 never staged by the coder seat.
 
-The earlier bare command remains prepare-only for compatibility:
+Manual handoff remains available explicitly:
 
 `runIssue(issueNumber)` in `src/lib/issue.mjs` implements
-`roster run --issue N`. It can also be called directly:
+`roster prepare --issue N`. It can also be called directly:
 
 ```js
 import { runIssue } from './lib/issue.mjs';
@@ -65,8 +66,8 @@ the worker environment, normally the initialized `vendor/github-agent-contracts`
 submodule; see [dependency resolution](DEPENDENCY.md). The printed command uses
 POSIX shell variable syntax; PowerShell
 users must use their shell's environment-variable syntax when executing it.
-Without `--runtime builtin`, this module only prepares a coder handoff and
-prints the legacy publishing command: it does not
+`roster prepare --issue N` only prepares a coder handoff and
+prints the manual publishing command: it does not
 start a worker, merge, or open additional issues. A later explicit publish
 links the issue and requests merge only after the SDK verifies reviewed policy
 and required checks. The builtin publish path posts an App-authored comment
