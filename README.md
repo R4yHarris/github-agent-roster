@@ -31,6 +31,14 @@ or GUI. No Hermes, Claude Code, or Copilot worker is required.
 
 ## Status / what runs today
 
+The harness is a [delivery feedback loop](docs/FEEDBACK_LOOP.md), not a chat UI:
+[principals](docs/PRINCIPALS.md) bound each seat, [estimates](docs/ESTIMATION.md)
+precede work, and tools, research, tests, and excellence checks produce delivery
+evidence. Human [retrospectives](docs/RETRO.md) record difficulty, actual minutes,
+and verdict; [learning](docs/LEARNING.md) informs the [next task](docs/NEXT.md)
+with model capacity and redacted prior feedback. Zero defects is the target,
+not a claim inferred from passing tests.
+
 The builtin planner and coder run in one issue worktree when a model endpoint
 and model are configured. An empty endpoint produces a `RESULT.md` summary
 only; it never edits code or runs tests. The shell starts in a TTY. For the
