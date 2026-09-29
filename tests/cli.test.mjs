@@ -33,6 +33,7 @@ test("help lists every prompt's command", () => {
   assert.match(result.stdout, /roster\s+recommend\s+--task-class/);
   assert.match(result.stdout, /roster\s+ask/);
   assert.match(result.stdout, /--runtime builtin \[--seats planner,coder\]/);
+  assert.match(result.stdout, /^  roster run --issue N --runtime builtin --seats planner,coder$/m);
 });
 
 test("ask CLI creates an offline draft with recipe and task paths", () => {

@@ -18,6 +18,7 @@ const help = `Usage:
   roster ask "..."
   roster run --issue N
   roster run --issue N --runtime builtin [--seats planner,coder] [--publish]
+  roster run --issue N --runtime builtin --seats planner,coder
   roster recipe validate PATH
   roster stats [--ref REVISION_OR_RANGE] [--evals PATH]
   roster vault set NAME
