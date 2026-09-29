@@ -18,7 +18,7 @@ const defaultProfiles = {
 const fields = {
   llm: ['base_url', 'model', 'api_key_env', 'effort', 'context_max', 'profile'],
   planner: ['turn_budget'],
-  seat: ['id', 'principal', 'turn_budget', 'tools'],
+  seat: ['id', 'principal', 'turn_budget', 'tools', 'context_chars'],
   paths: ['memory', 'skills', 'asks', 'worktrees'],
 };
 const availableTools = ['read_file', 'write_file', 'list_dir', 'run_test'];
@@ -160,7 +160,8 @@ export function parseConfig(source) {
   if (!roots.has('schema') ||
       ['llm', 'seat', 'paths'].some((name) =>
         !roots.has(name) || fields[name].some((field) =>
-          !(name === 'llm' && field === 'profile') && !Object.hasOwn(config[name], field))) ||
+          !(name === 'llm' && field === 'profile') &&
+          !(name === 'seat' && field === 'context_chars') && !Object.hasOwn(config[name], field))) ||
       (roots.has('planner') && !Object.hasOwn(config.planner, 'turn_budget'))) {
     invalid('schema, llm, seat, paths, and optional planner must contain every documented field');
   }
@@ -215,6 +216,9 @@ export function parseConfig(source) {
   seat.id = stringValue(seat.id, 'seat.id');
   seat.principal = stringValue(seat.principal, 'seat.principal');
   seat.turn_budget = integerValue(seat.turn_budget, 'seat.turn_budget');
+  seat.context_chars = Object.hasOwn(seat, 'context_chars')
+    ? integerValue(seat.context_chars, 'seat.context_chars') : 8000;
+  if (seat.context_chars < 1) invalid('seat.context_chars must be positive');
   if (seat.id !== 'coder' || seat.principal !== 'coder' || seat.turn_budget < 1 || seat.turn_budget > 64) {
     invalid('seat must be coder with principal coder and turn_budget between 1 and 64');
   }
