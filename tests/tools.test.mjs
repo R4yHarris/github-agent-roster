@@ -19,7 +19,7 @@ test('limits reading, writing, and listing to worktree files allowed by TASK.md'
   const tools = await createTools({ worktree, allowedFiles: ['README.md', 'src/**'] });
   assert.equal(await tools.read_file({ path: 'README.md' }), '# Example\n');
   assert.deepEqual((await tools.list_dir({ path: '.' })).map(({ name }) => name),
-    ['.env', 'README.md', 'src']);
+    ['README.md', 'src']);
   assert.deepEqual(await tools.write_file({ path: 'src/new.mjs', content: 'export const ok = true;\n' }),
     { path: 'src/new.mjs', bytes: 24 });
   assert.equal(readFileSync(path.join(worktree, 'src', 'new.mjs'), 'utf8'), 'export const ok = true;\n');
@@ -36,6 +36,35 @@ test('limits reading, writing, and listing to worktree files allowed by TASK.md'
   assert.equal(isForbiddenWrite('other/.github/workflows/ci.yml'), true);
   assert.equal(isAllowedFile('src/other.mjs', ['src/**']), true);
   assert.equal(isAllowedFile('docs/file.md', ['src/**']), false);
+});
+
+test('list_dir hides protected entries and refuses their paths while writes stay denied', async (context) => {
+  const worktree = fixture(context);
+  mkdirSync(path.join(worktree, '.github', 'workflows'), { recursive: true });
+  mkdirSync(path.join(worktree, 'vendor', 'github-agent-contracts'), { recursive: true });
+  mkdirSync(path.join(worktree, 'src', '.env.private'));
+  for (const file of ['agent-policy.yml', '.github/workflows/ci.yml',
+    'vendor/github-agent-contracts/checker.mjs', 'src/key.pem', 'src/agent-policy.yml']) {
+    writeFileSync(path.join(worktree, file), 'protected');
+  }
+  const tools = await createTools({ worktree, allowedFiles: ['**/*'] });
+  assert.deepEqual((await tools.list_dir({ path: '.' })).map(({ name }) => name),
+    ['.github', 'README.md', 'src', 'vendor']);
+  assert.deepEqual((await tools.list_dir({ path: '.github' })).map(({ name }) => name), []);
+  assert.deepEqual((await tools.list_dir({ path: 'vendor' })).map(({ name }) => name), []);
+  assert.deepEqual((await tools.list_dir({ path: 'src' })).map(({ name }) => name), []);
+  for (const file of ['..', path.dirname(worktree), '.env', 'agent-policy.yml',
+    '.github/workflows', 'src/key.pem', 'src/.env.private', 'src/agent-policy.yml',
+    'vendor/github-agent-contracts']) {
+    await assert.rejects(tools.list_dir({ path: file }),
+      /relative|inside|secrets|Listing protected/i, file);
+  }
+  for (const file of ['agent-policy.yml', '.github/workflows/ci.yml',
+    'vendor/github-agent-contracts/checker.mjs', 'src/key.pem', 'src/agent-policy.yml']) {
+    await assert.rejects(tools.write_file({ path: file, content: 'changed' }), /not allowed|secrets/);
+    assert.equal(readFileSync(path.join(worktree, file), 'utf8'), 'protected');
+  }
+  assert.equal(isForbiddenWrite('vendor/github-agent-contracts/scripts/agent-pr.mjs'), true);
 });
 
 test('refuses symlink paths rather than following them out of the worktree', async (context) => {

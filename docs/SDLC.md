@@ -84,7 +84,8 @@ roster's skills, and the last 20 memory JSONL lines. Its
 `read_file`, `write_file`, and `list_dir` tools stay inside the worktree and
 reject symlink escapes; writes must match the TASK file's allowed list and
 cannot touch `.env*`, `*.pem`, `.git`, `agent-policy.yml`,
-`.github/workflows`, or the generated task/result files. `run_test` runs
+`.github/workflows`, the pinned contracts submodule, or the generated
+task/result files. Directory listings hide protected entries. `run_test` runs
 `node --test` in the worktree with a 60-second timeout and without the model
 API key or App credentials. A successful run records `RESULT.md` and appends
 memory. Turn exhaustion or failed tests return an error and do not publish.

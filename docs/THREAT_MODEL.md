@@ -75,7 +75,9 @@ policy and workflow changes. Those publication checks are not a filesystem
 write sandbox. The planner has no model-invokable tools and writes only
 validated recipe/task files. The [builtin coder tools](../src/runtime/tools.mjs) enforce task
 allowlists, reject path and symlink escapes, and deny writes to Git metadata,
-recognized environment files, PEMs, policy, workflows, and generated task files.
+recognized environment files, PEMs, policy, workflows, the pinned contracts
+submodule, and generated task files. Directory listing also omits protected
+entries and refuses to enter those paths.
 These application-level guards are not complete enforcement of every required
 surface above, nor an OS sandbox for repository tests. The roster does not
 provision WSL isolation. A trusted executor must enforce the full deployment
