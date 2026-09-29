@@ -65,4 +65,4 @@ root; without the flag, it prints the next command but does not invoke it.
 Do not commit as the signed-in human when App environment variables are set.
 Never commit tokens, private keys, or `.env`.
 
-Run the Node 20+ ESM tests with `node --test`. No runtime packages are required.
+Run the Node 20+ ESM tests with `npm test`. No runtime packages are required.
