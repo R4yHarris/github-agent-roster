@@ -1,93 +1,77 @@
 # github-agent-roster
 
-A standalone Node 20 ESM coding-agent orchestrator for software tasks.
-Roster is the team control plane: its builtin planner and coder seats run in
-sequence in one process and issue worktree. The planner writes a recipe and
-task; the coder can edit code with an OpenAI-compatible model, run tests, and
-prepare a PR. No Hermes, Claude Code, or Copilot worker is required. GitHub
-Issues and PRs remain the [board and forge](docs/BOARD.md).
+A chat-driven Agile software-delivery harness on Node 20 ESM. Roster owns
+planning, task files, seat execution, tools, skills, memory, and Git worktrees.
+GitHub Issues and PRs are the [board and forge](docs/BOARD.md). Roster is not
+a thin CLI wrapper, Hermes Kanban, a Git host, or a separate Kanban database;
+it does not replace Git.
 
-[github-agent-contracts](https://github.com/R4yHarris/github-agent-contracts)
-is the **GitHub publish SDK**, consumed as a required
-[Git submodule](vendor/github-agent-contracts). It owns App identity, policy
-checks, attribution trailers, and `agent-pr.mjs`; it is not the orchestrator.
+## Delivery lifecycle
 
-| Responsibility | Owner |
-| --- | --- |
-| Team control plane: configuration, planner, coder loop, tools, skills, memory, worktrees | Roster |
-| Model inference | Explicitly configured OpenAI-compatible endpoint |
-| Optional secret storage for the standalone chat hook | Local encrypted file vault |
-| GitHub publication, App identity, policy enforcement, trailers | Contracts submodule |
-| Durable queue, review, human evaluation | GitHub Issues + PRs |
-| Policy, merge, deploy decisions | Humans and repository protections |
+1. **Ask:** a human states an ask in the `roster` shell or a GitHub issue.
+2. **Plan:** the planner breaks the ask into a RECIPE and TASK.
+3. **Assign:** roster sequences planner and coder seats in one process and
+   worktree. The reviewer role is human today, not a concurrent model seat.
+4. **Infer:** configured planner and coder seats call a model through the
+   **vLLM OpenAI API on DGX Spark** first. Hosted APIs are a later, explicit
+   profile using the same HTTP shape. With no endpoint, the deterministic
+   stub does not edit code or run tests.
+5. **Code:** the coder uses worktree-scoped tools, skills, and recent memory,
+   then runs `node --test` after its last edit.
+6. **Publish:** reviewed code goes through the required
+   [github-agent-contracts](vendor/github-agent-contracts) Git submodule for
+   GitHub App identity, human-owned policy, and `AI-Run` trailers.
+7. **Evaluate:** a human reviews the PR and posts `AI-Eval:`. Locally recorded
+   decisions inform `roster stats` and opt-in `roster recommend` for later
+   assignments; PR comments are not automatically imported.
 
-There is no separate Kanban database, and Roster does not replace Git.
+This is a single-process, sequential loop, not a multi-node DGX deployment
+or GUI. No Hermes, Claude Code, or Copilot worker is required.
 
-## MVP path
+## Status / what runs today
 
-```text
-config -> explicit /v1 endpoint -> planner -> coder -> tests -> agent-pr -> AI-Eval
+The builtin planner and coder run in one issue worktree when a model endpoint
+and model are configured. An empty endpoint produces a `RESULT.md` summary
+only; it never edits code or runs tests. The shell starts in a TTY. For the
+`roster` bin, see [installation](docs/INSTALL.md); these are user commands,
+not paths to the CLI source:
+
+```sh
+roster
+roster --help
+roster doctor
+roster init
+roster ask "Add a Status section to README.md"
+roster run --ask-file templates/sdlc/ASK.md --runtime builtin
+roster run --issue 42 --runtime builtin
+roster run --issue 42 --runtime builtin --auto-model
+roster run --issue 42 --runtime builtin --publish
+roster run --issue 42
+roster status --issue 42 --offline
+roster recipe validate recipe.yml
+roster stats --ref HEAD --evals evals.jsonl
+roster eval SESSION accept 3 n
+roster recommend --task-class docs
+roster vault list
+npm test
 ```
 
-1. **Config:** select the model, endpoint, and per-seat turn budgets. The CLI uses
-   the current repository's GitHub origin and the supplied issue number.
-   Keep secrets out of committed configuration.
-2. **Local or hosted `/v1` endpoint:** explicitly connect the coder to an
-   OpenAI-compatible model, with any required key supplied through the configured
-   environment variable. No hosted service is selected by default.
-3. **Two sequential seats:** the planner writes the recipe and task in an
-   isolated Git worktree; the coder reads them with skills and bounded memory.
-   The LLM coder must pass `node --test` after its last edit.
-4. **`agent-pr`:** optionally publish reviewed changes through the contracts SDK
-   under the GitHub App identity, subject to human-owned policy.
-5. **`AI-Eval`:** a human reviews the PR and posts an `AI-Eval:` comment.
+`roster ask` creates a GitHub issue when `gh` is available, or a local draft
+and printable issue command when it is not. Bare `roster run --issue N`
+prepares a manual handoff without launching a coder. The builtin
+`--seats planner,coder` selection is optional; `--publish` explicitly requests
+App publication after a model-backed run and passing tests. `--auto-model`
+requires an empty configured model and at least three matching local human
+evaluations or keeps the stub. `roster status --issue N` queries GitHub;
+`--offline` uses cached worktree data only. The [offline demo](docs/DEMO.md)
+needs neither GitHub nor a model. See the [shell guide](docs/REPL.md) for
+`/model`, `/effort`, and `/publish`.
 
-Configuration loading and builtin execution are implemented as an opt-in path.
-An empty endpoint uses an offline deterministic stub that writes a `RESULT.md`
-summary **without editing code or running tests**; it is not a code-writing
-worker. A separate vault-aware [chat hook](docs/LLM.md) is available, but its
-vault lookup is not wired into the builtin client.
-
-## Available today
-
-The Node 20 ESM CLI supports both the builtin loop and a manual handoff:
-
-- With no arguments in a TTY, `roster` opens the [interactive human shell](docs/REPL.md)
-  with slash commands, including `/model` and `/effort` for ignored private
-  settings; non-TTY usage and `--help` keep the standard help text.
-- `ask "..."` creates an issue in the current GitHub repository when `gh`
-  is available; without `gh` it writes a local ask, recipe, and task plus
-  a printable `gh issue create` command.
-- `run --issue N --runtime builtin` runs builtin planner then coder in one
-  worktree. `--seats planner,coder` is optional; publishing requires `--publish`.
-- `run --issue N --runtime builtin --auto-model` opts into an evaluated model
-  only when the configured model is empty and at least three matching human
-  evaluations exist; otherwise it keeps the stub.
-- `run --issue N` reads a GitHub issue, creates one coder worktree, writes the
-  assignment and ignored `.env`, and prints the next publishing command. It
-  does not launch Hermes or any other worker.
-- `status --issue N [--offline]` shows that issue, its open PR, and worktree
-  path; offline mode uses only cached assignment data and never calls GitHub.
-- `recipe validate PATH` validates strict seat YAML. Worker labels are
-  descriptive; validation neither executes a recipe nor grants permissions.
-- `stats` joins contracts `AI-Run` history with opt-in local runs and human
-  evaluations. `eval` records a human decision; `recommend` needs at least
-  three evaluated samples. Neither fetches evaluations from GitHub.
-- `vault set NAME` reads stdin, `vault list` prints names only, and
-  `vault get NAME` writes a value only to a pipe or redirected stdout. A local-first
-  OpenAI-compatible chat hook is available independently of the builtin loop.
-
-No concurrent workers, automatic routing, or deploy are provided. The human
-shell's `/publish` explicitly requests App merge after green checks.
-Do not tag v0.1.0 until the one-task loop is reviewed and working in a published PR.
-
-## Status
-
-Roster's sequential planner and coder seats and interactive CLI are available.
-Try the [30-second offline stub demo](docs/DEMO.md) to inspect a RECIPE, TASK,
-and RESULT without GitHub or a model; the stub does not edit code or run tests.
-For daily use, see the [interactive shell guide](docs/REPL.md). CLI flags remain
-available for agents and CI.
+`roster stats` combines contracts `AI-Run` history with opt-in local runs and
+local `roster eval` decisions. `roster recommend` does not route automatically
+or fetch evaluations from GitHub. `roster vault set NAME` reads piped stdin;
+`roster vault get NAME` writes a value only to redirected stdout. There are no
+concurrent workers or automatic deploys.
 
 ## Setup
 
@@ -124,31 +108,16 @@ instructions.
 Run tests with `npm test`; there are no runtime package dependencies.
 Tests run with no API key or model endpoint.
 
-## Current CLI
-
-```sh
-node src/cli.mjs
-node src/cli.mjs --help
-node src/cli.mjs doctor
-node src/cli.mjs init
-node src/cli.mjs ask "Add a Status section to README.md"
-node src/cli.mjs run --issue 42
-node src/cli.mjs run --issue 42 --runtime builtin
-node src/cli.mjs run --issue 42 --runtime builtin --auto-model
-node src/cli.mjs recipe validate recipe.yml
-node src/cli.mjs stats --ref HEAD --evals evals.jsonl
-node src/cli.mjs vault list
-node src/cli.mjs vault get ROSTER_API_KEY
-node src/cli.mjs eval roster-20260928T120000000Z accept 3 n
-node src/cli.mjs recommend --task-class feat
-npm test
-```
-
 Copy [the example config](roster.config.example.yml) to ignored
-`.roster/config.yml` to select an Ollama, LM Studio, or OpenAI profile and
-model, or set a custom `llm.base_url`. See [endpoint profiles](docs/ENDPOINTS.md).
+`.roster/config.yml`. The first documented profile, `vllm-local`, uses the
+**vLLM OpenAI API on DGX Spark** at `http://127.0.0.1:8000/v1`: set
+`llm.base_url` to that URL, choose a served `llm.model`, and keep
+`llm.profile: ""`. Schema 1 does not accept `vllm-local` as a named YAML
+profile; the other local profiles and the later opt-in hosted profile are
+documented under [endpoints](docs/ENDPOINTS.md). The tracked example keeps
+the endpoint empty so the default is the offline stub; never put keys in it.
 
-Both run modes need Git and authenticated `gh` access to an existing issue on
+Both issue run modes need Git and authenticated `gh` access to an existing issue on
 the current repository's GitHub origin. The builtin path creates
 `.worktrees/issue-N`, writes `ASSIGNMENT.md`, `RECIPE.yml`, and `TASK.md`, runs
 the coder, and prints a publishing command. Bare `run --issue N` remains

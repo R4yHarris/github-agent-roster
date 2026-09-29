@@ -1,6 +1,6 @@
 # LLM endpoints
 
-Start with a local OpenAI-compatible server. The
+Start with the vLLM OpenAI API on DGX Spark. The
 [schema 1 config example](../roster.config.example.yml) supplies defaults for
 the builtin planner and coder. Copy it to ignored `.roster/config.yml` to
 configure the opt-in `run --issue N --runtime builtin` path.
@@ -16,8 +16,10 @@ prepare-only. See [SDLC](SDLC.md) for execution and publishing.
   human-evaluated runs; without it, a configured endpoint fails before
   creating a worktree. The example does not select a provider or contact
   an endpoint.
-- `profiles.ollama`, `profiles.lmstudio`, and `profiles.openai` define
-  validated base URLs and API-key environment names. Selecting
+- The first documented profile, `vllm-local`, uses `llm.base_url` at
+  `http://127.0.0.1:8000/v1`; it is not a selectable schema 1 YAML profile.
+  `profiles.ollama`, `profiles.lmstudio`, and `profiles.openai` define
+  validated named base URLs and API-key environment names. Selecting
   `llm.profile` uses that endpoint and key name; `llm.base_url` must then
   remain empty. An explicit base URL requires an empty profile.
 - `llm.api_key_env: ROSTER_API_KEY` names an environment variable, not a key.
@@ -53,6 +55,15 @@ tracked example. `/model clear` leaves the model empty for opt-in
 See [model routing](ROUTING.md) for the three-evaluation threshold.
 
 ## Local profiles
+
+### vllm-local (DGX Spark)
+
+Run vLLM on DGX Spark. When Roster runs on the same host, set
+`llm.base_url: http://127.0.0.1:8000/v1` and `llm.profile: ""` in the
+copied config, then set `llm.model` to a model ID returned by `/v1/models`.
+Leave the API-key environment variable unset only when server authentication
+is disabled. This first profile is a custom-URL recipe until schema 1 supports
+`vllm-local` as a named YAML profile.
 
 ### Ollama
 
