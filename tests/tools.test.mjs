@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createTools, isAllowedFile, isForbiddenWrite, toolDefinitions } from '../src/runtime/tools.mjs';
+import { createTools, isAllowedFile, isForbiddenRead, isForbiddenWrite, toolDefinitions } from '../src/runtime/tools.mjs';
 
 function fixture(context) {
   const worktree = mkdtempSync(path.join(tmpdir(), 'roster-tools-'));
@@ -155,4 +155,57 @@ test('run_test actually executes Node tests from the worktree', async (context) 
   const result = await tools.run_test();
   assert.equal(result.exit_code, 0, result.stderr);
   assert.equal(readFileSync(path.join(worktree, 'ran-marker.txt'), 'utf8'), 'yes');
+});
+
+test('exactly five tools deny protected reads and Windows alias or stream paths', async (context) => {
+  const worktree = fixture(context);
+  const tools = await createTools({ worktree, allowedFiles: ['**/*'] });
+  const names = ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text'];
+  assert.deepEqual(Object.keys(tools), names);
+  assert.deepEqual(toolDefinitions.map(({ function: tool }) => tool.name), names);
+  for (const file of ['.env', 'nested/.env.local', 'production.env', 'key.pem',
+    'agent-policy.yml', '.github/workflows/build.yml', '.git/config',
+    '.roster/vault/.key', 'vendor/github-agent-contracts/scripts/agent-pr.mjs']) {
+    assert.equal(isForbiddenRead(file), true, file);
+    await assert.rejects(tools.read_file({ path: file }), /secrets/, file);
+    await assert.rejects(tools.search_text({ query: 'secret', path: file }), /secrets/, file);
+  }
+  for (const file of ['.env ', 'key.pem.', 'key.pem::$DATA', '.git:metadata',
+    'src/agent-policy.yml.', 'src/file.mjs:stream']) {
+    await assert.rejects(tools.read_file({ path: file }), /ambiguous Windows|data streams/, file);
+    await assert.rejects(tools.write_file({ path: file, content: 'bad' }),
+      /ambiguous Windows|data streams/, file);
+  }
+  await assert.rejects(tools.search_text({ query: 'secret', path: '../outside' }), /inside/);
+});
+
+test('literal search caps results at fifty lines and never shells out or reveals protected bodies', async (context) => {
+  const worktree = fixture(context);
+  const marker = 'literal.*marker';
+  writeFileSync(path.join(worktree, 'src', 'matches.txt'),
+    Array.from({ length: 51 }, (_, index) => `${marker} ${index + 1}`).join('\n'));
+  writeFileSync(path.join(worktree, 'src', 'binary.bin'), `${marker}\0hidden`);
+  for (const file of ['.env', 'agent-policy.yml', 'secret.pem', 'production.env']) {
+    writeFileSync(path.join(worktree, file), marker);
+  }
+  mkdirSync(path.join(worktree, '.github', 'workflows'), { recursive: true });
+  writeFileSync(path.join(worktree, '.github', 'workflows', 'ci.yml'), marker);
+  const tools = await createTools({ worktree, allowedFiles: ['README.md'],
+    runCommand: () => { throw new Error('search_text must not start a subprocess'); } });
+  const result = await tools.search_text({ query: marker });
+  assert.equal(result.matches.length, 50);
+  assert.equal(result.truncated, true);
+  assert.ok(result.matches.every(({ path: file }) => file === 'src/matches.txt'));
+  assert.deepEqual(result.matches.map(({ line }) => line),
+    Array.from({ length: 50 }, (_, index) => index + 1));
+  assert.equal(result.matches[0].text, `${marker} 1`);
+  writeFileSync(path.join(worktree, 'src', 'matches.txt'), `${marker}\n`.repeat(50));
+  const exact = await tools.search_text({ query: marker, path: 'src/matches.txt' });
+  assert.equal(exact.matches.length, 50);
+  assert.equal(exact.truncated, false);
+  assert.deepEqual(await tools.search_text({ query: 'literal.+marker', path: 'src' }),
+    { matches: [], truncated: false });
+  await assert.rejects(tools.search_text({ query: '' }), /nonempty/);
+  await assert.rejects(tools.search_text({ query: 'one\ntwo' }), /single-line/);
+  await assert.rejects(tools.search_text({ query: marker, command: 'arbitrary' }), /Tool arguments/);
 });

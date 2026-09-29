@@ -11,19 +11,26 @@ function partsOf(file) {
   return file.replaceAll('\\', '/').toLowerCase().split('/');
 }
 
+function hasAmbiguousComponents(file) {
+  return partsOf(file).some((part) => part !== '.' && part !== '..' &&
+    /[:\x00-\x1f]|[. ]$/.test(part));
+}
+
 function isSecret(file) {
   const parts = partsOf(file);
   return parts.some((part, index) => part === '.env' || part.startsWith('.env.') ||
-    part.endsWith('.pem') || (part === '.roster' && parts[index + 1] === 'vault'));
+    part.endsWith('.env') || part.endsWith('.pem') ||
+    (part === '.roster' && parts[index + 1] === 'vault'));
 }
 
 export function isForbiddenRead(file) {
-  return isSecret(file) || partsOf(file).includes('.git');
+  return isProtectedSurface(file);
 }
 
 function isProtectedSurface(file) {
   const parts = partsOf(file);
-  return isSecret(file) || parts.includes('.git') || parts.includes('agent-policy.yml') ||
+  return hasAmbiguousComponents(file) || isSecret(file) ||
+    parts.includes('.git') || parts.includes('agent-policy.yml') ||
     parts.some((part, index) =>
       (part === '.github' && parts[index + 1] === 'workflows') ||
       (part === 'vendor' && parts[index + 1] === 'github-agent-contracts'));
@@ -96,6 +103,18 @@ export const toolDefinitions = [
       parameters: { type: 'object', properties: {}, additionalProperties: false },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'search_text',
+      description: 'Find literal text in regular worktree files; returns at most 50 matching lines.',
+      parameters: {
+        type: 'object',
+        properties: { query: { type: 'string' }, path: { type: 'string' } },
+        required: ['query'], additionalProperties: false,
+      },
+    },
+  },
 ];
 
 export async function createTools({
@@ -120,6 +139,9 @@ export async function createTools({
         path.isAbsolute(input) || path.win32.isAbsolute(input)) {
       throw new Error('Tool path must be relative to the worktree');
     }
+    if (hasAmbiguousComponents(input)) {
+      throw new Error('Tool path must not contain ambiguous Windows components or alternate data streams');
+    }
     const file = path.resolve(root, input);
     const relative = path.relative(root, file);
     if ((!directory && !relative) || relative === '..' ||
@@ -127,14 +149,11 @@ export async function createTools({
       throw new Error('Tool path must stay inside the worktree');
     }
     const normalized = relative.split(path.sep).join('/');
-    if (isForbiddenRead(normalized)) {
-      throw new Error('Tool access to secrets and Git metadata is refused');
-    }
-    if (directory && isProtectedSurface(normalized)) {
-      throw new Error('Listing protected worktree paths is refused');
-    }
     if (write && !isAllowedFile(normalized, allowedFiles)) {
       throw new Error(`Writing ${normalized} is not allowed by TASK.md or worktree policy`);
+    }
+    if (isForbiddenRead(normalized)) {
+      throw new Error('Tool access to secrets, Git metadata, policy, workflows, or contracts is refused');
     }
     return { file, relative, normalized };
   }
@@ -166,7 +185,7 @@ export async function createTools({
     }
   }
 
-  return {
+  const tools = {
     async read_file(args) {
       argumentsFor(args, ['path']);
       const { file, relative } = locate(args.path);
@@ -237,5 +256,39 @@ export async function createTools({
         throw new Error(`node --test could not run: ${error.message}`, { cause: error });
       }
     },
+
+    async search_text(args) {
+      argumentsFor(args, ['query'], ['path']);
+      if (typeof args.query !== 'string' || !args.query.length || /[\r\n\0]/.test(args.query)) {
+        throw new TypeError('search_text query must be nonempty, single-line literal text');
+      }
+      const matches = [];
+      async function visit(input) {
+        const { file, relative, normalized } = locate(input, { directory: true });
+        if (relative) await checkComponents(relative);
+        const entry = await fs.lstat(file);
+        if (entry.isDirectory()) {
+          for (const child of await tools.list_dir({ path: input })) {
+            if (child.type === 'directory' || child.type === 'file') {
+              await visit(path.posix.join(normalized, child.name));
+              if (matches.length > 50) return;
+            }
+          }
+          return;
+        }
+        if (!entry.isFile()) throw new Error('search_text requires a regular file or directory');
+        const text = await tools.read_file({ path: normalized });
+        if (text.includes('\0')) return;
+        for (const [index, line] of text.split(/\r?\n/).entries()) {
+          if (line.includes(args.query)) {
+            matches.push({ path: normalized, line: index + 1, text: line });
+            if (matches.length > 50) return;
+          }
+        }
+      }
+      await visit(args.path ?? '.');
+      return { matches: matches.slice(0, 50), truncated: matches.length > 50 };
+    },
   };
+  return tools;
 }
