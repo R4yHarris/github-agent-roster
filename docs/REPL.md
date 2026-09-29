@@ -15,7 +15,7 @@ agents and CI.
 | `/effort [l|m|h|x]` | Show the current effort or persist a new level to ignored `.roster/config.yml`. |
 | `/run N [--auto-model]` or `/run --issue N [--auto-model]` | Run the builtin planner then coder in one issue worktree. The optional flag routes an empty configured model only with enough human evaluations; otherwise the stub writes a task and result without editing code or testing. |
 | `/status [N] [--offline]` | Show an issue, its open branch PR, and worktree path. Defaults to the last run or created issue; offline reads only the cached assignment and reports PR state as unknown. |
-| `/eval TARGET accept|reject|rework 1-5 y|n` | Record a human evaluation through the existing evaluation library. |
+| `/eval TARGET accept\|reject\|rework 1-5 y\|n [--minutes N] [--comment "TEXT"]` | Record the [human retrospective](RETRO.md), including actual minutes and local feedback. |
 | `/publish [SUBJECT]` | Publish reviewed changes using the pinned contracts SDK. After `/run N`, the default subject is `feat: issue N`; a confirmed merge comments on and closes that issue. Otherwise supply a conventional subject. |
 | `/stats [REF]` | Summarize contracts and local AI-Run records, optionally at a Git ref. |
 | `/recommend feat|fix|docs|test` | Recommend from evaluated local runs. |

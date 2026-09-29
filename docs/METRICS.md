@@ -65,8 +65,10 @@ evaluations do not create runs. An explicit `--evals` file's entries override
 local SHA evaluations.
 
 The default `.roster/evals.jsonl` uses the stricter human `roster eval` schema:
-SHA **or** session, `accept|reject|rework`, integer difficulty 1-5, and boolean
-`again`. It is append-only, so the last decision for a target wins. A SHA
+at least one SHA or session (both when known), `accept|reject|rework`, integer
+difficulty 1-5, and boolean `again`, plus known model/class, optional actual
+minutes, local comment, and an ISO timestamp. Legacy records still load.
+It is append-only, so the last decision for a target wins. A SHA
 evaluation takes precedence over a session evaluation. Local run metadata joins
 by full SHA or by session and compatible task; known exported fields win.
 Duplicate local run records do not add extra counts. See

@@ -3,7 +3,7 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runIssue } from './lib/issue.mjs';
-import { recordEvaluation } from './lib/eval.mjs';
+import { parseEvaluationArgs, recordEvaluation } from './lib/eval.mjs';
 import { formatRecommendation, recommend, repositoryRoot, TASK_CLASSES } from './lib/learn.mjs';
 import { submitAsk } from './lib/ask.mjs';
 import { runBuiltinIssue } from './lib/builtin.mjs';
@@ -34,7 +34,7 @@ const help = `Usage:
   roster vault set NAME
   roster vault list
   roster vault get NAME
-  roster eval <sha-or-session> <accept|reject|rework> <1-5> <y|n>
+  roster eval <sha-or-session> <accept|reject|rework> <1-5> <y|n> [--minutes N] [--comment "TEXT"]
   roster recommend --task-class feat|fix|docs|test
 
 Ask creates a GitHub issue when gh is available; otherwise it saves a local draft.
@@ -167,10 +167,8 @@ async function main(args) {
     });
     process.stdout.write(formatMetrics(summarizeMetrics(records)));
   } else if (args[0] === 'eval') {
-    if (args.length !== 5) {
-      throw new TypeError('Use roster eval <sha-or-session> <accept|reject|rework> <1-5> <y|n>.');
-    }
-    const evaluation = await recordEvaluation(...args.slice(1));
+    const { values, options } = parseEvaluationArgs(args.slice(1));
+    const evaluation = await recordEvaluation(...values, options);
     process.stdout.write(`Recorded AI-Eval for ${evaluation.sha ?? evaluation.session}.\n`);
   } else if (args[0] === 'recommend') {
     if (args.length !== 3 || args[1] !== '--task-class' || !TASK_CLASSES.includes(args[2])) {

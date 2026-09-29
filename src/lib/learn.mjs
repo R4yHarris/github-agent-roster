@@ -88,8 +88,8 @@ function validateLocalRun(record, source) {
 
 export function validateLocalEvaluation(record, source) {
   if (!isObject(record)) throw new Error(`${source}: expected a JSON object`);
-  if ((record.sha != null) === (record.session != null)) {
-    throw new Error(`${source}: an evaluation needs exactly one sha or session`);
+  if (record.sha == null && record.session == null) {
+    throw new Error(`${source}: an evaluation needs a sha or session`);
   }
   if (record.sha != null) validateSha(record, source);
   if (record.session != null &&
@@ -106,6 +106,14 @@ export function validateLocalEvaluation(record, source) {
   validateLocalRun(record, source);
   if (record.minutes != null && (!Number.isSafeInteger(record.minutes) || record.minutes < 0)) {
     throw new Error(`${source}: minutes must be a nonnegative integer`);
+  }
+  if (record.comment != null && (typeof record.comment !== 'string' ||
+      Buffer.byteLength(record.comment, 'utf8') > 4096 || /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(record.comment))) {
+    throw new Error(`${source}: comment must be text of at most 4 KiB without control characters`);
+  }
+  if (record.at != null && (typeof record.at !== 'string' ||
+      !Number.isFinite(Date.parse(record.at)) || new Date(record.at).toISOString() !== record.at)) {
+    throw new Error(`${source}: at must be an ISO timestamp`);
   }
 }
 
@@ -235,7 +243,7 @@ export function joinLearning(exported, local, evaluations, includeUnpublished = 
   const bySession = new Map();
   for (const evaluation of evaluations) {
     if (evaluation.sha) bySha.set(evaluation.sha.toLowerCase(), evaluation);
-    else bySession.set(evaluation.session, evaluation);
+    if (evaluation.session) bySession.set(evaluation.session, evaluation);
   }
   return records.map(({ record }) => ({
     ...record,

@@ -21,9 +21,14 @@ export function estimateTask(metadata = {}, evaluations = [], defaultModel = '')
     throw new TypeError('Task model must be a served model id or empty');
   }
   const latest = new Map();
+  const sessionShas = new Map();
   for (const evaluation of evaluations) {
     validateLocalEvaluation(evaluation, 'Estimation history');
-    const target = evaluation.sha ? `sha:${evaluation.sha.toLowerCase()}` : `session:${evaluation.session}`;
+    if (evaluation.sha && evaluation.session) sessionShas.set(evaluation.session, evaluation.sha.toLowerCase());
+  }
+  for (const evaluation of evaluations) {
+    const sha = evaluation.sha?.toLowerCase() ?? sessionShas.get(evaluation.session);
+    const target = sha ? `sha:${sha}` : `session:${evaluation.session}`;
     latest.set(target, evaluation);
   }
   const samples = [...latest.values()].filter((evaluation) =>

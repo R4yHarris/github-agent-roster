@@ -31,7 +31,8 @@ function isProtectedSurface(file) {
 
 export function isForbiddenWrite(file) {
   const parts = partsOf(file);
-  return isProtectedSurface(file) || (parts.length === 1 && managedFiles.has(parts[0]));
+  return isProtectedSurface(file) || (parts.length === 1 && managedFiles.has(parts[0])) ||
+    parts.some((part, index) => part === '.roster' && parts[index + 1] === 'evals.jsonl');
 }
 
 export function isAllowedFile(file, allowedFiles) {
@@ -217,7 +218,7 @@ export async function createTools({
 
     async run_test(args = {}) {
       argumentsFor(args, []);
-      const testEnv = { ...env };
+      const testEnv = { ...env, ROSTER_SEAT: 'coder' };
       for (const name of [apiKeyEnv, 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH',
         'GH_TOKEN', 'GITHUB_TOKEN', 'NODE_TEST_CONTEXT']) delete testEnv[name];
       try {

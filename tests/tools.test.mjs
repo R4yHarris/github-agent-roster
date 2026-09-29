@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createTools, isAllowedFile, isForbiddenWrite } from '../src/runtime/tools.mjs';
+import { createTools, isAllowedFile, isForbiddenWrite, toolDefinitions } from '../src/runtime/tools.mjs';
 
 function fixture(context) {
   const worktree = mkdtempSync(path.join(tmpdir(), 'roster-tools-'));
@@ -26,7 +26,7 @@ test('limits reading, writing, and listing to worktree files allowed by TASK.md'
   await assert.rejects(tools.write_file({ path: 'docs/no.md', content: '' }), /not allowed/);
   for (const file of ['../outside.md', path.join(worktree, '..', 'outside.md'), '.env',
     'nested/.env.local', 'key.pem', 'src/agent-policy.yml', '.github/workflows/build.yml',
-    '.git/config', 'TASK.md', 'ASSIGNMENT.md', 'RESULT.md', 'RECIPE.yml', 'ESTIMATE.md']) {
+    '.git/config', 'TASK.md', 'ASSIGNMENT.md', 'RESULT.md', 'RECIPE.yml', 'ESTIMATE.md', '.roster/evals.jsonl']) {
     await assert.rejects(tools.write_file({ path: file, content: 'bad' }), /relative|inside|secret|not allowed/i, file);
   }
   await assert.rejects(tools.read_file({ path: '.env' }), /secrets/);
@@ -36,6 +36,24 @@ test('limits reading, writing, and listing to worktree files allowed by TASK.md'
   assert.equal(isForbiddenWrite('other/.github/workflows/ci.yml'), true);
   assert.equal(isAllowedFile('src/other.mjs', ['src/**']), true);
   assert.equal(isAllowedFile('docs/file.md', ['src/**']), false);
+});
+
+test('coder tools cannot write human evaluations even with broad task scope or a test child process', async (context) => {
+  const worktree = fixture(context);
+  const tools = await createTools({ worktree, allowedFiles: ['**/*'] });
+  assert.equal(Object.hasOwn(tools, 'eval'), false);
+  assert.equal(toolDefinitions.some(({ function: tool }) => /eval/i.test(tool.name)), false);
+  await assert.rejects(tools.write_file({ path: '.roster/evals.jsonl', content: '{"verdict":"accept"}\n' }),
+    /not allowed/);
+  const evaluator = new URL('../src/lib/eval.mjs', import.meta.url).href;
+  writeFileSync(path.join(worktree, 'no-self-eval.test.mjs'),
+    "import test from 'node:test';\nimport assert from 'node:assert/strict';\n" +
+    `import { recordEvaluation } from ${JSON.stringify(evaluator)};\n` +
+    "test('no self evaluation', async () => {\n" +
+    "  await assert.rejects(recordEvaluation('roster-42-coder', 'accept', '3', 'y'), /human-only/);\n" +
+    "});\n");
+  const result = await tools.run_test();
+  assert.equal(result.exit_code, 0, result.stderr || result.stdout);
 });
 
 test('list_dir hides protected entries and refuses their paths while writes stay denied', async (context) => {
@@ -108,6 +126,7 @@ test('run_test uses node --test with a 60s timeout and strips API and GitHub cre
   assert.equal(options.cwd, worktree);
   assert.equal(options.timeout, 60_000);
   assert.equal(options.env.PATH, process.env.PATH);
+  assert.equal(options.env.ROSTER_SEAT, 'coder');
   for (const key of ['CUSTOM_KEY', 'GH_TOKEN', 'GITHUB_APP_ID',
     'GITHUB_APP_PRIVATE_KEY_PATH', 'NODE_TEST_CONTEXT']) {
     assert.equal(options.env[key], undefined);

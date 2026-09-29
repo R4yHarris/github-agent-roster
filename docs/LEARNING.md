@@ -64,8 +64,8 @@ twice. Known Git-exported values take precedence over local values.
 After reviewing the result, a **human** runs:
 
 ```sh
-roster eval roster-20260928T120000000Z accept 3 n
-roster eval 0123456789abcdef0123456789abcdef01234567 rework 4 y
+roster eval roster-20260928T120000000Z accept 3 n --minutes 18 --comment "Ship quality."
+roster eval 0123456789abcdef0123456789abcdef01234567 rework 4 y --minutes 35
 ```
 
 The positional values are:
@@ -86,7 +86,7 @@ This appends `.roster/evals.jsonl` at the current Git repository's root, even
 when invoked from a subdirectory:
 
 ```json
-{"session":"roster-20260928T120000000Z","verdict":"accept","difficulty":3,"again":false}
+{"sha":null,"session":"roster-20260928T120000000Z","model":null,"task_class":null,"verdict":"accept","difficulty":3,"again":false,"minutes":18,"comment":"Ship quality.","at":"2026-09-29T12:00:00.000Z"}
 ```
 
 Corrections append another record, preserving the history. The last evaluation
@@ -95,17 +95,16 @@ SHA-specific evaluation takes precedence over a session-wide evaluation.
 Malformed arguments or existing JSONL fail explicitly rather than silently
 skipping data.
 
-Optionally, the human can also post the contracts comment using their own
-authenticated GitHub CLI:
+The human command enriches known SHA/session/model/class fields from run history.
+With `gh` and one matching PR, it posts `AI-Eval: 1|accept|3|n` and `Minutes: 18`
+using the human's GitHub identity, not the App. The free-text comment stays local.
+Missing minutes remain unknown (`null`); legacy four-argument calls still work.
+See the [retrospective guide](RETRO.md) for verdict meanings and failure handling.
 
-```sh
-gh pr comment 123 --body "AI-Eval: 1|accept|3|n"
-```
-
-Roster does not fetch PR comments, post evaluation comments, generate decisions,
-or write evaluation trailers. The coder `run` and contracts publishing paths
-never write `AI-Eval`; only the explicit human `eval` command writes the local
-evaluation file.
+Roster does not fetch PR comments, generate decisions, or write evaluation
+trailers. The coder `run` and contracts publishing paths never write `AI-Eval`;
+only the explicit human `eval` command writes the local evaluation file. Agent
+seat calls and coder-tool writes to the evaluation file are rejected.
 
 ## Stats and recommendations
 

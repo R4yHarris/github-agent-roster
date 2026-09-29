@@ -45,6 +45,10 @@ test('estimation separates models/classes and counts corrected targets once', ()
   assert.equal(corrected.accepted, 2);
   assert.equal(corrected.estimate_min, 15);
   assert.equal(estimateTask(metadata, [history[0], history[0], history[0]]).n, 1);
+  const linked = estimateTask(metadata, [...history,
+    { ...history[2], sha: 'a'.repeat(40), verdict: 'rework' }]);
+  assert.equal(linked.n, 3);
+  assert.equal(linked.accepted, 2);
 });
 
 test('invalid metadata and timing fail explicitly instead of becoming defaults', () => {
