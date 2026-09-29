@@ -69,6 +69,10 @@ GitHub write path or human-token fallback is permitted for the coder worker.
 An explicit trusted `--publish` or `/publish` request may use
 `--merge-when-green` through the SDK, subject to reviewed `merger.merge` policy
 and required checks; the model has no direct publisher tool.
+After a confirmed issue-branch merge, issue comment and closure use an
+issue-scoped App token (Issues write, Pull requests read), never the human
+`gh` login. The requested issue URL, PR branch, merge state, and closing
+reference must agree before any comment; API failures are reported explicitly.
 
 The contracts publisher checks coder grants against reviewed policy and refuses
 policy and workflow changes. Those publication checks are not a filesystem

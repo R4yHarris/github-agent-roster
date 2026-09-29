@@ -4,6 +4,9 @@ import { Writable } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { submitAsk } from './lib/ask.mjs';
 import { prepareBuiltinPublication, runBuiltinIssue } from './lib/builtin.mjs';
+import {
+  closeMergedIssue, issueMergeMessage, mergedPullNumber, mergedPullNumberFromFailure,
+} from './lib/issue-board.mjs';
 import { loadConfig } from './lib/config.mjs';
 import { recordEvaluation } from './lib/eval.mjs';
 import { formatRecommendation, recommend, repositoryRoot, TASK_CLASSES } from './lib/learn.mjs';
@@ -33,6 +36,13 @@ class ChecksPermissionError extends Error {}
 async function publishWithContracts({ contractsPath, cwd, env, message, output, errorOutput }) {
   const { main } = await import(pathToFileURL(join(contractsPath, 'scripts', 'agent-pr.mjs')).href);
   let errorText = '';
+  let successText = '';
+  const stdout = {
+    write(text) {
+      successText += String(text);
+      output.write(text);
+    },
+  };
   const stderr = {
     write(text) {
       errorText += String(text);
@@ -40,9 +50,18 @@ async function publishWithContracts({ contractsPath, cwd, env, message, output, 
     },
   };
   const code = await main(['--message', message, '--merge-when-green'], {
-    cwd, env, stdout: output, stderr,
+    cwd, env, stdout, stderr,
   });
-  if (code === 0) return;
+  if (code === 0) {
+    return { mergedPullRequest: /^Merged PR #/m.test(successText)
+      ? mergedPullNumber(successText) : null };
+  }
+  const merged = mergedPullNumberFromFailure(errorText);
+  if (merged !== null) {
+    const error = new Error(`PR #${merged} merged, but local publisher cleanup failed; inspect the worktree.`);
+    error.mergedPullRequest = merged;
+    throw error;
+  }
   if (errorText.includes('HTTP 422')) {
     throw new ChecksPermissionError('Checks permission is not accepted on the installation.');
   }
@@ -53,7 +72,8 @@ const defaultServices = {
   submitAsk, runBuiltinIssue, recordEvaluation, repositoryRoot, loadMetrics,
   summarizeMetrics, formatMetrics, recommend, formatRecommendation,
   resolveContractsPath, prepareBuiltinPublication, createFileVault,
-  validateSecretName, readStatus, formatStatus, publisher: publishWithContracts,
+  validateSecretName, readStatus, formatStatus, issueCloser: closeMergedIssue,
+  publisher: publishWithContracts,
 };
 
 function conventionalSubject(value) {
@@ -156,6 +176,8 @@ export function createDispatcher({
         }
         const subject = args || (state.lastRun ? `feat: issue ${state.lastRun.issue.number}` : null);
         if (subject !== null) conventionalSubject(subject);
+        const message = subject && state.lastRun
+          ? issueMergeMessage(subject, state.lastRun.issue.number) : subject;
         const appId = Boolean(env.GITHUB_APP_ID);
         const keyPath = Boolean(env.GITHUB_APP_PRIVATE_KEY_PATH);
         if (appId !== keyPath) {
@@ -164,7 +186,7 @@ export function createDispatcher({
         if (!appId) {
           api.resolveContractsPath({ repoRoot, cwd, env });
           output.write(`From ${state.lastRun?.worktreePath ?? currentRoot()}, publish reviewed changes:\n` +
-            `node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "${subject ?? '<conventional subject>'}" --merge-when-green\n`);
+            `node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "${message ?? '<conventional subject>'}" --merge-when-green\n`);
           return true;
         }
         if (subject === null) throw new TypeError('Use /publish <conventional subject> or /run N first.');
@@ -180,11 +202,34 @@ export function createDispatcher({
           publishEnv = { ...env, GITHUB_APP_PRIVATE_KEY_PATH: resolve(cwd, env.GITHUB_APP_PRIVATE_KEY_PATH) };
           delete publishEnv[config.llm.api_key_env];
         }
-        await api.publisher({
-          contractsPath, cwd: publishRoot, env: publishEnv, message: subject,
-          output, errorOutput,
-        });
-        state.published = true;
+        const finishIssue = async (pullNumber) => {
+          state.published = true;
+          await api.issueCloser({
+            issue: state.lastRun.issue, pullNumber,
+            runLine: state.lastRun.runs?.coder?.line,
+            repoRoot: state.lastRun.repoRoot, cwd, env,
+          });
+          output.write(`Commented on and closed issue #${state.lastRun.issue.number}.\n`);
+        };
+        let publication;
+        try {
+          publication = await api.publisher({
+            contractsPath, cwd: publishRoot, env: publishEnv, message,
+            output, errorOutput,
+          });
+        } catch (error) {
+          if (state.lastRun && Number.isSafeInteger(error.mergedPullRequest) &&
+              error.mergedPullRequest > 0) {
+            await finishIssue(error.mergedPullRequest);
+          }
+          throw error;
+        }
+        if (state.lastRun) {
+          if (!Number.isSafeInteger(publication?.mergedPullRequest) || publication.mergedPullRequest <= 0) {
+            throw new Error('Publisher did not confirm a merged PR; issue remains open');
+          }
+          await finishIssue(publication.mergedPullRequest);
+        } else state.published = true;
         return true;
       }
       case 'stats': {

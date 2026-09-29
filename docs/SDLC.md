@@ -116,7 +116,9 @@ change; configure an LLM to do that. The command prints, but does not execute,
 the publishing command:
 
 ```sh
-node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue 42" --merge-when-green
+node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue 42
+
+Closes #42" --merge-when-green
 ```
 
 Run it from the **issue worktree root** after reviewing code and initializing
@@ -127,7 +129,13 @@ task-allowed files, excluding generated task files and refusing policy,
 workflows, secrets, or other out-of-scope changes. The SDK enforces the
 human-owned policy, waits for required checks, then marks the App PR ready
 and merges only when reviewed policy and repository rules permit it. No
-deploy is requested. The runner prints one AI-Run for each seat with its own
+deploy is requested. For an issue run, the PR body links `Closes #N`. With
+builtin `--publish` or REPL `/publish`, once the SDK confirms a merge,
+Roster verifies the PR, comments on the issue
+with the coder's AI-Run line, and closes it through an issue-scoped App token.
+If post-merge issue operations fail, the merged PR remains merged and the
+error is reported; do not publish a duplicate commit to retry. The runner
+prints one AI-Run for each seat with its own
 session and reported token counts; the single code commit published through
 the SDK carries the coder's run. Unknown slots remain unset or `-`. An API key
 is not forwarded to tests or the publisher.

@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { IDENTIFIER, inferTaskClass, recordRun } from './learn.mjs';
+import { issueMergeMessage } from './issue-board.mjs';
 import { renderAssignment } from '../planner/stub.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -100,7 +101,9 @@ export async function runIssue(issueNumber, {
   const assignmentPath = path.join(worktreePath, 'ASSIGNMENT.md');
   const envPath = path.join(worktreePath, '.env');
   const session = sessionId ?? `roster-${now().toISOString().replace(/[-:.]/g, '')}`;
-  const nextCommand = `node $GITHUB_AGENT_CONTRACTS/scripts/agent-pr.mjs --message "feat: issue ${number}" --merge-when-green`;
+  const nextCommand = `node $GITHUB_AGENT_CONTRACTS/scripts/agent-pr.mjs --message "${issueMergeMessage(
+    `feat: issue ${number}`, number,
+  )}" --merge-when-green`;
 
   await beforeWorktree(repoRoot, worktreePath);
   await fileSystem.mkdir(path.dirname(worktreePath), { recursive: true });

@@ -162,6 +162,9 @@ The publisher requires a feature branch and a human-owned root
 `agent-policy.yml` authorizing coder publication and explicit SDK merging.
 It waits for required checks and repository review rules before merging; neither
 a recipe nor this CLI grants policy capabilities or deploy rights.
+For an issue run, the PR links `Closes #N`. The builtin `--publish` and REPL
+`/publish` paths also post an App-authored issue comment after a confirmed
+merge (with the coder AI-Run when present) and close the issue if needed.
 
 Never commit credentials or `.env`, or publish as the signed-in human when App
 env is set.

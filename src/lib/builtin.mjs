@@ -10,6 +10,9 @@ import { runPlanner } from '../seats/planner.mjs';
 import { isAllowedFile, isForbiddenWrite } from '../runtime/tools.mjs';
 import { loadConfig } from './config.mjs';
 import { runIssue } from './issue.mjs';
+import {
+  closeMergedIssue, issueMergeMessage, mergedPullNumber, mergedPullNumberFromFailure,
+} from './issue-board.mjs';
 import { inferTaskClass, recordRun } from './learn.mjs';
 import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
 
@@ -103,6 +106,7 @@ export async function runBuiltinIssue(issueNumber, {
   vault,
   runTestCommand,
   publisher = execFileAsync,
+  issueCloser = closeMergedIssue,
   now,
 } = {}) {
   if (seats !== 'planner,coder') {
@@ -154,7 +158,8 @@ export async function runBuiltinIssue(issueNumber, {
   });
   await recordSeat(sessions.coder, coderRun);
   const runs = { planner: plannerRun, coder: coderRun };
-  const command = `node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue ${prepared.issue.number}" --merge-when-green`;
+  const publishMessage = issueMergeMessage(`feat: issue ${prepared.issue.number}`, prepared.issue.number);
+  const command = `node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "${publishMessage}" --merge-when-green`;
   log(`Worktree: ${worktreePath}\nAssignment: ${prepared.assignmentPath}\n` +
     `RECIPE: ${planner.recipePath}\nTASK: ${planner.taskPath}\nRESULT: ${result.resultPath}\n` +
     `Planner session: ${sessions.planner}\nAI-Run: ${plannerRun.line}\n` +
@@ -169,11 +174,35 @@ export async function runBuiltinIssue(issueNumber, {
     const { contractsPath, publishEnv } = await prepareBuiltinPublication(completed, {
       cwd, config, env,
     });
-    const { stdout } = await publisher(process.execPath,
-      [path.join(contractsPath, 'scripts', 'agent-pr.mjs'),
-        '--message', `feat: issue ${prepared.issue.number}`, '--merge-when-green'],
-      { cwd: worktreePath, env: publishEnv, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
+    let stdout;
+    try {
+      ({ stdout } = await publisher(process.execPath,
+        [path.join(contractsPath, 'scripts', 'agent-pr.mjs'),
+          '--message', publishMessage, '--merge-when-green'],
+        { cwd: worktreePath, env: publishEnv, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }));
+    } catch (error) {
+      const merged = mergedPullNumberFromFailure(error.stderr ?? error.message);
+      if (merged === null) throw error;
+      try {
+        await issueCloser({
+          issue: prepared.issue, pullNumber: merged, runLine: coderRun.line,
+          repoRoot: prepared.repoRoot, cwd, env,
+        });
+      } catch (closeError) {
+        throw new Error(`PR #${merged} merged, but issue closure and local cleanup failed: ${closeError.message}`, {
+          cause: closeError,
+        });
+      }
+      throw new Error(`PR #${merged} merged and issue closed, but local publisher cleanup failed; inspect the worktree`, {
+        cause: error,
+      });
+    }
     if (stdout?.trim()) log(stdout.trim());
+    const pullNumber = mergedPullNumber(stdout);
+    await issueCloser({
+      issue: prepared.issue, pullNumber, runLine: coderRun.line,
+      repoRoot: prepared.repoRoot, cwd, env,
+    });
   }
   return completed;
 }
