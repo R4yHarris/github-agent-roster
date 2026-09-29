@@ -38,8 +38,14 @@ function isProtectedSurface(file) {
 
 export function isForbiddenWrite(file) {
   const parts = partsOf(file);
-  return isProtectedSurface(file) || (parts.length === 1 && managedFiles.has(parts[0])) ||
-    parts.some((part, index) => part === '.roster' && parts[index + 1] === 'evals.jsonl');
+  return isProtectedSurface(file) || isManagedFile(file) ||
+    parts.some((part, index) => part === '.roster' &&
+      ['evals.jsonl', 'memory'].includes(parts[index + 1]));
+}
+
+export function isManagedFile(file) {
+  const parts = partsOf(file);
+  return parts.length === 1 && managedFiles.has(parts[0]);
 }
 
 export function isAllowedFile(file, allowedFiles) {

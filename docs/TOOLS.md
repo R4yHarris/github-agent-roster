@@ -31,7 +31,8 @@ storage under `.roster/vault`, Git metadata,
 cannot rewrite. `list_dir` refuses protected paths and hides their names
 when listing a parent. Policy and workflow bodies are no longer readable
 as task context; both reads and writes are denied.
-The human evaluation ledger `.roster/evals.jsonl` is also write-protected,
+The human evaluation ledger `.roster/evals.jsonl` and seat notebooks under
+`.roster/memory` are also write-protected,
 even when TASK.md grants broad write scope.
 
 `search_text` is a case-sensitive, fixed-string grep, not a regex or a shell
@@ -51,6 +52,9 @@ evaluation boundary, applies a 60-second timeout, and captures test output.
 A nonzero Node exit is a failed tool result rather than a process crash,
 so the coder can use another turn to fix it. A timeout is an explicit
 error. Final verification must pass before a configured run reports
-success or publishes. Tests themselves execute project code; these
+success or publishes. The [excellence gate](EXCELLENCE.md) verifies actual
+diff paths and secret checks before RESULT.md and again before publication;
+a test process cannot bypass those checks by editing outside task scope.
+Tests themselves execute project code; these
 application-level guards are **not** an OS sandbox. See the
 [threat model](THREAT_MODEL.md) for deployment boundaries.

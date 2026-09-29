@@ -7,7 +7,8 @@ import { buildPublishEnv, buildRun, RUN_ENV_NAMES } from '../metrics/run.mjs';
 import { taskFilesAllowed } from '../planner/stub.mjs';
 import { runCoder } from '../seats/coder.mjs';
 import { runPlanner } from '../seats/planner.mjs';
-import { isAllowedFile, isForbiddenWrite } from '../runtime/tools.mjs';
+import { isAllowedFile, isForbiddenWrite, isManagedFile } from '../runtime/tools.mjs';
+import { checkExcellence } from '../runtime/excellence.mjs';
 import { loadConfig } from './config.mjs';
 import { runIssue } from './issue.mjs';
 import {
@@ -19,7 +20,6 @@ import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
 
 const execFileAsync = promisify(execFile);
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
-const generated = new Set(['ASSIGNMENT.md', 'TASK.md', 'RECIPE.yml', 'CONTEXT.md', 'RESEARCH.md', 'RESULT.md', 'ESTIMATE.md']);
 
 async function git(worktree, args, env = process.env) {
   const { stdout } = await execFileAsync('git', args, {
@@ -44,7 +44,7 @@ export async function stageReviewedFiles(worktree, allowedFiles, { env = process
     if (!entry.startsWith('?? ') && !/^[ MADRCU?!]{2} /.test(entry.slice(0, 3))) {
       throw new Error('Could not parse worktree Git status before publishing');
     }
-    if (generated.has(file)) continue;
+    if (isManagedFile(file)) continue;
     if (isForbiddenWrite(file) || !isAllowedFile(file, allowedFiles)) {
       throw new Error(`Refusing to publish file outside TASK.md scope or protected by policy: ${file}`);
     }
@@ -70,15 +70,22 @@ export async function prepareBuiltinPublication(run, {
       typeof run.planner?.task !== 'string' || !run.runs?.coder?.env) {
     throw new TypeError('Publishing requires a completed builtin run');
   }
-  if (run.result?.mode !== 'llm' || run.result.tests?.exit_code !== 0) {
+  if (run.result?.mode !== 'llm' || (run.result.tests?.exit_code !== 0 && !run.result.testsSkipped)) {
     throw new Error('Publishing requires a configured coder run with passing tests');
   }
+  if (!run.result.excellence?.pass) throw new Error('Publishing requires a passing excellence gate');
   if (!env.GITHUB_APP_ID || !env.GITHUB_APP_PRIVATE_KEY_PATH) {
     throw new Error('Publishing requires GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH');
   }
   await ensureUnchanged(run.recipePath, run.planner.recipe);
   await ensureUnchanged(run.taskPath, run.planner.task);
   await ensureUnchanged(run.planner.estimatePath, run.planner.estimate);
+  const excellence = await checkExcellence({
+    worktree: run.worktreePath, task: run.planner.task, result: run.result, baseline: run.result.baseline,
+    verifiedSnapshot: run.result.excellence.snapshot,
+    env, apiKeyEnv: config.llm.api_key_env,
+  });
+  if (!excellence.pass) throw new Error(`Publishing refused by excellence gate: ${excellence.reasons[0]}`);
   const commandEnv = { ...env };
   delete commandEnv[config.llm.api_key_env];
   await git(run.worktreePath, ['submodule', 'update', '--init', '--recursive'], commandEnv);
