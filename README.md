@@ -137,7 +137,8 @@ printing `insufficient data`. Nothing fetches human evaluations from GitHub.
 See [the one-task loop](docs/ONE_TASK_LOOP.md), [same-session seats](docs/MULTIAGENT.md),
 [the human shell](docs/REPL.md), [recipes](docs/SEATS.md), and
 [metrics](docs/METRICS.md), [learning](docs/LEARNING.md),
-[LLM configuration and the vault](docs/LLM.md), [SDLC](docs/SDLC.md), and
+[LLM configuration and the vault](docs/LLM.md), [builtin tools](docs/TOOLS.md),
+[SDLC](docs/SDLC.md), and
 [principals](docs/PRINCIPALS.md) for details.
 
 ## Publish
