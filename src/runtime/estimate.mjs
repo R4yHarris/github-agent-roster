@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { inferTaskClass, joinLearning, loadLearning, TASK_CLASSES, validateLocalEvaluation } from '../lib/learn.mjs';
+import { splitTaskFrontmatter } from './skills.mjs';
 
 const fields = ['difficulty', 'estimate_min', 'task_class', 'model'];
 
@@ -64,10 +65,13 @@ function formatMetadata(metadata) {
 export async function writeEstimate(task, {
   worktree, learningRoot, config, env = process.env,
 }) {
-  if (typeof task !== 'string' || !task.startsWith('# Task: ')) {
+  if (typeof task !== 'string') {
     throw new TypeError('Estimation requires a TASK.md document');
   }
-  const normalized = task.replace(/\r\n/g, '\n');
+  const { frontmatter, body: normalized } = splitTaskFrontmatter(task);
+  if (!normalized.startsWith('# Task: ')) {
+    throw new TypeError('Estimation requires a TASK.md document');
+  }
   const section = normalized.search(/^## /m);
   const header = section < 0 ? normalized : normalized.slice(0, section);
   const body = section < 0 ? '' : normalized.slice(section);
@@ -83,7 +87,7 @@ export async function writeEstimate(task, {
   const metadata = estimateTask(readMetadata(header), [...standalone, ...joined],
     config.llm.model || env.ROSTER_MODEL || '');
   const cleanHeader = header.replace(/^(difficulty|estimate_min|task_class|model):[^\n]*\n?/gm, '').trimEnd();
-  const updatedTask = `${cleanHeader}\n\n${formatMetadata(metadata)}\n\n${body}`;
+  const updatedTask = `${frontmatter}${cleanHeader}\n\n${formatMetadata(metadata)}\n\n${body}`;
   const estimate = `# Estimate\n\n${formatMetadata(metadata)}\n\n` +
     `Source: ${metadata.source}\nMatching timed evaluations: ${metadata.n}\n` +
     `Accepted timed evaluations: ${metadata.accepted}\n\n` +

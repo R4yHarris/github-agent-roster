@@ -22,6 +22,7 @@ function fixture(t) {
   mkdirSync(path.join(repoRoot, 'principals'));
   copyFileSync(path.join(sourceRoot, 'principals', 'coder.md'),
     path.join(repoRoot, 'principals', 'coder.md'));
+  cpSync(path.join(sourceRoot, 'skills'), path.join(repoRoot, 'skills'), { recursive: true });
   mkdirSync(tempRoot);
   copyFileSync(path.join(sourceRoot, 'roster.config.example.yml'),
     path.join(repoRoot, 'roster.config.example.yml'));

@@ -5,9 +5,16 @@ description: Implement a bounded software task from TASK.md in one assigned code
 
 # Implement a task
 
+## When to use
+
 Use this skill after an ask has become an agreed task through the
 [v0 SDLC handoff](../../docs/SDLC.md). It is a procedure for one coder, not a
 worker launcher or permission grant.
+
+## Stop condition
+
+Stop when every acceptance check has evidence, the turn budget is spent, or
+a blocker prevents safe in-scope progress. State which checks remain unmet.
 
 ## Inputs and boundaries
 
@@ -51,9 +58,6 @@ worker launcher or permission grant.
    remaining risks or blockers. Preserve the original Ask. Check that the
    publication contains only intended files and no credentials or `.env`.
 
-Stop when the turn budget is exhausted and report any unmet check or blocker.
-Never claim that a failed test passed.
-
 For example, if AC-2 requires invalid issue numbers to fail without creating a
 worktree, assert both the specific error and the absence of worktree/file
 operations. `node --test tests/issue.test.mjs` can exercise that harness; its
@@ -77,3 +81,11 @@ when App env is set. If App env is absent, return the local handoff. If a
 publishing prerequisite or permission is missing, report it; do not bypass it
 or claim publication. The human owns review and the `AI-Eval:` comment; the
 SDK may merge only after explicit publication, approved policy, and green checks.
+
+## Learnings
+
+In a shared repository, the parent should integrate current main and retest
+before the first SDK publication, without modifying another agent's worktree.
+The pinned publisher can leave an App commit behind after an updated-head
+failure; preserve that commit and report the state rather than manufacturing
+an empty retry commit, rewriting vendor code, or falling back to human credentials.

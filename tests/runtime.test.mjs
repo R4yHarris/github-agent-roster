@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -24,8 +24,7 @@ function fixture(context, config = stubConfig) {
   mkdirSync(path.join(repoRoot, 'principals'));
   writeFileSync(path.join(repoRoot, 'principals', 'coder.md'),
     readFileSync(new URL('../principals/coder.md', import.meta.url), 'utf8'));
-  mkdirSync(skillDirectory, { recursive: true });
-  mkdirSync(path.join(repoRoot, 'skills', 'run-tests'));
+  cpSync(new URL('../skills/', import.meta.url), path.join(repoRoot, 'skills'), { recursive: true });
   writeFileSync(path.join(skillDirectory, 'SKILL.md'), '# Implement task\nRun tests.\n');
   writeFileSync(path.join(repoRoot, 'skills', 'run-tests', 'SKILL.md'), '# Run tests\nUse node --test.\n');
   writeFileSync(path.join(worktree, 'AGENTS.md'), '# Instructions\nCode carefully.\n');
@@ -51,7 +50,8 @@ test('loads worktree context, this roster repository skills, and only the last 2
   assert.equal(loaded.memory.length, 20);
   assert.deepEqual(loaded.memory.map((line) => JSON.parse(line).index),
     Array.from({ length: 20 }, (_, index) => index + 5));
-  assert.deepEqual(await loadSkills({ repoRoot: options.repoRoot }), [
+  assert.deepEqual(await loadSkills({ repoRoot: options.repoRoot,
+    task: '---\nskills: [implement-task, run-tests]\n---\n' }), [
     { name: 'implement-task', content: '# Implement task\nRun tests.\n' },
     { name: 'run-tests', content: '# Run tests\nUse node --test.\n' },
   ]);
@@ -59,7 +59,7 @@ test('loads worktree context, this roster repository skills, and only the last 2
   await assert.rejects(readMemory({ file: options.memoryPath, repoRoot: options.repoRoot }), /Invalid memory JSONL line 1/);
 });
 
-test('missing or empty skills directories are optional, but malformed skill files fail', async (context) => {
+test('unrequested skills are optional, but requested malformed skill files fail', async (context) => {
   const repoRoot = mkdtempSync(path.join(tmpdir(), 'roster-skills-'));
   context.after(() => rmSync(repoRoot, { recursive: true, force: true }));
   assert.deepEqual(await loadSkills({ repoRoot }), []);
@@ -70,7 +70,22 @@ test('missing or empty skills directories are optional, but malformed skill file
   assert.deepEqual(await loadSkills({ repoRoot }), []);
   mkdirSync(path.join(skills, 'malformed'));
   mkdirSync(path.join(skills, 'malformed', 'SKILL.md'));
-  await assert.rejects(loadSkills({ repoRoot }), /regular SKILL\.md/);
+  assert.deepEqual(await loadSkills({ repoRoot }), []);
+  await assert.rejects(loadSkills({ repoRoot, task: '---\nskills: [malformed]\n---\n' }), /regular SKILL\.md/);
+});
+
+test('a missing task skill stops the coder before any model or tool turn', async (context) => {
+  const options = fixture(context, llmConfig);
+  const taskPath = path.join(options.worktree, 'TASK.md');
+  writeFileSync(taskPath, readFileSync(taskPath, 'utf8').replace(/^skills:.*$/m, 'skills: [missing]'));
+  let calls = 0;
+  await assert.rejects(runCoder({
+    ...options,
+    fetchImpl: () => { calls += 1; throw new Error('Unexpected model call'); },
+    runTestCommand: () => { calls += 1; throw new Error('Unexpected test call'); },
+  }), /Unknown task skill: missing/);
+  assert.equal(calls, 0);
+  assert.throws(() => readFileSync(path.join(options.worktree, 'RESULT.md')), /ENOENT/);
 });
 
 test('seat memory paths preserve a custom coder file and isolate the planner beside it', () => {

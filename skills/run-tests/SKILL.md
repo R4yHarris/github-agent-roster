@@ -5,6 +5,8 @@ description: Verify TASK.md acceptance checks using only Node's built-in node --
 
 # Run tests
 
+## When to use
+
 Use this skill in the assigned worktree after reading its `TASK.md` and
 repository instructions. The runner is **`node --test` only**, on Node 20+.
 Do not install packages, introduce another runner, or substitute lint, build,
@@ -13,6 +15,12 @@ or live network workflows for the acceptance checks.
 In the builtin runtime, use the `run_test` tool: it runs the full suite and
 does not accept arbitrary shell commands. The focused command examples below
 apply to a manual worker with shell access.
+
+## Stop condition
+
+Stop after the final edit has passing test evidence, or report the first
+failure, missing prerequisite, or exhausted turn budget. Never mark unrun
+or skipped acceptance checks as passed.
 
 ## Procedure
 

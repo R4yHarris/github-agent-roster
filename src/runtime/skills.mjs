@@ -2,13 +2,19 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { ensureLocalPath } from '../lib/paths.mjs';
 
-export function taskSkillNames(task) {
+export function splitTaskFrontmatter(task) {
   if (typeof task !== 'string') throw new TypeError('TASK.md must be text');
   const text = task.replace(/\r\n/g, '\n');
-  if (!text.startsWith('---\n')) return [];
+  if (!text.startsWith('---\n')) return { frontmatter: '', body: text };
   const end = text.indexOf('\n---\n', 3);
   if (end < 0) throw new Error('TASK.md frontmatter must end with ---');
-  const lines = text.slice(4, end).split('\n');
+  return { frontmatter: text.slice(0, end + 5), body: text.slice(end + 5) };
+}
+
+export function taskSkillNames(task) {
+  const { frontmatter } = splitTaskFrontmatter(task);
+  if (!frontmatter) return [];
+  const lines = frontmatter.slice(4, -5).split('\n');
   const entries = lines.flatMap((line, index) => /^skills:/.test(line) ? [index] : []);
   if (!entries.length) return [];
   if (entries.length !== 1) throw new Error('TASK.md must not repeat skills');
@@ -36,7 +42,9 @@ export function taskSkillNames(task) {
   return names;
 }
 
-export async function loadSkills({ repoRoot, skillsPath = 'skills' }) {
+export async function loadSkills({ repoRoot, skillsPath = 'skills', task = '' }) {
+  const names = taskSkillNames(task);
+  if (!names.length) return [];
   const root = await fs.realpath(repoRoot);
   const directory = path.resolve(root, skillsPath);
   const relative = path.relative(root, directory);
@@ -44,32 +52,23 @@ export async function loadSkills({ repoRoot, skillsPath = 'skills' }) {
     throw new Error('Skills must be loaded from this roster repository');
   }
   await ensureLocalPath(directory, root);
-  let status;
-  try {
-    status = await fs.lstat(directory);
-  } catch (error) {
-    if (error.code === 'ENOENT') return [];
-    throw error;
-  }
-  if (!status.isDirectory() || status.isSymbolicLink()) {
-    throw new Error('Skills path must be a directory, not a symlink');
-  }
   const skills = [];
-  for (const entry of (await fs.readdir(directory, { withFileTypes: true }))
-    .sort((left, right) => left.name.localeCompare(right.name))) {
-    if (!entry.isDirectory()) continue;
-    const file = path.join(directory, entry.name, 'SKILL.md');
+  for (const name of names) {
+    const file = path.join(directory, name, 'SKILL.md');
+    await ensureLocalPath(file, root);
     let skillStatus;
     try {
       skillStatus = await fs.lstat(file);
     } catch (error) {
-      if (error.code === 'ENOENT') continue;
+      if (error.code === 'ENOENT') throw new Error(`Unknown task skill: ${name}`, { cause: error });
       throw error;
     }
-    if (!skillStatus.isFile() || skillStatus.isSymbolicLink()) {
-      throw new Error(`Skill ${entry.name} must contain a regular SKILL.md file`);
+    if (!skillStatus.isFile() || skillStatus.isSymbolicLink() || skillStatus.size > 65_536) {
+      throw new Error(`Skill ${name} must contain a regular SKILL.md file of at most 64 KiB`);
     }
-    skills.push({ name: entry.name, content: await fs.readFile(file, 'utf8') });
+    const content = await fs.readFile(file, 'utf8');
+    if (!content.trim()) throw new Error(`Skill ${name} must not be empty`);
+    skills.push({ name, content });
   }
   return skills;
 }

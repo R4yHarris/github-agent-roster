@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -34,7 +34,7 @@ function fixture(context) {
   writeFileSync(path.join(repoRoot, 'principals', 'coder.md'),
     readFileSync(new URL('../principals/coder.md', import.meta.url), 'utf8'));
   mkdirSync(target);
-  mkdirSync(path.join(repoRoot, 'skills', 'implement-task'), { recursive: true });
+  cpSync(new URL('../skills/', import.meta.url), path.join(repoRoot, 'skills'), { recursive: true });
   mkdirSync(path.join(contracts, 'scripts'), { recursive: true });
   writeFileSync(path.join(repoRoot, 'roster.config.example.yml'), example);
   writeFileSync(path.join(repoRoot, 'skills', 'implement-task', 'SKILL.md'), '# Code and test\n');
@@ -310,7 +310,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
       }) };
     }
     if (completion === 2) {
-      assert.match(body.messages[0].content, /## TASK\.md\n\n# Task: Add Status to README/);
+      assert.match(body.messages[0].content, /## TASK\.md\n\n---\nskills: [^\n]+\n---\n# Task: Add Status to README/);
       assert.match(readFileSync(path.join(options.target, '.worktrees', 'issue-42', 'ESTIMATE.md'), 'utf8'),
         /model: local-model/);
       assert.deepEqual(body.tools.map(({ function: tool }) => tool.name),
