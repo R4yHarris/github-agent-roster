@@ -10,6 +10,7 @@
     "templates/",
     "fixtures/demo-task/",
     "skills/",
+    "principals/",
     "docs/",
     "roster.config.example.yml",
     "AGENTS.md",

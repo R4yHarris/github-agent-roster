@@ -4,10 +4,12 @@ import { runLoop } from '../runtime/loop.mjs';
 import { appendMemory, seatMemoryPath } from '../runtime/memory.mjs';
 import { loadSkills } from '../runtime/skills.mjs';
 import { createTools } from '../runtime/tools.mjs';
+import { loadPrincipal } from './principal.mjs';
 
 export async function runCoder({
   worktree, repoRoot, config, task, session, fetchImpl, env, vault, runTestCommand,
 }) {
+  const principal = await loadPrincipal({ repoRoot, id: config.seat.principal });
   const memoryPath = seatMemoryPath({
     repoRoot, memoryPath: config.paths.memory, seat: 'coder',
   });
@@ -21,7 +23,7 @@ export async function runCoder({
   });
   let result;
   try {
-    result = await runLoop({ config, context, skills, tools, worktree, fetchImpl, env, vault });
+    result = await runLoop({ config, principal, context, skills, tools, worktree, fetchImpl, env, vault });
   } catch (error) {
     await appendMemory({ file: memoryPath, repoRoot, record: {
       task, session, status: 'failed', error: error.message,

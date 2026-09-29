@@ -19,6 +19,9 @@ function fixture(t) {
   const tempRoot = path.join(root, 'worktrees');
   mkdirSync(path.join(repoRoot, 'templates', 'sdlc'), { recursive: true });
   mkdirSync(path.join(repoRoot, 'fixtures', 'demo-task'), { recursive: true });
+  mkdirSync(path.join(repoRoot, 'principals'));
+  copyFileSync(path.join(sourceRoot, 'principals', 'coder.md'),
+    path.join(repoRoot, 'principals', 'coder.md'));
   mkdirSync(tempRoot);
   copyFileSync(path.join(sourceRoot, 'roster.config.example.yml'),
     path.join(repoRoot, 'roster.config.example.yml'));
