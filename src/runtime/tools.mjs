@@ -16,11 +16,17 @@ function isSecret(file) {
     part.endsWith('.pem'));
 }
 
-export function isForbiddenWrite(file) {
+function isProtectedSurface(file) {
   const parts = partsOf(file);
   return isSecret(file) || parts.includes('.git') || parts.includes('agent-policy.yml') ||
-    (parts.length === 1 && managedFiles.has(parts[0])) ||
-    parts.some((part, index) => part === '.github' && parts[index + 1] === 'workflows');
+    parts.some((part, index) =>
+      (part === '.github' && parts[index + 1] === 'workflows') ||
+      (part === 'vendor' && parts[index + 1] === 'github-agent-contracts'));
+}
+
+export function isForbiddenWrite(file) {
+  const parts = partsOf(file);
+  return isProtectedSurface(file) || (parts.length === 1 && managedFiles.has(parts[0]));
 }
 
 export function isAllowedFile(file, allowedFiles) {
@@ -118,6 +124,9 @@ export async function createTools({
     if (isSecret(normalized) || partsOf(normalized).includes('.git')) {
       throw new Error('Tool access to secrets and Git metadata is refused');
     }
+    if (directory && isProtectedSurface(normalized)) {
+      throw new Error('Listing protected worktree paths is refused');
+    }
     if (write && !isAllowedFile(normalized, allowedFiles)) {
       throw new Error(`Writing ${normalized} is not allowed by TASK.md or worktree policy`);
     }
@@ -187,17 +196,18 @@ export async function createTools({
 
     async list_dir(args = {}) {
       argumentsFor(args, [], ['path']);
-      const { file, relative } = locate(args.path ?? '.', { directory: true });
+      const { file, relative, normalized } = locate(args.path ?? '.', { directory: true });
       if (relative) await checkComponents(relative);
       const entry = await fs.lstat(file);
       if (!entry.isDirectory()) throw new Error('list_dir requires a directory');
       if (relative) await checkParent(file);
       const entries = await fs.readdir(file, { withFileTypes: true });
-      return entries.map((item) => ({
+      return entries.filter((item) => !isProtectedSurface(path.posix.join(normalized, item.name)))
+        .map((item) => ({
         name: item.name,
         type: item.isDirectory() ? 'directory' : item.isFile() ? 'file' :
           item.isSymbolicLink() ? 'symlink' : 'other',
-      })).sort((left, right) => left.name.localeCompare(right.name));
+        })).sort((left, right) => left.name.localeCompare(right.name));
     },
 
     async run_test(args = {}) {
