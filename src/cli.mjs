@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runIssue } from './lib/issue.mjs';
 import { parseEvaluationArgs, recordEvaluation } from './lib/eval.mjs';
-import { formatRecommendation, recommend, repositoryRoot, TASK_CLASSES } from './lib/learn.mjs';
+import { formatRecommendation, parseRecommendationArgs, recommend, repositoryRoot } from './lib/learn.mjs';
 import { submitAsk } from './lib/ask.mjs';
 import { runBuiltinIssue } from './lib/builtin.mjs';
 import { loadConfig } from './lib/config.mjs';
@@ -35,7 +35,7 @@ const help = `Usage:
   roster vault list
   roster vault get NAME
   roster eval <sha-or-session> <accept|reject|rework> <1-5> <y|n> [--minutes N] [--comment "TEXT"]
-  roster recommend --task-class feat|fix|docs|test
+  roster recommend --task-class feat|fix|docs|test [--difficulty 1-5]
 
 Ask creates a GitHub issue when gh is available; otherwise it saves a local draft.
 Doctor checks local prerequisites without contacting GitHub or printing App env values.
@@ -171,11 +171,9 @@ async function main(args) {
     const evaluation = await recordEvaluation(...values, options);
     process.stdout.write(`Recorded AI-Eval for ${evaluation.sha ?? evaluation.session}.\n`);
   } else if (args[0] === 'recommend') {
-    if (args.length !== 3 || args[1] !== '--task-class' || !TASK_CLASSES.includes(args[2])) {
-      throw new TypeError('Use roster recommend --task-class feat|fix|docs|test.');
-    }
+    const { taskClass, difficulty } = parseRecommendationArgs(args.slice(1));
     const records = loadMetrics({ contractsPath: resolveContractsPath(), cwd: repositoryRoot() });
-    process.stdout.write(formatRecommendation(recommend(records, args[2]), args[2]));
+    process.stdout.write(formatRecommendation(recommend(records, taskClass, difficulty), taskClass, loadConfig()));
   } else {
     throw new TypeError('Unknown arguments. Run roster --help for usage.');
   }

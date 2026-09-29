@@ -1,8 +1,9 @@
 # Learning from runs and human evaluations
 
 Roster joins the required contracts pack's `AI-Run` export with local run
-metadata and human decisions. There is no model API, vault, analytics service,
-or separate task database. GitHub Issues and PRs remain the queue.
+metadata and human decisions. The goal is the **next task at this difficulty
+with fewer defects**, not a hidden quality score. There is no model API, vault,
+analytics service, or separate task database. GitHub Issues and PRs remain the queue.
 
 ## Opt in to local run records
 
@@ -41,6 +42,7 @@ Only reported fields are written:
 | `effort` | Contracts-normalized `AI_EFFORT`: `l`, `m`, `h`, or `x` |
 | `context_used`, `context_max`, `context_out` | Corresponding `AI_CONTEXT_*` environment variables |
 | `task_class` | A recognized `feat`, `fix`, `docs`, or `test` prefix in the issue title |
+| `excellence` | A recorded `pass`/`fail` or report with boolean `pass`; never a human evaluation |
 
 Run metadata normalization uses the contracts parser through
 [`resolveContractsPath`](../src/lib/paths.mjs), not a copied parser.
@@ -80,7 +82,9 @@ characters are resolved through Git as commit abbreviations; use a non-hex
 session such as `roster-...` to avoid that ambiguity. Sessions use the contracts
 1-64 character alphabet (letters, digits, `.`, `_`, `-`), without a leading `-`
 for CLI arguments. A full SHA or session need not already have a local run;
-unmatched evaluations remain saved but do not influence recommendations.
+unmatched evaluations remain saved. Self-contained evaluations with a known
+model and task class can supply local learning evidence without a separate run
+record; incomplete metadata cannot establish model capacity.
 
 This appends `.roster/evals.jsonl` at the current Git repository's root, even
 when invoked from a subdirectory:
@@ -111,12 +115,17 @@ seat calls and coder-tool writes to the evaluation file are rejected.
 ```sh
 roster stats
 roster stats --ref main..HEAD --evals evals.jsonl
-roster recommend --task-class feat
+roster recommend --task-class fix --difficulty 4
 ```
 
-Stats invokes contracts `export-agent-metrics.mjs` and joins the local records.
-The existing `MODEL`, `EFFORT`, `RUNS`, and `EVALS` columns remain unchanged.
-Unknown model or effort displays as `-`.
+Stats invokes contracts `export-agent-metrics.mjs` and joins the local records,
+including self-contained human evaluations when no exported run matches.
+Rows are grouped by **model, task class, and effort**, so different effort
+configurations are not mixed. The table retains `MODEL`, `EFFORT`, `RUNS`,
+and `EVALS` and adds `TASK_CLASS`, `N`, `ACCEPT`, `MEDIAN_MIN`, and
+`MEDIAN_DIFFICULTY`. Unknown values display as `-`, never invented zero actuals.
+Medians use available human measurements across accepted, rejected, and reworked
+samples. `N` counts distinct decisions, not duplicate exported commits.
 
 Without `--ref`, stats includes exported `HEAD` history and local-only runs.
 An explicit `--ref` restricts results to exported commits in that revision or
@@ -135,35 +144,56 @@ the deterministic `builtin-stub` are not candidates.
 
 For each configuration:
 
-- `n` counts distinct human-evaluated samples of the requested task class.
+- `n` counts distinct human-evaluated samples of the requested task class,
+  plus recorded excellence failures that must count as rejects.
 - Accept-rate is `accept / n`; `reject` and `rework` are not accepts.
-- Unevaluated runs do not enter the denominator.
+- Unevaluated runs do not enter the denominator unless excellence recorded a
+  failure. A passing test or excellence report never invents human acceptance.
 - One session evaluation counts at most once per configuration, even when
   several exported commits share that session.
-- At least **3** samples are required. The highest accept-rate wins; ties use
-  larger `n`, then model name and effort order (`l`, `m`, `h`, `x`, unknown).
-- Difficulty, `again`, and context are retained as evidence, not invented
-  quality scores or ranking weights.
+
+`--difficulty 1-5` requires median human-rated difficulty at least that high,
+in addition to `n >= 3`. Missing difficulty cannot satisfy that request.
+Eligible configurations rank by accept-rate, then sample count, then stable
+model/effort ordering. Omitting difficulty preserves the previous read-only
+recommendation behavior. Output includes the supporting medians; a candidate
+also carries the rounded median **accepted** minutes for the next task estimate.
+Missing timing remains unknown. If no candidate qualifies, the command prints
+`insufficient data` and the actual config model/effort default (`ROSTER_MODEL`
+when config has no model); it does not
+silently choose a different model.
+
+Security misses such as a secret in the diff or a policy edit count as
+**reject**, even when tests passed or a human evaluation said accept, if an
+excellence failure was recorded. This is a derived learning decision only:
+the human's append-only AI-Eval is not rewritten. Duplicate run records cannot
+erase a recorded failure. Failure-only evidence has no invented difficulty or
+duration. Legacy free-form verdicts remain visible in `EVALS` but do not enter
+the normalized `N` or recommendations. `again` and token context are evidence,
+not extra ranking weights; difficulty is an explicit eligibility gate.
 
 Two evaluations still print `insufficient data`, even if a third run exists
-without a human evaluation. A third distinct evaluated sample for the same
-task class, model, and effort makes that configuration eligible.
+without a human evaluation or recorded excellence failure. A third distinct
+evaluated sample for the same task class, model, and effort satisfies the count
+threshold, but any requested difficulty must also be supported.
 
 Example output:
 
 ```text
-feat: careful-model effort=h accept-rate=66.7% n=3
+feat: careful-model effort=h accept-rate=66.7% n=3 median-min=20 median-difficulty=4
 ```
 
-If no configuration qualifies, the exact output is `insufficient data`.
-`roster recommend` is read-only. Only
+If no configuration qualifies, output includes `insufficient data` and the
+configured fallback. `roster recommend` is read-only.
 `roster run --issue N --runtime builtin --auto-model` with an empty configured
-model applies a qualifying suggestion to that run's planner and coder,
-without editing private config or policy. Fewer than three evaluated
-samples keep the run on the deterministic stub. See [routing](ROUTING.md).
+model applies a qualifying suggestion to that run's planner and coder without
+editing private config or policy. Fewer than three samples keep that opt-in run
+on the deterministic stub. An explicit task model can select the coder as
+described in [estimation](ESTIMATION.md). See [routing](ROUTING.md).
 
 Both `.roster/runs/` and `.roster/evals.jsonl` are ignored by Git. Keep human
-feedback local unless the human explicitly posts the optional PR comment.
+free-text feedback local; the human eval command posts only the compact verdict
+and reported minutes when a matching PR exists.
 
 ## Tests
 

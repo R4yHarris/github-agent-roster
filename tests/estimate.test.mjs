@@ -33,6 +33,9 @@ test('three matching evaluations use only accepted actuals and round medians to 
   mixed[1].verdict = 'reject';
   mixed[2].verdict = 'rework';
   assert.equal(estimateTask(metadata, mixed).estimate_min, 12);
+  const unsafe = evaluations([1, 10, 20]);
+  unsafe[0].excellence = 'fail';
+  assert.equal(estimateTask(metadata, unsafe).estimate_min, 15);
   assert.equal(estimateTask(metadata, mixed.map((record) => ({ ...record, verdict: 'reject' }))).estimate_min, 15);
 });
 

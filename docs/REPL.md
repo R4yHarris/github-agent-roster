@@ -18,7 +18,7 @@ agents and CI.
 | `/eval TARGET accept\|reject\|rework 1-5 y\|n [--minutes N] [--comment "TEXT"]` | Record the [human retrospective](RETRO.md), including actual minutes and local feedback. |
 | `/publish [SUBJECT]` | Publish reviewed changes using the pinned contracts SDK. After `/run N`, the default subject is `feat: issue N`; a confirmed merge comments on and closes that issue. Otherwise supply a conventional subject. |
 | `/stats [REF]` | Summarize contracts and local AI-Run records, optionally at a Git ref. |
-| `/recommend feat|fix|docs|test` | Recommend from evaluated local runs. |
+| `/recommend feat\|fix\|docs\|test [--difficulty 1-5]` | Recommend model/effort with enough evidence at the requested difficulty, or show insufficient data and the config default. |
 | `/vault` or `/vault list` | List vault entry names, never values. |
 | `/vault get NAME` | Check whether an entry exists without revealing its value; use piped `roster vault get NAME` to retrieve it. |
 | `/vault set NAME` | Read the next line with terminal echo and readline history disabled, then store it in the existing file vault. |
