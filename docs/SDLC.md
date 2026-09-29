@@ -52,13 +52,14 @@ without editing the tracked example or storing credentials.
   Private schema 1 configs predating the planner section use a one-turn planner.
 - `seat.id` and `seat.principal` are both `coder`. The principal does not confer
   merge or deploy rights. `seat.turn_budget` limits coder responses to 1-64
-  (example: 8). `seat.tools` can only name the four builtin tools.
+  (example: 8). `seat.tools` can only name the five builtin tools.
+  `seat.context_chars` bounds the initial pack (default 8000 characters).
 - `paths.memory` selects the coder's append-only JSONL file; the planner uses
   `planner.jsonl` beside it. Each seat loads only its own last 20 entries.
   `paths.skills`
-  loads immediate `*/SKILL.md` files from **this** checkout (including
-  `implement-task` and `run-tests` when present). A missing or empty skills
-  directory is allowed. `paths.asks` holds local drafts;
+  loads only the `skills:` names selected by task frontmatter from **this**
+  checkout. Missing requested skills fail; an unrequested skill is not loaded.
+  `paths.asks` holds local drafts;
   `paths.worktrees` selects a path inside the issue repository.
 
 ## Task files and planning
@@ -71,7 +72,8 @@ without editing the tracked example or storing credentials.
 The generated recipe has builtin `planner` then `coder` seats with principal
 `coder`. Their fixed sequences are `[read_ask, plan, write_task]` and
 `[load_context, implement, run_tests, summarize]`. It assigns work, not GitHub
-capabilities.
+capabilities. The coder's recipe labels expand to the
+[eight-stage single-seat contract](SEAT.md); they do not create additional seats.
 
 ```sh
 roster ask "Add a Status section to README.md"
@@ -98,7 +100,8 @@ are validated before writing the task.
 
 [`TASK.md`](../templates/sdlc/TASK.md) puts acceptance checks and files
 allowed before the Ask text. The coder must meet the checks; the runner
-also enforces a final successful `node --test` in LLM mode. A failing check
+also enforces a final successful `node --test` in LLM mode unless initial
+frontmatter explicitly declares `tests: none`. A failing check
 must be reported, not treated as success.
 
 ## Execute and publish
@@ -135,8 +138,9 @@ API key or App credentials. A nonzero exit returns captured stdout, stderr,
 and exit code to the coder as a failed tool result so it can correct the task
 within its turn budget; a timeout reports an explicit error. Final nonzero
 verification fails the run and records failed memory instead of claiming
-success. A successful run records `RESULT.md` and appends memory. See the
-[four-tool contract and denylist](TOOLS.md) for the exact inputs and
+success. A successful run appends memory, runs the excellence gate, and writes RESULT.md.
+Failed configured runs also save a truthful result before rejecting. See the
+[five-tool contract and denylist](TOOLS.md) for the exact inputs and
 protected surfaces.
 
 With no endpoint, the stub writes a deterministic `RESULT.md` summary, exits

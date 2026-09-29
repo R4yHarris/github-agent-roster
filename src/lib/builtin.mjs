@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -14,7 +15,7 @@ import { runIssue } from './issue.mjs';
 import {
   closeMergedIssue, issueMergeMessage, mergedPullNumber, mergedPullNumberFromFailure,
 } from './issue-board.mjs';
-import { inferTaskClass, recommend, recordRun } from './learn.mjs';
+import { IDENTIFIER, inferTaskClass, recommend, recordRun } from './learn.mjs';
 import { loadMetrics } from './metrics.mjs';
 import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
 
@@ -83,6 +84,7 @@ export async function prepareBuiltinPublication(run, {
   const excellence = await checkExcellence({
     worktree: run.worktreePath, task: run.planner.task, result: run.result, baseline: run.result.baseline,
     verifiedSnapshot: run.result.excellence.snapshot,
+    memoryPath: run.result.memoryPath,
     env, apiKeyEnv: config.llm.api_key_env,
   });
   if (!excellence.pass) throw new Error(`Publishing refused by excellence gate: ${excellence.reasons[0]}`);
@@ -94,6 +96,43 @@ export async function prepareBuiltinPublication(run, {
   const publishEnv = buildPublishEnv({ config, env, run: run.runs.coder });
   publishEnv.GITHUB_APP_PRIVATE_KEY_PATH = path.resolve(cwd, env.GITHUB_APP_PRIVATE_KEY_PATH);
   return { contractsPath, worktreePath: run.worktreePath, publishEnv };
+}
+
+export async function runBuiltinTask({
+  cwd = process.cwd(), repoRoot = rosterRoot, config = loadConfig({ repoRoot }), env = process.env,
+  task = env.AI_TASK || `local-${randomBytes(8).toString('hex')}`,
+  session = env.AI_SESSION || `roster-${randomBytes(8).toString('hex')}-coder`,
+  log = console.log, fetchImpl, vault, runTestCommand,
+} = {}) {
+  if (typeof task !== 'string' || !IDENTIFIER.test(task) ||
+      typeof session !== 'string' || !IDENTIFIER.test(session)) {
+    throw new TypeError('AI_TASK and AI_SESSION must be opaque 1-64 character identifiers');
+  }
+  resolveContractsPath({ repoRoot, cwd, env });
+  const worktreePath = path.resolve(cwd);
+  const record = async (result) => {
+    const metricEnv = { ...env };
+    for (const name of [...RUN_ENV_NAMES, config.llm.api_key_env,
+      'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH', 'GH_TOKEN', 'GITHUB_TOKEN']) delete metricEnv[name];
+    await recordRun({
+      task, session, task_class: result.taskMetadata?.task_class,
+      excellence: result.excellence.pass ? 'pass' : 'fail',
+    }, { cwd: worktreePath, env: { ...metricEnv, ...result.run?.env } });
+  };
+  let result;
+  try {
+    result = await runCoder({ worktree: worktreePath, repoRoot, config, env, task, session,
+      fetchImpl, vault, runTestCommand });
+  } catch (error) {
+    if (error instanceof Error && error.result) await record(error.result);
+    throw error;
+  }
+  await record(result);
+  log(`Worktree: ${worktreePath}\nTASK: ${path.join(worktreePath, 'TASK.md')}\n` +
+    `CONTEXT: ${result.contextPath}\nRESEARCH: ${result.researchPath}\nRESULT: ${result.resultPath}\n` +
+    `Mode: ${result.mode}\n` + (result.run ? `AI-Run: ${result.run.line}\n` : '') +
+    'Single coder task complete; publication remains an explicit reviewed App SDK handoff.');
+  return { worktreePath, task, session, result, run: result.run };
 }
 
 export async function runBuiltinIssue(issueNumber, {
@@ -178,8 +217,9 @@ export async function runBuiltinIssue(issueNumber, {
   for (const name of [...RUN_ENV_NAMES, 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH',
     'GH_TOKEN', 'GITHUB_TOKEN']) delete metricEnv[name];
   const taskClass = planner.metadata.task_class;
-  const recordSeat = async (session, run) => recordRun({
+  const recordSeat = async (session, run, excellence) => recordRun({
     session, task: prepared.task, task_class: taskClass,
+    ...(excellence ? { excellence: excellence.pass ? 'pass' : 'fail' } : {}),
   }, { cwd: prepared.repoRoot, env: { ...metricEnv, ...run?.env } });
   const plannerRun = activeConfig.llm.base_url ? buildRun({
     config: activeConfig, usage: planner.usage ?? {}, session: sessions.planner, task: prepared.task,
@@ -190,10 +230,16 @@ export async function runBuiltinIssue(issueNumber, {
     ...activeConfig.llm, model: planner.metadata.model || activeConfig.llm.model,
     effort: planner.feedback?.effort ?? activeConfig.llm.effort,
   }) };
-  const result = await runCoder({
-    worktree: worktreePath, repoRoot, config: coderConfig, task: prepared.task, session: sessions.coder,
-    fetchImpl, env, vault, runTestCommand, priorFeedback: planner.feedback?.context,
-  });
+  let result;
+  try {
+    result = await runCoder({
+      worktree: worktreePath, repoRoot, config: coderConfig, task: prepared.task, session: sessions.coder,
+      fetchImpl, env, vault, runTestCommand, priorFeedback: planner.feedback?.context,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.result) await recordSeat(sessions.coder, error.result.run, error.result.excellence);
+    throw error;
+  }
   await ensureUnchanged(planner.recipePath, planner.recipe);
   await ensureUnchanged(planner.taskPath, planner.task);
   await ensureUnchanged(planner.estimatePath, planner.estimate);
@@ -201,7 +247,7 @@ export async function runBuiltinIssue(issueNumber, {
     config: coderConfig, usage: result.usage ?? {}, session: sessions.coder, task: prepared.task,
     env,
   }) : null;
-  await recordSeat(sessions.coder, coderRun);
+  await recordSeat(sessions.coder, coderRun, result.excellence);
   const runs = { planner: plannerRun, coder: coderRun };
   const publishMessage = issueMergeMessage(`feat: issue ${prepared.issue.number}`, prepared.issue.number);
   const command = `node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "${publishMessage}" --merge-when-green`;

@@ -591,7 +591,7 @@ test('opt-in learning records exactly one run for each builtin seat', async (con
   });
   assert.deepEqual(loadLearning({ cwd: options.target }).runs, [
     { session: result.sessions.planner, task: 'issue-42', task_class: 'feat' },
-    { session: result.sessions.coder, task: 'issue-42', task_class: 'feat' },
+    { session: result.sessions.coder, task: 'issue-42', task_class: 'feat', excellence: 'fail' },
   ]);
 });
 

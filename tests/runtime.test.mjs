@@ -90,7 +90,8 @@ test('a missing task skill stops the coder before any model or tool turn', async
     runTestCommand: () => { calls += 1; throw new Error('Unexpected test call'); },
   }), /Unknown task skill: missing/);
   assert.equal(calls, 0);
-  assert.throws(() => readFileSync(path.join(options.worktree, 'RESULT.md')), /ENOENT/);
+  assert.match(readFileSync(path.join(options.worktree, 'RESULT.md'), 'utf8'),
+    /Checks: FAIL[\s\S]*Unknown task skill: missing/);
 });
 
 test('seat memory paths preserve a custom coder file and isolate the planner beside it', () => {
@@ -101,6 +102,8 @@ test('seat memory paths preserve a custom coder file and isolate the planner bes
     path.join(repoRoot, 'custom', 'planner.jsonl'));
   assert.throws(() => seatMemoryPath({ repoRoot, memoryPath: 'custom/history.jsonl', seat: 'merger' }),
     /planner or coder/);
+  assert.throws(() => seatMemoryPath({ repoRoot, memoryPath: '.env.jsonl', seat: 'coder' }),
+    /protected or secret path/);
 });
 
 test('stub coder writes a deterministic result without contacting an LLM or running tests', async (context) => {

@@ -129,6 +129,7 @@ export async function createTools({
   allowedFiles,
   env = process.env,
   apiKeyEnv = 'ROSTER_API_KEY',
+  memoryPath,
   runCommand = execute,
 } = {}) {
   const root = path.resolve(worktree);
@@ -156,7 +157,8 @@ export async function createTools({
       throw new Error('Tool path must stay inside the worktree');
     }
     const normalized = relative.split(path.sep).join('/');
-    if (write && !isAllowedFile(normalized, allowedFiles)) {
+    if (write && (!isAllowedFile(normalized, allowedFiles) ||
+        (memoryPath && path.relative(file, path.resolve(memoryPath)) === ''))) {
       throw new Error(`Writing ${normalized} is not allowed by TASK.md or worktree policy`);
     }
     if (isForbiddenRead(normalized)) {
