@@ -8,7 +8,7 @@ import {
   closeMergedIssue, issueMergeMessage, mergedPullNumber, mergedPullNumberFromFailure,
 } from './lib/issue-board.mjs';
 import { loadConfig, setConfigValue } from './lib/config.mjs';
-import { recordEvaluation } from './lib/eval.mjs';
+import { parseEvaluationArgs, recordEvaluation } from './lib/eval.mjs';
 import { formatRecommendation, recommend, repositoryRoot, TASK_CLASSES } from './lib/learn.mjs';
 import { formatMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
 import { resolveContractsPath } from './lib/paths.mjs';
@@ -23,7 +23,7 @@ const help = `Commands:
   /effort [l|m|h|x]         Show or persist the effort level
   /run N [--auto-model]     Run builtin seats, optionally routing from human evaluations
   /status [N] [--offline]   Show an issue, open PR, and local worktree
-  /eval TARGET VERDICT 1-5 y|n
+  /eval TARGET VERDICT 1-5 y|n [--minutes N] [--comment "TEXT"]
   /publish [SUBJECT]        Publish reviewed changes (conventional subject)
   /stats [REF]              Show AI-Run metrics
   /recommend feat|fix|docs|test
@@ -187,9 +187,8 @@ export function createDispatcher({
         return true;
       }
       case 'eval': {
-        const fields = args.split(/\s+/);
-        if (fields.length !== 4) throw new TypeError('Use /eval TARGET accept|reject|rework 1-5 y|n.');
-        const evaluation = await api.recordEvaluation(...fields, { cwd: currentRoot() });
+        const { values, options } = parseEvaluationArgs(args);
+        const evaluation = await api.recordEvaluation(...values, { ...options, cwd: currentRoot(), env });
         output.write(`Recorded AI-Eval for ${evaluation.sha ?? evaluation.session}.\n`);
         return true;
       }

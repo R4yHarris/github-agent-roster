@@ -141,6 +141,21 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
   assert.match(errorOutput.text, /Unknown command: plain/);
 });
 
+test('/eval passes quoted feedback and actual minutes to the human-only writer', async () => {
+  const shell = dispatcher({
+    services: {
+      recordEvaluation: async (target, verdict, difficulty, again, options) => {
+        assert.deepEqual([target, verdict, difficulty, again], ['roster-42-coder', 'rework', '4', 'n']);
+        assert.equal(options.minutes, 25);
+        assert.equal(options.comment, 'Keep the  regression test.');
+        assert.deepEqual(options.env, {});
+        return { session: target };
+      },
+    },
+  });
+  await shell.dispatch('/eval roster-42-coder rework 4 n --minutes 25 --comment "Keep the  regression test."');
+});
+
 test('/model clear and /run --auto-model opt into routing without persisting a selection', async () => {
   const calls = [];
   const shell = dispatcher({
