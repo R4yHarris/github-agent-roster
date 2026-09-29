@@ -65,4 +65,16 @@ root; without the flag, it prints the next command but does not invoke it.
 Do not commit as the signed-in human when App environment variables are set.
 Never commit tokens, private keys, or `.env`.
 
+## Trailer CI
+
+The [composite action](../.github/actions/check-agent-trailers/action.yml)
+passes the PR base and head SHAs to the pinned submodule's
+`scripts/check-pr-agent-trailers.mjs`, rather than the roster's local copy.
+The human-owned [workflow](../.github/workflows/check-agent-trailers.yml) must
+check out full history with `persist-credentials: false` and
+`submodules: recursive`, then use Node 20 before running that action. Do not
+check out the base revision before the local action: that replaces the PR
+checkout and can leave its checker without required files. The workflow also
+needs a separate `tests` job running `node --test tests/*.test.mjs` on Node 20.
+
 Run the Node 20+ ESM tests with `npm test`. No runtime packages are required.
