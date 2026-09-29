@@ -46,5 +46,8 @@ board. See [same-session seats](docs/MULTIAGENT.md) and [SDLC](docs/SDLC.md).
 
 GHCP subagent names `planner` and `coder` map to these sequential builtin seats
 in one run/worktree, not separate chats, a second queue, Hermes Kanban, or a
-new runtime. Follow the [GHCP bridge](docs/GHCP.md) for its explicit App
-publication command and HTTP 422 handling; the builtin loop is unchanged.
+new runtime. The parent Copilot calls
+`node src/cli.mjs run --issue N --runtime builtin --seats planner,coder`
+for the issue, then the App publisher for reviewed changes. It must not
+`git commit` as R4yHarris when `GITHUB_APP_*` is set. Follow the
+[GHCP bridge](docs/GHCP.md) for publication and HTTP 422 handling.

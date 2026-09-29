@@ -6,6 +6,21 @@ in the same issue worktree. They do not create separate chats, another queue,
 Hermes Kanban, or a new runtime. GitHub Issues and PRs remain the board; see
 the [SDLC](SDLC.md).
 
+## Parent Copilot handoff
+
+The parent Copilot coordinates the request by calling Roster, rather than
+starting separate coding chats or writing a second queue:
+
+```sh
+node src/cli.mjs run --issue N --runtime builtin --seats planner,coder
+```
+
+In a human TTY, the equivalent is `/run N` in the [Roster shell](REPL.md).
+The parent reviews the resulting worktree and tests, then invokes the
+contracts publisher below for an explicitly requested publication. Copilot
+subagent names label Roster seats; they are not GitHub identities or policy
+grants.
+
 ## Publish from the feature worktree
 
 For an explicitly requested, reviewed GHCP change, when `GITHUB_APP_ID` and
@@ -23,7 +38,8 @@ Keep the [hard boundaries](../AGENTS.md): do not
 edit the contracts submodule, [agent-policy.yml](../agent-policy.yml), or
 [workflows](../.github/workflows/).
 
-Never `git commit` as the signed-in human when App environment is set, and
+Never `git commit` as R4yHarris (the signed-in human) when `GITHUB_APP_*`
+environment is set, and
 never use `gh pr create` or `git push` with human credentials to publish. If
 `--merge-when-green` fails with HTTP 422, stop and report that Checks
 permission is not accepted on the installation. Do not use a workaround or
