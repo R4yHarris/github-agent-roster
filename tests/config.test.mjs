@@ -33,7 +33,7 @@ test('loads the tracked example when private config is absent', (context) => {
     },
     planner: { turn_budget: 2 },
     seat: {
-      id: 'coder', principal: 'coder', turn_budget: 8,
+      id: 'coder', principal: 'coder', turn_budget: 8, context_chars: 8000,
       tools: ['read_file', 'write_file', 'list_dir', 'run_test'],
     },
     paths: {
@@ -145,6 +145,7 @@ test('rejects invalid schema, fields, roles, paths, tool names, and endpoint set
       .replace('base_url: ""', 'base_url: http://localhost:1234/v1')],
     ['tools', example.replace('run_test]', 'git_push]')],
     ['budget', example.replace('turn_budget: 8', 'turn_budget: 0')],
+    ['context budget', example.replace('context_chars: 8000', 'context_chars: 0')],
     ['planner budget', example.replace('turn_budget: 2', 'turn_budget: 65')],
     ['planner missing budget', example.replace(/  turn_budget: 2[^\r\n]*\r?\n/, '')],
     ['planner unknown field', example.replace('planner:', 'planner:\n  tools: [write_file]')],
@@ -163,6 +164,12 @@ test('rejects invalid schema, fields, roles, paths, tool names, and endpoint set
     .replace(/profiles:\r?\n[\s\S]*?(?=planner:)/, '');
   assert.equal(parseConfig(withoutProfiles).llm.profile, '');
   assert.equal(parseConfig(withoutProfiles).profiles.openai.api_key_env, 'OPENAI_API_KEY');
+});
+
+test('older configs retain the default context budget and can explicitly set it', () => {
+  assert.equal(parseConfig(example.replace(/  context_chars:[^\r\n]*\r?\n/, '')).seat.context_chars, 8000);
+  assert.equal(parseConfig(example.replace('context_chars: 8000', 'context_chars: 16000'))
+    .seat.context_chars, 16000);
 });
 
 test('only a missing private config triggers the example fallback', (context) => {

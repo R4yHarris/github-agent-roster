@@ -241,7 +241,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
       }) };
     }
     if (completion === 2) {
-      assert.match(body.messages[1].content, /TASK\.md:\n# Task: Add Status to README/);
+      assert.match(body.messages[0].content, /## TASK\.md\n\n# Task: Add Status to README/);
       assert.deepEqual(body.tools.map(({ function: tool }) => tool.name),
         ['read_file', 'write_file', 'list_dir', 'run_test']);
       return { ok: true, status: 200, json: async () => ({
@@ -363,7 +363,7 @@ test('default planner/coder run preserves the task handoff while the coder edits
       }) } }] }) };
     }
     if (completion === 2) {
-      assert.match(body.messages[1].content, /## Files allowed\n- `src\/app\.mjs`/);
+      assert.match(body.messages[0].content, /## Files allowed\n- `src\/app\.mjs`/);
       const write = (id, file, content) => ({
         id, type: 'function',
         function: { name: 'write_file', arguments: JSON.stringify({ path: file, content }) },
@@ -461,7 +461,7 @@ test('planner and coder read only their own last 20 memory lines and append sepa
     const body = JSON.parse(request.body);
     const expected = calls === 1 ? 'planner' : 'coder';
     const other = calls === 1 ? 'coder' : 'planner';
-    const context = body.messages[1].content;
+    const context = body.messages[calls === 1 ? 1 : 0].content;
     assert.match(context, new RegExp(`"seat":"${expected}","index":5`));
     assert.match(context, new RegExp(`"seat":"${expected}","index":24`));
     assert.doesNotMatch(context, new RegExp(`"seat":"${expected}","index":4`));
