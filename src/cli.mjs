@@ -7,8 +7,10 @@ import { recordEvaluation } from './lib/eval.mjs';
 import { formatRecommendation, recommend, repositoryRoot, TASK_CLASSES } from './lib/learn.mjs';
 import { submitAsk } from './lib/ask.mjs';
 import { runBuiltinIssue } from './lib/builtin.mjs';
+import { loadConfig } from './lib/config.mjs';
 import { formatMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
 import { resolveContractsPath } from './lib/paths.mjs';
+import { formatStatus, readStatus } from './lib/status.mjs';
 import { validateRecipe } from './lib/recipe.mjs';
 import { startRepl } from './repl.mjs';
 import { createFileVault, validateSecretName } from './vault/file.mjs';
@@ -20,6 +22,7 @@ const help = `Usage:
   roster run --issue N
   roster run --issue N --runtime builtin [--seats planner,coder] [--publish]
   roster run --issue N --runtime builtin --seats planner,coder
+  roster status [--issue N] [--offline]
   roster recipe validate PATH
   roster stats [--ref REVISION_OR_RANGE] [--evals PATH]
   roster vault set NAME
@@ -92,6 +95,26 @@ async function main(args) {
     const options = runOptions(args.slice(1));
     await runBuiltinIssue(options.issue, { publish: options.publish, seats: options.seats,
       repoRoot: rosterRoot });
+  } else if (args[0] === 'status') {
+    let issue;
+    let offline = false;
+    const flags = new Set();
+    for (let index = 1; index < args.length; index += 1) {
+      const flag = args[index];
+      if (!['--issue', '--offline'].includes(flag) || flags.has(flag)) {
+        throw new TypeError('Use roster status [--issue N] [--offline].');
+      }
+      flags.add(flag);
+      if (flag === '--offline') offline = true;
+      else {
+        issue = args[++index];
+        if (!issue || issue.startsWith('--')) {
+          throw new TypeError('Use roster status [--issue N] [--offline].');
+        }
+      }
+    }
+    process.stdout.write(formatStatus(await readStatus({ issue, offline,
+      config: loadConfig({ repoRoot: rosterRoot }) })));
   } else if (args.length === 3 && args[0] === 'recipe' && args[1] === 'validate') {
     validateRecipe(args[2]);
     process.stdout.write(`Valid recipe: ${args[2]}\n`);

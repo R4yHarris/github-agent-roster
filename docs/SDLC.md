@@ -85,7 +85,12 @@ must be reported, not treated as success.
 node src/cli.mjs run --issue 42 --runtime builtin
 ```
 
-The command uses the current Git repository's GitHub origin, authenticated
+Use `node src/cli.mjs status --issue 42` to read the issue, its open
+`issue-42` branch PR, and the local worktree path. Add `--offline` to read
+only the cached assignment and filesystem; an unavailable PR is shown as
+unknown, not absent. See the [interactive shell](REPL.md) for `/status`.
+
+`roster run` uses the current Git repository's GitHub origin, authenticated
 `gh issue view`, and branch `issue-42` in `.worktrees/issue-42`. It writes
 `ASSIGNMENT.md`, `RECIPE.yml`, `TASK.md`, and an ignored `.env` containing
 `AI_TASK` and the coder's `AI_SESSION`. The planner writes only `RECIPE.yml`
