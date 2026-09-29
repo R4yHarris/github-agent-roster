@@ -2,7 +2,7 @@ import { basename, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { Writable } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { writeAsk } from './lib/ask.mjs';
+import { submitAsk } from './lib/ask.mjs';
 import { prepareBuiltinPublication, runBuiltinIssue } from './lib/builtin.mjs';
 import { loadConfig } from './lib/config.mjs';
 import { recordEvaluation } from './lib/eval.mjs';
@@ -13,7 +13,7 @@ import { createFileVault, validateSecretName } from './vault/file.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const help = `Commands:
-  /ask TEXT                 Draft a local ask and task
+  /ask TEXT                 Create an issue, or draft one if gh is unavailable
   /run N                    Run the builtin planner and coder for issue N
   /status                   Show this shell's repository and last run
   /eval TARGET VERDICT 1-5 y|n
@@ -49,7 +49,7 @@ async function publishWithContracts({ contractsPath, cwd, env, message, output, 
 }
 
 const defaultServices = {
-  writeAsk, runBuiltinIssue, recordEvaluation, repositoryRoot, loadMetrics,
+  submitAsk, runBuiltinIssue, recordEvaluation, repositoryRoot, loadMetrics,
   summarizeMetrics, formatMetrics, recommend, formatRecommendation,
   resolveContractsPath, prepareBuiltinPublication, createFileVault,
   validateSecretName, publisher: publishWithContracts,
@@ -102,9 +102,11 @@ export function createDispatcher({
     switch (command) {
       case 'ask': {
         if (!args) throw new TypeError('Use /ask TEXT.');
-        const ask = await api.writeAsk(args, { repoRoot, config, env });
+        const ask = await api.submitAsk(args, { cwd, repoRoot, config, env });
         state.lastAsk = ask;
-        output.write(`Ask: ${ask.askPath}\nRECIPE: ${ask.recipePath}\nTASK: ${ask.taskPath}\n`);
+        output.write(ask.mode === 'issue'
+          ? `Issue: ${ask.url}\n`
+          : `Ask: ${ask.askPath}\nRECIPE: ${ask.recipePath}\nTASK: ${ask.taskPath}\nNext: ${ask.command}\n`);
         return true;
       }
       case 'run': {

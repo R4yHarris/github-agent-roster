@@ -54,7 +54,9 @@ The Node 20 ESM CLI supports both the builtin loop and a manual handoff:
 
 - With no arguments in a TTY, `roster` opens the [interactive human shell](docs/REPL.md)
   with slash commands; non-TTY usage and `--help` keep the standard help text.
-- `ask "..."` drafts a local ask, recipe, and task; it does not create an issue.
+- `ask "..."` creates an issue in the current GitHub repository when `gh`
+  is available; without `gh` it writes a local ask, recipe, and task plus
+  a printable `gh issue create` command.
 - `run --issue N --runtime builtin` runs builtin planner then coder in one
   worktree. `--seats planner,coder` is optional; publishing requires `--publish`.
 - `run --issue N` reads a GitHub issue, creates one coder worktree, writes the

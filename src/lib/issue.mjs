@@ -12,7 +12,7 @@ async function execute(program, args, cwd) {
   return stdout;
 }
 
-function githubRepository(origin) {
+export function githubRepository(origin) {
   let url;
   try {
     url = new URL(origin.startsWith('git@github.com:')

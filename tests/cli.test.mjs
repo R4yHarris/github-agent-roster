@@ -37,23 +37,27 @@ test("help lists every prompt's command", () => {
   assert.match(result.stdout, /^  roster run --issue N --runtime builtin --seats planner,coder$/m);
 });
 
-test("ask CLI creates an offline draft with recipe and task paths", () => {
+test("ask CLI creates an offline draft with a create command when gh is missing", () => {
   const directory = mkdtempSync(join(tmpdir(), "roster-ask-cli-"));
   try {
     const fixtureRoot = join(directory, "roster");
     cpSync(join(root, "src"), join(fixtureRoot, "src"), { recursive: true });
     cpSync(join(root, "templates"), join(fixtureRoot, "templates"), { recursive: true });
     cpSync(join(root, "roster.config.example.yml"), join(fixtureRoot, "roster.config.example.yml"));
-    const result = run(["ask", "Add a Status section to README.md."], process.env,
+    const offlineEnv = Object.fromEntries(Object.entries(process.env)
+      .filter(([name]) => name.toLowerCase() !== "path"));
+    offlineEnv.PATH = "";
+    const result = run(["ask", "Add a Status section to README.md."], offlineEnv,
       join(fixtureRoot, "src", "cli.mjs"));
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr);
-    const [ask, recipe, task] = result.stdout.trim().split(/\r?\n/);
+    const [ask, recipe, task, command] = result.stdout.trim().split(/\r?\n/);
     assert.match(ask, /^Ask: .*\.roster[\\/]asks[\\/].+\.md$/);
     assert.match(recipe, /^RECIPE: .*RECIPE\.yml$/);
     assert.match(task, /^TASK: .*TASK\.md$/);
     assert.match(readFileSync(recipe.slice("RECIPE: ".length), "utf8"), /worker: builtin/);
     assert.match(readFileSync(task.slice("TASK: ".length), "utf8"), /node --test exits 0/);
+    assert.match(command, /^Next: gh issue create --title .+ --body-file .+$/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

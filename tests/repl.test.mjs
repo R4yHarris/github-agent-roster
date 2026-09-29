@@ -38,9 +38,10 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
   };
   const { dispatch, state, output, errorOutput, banner } = dispatcher({
     services: {
-      writeAsk: async (ask) => {
+      submitAsk: async (ask) => {
         calls.push(['ask', ask]);
-        return { askPath: 'ask.md', recipePath: 'RECIPE.yml', taskPath: 'TASK.md' };
+        return { mode: 'draft', askPath: 'ask.md', recipePath: 'RECIPE.yml',
+          taskPath: 'TASK.md', command: 'gh issue create --body-file ask.md' };
       },
       runBuiltinIssue: async (issue, options) => {
         calls.push(['run', issue, options.publish]);
@@ -103,6 +104,7 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
     ['vault-get', 'ROSTER_TOKEN'],
   ]);
   assert.match(output.text, /Worktree: issue-42/);
+  assert.match(output.text, /Next: gh issue create --body-file ask\.md/);
   assert.match(output.text, /--message "feat: issue 42" --merge-when-green/);
   assert.doesNotMatch(output.text, /--merge-when-green --merge-when-green/);
   assert.match(output.text, /Last run: issue-42/);
@@ -111,6 +113,17 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
   assert.match(output.text, /ROSTER_TOKEN is stored \(value hidden/);
   assert.match(errorOutput.text, /Unknown command: \/unknown/);
   assert.match(errorOutput.text, /Unknown command: plain/);
+});
+
+test('slash ask prints the created issue URL when gh is available', async () => {
+  const { dispatch, state, output } = dispatcher({
+    services: { submitAsk: async () => ({
+      mode: 'issue', number: 42, url: 'https://github.com/example/project/issues/42',
+    }) },
+  });
+  await dispatch('/ask Add status to README.');
+  assert.equal(state.lastAsk.number, 42);
+  assert.equal(output.text, 'Issue: https://github.com/example/project/issues/42\n');
 });
 
 test('banner reports the configured LLM endpoint when not using the stub', () => {

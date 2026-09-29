@@ -18,8 +18,9 @@ seats:
     sequence: [load_context, implement, run_tests, summarize]
 ```
 
-`roster ask` makes an offline draft with `ask: local:<id>` instead; the issue
-runner generates `ask: issue:N` when the human supplies an existing issue.
+When `gh` is unavailable, `roster ask` makes an offline draft with
+`ask: local:<id>`; when available it creates an issue. The issue runner
+generates `ask: issue:N` from an existing or newly created issue.
 The strict parser also accepts the previous version 1 prepare-only shape for
 compatibility:
 
