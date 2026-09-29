@@ -103,6 +103,15 @@ test('a pack fits at the exact configured character boundary', async (context) =
   }), /exceed seat.context_chars/);
 });
 
+test('prior feedback is required context, redacted, and never silently omitted to meet the budget', async (context) => {
+  const result = await loadContext({ ...fixture(context), priorFeedback: 'Retry with password="secret value".', env: {} });
+  assert.match(result.pack, /## Prior feedback/);
+  assert.doesNotMatch(result.pack, /secret value/);
+  await assert.rejects(loadContext({ ...fixture(context),
+    priorFeedback: 'Required feedback '.repeat(1000), config: { seat: { context_chars: 8000 } } }),
+  /prior feedback.*exceed seat.context_chars/);
+});
+
 test('task skill names support inline and block frontmatter without accepting paths', () => {
   assert.deepEqual(taskSkillNames('---\nskills: [implement-task, "run-tests"]\n---\n# Task'), [
     'implement-task', 'run-tests',

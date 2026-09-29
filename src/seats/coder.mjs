@@ -9,13 +9,13 @@ import { createTools } from '../runtime/tools.mjs';
 import { loadPrincipal } from './principal.mjs';
 
 export async function runCoder({
-  worktree, repoRoot, config, task, session, fetchImpl, env, vault, runTestCommand,
+  worktree, repoRoot, config, task, session, fetchImpl, env, vault, runTestCommand, priorFeedback = null,
 }) {
   const principal = await loadPrincipal({ repoRoot, id: config.seat.principal });
   const memoryPath = seatMemoryPath({
     repoRoot, memoryPath: config.paths.memory, seat: 'coder',
   });
-  const context = await loadContext({ worktree, memoryPath, repoRoot, config, principal, env });
+  const context = await loadContext({ worktree, memoryPath, repoRoot, config, principal, env, priorFeedback });
   const tools = await createTools({
     worktree, allowedFiles: taskFilesAllowed(context.task),
     apiKeyEnv: config.llm.api_key_env, env, runCommand: runTestCommand,

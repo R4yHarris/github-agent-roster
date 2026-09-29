@@ -65,18 +65,9 @@ function formatMetadata(metadata) {
 }
 
 export async function writeEstimate(task, {
-  worktree, learningRoot, config, env = process.env,
+  worktree, learningRoot, config, env = process.env, recommendation = null,
 }) {
-  if (typeof task !== 'string') {
-    throw new TypeError('Estimation requires a TASK.md document');
-  }
-  const { frontmatter, body: normalized } = splitTaskFrontmatter(task);
-  if (!normalized.startsWith('# Task: ')) {
-    throw new TypeError('Estimation requires a TASK.md document');
-  }
-  const section = normalized.search(/^## /m);
-  const header = section < 0 ? normalized : normalized.slice(0, section);
-  const body = section < 0 ? '' : normalized.slice(section);
+  const taskMetadata = readTaskMetadata(task);
   const { runs, evaluations } = loadLearning({ cwd: learningRoot });
   const standalone = evaluations.filter((evaluation) => !runs.some((run) =>
     (evaluation.sha && run.sha?.toLowerCase() === evaluation.sha.toLowerCase()) ||
@@ -87,15 +78,48 @@ export async function writeEstimate(task, {
       ...(excellence === undefined ? {} : { excellence }),
       task_class: task_class ?? inferTaskClass(runTask) ?? evaluation.task_class,
     }));
-  const metadata = estimateTask(readMetadata(header), [...standalone, ...joined],
+  const metadata = estimateTask(taskMetadata, [...standalone, ...joined],
     config.llm.model || env.ROSTER_MODEL || '');
-  const cleanHeader = header.replace(/^(difficulty|estimate_min|task_class|model):[^\n]*\n?/gm, '').trimEnd();
-  const updatedTask = `${frontmatter}${cleanHeader}\n\n${formatMetadata(metadata)}\n\n${body}`;
-  const estimate = `# Estimate\n\n${formatMetadata(metadata)}\n\n` +
-    `Source: ${metadata.source}\nMatching timed evaluations: ${metadata.n}\n` +
-    `Accepted timed evaluations: ${metadata.accepted}\n\n` +
+  if (recommendation?.estimate_min != null) {
+    if (recommendation.model !== metadata.model || !Number.isSafeInteger(recommendation.n) || recommendation.n < 3) {
+      throw new Error('Recommended estimate must match the selected model with at least three samples');
+    }
+    estimateTask({ ...metadata, estimate_min: recommendation.estimate_min });
+    Object.assign(metadata, { estimate_min: recommendation.estimate_min, source: 'recommendation',
+      n: recommendation.n, accepted: recommendation.accepted });
+  }
+  const updatedTask = updateTaskMetadata(task, metadata);
+  const evidence = metadata.source === 'recommendation'
+    ? `Recommendation samples: ${metadata.n}\nAccepted samples: ${metadata.accepted}\n`
+    : `Matching timed evaluations: ${metadata.n}\nAccepted timed evaluations: ${metadata.accepted}\n`;
+  const estimate = `# Estimate\n\n${formatMetadata(metadata)}\n\nSource: ${metadata.source}\n${evidence}\n` +
     'A story-point style estimate, not a delivery promise. Compare with human-reported actuals.\n';
   const estimatePath = join(worktree, 'ESTIMATE.md');
   await fs.writeFile(estimatePath, estimate, { encoding: 'utf8', flag: 'wx' });
   return { task: updatedTask, metadata, estimate, estimatePath };
+}
+
+function taskParts(task) {
+  if (typeof task !== 'string') {
+    throw new TypeError('Estimation requires a TASK.md document');
+  }
+  const { frontmatter, body: normalized } = splitTaskFrontmatter(task);
+  if (!normalized.startsWith('# Task: ')) {
+    throw new TypeError('Estimation requires a TASK.md document');
+  }
+  const section = normalized.search(/^## /m);
+  const header = section < 0 ? normalized : normalized.slice(0, section);
+  const body = section < 0 ? '' : normalized.slice(section);
+  return { frontmatter, header, body };
+}
+
+export function readTaskMetadata(task) {
+  return estimateTask(readMetadata(taskParts(task).header));
+}
+
+export function updateTaskMetadata(task, metadata) {
+  const { frontmatter, header, body } = taskParts(task);
+  const values = estimateTask({ ...readMetadata(header), ...metadata });
+  const cleanHeader = header.replace(/^(difficulty|estimate_min|task_class|model):[^\n]*\n?/gm, '').trimEnd();
+  return `${frontmatter}${cleanHeader}\n\n${formatMetadata(values)}\n\n${body}`;
 }

@@ -2,11 +2,11 @@ import { execFileSync } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { resolve } from 'node:path';
 import {
-  appendJsonl, failureDetail, IDENTIFIER, inferTaskClass, loadLearning, repositoryRoot, SHA,
+  appendJsonl, failureDetail, IDENTIFIER, inferTaskClass, repositoryRoot, SHA,
   validateLocalEvaluation,
 } from './learn.mjs';
 import { githubRepository } from './issue.mjs';
-import { loadMetrics } from './metrics.mjs';
+import { loadAvailableMetrics } from './metrics.mjs';
 
 const usage = 'Use eval <sha-or-session> <accept|reject|rework> <1-5> <y|n> [--minutes N] [--comment "TEXT"].';
 
@@ -41,18 +41,6 @@ export function parseEvaluationArgs(input) {
     } else options.comment = value;
   }
   return { values: args.slice(0, 4), options };
-}
-
-function evaluationRuns({ cwd, run }) {
-  try {
-    run('git', ['rev-parse', '--verify', '--quiet', 'HEAD'], {
-      cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
-    });
-  } catch (error) {
-    if (error.status === 1) return loadLearning({ cwd }).runs;
-    throw new Error(`Could not inspect evaluation history: ${failureDetail(error)}`, { cause: error });
-  }
-  return loadMetrics({ cwd, run });
 }
 
 async function commentEvaluation({ evaluation, record, cwd, run, env, log }) {
@@ -106,7 +94,7 @@ export async function recordEvaluation(target, verdict, difficulty, again, {
   minutes = null,
   comment = '',
   now = () => new Date(),
-  metricsLoader = evaluationRuns,
+  metricsLoader = loadAvailableMetrics,
   commenter = commentEvaluation,
   log = console.warn,
 } = {}) {

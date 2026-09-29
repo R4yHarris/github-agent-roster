@@ -16,8 +16,10 @@ model:
 Difficulty is an integer from 1 to 5, minutes a nonnegative integer, and class
 one of `feat`, `fix`, `docs`, or `test`. Missing values default to difficulty 2
 and 15 minutes. Class follows a recognized title prefix, otherwise `feat`.
-An empty model uses the recommendation already selected by `--auto-model`, or
-config (`ROSTER_MODEL` when config is empty). An explicit task model selects
+An empty task model uses a qualifying prior-feedback recommendation, then
+config (`ROSTER_MODEL` when config is empty). With none configured, a prior
+acceptance can seed the next baseline model without claiming capacity.
+See [next-task feedback](NEXT.md). An explicit task model selects
 the coder model, not the planner model. With no endpoint, it is still a stub.
 The LLM planner may supply these optional fields; invalid values are rejected.
 
@@ -35,6 +37,8 @@ median. No accepted timings means keep the task/default estimate. Corrections
 replace the previous evaluation for their target; duplicate lines are not
 extra evidence. Half-minute medians round up to keep integer task minutes.
 
+An effort-specific recommendation's reported estimate is preserved and labeled
+`Source: recommendation`; missing accepted timing does not invent an actual.
 The resulting fields are written back to `TASK.md`, and `ESTIMATE.md` records
 the estimate, source, and sample counts in the worktree **before** coding.
 The coder may read but not rewrite either document. They are rechecked after

@@ -30,7 +30,7 @@ export async function runPlanner({
   const taskPath = path.join(worktree, 'TASK.md');
   try {
     plan = await planAsk(ask, {
-      config, reference, title, fetchImpl, env, vault, memory,
+      config, reference, title, fetchImpl, env, vault, memory, learningRoot,
     });
     const recipe = parseRecipe(plan.recipe);
     if (recipe.ask !== reference || recipe.seats.length !== 2 ||
@@ -38,7 +38,9 @@ export async function runPlanner({
         recipe.seats[1].id !== 'coder' || recipe.seats[1].worker !== 'builtin') {
       throw new Error('Builtin planner must emit exactly a planner seat followed by a coder seat');
     }
-    plan = { ...plan, ...await writeEstimate(plan.task, { worktree, learningRoot, config, env }) };
+    plan = { ...plan, ...await writeEstimate(plan.task, {
+      worktree, learningRoot, config, env, recommendation: plan.feedback?.recommendation,
+    }) };
     await fs.writeFile(recipePath, plan.recipe, { encoding: 'utf8', flag: 'wx' });
     await fs.writeFile(taskPath, plan.task, { encoding: 'utf8', flag: 'wx' });
   } catch (error) {

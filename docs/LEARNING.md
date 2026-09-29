@@ -189,7 +189,10 @@ configured fallback. `roster recommend` is read-only.
 model applies a qualifying suggestion to that run's planner and coder without
 editing private config or policy. Fewer than three samples keep that opt-in run
 on the deterministic stub. An explicit task model can select the coder as
-described in [estimation](ESTIMATION.md). See [routing](ROUTING.md).
+described in [estimation](ESTIMATION.md). The [next planner task](NEXT.md) also
+uses qualifying capacity evidence and carries forward redacted human feedback.
+One acceptance can seed an otherwise unconfigured baseline, not a recommendation.
+See [routing](ROUTING.md).
 
 Both `.roster/runs/` and `.roster/evals.jsonl` are ignored by Git. Keep human
 free-text feedback local; the human eval command posts only the compact verdict
