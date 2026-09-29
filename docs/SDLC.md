@@ -107,3 +107,163 @@ unset or `-`. An API key is not forwarded to tests or the publisher.
 The earlier `roster run --issue N` remains a prepare-only compatibility
 command. See [the one-task loop](ONE_TASK_LOOP.md),
 [seats and recipes](SEATS.md), and [local metrics](METRICS.md).
+## Manual planning and acceptance checks
+
+The v0 software loop is:
+
+```text
+Human issue (Ask) -> planner's recipe and task -> one coder worktree
+                 -> tested PR through contracts -> human AI-Eval
+```
+
+GitHub issues and PRs are the queue and durable record. Local handoff documents
+are not a second board or database. Planning is a preparation step; the recipe
+here has exactly one execution seat, `coder`, with principal `coder`. It grants
+no merge or deploy rights.
+
+## Handoff documents
+
+| Template | Author and purpose |
+| --- | --- |
+| [Manual ASK.md](../templates/sdlc/manual/ASK.md) | Human: issue body describing the problem, observable requirements, scope, and open questions. |
+| [Manual RECIPE.yml](../templates/sdlc/manual/RECIPE.yml) | Planner: validated link to that issue and one builtin coder seat. Post the recipe on the issue. |
+| [Manual TASK.md](../templates/sdlc/manual/TASK.md) | Planner: bounded software work, acceptance checks, and the verification plan. Share it on the same issue. |
+| [Manual ASSIGNMENT.md](../templates/sdlc/manual/ASSIGNMENT.md) | Orchestrator or human: issue snapshot, existing worktree, task and recipe references, and worker context. |
+
+These expanded forms live in `templates/sdlc/manual/` so human handoff guidance
+does not replace the renderer placeholders or change generated task formats.
+They are not additional CLI inputs. The builtin path above generates its own
+recipe and task and loads these skills; the legacy prepare-only
+[one-task loop](ONE_TASK_LOOP.md) creates an assignment and ignored `.env`
+without executing a coder. If a worktree is already assigned, stay there;
+do not run the loop again to create another one.
+
+## 1. Make the ask concrete
+
+Use the ask template as the issue body in the current repository. Describe the
+caller, current behavior, desired behavior, a reproduction or example, and
+non-goals. Name allowed and protected areas, compatibility constraints, and
+dependency restrictions. Keep credentials and environment-file contents out.
+
+Give requirements stable IDs such as R1, R2, and R3. "Improve validation" is not
+ready for implementation: specify which input is invalid, the error the caller
+should observe, and whether any file, network, or other side effect is allowed.
+Resolve decisions that affect behavior on the issue before handing off coding.
+
+## 2. Turn requirements into a task
+
+Copy the task template to the assigned worktree root as `TASK.md`. The planner
+can be a human or a planning worker; that does not add a seat or permissions to
+this recipe. Link the issue and copy only the agreed scope, inputs, and decisions.
+
+For each requirement:
+
+1. Write an acceptance ID, such as AC-1, mapped to the source requirement.
+2. Specify **Given** concrete setup and input, **When** the software operation
+   runs, **Then** the observable result. Include exact output shapes, stable
+   errors, and required or forbidden side effects.
+3. Cover the normal path, meaningful invalid inputs or failures, boundary
+   values, and behavior that must not regress. For limits, specify the threshold
+   and test values on either side; for performance, specify units and measurement.
+4. Name the Node test file and test case that will prove the result. New behavior
+   may need a new test. If automation cannot establish a check, give a repeatable
+   manual procedure and the evidence to capture instead.
+5. List the exact `node --test` commands and leave evidence marked **Pending**
+   until those checks actually run.
+
+Checks describe software behavior, not implementation activities: "edit the
+parser" and "tests pass" alone do not prove an ask. Every requirement must map
+to a check; a green suite with no relevant assertion is not acceptance. Blocking
+ambiguity goes back to the issue, not into an invented default.
+
+### Worked example
+
+Suppose the ask is: "Reject invalid issue numbers before creating a worktree,
+while preserving the existing handoff for valid issues." A task could contain:
+
+| Check | Given / When / Then | Automated evidence |
+| --- | --- | --- |
+| AC-1 (invalid input) | Given `0`, `-1`, `1.5`, or `"01"`, when `runIssue` is called, it rejects with `TypeError` and `Issue number must be a positive safe integer`; no git, gh, or file-write operation occurs. | Assert the error and empty command/write logs in the injected harness. |
+| AC-2 (regression) | Given issue `42` on the current origin, when assignment succeeds, the worktree is `issue-42` under `.worktrees`, the Ask body is unchanged, and the environment has `AI_TASK=issue-42`. | Assert command arguments, assignment contents, and environment output. |
+| AC-3 (failure) | Given a failed issue lookup, when assignment is attempted, the failure is reported and no worktree or handoff files are created. | Inject lookup failure and assert no worktree command or file writes. |
+
+The existing [issue tests](../tests/issue.test.mjs) demonstrate these harness
+patterns without network access. The focused command is:
+
+```sh
+node --test tests/issue.test.mjs
+```
+
+This is an example of turning an ask into checks, not a request to change the
+current implementation. A task must record the actual test names and outcomes
+for its own requirements rather than borrowing this example's evidence.
+
+## 3. Prepare the one-coder recipe and assignment
+
+Copy the recipe template as `RECIPE.yml` alongside the task. Replace its example
+`ask: issue:42` with the real positive issue number. Keep exactly one seat with
+`id: coder` and `principal: coder`. The template uses `worker: builtin` with
+`[load_context, implement, run_tests, summarize]`. Legacy `hermes` and `copilot`
+recipes remain supported by the validator, but neither worker is required for
+the builtin loop. This template has no planner execution seat.
+
+Follow the strict [recipe format](SEATS.md): do not add task paths, skills,
+acceptance checks, dependencies, capabilities, merge flags, or arbitrary keys
+to the YAML. That context belongs in the Markdown handoff. The existing
+read-only validator can check the copied file from the repository root:
+
+```sh
+node src/cli.mjs recipe validate RECIPE.yml
+```
+
+Use the assignment template for a manual handoff. A human can append its handoff
+sections to an existing assignment without changing the captured Ask; builtin
+tools cannot rewrite generated task files. Keep
+`TASK.md`, `RECIPE.yml`, and `ASSIGNMENT.md` together in the assigned worktree
+root so their sibling links work. Ensure the issue, recipe, task ID, and
+`AI_TASK=issue-N` agree; use the supplied `AI_SESSION`, not a fabricated identity.
+Replace all placeholders before implementation.
+
+## 4. Implement and gather evidence
+
+Give the single coder the [implement-task skill](../skills/implement-task/SKILL.md).
+The coder reads the repository instructions and handoff, checks the actual code,
+and makes only the permitted implementation, regression-test, and documentation
+changes. Node 20+ ESM and zero new runtime dependencies remain the default.
+
+Use the [run-tests skill](../skills/run-tests/SKILL.md), which uses only
+`node --test`. The builtin coder calls `run_test`, which runs the full suite.
+For a manual shell-based handoff, start with affected test files in one
+invocation and broaden when required by scope. Do not install another runner.
+Record exact commands, exit codes, test names and counts, and the result for
+each acceptance ID. Builtin evidence belongs in the final summary and generated
+`RESULT.md`, not edits to protected task files. Record manual evidence separately.
+
+A failed, skipped, unmatched, or unrun check is not a pass. Fix in-scope failures
+and rerun; report out-of-scope failures, missing prerequisites, and uncovered
+checks as blockers. Do not change expectations merely to turn a failure green.
+Keep the issue's agreed plan and the PR's evidence consistent with the task.
+
+## 5. Publish, then let the human evaluate
+
+The PR handoff should link the issue and summarize the change, acceptance
+evidence, and remaining risks. Publication requires the pinned `v0.2.0`
+contracts dependency and the human-owned policy described in the
+[dependency guide](DEPENDENCY.md). Contracts owns identity, policy, and trailers;
+neither the recipe nor the skills grant permissions.
+
+With `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_PATH` set, publish from the
+assigned worktree's repository root:
+
+```sh
+node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "<type>: issue N"
+```
+
+Use a message matching the actual change. Never fall back to committing as the
+signed-in human when App env is set. Never commit `.env`, tokens, or private
+keys, copy contracts source, or edit policy to unblock publication. If App env
+is absent, return the local handoff; if publishing prerequisites fail, report
+the blocker without claiming a PR was opened.
+
+The human reviews, controls merge, and posts `AI-Eval:` on the PR. The coder
+does not merge, deploy, open extra issues, or fabricate a human evaluation.
