@@ -24,7 +24,7 @@ persist those fields to the private config. `/model clear` removes the
 chosen model without selecting another one. An empty model with a
 configured endpoint is an explicit error on a normal run.
 
-`--auto-model` is the **only** opt-in path that can fill an empty model:
+`--auto-model` opts into selecting a model for both seats up front:
 
 ```sh
 roster run --issue N --auto-model
@@ -52,3 +52,9 @@ model cannot be overridden by `--auto-model`; clear it first. Metrics
 errors remain errors, not silent routing fallbacks. GitHub Issues and PRs
 remain the [board](BOARD.md), not a model-routing database. See
 [human evaluations](LEARNING.md) for the evidence threshold.
+
+During planning, [next-task feedback](NEXT.md) can fill an empty **task** model
+from capacity evidence for the coder, without changing the planner's identity
+or endpoint. Explicit task models are preserved. A single prior acceptance
+can seed an unconfigured baseline but cannot enable LLM execution; normal runs
+still need an upfront configured model or the explicit `--auto-model` path.

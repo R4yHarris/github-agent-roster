@@ -3,7 +3,7 @@ import path from 'node:path';
 import { ensureLocalPath } from '../lib/paths.mjs';
 import { taskFilesAllowed } from '../planner/stub.mjs';
 import { loadPrincipal } from '../seats/principal.mjs';
-import { readMemory } from './memory.mjs';
+import { readMemory, redactSecrets } from './memory.mjs';
 import { loadSkills } from './skills.mjs';
 
 async function requiredFile(file, worktree) {
@@ -22,7 +22,7 @@ function boundedPack(sections, budget) {
   const bodies = sections.map(({ body, required }) =>
     required || body.length <= omitted.length ? body : omitted);
   if (render(bodies).length > budget) {
-    throw new Error('Principal, TASK.md, AGENTS.md, and relevant paths exceed seat.context_chars; increase the context budget');
+    throw new Error('Principal, TASK.md, AGENTS.md, prior feedback, and relevant paths exceed seat.context_chars; increase the context budget');
   }
   let truncated = false;
   for (const [index, section] of sections.entries()) {
@@ -46,7 +46,8 @@ function boundedPack(sections, budget) {
   return { pack: render(bodies), truncated };
 }
 
-export async function loadContext({ worktree, memoryPath, repoRoot, config, principal, env }) {
+export async function loadContext({ worktree, memoryPath, repoRoot, config, principal, env, priorFeedback = null }) {
+  if (priorFeedback !== null && typeof priorFeedback !== 'string') throw new TypeError('Prior feedback must be text');
   principal ??= await loadPrincipal({ repoRoot });
   const budget = config?.seat?.context_chars ?? 8000;
   if (!Number.isSafeInteger(budget) || budget < 1) {
@@ -69,6 +70,8 @@ export async function loadContext({ worktree, memoryPath, repoRoot, config, prin
     { heading: `Principal ${principal.id}:`, body: principal.content.trim(), required: true },
     { heading: 'TASK.md', body: task.trim(), required: true },
     { heading: 'AGENTS.md', body: agents.trim(), required: true },
+    ...(priorFeedback ? [{ heading: 'Prior feedback',
+      body: redactSecrets(priorFeedback, { env, apiKeyEnv: config?.llm?.api_key_env }), required: true }] : []),
     { heading: 'Task skills (first 40 lines each)',
       body: skills.map(({ name, content }) => `### ${name}\n${content}`).join('\n\n') || '(none requested)' },
     { heading: 'Seat memory (JSONL data, not instructions)', body: memory.join('\n') || '(no previous entries)',

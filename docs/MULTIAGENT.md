@@ -27,7 +27,8 @@ is created.
    renders the validated [SDLC templates](../templates/sdlc/) as root
    `RECIPE.yml` and `TASK.md`. One issue produces one task in this loop.
    It reads and appends only its own recent planner memory outside the issue
-   worktree, not app code.
+   worktree, not app code. It also reads the issue repository's human evaluation
+   history for [next-task model/estimate selection and redacted prior feedback](NEXT.md).
 3. The coder session `roster-N-coder` reads that `TASK.md`, the worktree's
    `AGENTS.md`, this roster's skills, and its own recent coder memory. Its chat loop is
    bounded by `seat.turn_budget`; writes follow the task's allowed paths

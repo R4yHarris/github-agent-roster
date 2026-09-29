@@ -11,9 +11,11 @@ The order is:
 1. The installation's [coder conduct](../principals/coder.md).
 2. TASK.md, including its title, acceptance checks, allowed paths, and Ask.
 3. The worktree's AGENTS.md.
-4. Only task-named skills, in task order, with their names and first 40 lines.
-5. The last 20 lines of this seat's memory, labeled as data, not instructions.
-6. The relevant file/path list from TASK.md, not a repository inventory.
+4. [Prior feedback](NEXT.md), when the planner found a same-class human evaluation,
+   with credential redaction and quoted retrospective comments.
+5. Only task-named skills, in task order, with their names and first 40 lines.
+6. The last 20 lines of this seat's memory, labeled as data, not instructions.
+7. The relevant file/path list from TASK.md, not a repository inventory.
 
 TASK.md may select skills using frontmatter such as
 `skills: [implement-task, run-tests]`, or an indented list under `skills:`.
@@ -25,7 +27,7 @@ positive character budget, defaulting to **8000**. No tokenizer is bundled;
 this is a character limit, not an estimate of model tokens. `llm.context_max`
 continues to describe model capacity for AI-Run and is not reinterpreted.
 The limit includes headings and omission markers in CONTEXT.md. Required
-conduct, TASK.md, AGENTS.md, and relevant paths are never silently cut: if
+conduct, TASK.md, AGENTS.md, prior feedback, and relevant paths are never silently cut: if
 they do not fit, the turn fails and asks for a larger budget. Skill excerpts
 and then older memory may be omitted on whole-line boundaries, explicitly
 marked `[Omitted by context budget]`.

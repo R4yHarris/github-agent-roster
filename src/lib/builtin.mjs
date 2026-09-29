@@ -186,12 +186,13 @@ export async function runBuiltinIssue(issueNumber, {
     env,
   }) : null;
   await recordSeat(sessions.planner, plannerRun);
-  const coderConfig = planner.metadata.model && planner.metadata.model !== activeConfig.llm.model
-    ? { ...activeConfig, llm: Object.freeze({ ...activeConfig.llm, model: planner.metadata.model }) }
-    : activeConfig;
+  const coderConfig = { ...activeConfig, llm: Object.freeze({
+    ...activeConfig.llm, model: planner.metadata.model || activeConfig.llm.model,
+    effort: planner.feedback?.effort ?? activeConfig.llm.effort,
+  }) };
   const result = await runCoder({
     worktree: worktreePath, repoRoot, config: coderConfig, task: prepared.task, session: sessions.coder,
-    fetchImpl, env, vault, runTestCommand,
+    fetchImpl, env, vault, runTestCommand, priorFeedback: planner.feedback?.context,
   });
   await ensureUnchanged(planner.recipePath, planner.recipe);
   await ensureUnchanged(planner.taskPath, planner.task);

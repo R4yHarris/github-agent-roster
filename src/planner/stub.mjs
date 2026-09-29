@@ -5,6 +5,7 @@ import { mergeUsage } from '../metrics/run.mjs';
 import { inferTaskClass } from '../lib/learn.mjs';
 import { estimateTask } from '../runtime/estimate.mjs';
 import { isForbiddenWrite } from '../runtime/tools.mjs';
+import { applyFeedback } from './feedback.mjs';
 
 const templates = new Map();
 const defaultChecks = ['node --test exits 0', 'The requested behavior in the Ask is implemented'];
@@ -120,13 +121,15 @@ export function planStub(ask, { reference = 'local:draft', title, metadata } = {
 }
 
 export async function planAsk(ask, {
-  config, reference = 'local:draft', title, fetchImpl, env, vault, memory = [],
+  config, reference = 'local:draft', title, fetchImpl, env, vault, memory = [], learningRoot,
 } = {}) {
   const cleanAsk = cleanAskText(ask);
   if (!Array.isArray(memory) || memory.some((line) => typeof line !== 'string')) {
     throw new TypeError('Planner memory must contain JSONL lines');
   }
-  if (!config.llm.base_url) return { ...planStub(cleanAsk, { reference, title }), usage: null, turns: 0 };
+  const finish = (plan) => learningRoot
+    ? { ...plan, ...applyFeedback(plan.task, { learningRoot, config, env }) } : plan;
+  if (!config.llm.base_url) return finish({ ...planStub(cleanAsk, { reference, title }), usage: null, turns: 0 });
   const budget = config.planner?.turn_budget;
   if (!Number.isSafeInteger(budget) || budget < 1 || budget > 64) {
     throw new TypeError('Planner turn budget must be between 1 and 64');
@@ -169,20 +172,18 @@ export async function planAsk(ask, {
       failure = 'LLM planner returned an unsupported task plan';
     }
     if (!failure) {
+      let built;
       try {
-        return {
-          ...buildPlan(cleanAsk, {
-            reference, title: fixedTitle ?? plan.title,
-            acceptanceChecks: plan.acceptance_checks, filesAllowed: plan.files_allowed,
-            metadata: plan,
-          }),
-          usage: mergeUsage(...usages),
-          turns: turn,
-        };
+        built = buildPlan(cleanAsk, {
+          reference, title: fixedTitle ?? plan.title,
+          acceptanceChecks: plan.acceptance_checks, filesAllowed: plan.files_allowed,
+          metadata: plan,
+        });
       } catch (error) {
         if (!(error instanceof TypeError)) throw error;
         failure = error.message;
       }
+      if (built) return finish({ ...built, usage: mergeUsage(...usages), turns: turn });
     }
     if (turn === budget) throw new Error(`Planner turn budget (${budget}) exhausted: ${failure}`);
     messages.push(

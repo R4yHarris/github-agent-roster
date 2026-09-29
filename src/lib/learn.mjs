@@ -231,7 +231,7 @@ export function excellenceFailed(record) {
   return record.excellence === 'fail' || record.excellence?.pass === false;
 }
 
-function matchesEvaluation(record, evaluation) {
+export function matchesEvaluation(record, evaluation) {
   if (record.sha && evaluation.sha) return record.sha.toLowerCase() === evaluation.sha.toLowerCase();
   return Boolean(record.session && record.session === evaluation.session);
 }
