@@ -37,7 +37,7 @@ test('loads the tracked example when private config is absent', (context) => {
     planner: { turn_budget: 2 },
     seat: {
       id: 'coder', principal: 'coder', turn_budget: 8, context_chars: 8000,
-      tools: ['read_file', 'write_file', 'list_dir', 'run_test'],
+      tools: ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text'],
     },
     paths: {
       memory: join('.roster', 'memory', 'coder.jsonl'),
@@ -161,7 +161,7 @@ test('rejects invalid schema, fields, roles, paths, tool names, and endpoint set
     ['profile and base URL', example.replace('profile: ""', 'profile: ollama')
       .replace('model: ""', 'model: chosen-model')
       .replace('base_url: ""', 'base_url: http://localhost:1234/v1')],
-    ['tools', example.replace('run_test]', 'git_push]')],
+    ['tools', example.replace('search_text]', 'git_push]')],
     ['budget', example.replace('turn_budget: 8', 'turn_budget: 0')],
     ['context budget', example.replace('context_chars: 8000', 'context_chars: 0')],
     ['planner budget', example.replace('turn_budget: 2', 'turn_budget: 65')],

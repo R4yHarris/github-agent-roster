@@ -314,7 +314,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
       assert.match(readFileSync(path.join(options.target, '.worktrees', 'issue-42', 'ESTIMATE.md'), 'utf8'),
         /model: local-model/);
       assert.deepEqual(body.tools.map(({ function: tool }) => tool.name),
-        ['read_file', 'write_file', 'list_dir', 'run_test']);
+        ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text']);
       return { ok: true, status: 200, json: async () => ({
         choices: [{ finish_reason: 'tool_calls', message: {
           role: 'assistant',

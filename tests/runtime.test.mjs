@@ -129,7 +129,7 @@ test('LLM coder uses only offered tools within the turn budget, then verifies te
       readFileSync(path.join(options.worktree, 'CONTEXT.md'), 'utf8'));
     assert.ok(sent.messages[0].content.length <= options.config.seat.context_chars);
     assert.deepEqual(sent.tools.map((tool) => tool.function.name),
-      ['read_file', 'write_file', 'list_dir', 'run_test']);
+      ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text']);
     if (calls === 1) {
       return { status: 200, json: async () => ({
         choices: [{ finish_reason: 'tool_calls', message: {

@@ -21,7 +21,7 @@ const fields = {
   seat: ['id', 'principal', 'turn_budget', 'tools', 'context_chars'],
   paths: ['memory', 'skills', 'asks', 'worktrees'],
 };
-const availableTools = ['read_file', 'write_file', 'list_dir', 'run_test'];
+const availableTools = ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text'];
 
 export class ConfigError extends Error {}
 
@@ -227,7 +227,7 @@ export function parseConfig(source) {
   seat.tools = toolList[1].split(',').map((tool) => tool.trim());
   if (!seat.tools.length || new Set(seat.tools).size !== seat.tools.length ||
       seat.tools.some((tool) => !availableTools.includes(tool))) {
-    invalid('seat.tools may only contain distinct read_file, write_file, list_dir, run_test tools');
+    invalid('seat.tools may only contain distinct read_file, write_file, list_dir, run_test, search_text tools');
   }
   seat.tools = Object.freeze(seat.tools);
 
