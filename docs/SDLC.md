@@ -16,8 +16,10 @@ Paths are relative to this checkout (the worktrees path is used in the issue's
 Git repository). Ignore a custom worktrees path yourself if you change it.
 
 - `llm.base_url`: OpenAI-compatible chat completions base (for example
-  `http://localhost:1234/v1`). Empty means a network-free deterministic stub.
-  Set `llm.model` when the URL is nonempty. Local endpoints may work without
+  `http://localhost:1234/v1`). Empty with no selected `llm.profile` means a
+  network-free deterministic stub. Select `ollama`, `lmstudio`, or `openai`
+  from `profiles` instead of setting a custom URL, then set `llm.model`.
+  Local endpoints may work without
   a key; when needed, set the environment variable named by `llm.api_key_env`
   or store an API key under that name in the file vault. A non-empty environment
   value wins. Put only its **name** in config, never the key. HTTP errors report status,

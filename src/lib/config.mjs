@@ -4,8 +4,14 @@ import { fileURLToPath } from 'node:url';
 import { TextDecoder } from 'node:util';
 
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
+const profileNames = ['ollama', 'lmstudio', 'openai'];
+const defaultProfiles = {
+  ollama: { base_url: 'http://127.0.0.1:11434/v1', api_key_env: 'ROSTER_API_KEY' },
+  lmstudio: { base_url: 'http://127.0.0.1:1234/v1', api_key_env: 'ROSTER_API_KEY' },
+  openai: { base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY' },
+};
 const fields = {
-  llm: ['base_url', 'model', 'api_key_env', 'effort', 'context_max'],
+  llm: ['base_url', 'model', 'api_key_env', 'effort', 'context_max', 'profile'],
   planner: ['turn_budget'],
   seat: ['id', 'principal', 'turn_budget', 'tools'],
   paths: ['memory', 'skills', 'asks', 'worktrees'],
@@ -68,18 +74,58 @@ function relativePath(value, name) {
   return segments.join(path.sep);
 }
 
+function apiKeyName(value, name) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value) || /^GITHUB_APP_/i.test(value)) {
+    invalid(`${name} must name an LLM environment variable, not a GitHub App credential`);
+  }
+  return value;
+}
+
+function baseUrl(value, name) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    invalid(`${name} must be an HTTP(S) URL without credentials, query, or fragment`);
+  }
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password ||
+      url.search || url.hash) {
+    invalid(`${name} must be an HTTP(S) URL without credentials, query, or fragment`);
+  }
+  return value;
+}
+
 export function parseConfig(source) {
   if (typeof source !== 'string' || Buffer.byteLength(source, 'utf8') > 65_536) {
     invalid('expected UTF-8 text of at most 64 KiB');
   }
-  const config = { llm: {}, planner: {}, seat: {}, paths: {} };
+  const config = { llm: {}, profiles: {}, planner: {}, seat: {}, paths: {} };
   const roots = new Set();
   let section;
+  let profile;
   for (const [index, original] of source.replace(/\r\n/g, '\n').split('\n').entries()) {
     if (/[\x00-\x09\x0b-\x1f\x7f]/.test(original)) invalid(`unsupported character on line ${index + 1}`);
     const line = uncomment(original);
     if (!line) continue;
+    if (line.startsWith('    ')) {
+      const match = /^    (base_url|api_key_env): (.+)$/.exec(line);
+      if (!match || section !== 'profiles' || !profile ||
+          Object.hasOwn(config.profiles[profile], match[1])) {
+        invalid(`unsupported or duplicate profile field on line ${index + 1}`);
+      }
+      config.profiles[profile][match[1]] = match[2];
+      continue;
+    }
     if (line.startsWith('  ')) {
+      if (section === 'profiles') {
+        const match = /^  (ollama|lmstudio|openai):$/.exec(line);
+        if (!match || Object.hasOwn(config.profiles, match[1])) {
+          invalid(`unsupported or duplicate profile on line ${index + 1}`);
+        }
+        profile = match[1];
+        config.profiles[profile] = {};
+        continue;
+      }
       const match = /^  ([a-z_]+): (.+)$/.exec(line);
       if (!match || !section || !fields[section].includes(match[1]) ||
           Object.hasOwn(config[section], match[1])) {
@@ -89,11 +135,12 @@ export function parseConfig(source) {
       continue;
     }
     const match = /^([a-z_]+):(?: (.*))?$/.exec(line);
-    if (!match || roots.has(match[1]) || !['schema', ...Object.keys(fields)].includes(match[1])) {
+    if (!match || roots.has(match[1]) || !['schema', 'profiles', ...Object.keys(fields)].includes(match[1])) {
       invalid(`unsupported or duplicate field on line ${index + 1}`);
     }
     roots.add(match[1]);
     section = match[1] === 'schema' ? undefined : match[1];
+    profile = undefined;
     if (match[1] === 'schema') {
       if (match[2] !== '1') invalid('schema must be 1');
     } else if (match[2] !== undefined) {
@@ -102,7 +149,8 @@ export function parseConfig(source) {
   }
   if (!roots.has('schema') ||
       ['llm', 'seat', 'paths'].some((name) =>
-        !roots.has(name) || fields[name].some((field) => !Object.hasOwn(config[name], field))) ||
+        !roots.has(name) || fields[name].some((field) =>
+          !(name === 'llm' && field === 'profile') && !Object.hasOwn(config[name], field))) ||
       (roots.has('planner') && !Object.hasOwn(config.planner, 'turn_budget'))) {
     invalid('schema, llm, seat, paths, and optional planner must contain every documented field');
   }
@@ -110,26 +158,37 @@ export function parseConfig(source) {
   const llm = config.llm;
   llm.base_url = stringValue(llm.base_url, 'llm.base_url');
   llm.model = stringValue(llm.model, 'llm.model');
-  llm.api_key_env = stringValue(llm.api_key_env, 'llm.api_key_env');
+  llm.api_key_env = apiKeyName(stringValue(llm.api_key_env, 'llm.api_key_env'), 'llm.api_key_env');
   llm.effort = stringValue(llm.effort, 'llm.effort');
   llm.context_max = integerValue(llm.context_max, 'llm.context_max');
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(llm.api_key_env) ||
-      /^GITHUB_APP_/i.test(llm.api_key_env)) {
-    invalid('llm.api_key_env must name an LLM environment variable, not a GitHub App credential');
+  llm.profile = Object.hasOwn(llm, 'profile') ? stringValue(llm.profile, 'llm.profile') : '';
+  if (llm.profile && !profileNames.includes(llm.profile)) {
+    invalid('llm.profile must be ollama, lmstudio, openai, or empty');
+  }
+  const profiles = roots.has('profiles') ? config.profiles :
+    Object.fromEntries(profileNames.map((name) => [name, { ...defaultProfiles[name] }]));
+  if (profileNames.some((name) => !Object.hasOwn(profiles, name) ||
+      ['base_url', 'api_key_env'].some((field) => !Object.hasOwn(profiles[name], field)))) {
+    invalid('profiles must define ollama, lmstudio, and openai with base_url and api_key_env');
+  }
+  for (const name of profileNames) {
+    profiles[name].base_url = baseUrl(stringValue(profiles[name].base_url, `profiles.${name}.base_url`),
+      `profiles.${name}.base_url`);
+    profiles[name].api_key_env = apiKeyName(
+      stringValue(profiles[name].api_key_env, `profiles.${name}.api_key_env`),
+      `profiles.${name}.api_key_env`);
+    Object.freeze(profiles[name]);
+  }
+  if (llm.profile) {
+    if (llm.base_url) invalid('choose either llm.profile or llm.base_url');
+    llm.base_url = profiles[llm.profile].base_url;
+    llm.api_key_env = profiles[llm.profile].api_key_env;
   }
   if (!['l', 'm', 'h', 'x'].includes(llm.effort)) invalid('llm.effort must be l, m, h, or x');
   if (llm.model && !/^[A-Za-z0-9._:/-]+$/.test(llm.model)) invalid('llm.model must be a model name without whitespace');
   if (llm.base_url) {
-    let url;
-    try {
-      url = new URL(llm.base_url);
-    } catch {
-      invalid('llm.base_url must be an HTTP(S) URL without credentials, query, or fragment');
-    }
-    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password ||
-        url.search || url.hash || !llm.model) {
-      invalid('llm.base_url requires a model and an HTTP(S) URL without credentials, query, or fragment');
-    }
+    baseUrl(llm.base_url, 'llm.base_url');
+    if (!llm.model) invalid('llm.base_url requires a model');
   }
 
   const seat = config.seat;
@@ -162,6 +221,7 @@ export function parseConfig(source) {
   return Object.freeze({
     schema: 1,
     llm: Object.freeze(llm),
+    profiles: Object.freeze(profiles),
     planner: Object.freeze(planner),
     seat: Object.freeze(seat),
     paths: Object.freeze(config.paths),

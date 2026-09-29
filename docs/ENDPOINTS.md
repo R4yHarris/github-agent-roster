@@ -10,8 +10,13 @@ prepare-only. See [SDLC](SDLC.md) for execution and publishing.
 ## Schema 1
 
 - `schema: 1` identifies the config shape.
-- `llm.base_url` and `llm.model` are deliberately empty strings. Choose both
-  explicitly; the example does not select a provider or model.
+- `llm.base_url`, `llm.model`, and `llm.profile` are deliberately empty
+  strings. Choose a profile and model, or set a custom base URL and model;
+  the example does not select a provider or contact an endpoint.
+- `profiles.ollama`, `profiles.lmstudio`, and `profiles.openai` define
+  validated base URLs and API-key environment names. Selecting
+  `llm.profile` uses that endpoint and key name; `llm.base_url` must then
+  remain empty. An explicit base URL requires an empty profile.
 - `llm.api_key_env: ROSTER_API_KEY` names an environment variable, not a key.
   Both seats use the [OpenAI-compatible client](LLM.md): a non-empty environment
   value wins over the same-named vault entry, and authorization is sent only
@@ -28,7 +33,8 @@ prepare-only. See [SDLC](SDLC.md) for execution and publishing.
   remain the work queue.
 
 Keep every field in the example when overriding configuration. Older private
-configs without `planner` remain valid with a one-turn planner. The underlying
+configs without `planner` or `profiles` remain valid; the planner gets one
+turn and the named profiles retain their documented defaults. The underlying
 [chat factory and vault](LLM.md) accept an in-memory API with
 `llm.api_key_optional` and `llm.api_key_name`; those are not builtin YAML fields.
 
@@ -41,8 +47,9 @@ remote access is deliberately secured.
 
 ### Ollama
 
-Set `llm.base_url` to `http://127.0.0.1:11434/v1`. Start Ollama and pull a model,
-then set `llm.model` to that installed model's ID. Use its OpenAI-compatible
+Set `llm.profile: ollama`, leave `llm.base_url: ""`, start Ollama and pull a
+model, then set `llm.model` to that installed model's ID. The profile uses
+`http://127.0.0.1:11434/v1` and its OpenAI-compatible
 `/v1` API, not the native `/api` endpoints. For an unauthenticated local server,
 leave the API-key environment variable unset.
 
@@ -56,27 +63,30 @@ environment variable unset only when server authentication is disabled.
 ### LM Studio
 
 Load a model and start the local OpenAI-compatible server in LM Studio. For
-port `1234`, set `llm.base_url` to `http://127.0.0.1:1234/v1`; use the port
-shown by LM Studio if different. Set `llm.model` to an ID returned by
+port `1234`, Set `llm.profile: lmstudio`; the default URL is
+`http://127.0.0.1:1234/v1`. Override the profile URL if LM Studio shows a
+different port. Set `llm.model` to an ID returned by
 `/v1/models`. Leave the API-key environment variable unset only when server
 authentication is disabled.
 
 ## Later profile: OpenAI
 
-Hosted inference is a later, explicit opt-in, not the default. Requests leave
-the local machine and may incur charges. Keep the other schema 1 fields and
+Hosted inference is an explicit opt-in, not the default. Requests leave the
+local machine and may incur charges. Keep the other schema 1 fields and
 replace the `llm` section with:
 
 ```yaml
 llm:
-  base_url: "https://api.openai.com/v1"
-  model: ""
-  api_key_env: ROSTER_API_KEY
+  base_url: ""
+  model: your-hosted-model
+  api_key_env: OPENAI_API_KEY
   effort: m
   context_max: 0
+  profile: openai
 ```
 
-Choose a model available to your OpenAI account and fill in `llm.model`.
-Supply `ROSTER_API_KEY` through your environment or secret manager; never put
+Choose a model available to your OpenAI account and replace the example
+`llm.model`. Supply `OPENAI_API_KEY` through your environment or file vault;
+never put
 its value in YAML, endpoint URLs, documentation, or Git. Do not commit tokens,
 private keys, or `.env` files.

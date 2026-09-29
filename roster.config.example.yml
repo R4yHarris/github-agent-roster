@@ -5,6 +5,17 @@ llm:
   api_key_env: ROSTER_API_KEY
   effort: m             # l|m|h|x
   context_max: 0        # 0 = unknown
+  profile: ""            # ollama|lmstudio|openai; empty uses base_url
+profiles:
+  ollama:
+    base_url: http://127.0.0.1:11434/v1
+    api_key_env: ROSTER_API_KEY
+  lmstudio:
+    base_url: http://127.0.0.1:1234/v1
+    api_key_env: ROSTER_API_KEY
+  openai:
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
 planner:
   turn_budget: 2         # maximum planner responses; no file tools
 seat:

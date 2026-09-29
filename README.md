@@ -121,8 +121,8 @@ npm test
 ```
 
 Copy [the example config](roster.config.example.yml) to ignored
-`.roster/config.yml` to set `llm.base_url`, `llm.model`, and the API-key
-environment variable's name. See [endpoint profiles](docs/ENDPOINTS.md).
+`.roster/config.yml` to select an Ollama, LM Studio, or OpenAI profile and
+model, or set a custom `llm.base_url`. See [endpoint profiles](docs/ENDPOINTS.md).
 
 Both run modes need Git and authenticated `gh` access to an existing issue on
 the current repository's GitHub origin. The builtin path creates
