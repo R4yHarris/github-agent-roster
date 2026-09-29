@@ -22,7 +22,9 @@ function fixture(context, config = stubConfig) {
   const skillDirectory = path.join(repoRoot, 'skills', 'implement-task');
   mkdirSync(worktree);
   mkdirSync(skillDirectory, { recursive: true });
+  mkdirSync(path.join(repoRoot, 'skills', 'run-tests'));
   writeFileSync(path.join(skillDirectory, 'SKILL.md'), '# Implement task\nRun tests.\n');
+  writeFileSync(path.join(repoRoot, 'skills', 'run-tests', 'SKILL.md'), '# Run tests\nUse node --test.\n');
   writeFileSync(path.join(worktree, 'AGENTS.md'), '# Instructions\nCode carefully.\n');
   writeFileSync(path.join(worktree, 'TASK.md'),
     planStub('Update `README.md` with a Status section.', { reference: 'issue:4' }).task);
@@ -48,9 +50,24 @@ test('loads worktree context, this roster repository skills, and only the last 2
     Array.from({ length: 20 }, (_, index) => index + 5));
   assert.deepEqual(await loadSkills({ repoRoot: options.repoRoot }), [
     { name: 'implement-task', content: '# Implement task\nRun tests.\n' },
+    { name: 'run-tests', content: '# Run tests\nUse node --test.\n' },
   ]);
   writeFileSync(options.memoryPath, '{bad-json\n');
   await assert.rejects(readMemory({ file: options.memoryPath, repoRoot: options.repoRoot }), /Invalid memory JSONL line 1/);
+});
+
+test('missing or empty skills directories are optional, but malformed skill files fail', async (context) => {
+  const repoRoot = mkdtempSync(path.join(tmpdir(), 'roster-skills-'));
+  context.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  assert.deepEqual(await loadSkills({ repoRoot }), []);
+  const skills = path.join(repoRoot, 'skills');
+  mkdirSync(skills);
+  assert.deepEqual(await loadSkills({ repoRoot }), []);
+  mkdirSync(path.join(skills, 'notes'));
+  assert.deepEqual(await loadSkills({ repoRoot }), []);
+  mkdirSync(path.join(skills, 'malformed'));
+  mkdirSync(path.join(skills, 'malformed', 'SKILL.md'));
+  await assert.rejects(loadSkills({ repoRoot }), /regular SKILL\.md/);
 });
 
 test('stub coder writes a deterministic result without contacting an LLM or running tests', async (context) => {
