@@ -304,12 +304,12 @@ test('pasting a vault command and secret together still hides the secret', async
   input.destroy();
 });
 
-test('empty argv with non-TTY stdin retains usage rather than starting the loop', () => {
+test('empty argv with non-TTY stdin prints usage and exits 2 without starting the loop', () => {
   const result = spawnSync(process.execPath, [cli], {
     cwd: root, input: '', encoding: 'utf8', timeout: 10_000,
   });
   assert.ifError(result.error);
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.status, 2, result.stderr);
   assert.match(result.stdout, /^Usage:\n/);
   assert.doesNotMatch(result.stdout, /roster> /);
 });
