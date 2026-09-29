@@ -68,6 +68,7 @@ async function main(args) {
     process.exitCode = await startRepl({ repoRoot: rosterRoot });
   } else if (args.length === 0 || (args.length === 1 && ['--help', '-h'].includes(args[0]))) {
     process.stdout.write(help);
+    if (args.length === 0) process.exitCode = 2;
   } else if (args.length === 2 && args[0] === 'ask') {
     const result = await writeAsk(args[1], {
       repoRoot: rosterRoot,
