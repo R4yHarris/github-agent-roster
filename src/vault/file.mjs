@@ -12,6 +12,9 @@ export function validateSecretName(name) {
   if (typeof name !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name)) {
     throw new TypeError('Secret names must be 1-64 ASCII letters, digits or underscores, starting with a letter or underscore.');
   }
+  if (/^GITHUB_APP_/i.test(name)) {
+    throw new TypeError('GitHub App credentials cannot be stored in the LLM vault.');
+  }
 }
 
 async function statIfPresent(path) {
@@ -118,6 +121,7 @@ export function createFileVault({ directory = join(homedir(), '.roster', 'vault'
           Buffer.from(name).toString('hex') !== match[1]) {
         throw new VaultError('The vault contains an invalid entry.');
       }
+      if (/^GITHUB_APP_/i.test(name)) throw new VaultError('The vault contains a forbidden GitHub App entry.');
       result.push(name);
     }
     return result.sort();
@@ -177,6 +181,9 @@ export function createFileVault({ directory = join(homedir(), '.roster', 'vault'
       validateSecretName(name);
       if (typeof value !== 'string' || value.length === 0) {
         throw new TypeError('A secret must be a non-empty string.');
+      }
+      if (/-----BEGIN (?:[A-Z0-9 ]*PRIVATE KEY)-----/i.test(value)) {
+        throw new TypeError('PEM private keys must not be stored in the LLM vault.');
       }
       try {
         await prepare(true);

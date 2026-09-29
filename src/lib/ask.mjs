@@ -9,12 +9,12 @@ import { planAsk, renderAsk } from '../planner/stub.mjs';
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
 
 export async function writeAsk(ask, {
-  repoRoot = rosterRoot, config = loadConfig({ repoRoot }), id = randomUUID(), fetchImpl, env,
+  repoRoot = rosterRoot, config = loadConfig({ repoRoot }), id = randomUUID(), fetchImpl, env, vault,
 }) {
   if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
     throw new TypeError('Ask ID must be an opaque local identifier');
   }
-  const plan = await planAsk(ask, { config, reference: `local:${id}`, fetchImpl, env });
+  const plan = await planAsk(ask, { config, reference: `local:${id}`, fetchImpl, env, vault });
   const directory = path.join(repoRoot, config.paths.asks);
   const draft = path.join(directory, id);
   const askPath = path.join(directory, `${id}.md`);

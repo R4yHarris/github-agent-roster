@@ -67,6 +67,7 @@ test('rejects invalid schema, fields, roles, paths, tool names, and endpoint set
     ['schema', example.replace('schema: 1', 'schema: 2')],
     ['extra', `${example}merge: true\n`],
     ['principal', example.replace('principal: coder', 'principal: merger')],
+    ['App key name', example.replace('api_key_env: ROSTER_API_KEY', 'api_key_env: GITHUB_APP_PRIVATE_KEY_PATH')],
     ['tools', example.replace('run_test]', 'git_push]')],
     ['budget', example.replace('turn_budget: 8', 'turn_budget: 0')],
     ['planner budget', example.replace('turn_budget: 2', 'turn_budget: 65')],

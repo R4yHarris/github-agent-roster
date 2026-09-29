@@ -143,7 +143,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
     if (completion === 1) {
       assert.equal(body.tools, undefined);
       return { ok: true, status: 200, json: async () => ({
-        choices: [{ message: { content: JSON.stringify({
+        choices: [{ message: { role: 'assistant', content: JSON.stringify({
           title: 'Add Status to README',
           acceptance_checks: ['node --test exits 0', 'README has a Status section'],
           files_allowed: ['README.md'],
@@ -217,7 +217,7 @@ test('default planner/coder run preserves the task handoff while the coder edits
     const body = JSON.parse(request.body);
     if (completion === 1) {
       assert.equal(body.tools, undefined);
-      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: JSON.stringify({
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { role: 'assistant', content: JSON.stringify({
         title: 'Implement the app',
         acceptance_checks: ['node --test exits 0'],
         files_allowed: ['src/app.mjs'],
@@ -248,6 +248,7 @@ test('default planner/coder run preserves the task handoff while the coder edits
   };
   const run = await runBuiltinIssue(42, {
     ...options, config: llmConfig, fetchImpl, log: () => {},
+    vault: { get: async () => undefined },
     runTestCommand: async () => ({ stdout: 'tests passed', stderr: '' }),
   });
   assert.equal(completion, 3);
@@ -259,6 +260,52 @@ test('default planner/coder run preserves the task handoff while the coder edits
   assert.equal(readFileSync(run.taskPath, 'utf8'), run.planner.task);
   assert.equal(options.calls.filter(({ program, args }) =>
     program === 'git' && args[0] === 'worktree').length, 1);
+});
+
+test('planner and coder use an environment key before the vault and fall back to the vault', async (context) => {
+  for (const source of ['environment', 'vault']) {
+    const options = fixture(context);
+    const key = 'test-only-llm-key';
+    let vaultReads = 0;
+    let requests = 0;
+    const vault = { get: async (name) => {
+      assert.equal(name, 'ROSTER_API_KEY');
+      vaultReads += 1;
+      return key;
+    } };
+    const fetchImpl = async (_url, request) => {
+      requests += 1;
+      assert.equal(request.headers.Authorization, `Bearer ${key}`);
+      if (requests === 1) {
+        return { status: 200, json: async () => ({
+          choices: [{ message: { role: 'assistant', content: JSON.stringify({
+            title: 'Add status',
+            acceptance_checks: ['node --test exits 0'],
+            files_allowed: ['README.md'],
+          }) } }],
+          usage: { prompt_tokens: 3, completion_tokens: 2 },
+        }) };
+      }
+      return { status: 200, json: async () => ({
+        choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Done.' } }],
+        usage: { prompt_tokens: 5, completion_tokens: 1 },
+      }) };
+    };
+    const logs = [];
+    const result = await runBuiltinIssue(42, {
+      ...options, config: llmConfig, vault, fetchImpl,
+      env: { ...options.env, ROSTER_API_KEY: source === 'environment' ? key : undefined },
+      runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+      log: (message) => logs.push(message),
+    });
+    assert.equal(requests, 2);
+    assert.equal(vaultReads, source === 'environment' ? 0 : 2);
+    assert.equal(result.runs.planner.env.AI_CONTEXT_USED, '3');
+    assert.equal(result.runs.coder.env.AI_CONTEXT_USED, '5');
+    assert.ok(!logs.join('\n').includes(key));
+    assert.ok(!readFileSync(path.join(options.repoRoot, '.roster', 'memory', 'coder.jsonl'),
+      'utf8').includes(key));
+  }
 });
 
 test('opt-in learning records exactly one run for each builtin seat', async (context) => {
@@ -281,7 +328,7 @@ test('detects a changed recipe after the coder runs tests and refuses publicatio
   const fetchImpl = async (_url, request) => {
     const body = JSON.parse(request.body);
     if (!body.tools) {
-      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: JSON.stringify({
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { role: 'assistant', content: JSON.stringify({
         title: 'Update README', acceptance_checks: ['node --test exits 0'],
         files_allowed: ['README.md'],
       }) } }] }) };
@@ -292,6 +339,7 @@ test('detects a changed recipe after the coder runs tests and refuses publicatio
   };
   await assert.rejects(runBuiltinIssue(42, {
     ...options, config: llmConfig, publish: true, fetchImpl,
+    vault: { get: async () => undefined },
     env: { ...options.env, GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'app.pem' },
     runTestCommand: async (_program, _args, { cwd }) => {
       writeFileSync(path.join(cwd, 'RECIPE.yml'), 'tampered');

@@ -133,7 +133,8 @@ test('budget exhaustion and a failed final test stop without claiming success', 
     .replace('model: ""', 'model: local-model').replace('turn_budget: 8', 'turn_budget: 1'));
   const options = fixture(context, budget);
   await assert.rejects(runCoder({
-    ...options, fetchImpl: async () => ({ status: 200, json: async () => ({
+    ...options, vault: { get: async () => undefined },
+    fetchImpl: async () => ({ status: 200, json: async () => ({
       choices: [{ finish_reason: 'tool_calls', message: {
         role: 'assistant',
         tool_calls: [{ id: 'call-1', type: 'function', function: {
@@ -147,7 +148,8 @@ test('budget exhaustion and a failed final test stop without claiming success', 
 
   const failing = fixture(context, llmConfig);
   await assert.rejects(runCoder({
-    ...failing, fetchImpl: async () => ({ status: 200, json: async () => ({
+    ...failing, vault: { get: async () => undefined },
+    fetchImpl: async () => ({ status: 200, json: async () => ({
       choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Done' } }],
     }) }),
     runTestCommand: async () => { throw Object.assign(new Error('failed'), {

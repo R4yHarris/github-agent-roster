@@ -13,9 +13,9 @@ prepare-only. See [SDLC](SDLC.md) for execution and publishing.
 - `llm.base_url` and `llm.model` are deliberately empty strings. Choose both
   explicitly; the example does not select a provider or model.
 - `llm.api_key_env: ROSTER_API_KEY` names an environment variable, not a key.
-  The configured coder uses the [OpenAI-compatible client](LLM.md), which
-  sends authorization only for a resolved key. Leave the variable unset for
-  a keyless local server; the planner still needs it for a keyed endpoint.
+  Both seats use the [OpenAI-compatible client](LLM.md): a non-empty environment
+  value wins over the same-named vault entry, and authorization is sent only
+  for a resolved key. Leave both unset for a keyless local server.
 - `llm.effort: m` records medium effort and `llm.context_max: 0` means an unknown
   context limit. These are run metadata, not provider-specific request options.
 - `planner.turn_budget` bounds the planner's JSON responses; it has no file
@@ -28,7 +28,7 @@ prepare-only. See [SDLC](SDLC.md) for execution and publishing.
   remain the work queue.
 
 Keep every field in the example when overriding configuration. Older private
-configs without `planner` remain valid with a one-turn planner. The separate
+configs without `planner` remain valid with a one-turn planner. The underlying
 [chat factory and vault](LLM.md) accept an in-memory API with
 `llm.api_key_optional` and `llm.api_key_name`; those are not builtin YAML fields.
 

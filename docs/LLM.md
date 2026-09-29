@@ -33,14 +33,16 @@ stub in that case. The prepare-only [`runIssue`](../src/lib/issue.mjs) path has
 no LLM call or config loader. The existing builtin coder loop calls this
 factory; it does not add a separate runner, planner, or task queue.
 
-The opt-in [builtin coder loop](../src/runtime/loop.mjs) now uses this client
-when `.roster/config.yml` sets `llm.base_url`, mapping `llm.api_key_env` to
-the client's key name. Keys are optional for local endpoints such as Ollama
-at `http://127.0.0.1:11434/v1`; a resolved key is still sent when present.
-The empty-URL stub makes no chat request. The coder returns reported token
-usage to the per-seat AI-Run metadata, without logging keys or prompts.
-The planner currently uses its existing JSON planner client, so a keyed
-end-to-end run still needs its configured environment key.
+The builtin [planner](../src/planner/stub.mjs) and
+[coder](../src/runtime/loop.mjs) use this client through a shared adapter
+when `.roster/config.yml` sets `llm.base_url`. The configured
+`llm.api_key_env` is both the environment-variable and vault entry name:
+a non-empty environment value wins without reading the vault, while an
+unset or empty value falls back to the vault. Keys are optional for local
+endpoints such as Ollama at `http://127.0.0.1:11434/v1`; a resolved key
+is still sent when present. The empty-URL stub makes no chat request.
+Both seats pass only reported token usage to their AI-Run metadata. The
+client does not log API keys or HTTP request/response bodies.
 
 An enabled hook is used as follows:
 
@@ -95,6 +97,9 @@ const config = {
 variable first. A non-empty value wins without opening the vault. An unset
 or empty variable falls back to the same vault name; a missing entry returns
 `undefined`. Vault failures are errors, not missing-key fallbacks.
+For the builtin YAML config, use `llm.api_key_env` as that name. GitHub App
+credential names and PEM private keys are refused by the LLM vault; keep the
+App key outside the checkout and this vault.
 
 ## File vault
 
@@ -106,6 +111,7 @@ parents) are rejected, as are symlinked vault directories and entry files.
 ```sh
 node src/cli.mjs vault set OPENAI_API_KEY
 node src/cli.mjs vault list
+node src/cli.mjs vault get OPENAI_API_KEY
 ```
 
 `set` requires piped/redirected stdin and reads until EOF; it never accepts a
@@ -113,8 +119,10 @@ secret argument or echoes the value. For example, pipe the output of your
 existing secret manager into `node src/cli.mjs vault set OPENAI_API_KEY`.
 Do not type literal credentials into shell history. One trailing LF or CRLF
 is removed; other whitespace is preserved. Empty values are rejected.
-`list` prints sorted names only, one per line. There is deliberately no CLI
-command that prints secret values.
+`list` prints sorted names only, one per line. `get` emits the exact value
+only when stdout is redirected or piped; it refuses an interactive terminal
+and errors on a missing name. The interactive shell's `/vault get NAME`
+reports presence without revealing the value.
 
 The [`createFileVault`](../src/vault/file.mjs) API exposes async `set(name,
 value)`, `get(name)` and `list()` methods. Names are case-sensitive, 1-64

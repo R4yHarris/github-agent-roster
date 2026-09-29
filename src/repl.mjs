@@ -21,6 +21,7 @@ const help = `Commands:
   /stats [REF]              Show AI-Run metrics
   /recommend feat|fix|docs|test
   /vault [list]             List secret names
+  /vault get NAME           Check whether a secret is stored, without revealing it
   /vault set NAME           Enter a secret with input hidden
   /help                     Show these commands
   /quit                     Exit
@@ -194,8 +195,16 @@ export function createDispatcher({
           output.write(names.length ? `${names.join('\n')}\n` : 'No secrets stored.\n');
           return true;
         }
+        const lookup = /^get\s+(\S+)$/.exec(args);
+        if (lookup) {
+          api.validateSecretName(lookup[1]);
+          const value = await api.createFileVault().get(lookup[1]);
+          if (value === undefined) throw new Error(`No secret stored for ${lookup[1]}.`);
+          output.write(`${lookup[1]} is stored (value hidden; pipe roster vault get NAME to retrieve it).\n`);
+          return true;
+        }
         const secret = /^set\s+(\S+)$/.exec(args);
-        if (!secret) throw new TypeError('Use /vault [list] or /vault set NAME.');
+        if (!secret) throw new TypeError('Use /vault [list], /vault get NAME, or /vault set NAME.');
         api.validateSecretName(secret[1]);
         state.pendingSecret = secret[1];
         output.write('Secret (input hidden): ');

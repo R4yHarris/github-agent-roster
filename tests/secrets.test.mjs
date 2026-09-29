@@ -48,6 +48,7 @@ test('vault failures do not become missing secrets or leak material through caus
 
 test('invalid names and non-string credentials fail explicitly', async () => {
   await assert.rejects(resolveSecret('../TOKEN', { env: {} }), /Secret names/);
+  await assert.rejects(resolveSecret('GITHUB_APP_PRIVATE_KEY_PATH', { env: {} }), /GitHub App credentials/);
   await assert.rejects(resolveSecret('TOKEN', { env: { TOKEN: 123 } }), /must be a string/);
   for (const value of [null, '', 123]) {
     await assert.rejects(resolveSecret('TOKEN', { env: {}, vault: { get: async () => value } }), /invalid secret/);

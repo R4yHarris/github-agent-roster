@@ -24,6 +24,7 @@ const help = `Usage:
   roster stats [--ref REVISION_OR_RANGE] [--evals PATH]
   roster vault set NAME
   roster vault list
+  roster vault get NAME
   roster eval <sha-or-session> <accept|reject|rework> <1-5> <y|n>
   roster recommend --task-class feat|fix|docs|test
 
@@ -46,6 +47,14 @@ async function setVaultSecret(name) {
   }
   await createFileVault().set(name, value.replace(/\r?\n$/, ''));
   process.stdout.write(`Stored secret ${name}.\n`);
+}
+
+async function getVaultSecret(name) {
+  validateSecretName(name);
+  if (process.stdout.isTTY) throw new TypeError('Pipe roster vault get NAME; refusing to print a secret in a terminal.');
+  const value = await createFileVault().get(name);
+  if (value === undefined) throw new Error(`No secret stored for ${name}.`);
+  process.stdout.write(value);
 }
 
 function statsOptions(args) {
@@ -88,6 +97,8 @@ async function main(args) {
   } else if (args.length === 2 && args[0] === 'vault' && args[1] === 'list') {
     const names = await createFileVault().list();
     if (names.length) process.stdout.write(`${names.join('\n')}\n`);
+  } else if (args.length === 3 && args[0] === 'vault' && args[1] === 'get') {
+    await getVaultSecret(args[2]);
   } else if (args[0] === 'stats') {
     const options = statsOptions(args.slice(1));
     const records = loadMetrics({

@@ -17,6 +17,7 @@ agents and CI.
 | `/stats [REF]` | Summarize contracts and local AI-Run records, optionally at a Git ref. |
 | `/recommend feat|fix|docs|test` | Recommend from evaluated local runs. |
 | `/vault` or `/vault list` | List vault entry names, never values. |
+| `/vault get NAME` | Check whether an entry exists without revealing its value; use piped `roster vault get NAME` to retrieve it. |
 | `/vault set NAME` | Read the next line with terminal echo and readline history disabled, then store it in the existing file vault. |
 | `/help` | Show slash-command help. |
 | `/quit` | Exit with status 0; Ctrl+C also exits 0. |

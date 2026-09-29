@@ -34,6 +34,7 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
   const vault = {
     async list() { calls.push(['vault-list']); return ['ROSTER_TOKEN']; },
     async set(name, value) { calls.push(['vault-set', name, value]); },
+    async get(name) { calls.push(['vault-get', name]); return 'private-value'; },
   };
   const { dispatch, state, output, errorOutput, banner } = dispatcher({
     services: {
@@ -83,6 +84,7 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
   await dispatch('/vault set ROSTER_TOKEN');
   assert.equal(state.pendingSecret, 'ROSTER_TOKEN');
   await dispatch('private-value');
+  await dispatch('/vault get ROSTER_TOKEN');
   assert.equal(state.pendingSecret, null);
   await dispatch('/help');
   assert.equal(await dispatch('/unknown'), true);
@@ -98,6 +100,7 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
     ['recommend', 'feat'],
     ['vault-list'],
     ['vault-set', 'ROSTER_TOKEN', 'private-value'],
+    ['vault-get', 'ROSTER_TOKEN'],
   ]);
   assert.match(output.text, /Worktree: issue-42/);
   assert.match(output.text, /--message "feat: issue 42" --merge-when-green/);
@@ -105,6 +108,7 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
   assert.match(output.text, /Last run: issue-42/);
   assert.match(output.text, /Commands:\n/);
   assert.ok(!output.text.includes('private-value'));
+  assert.match(output.text, /ROSTER_TOKEN is stored \(value hidden/);
   assert.match(errorOutput.text, /Unknown command: \/unknown/);
   assert.match(errorOutput.text, /Unknown command: plain/);
 });

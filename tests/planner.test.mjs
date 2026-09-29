@@ -66,9 +66,9 @@ test('LLM planner validates JSON before generating a recipe and never exposes th
     assert.equal(body.messages[1].content, 'Add status to README.');
     assert.equal(body.tools, undefined);
     return {
-      ok: true,
+      status: 200,
       async json() {
-        return { choices: [{ message: { content: JSON.stringify({
+        return { choices: [{ message: { role: 'assistant', content: JSON.stringify({
           title: 'Add a Status section',
           acceptance_checks: ['README has a Status section', 'node --test exits 0'],
           files_allowed: ['README.md'],
@@ -93,25 +93,26 @@ test('LLM planner validates JSON before generating a recipe and never exposes th
     return true;
   });
   await assert.rejects(planAsk('Add status to README.', {
-    config: llmConfig, fetchImpl: async () => ({ ok: true, json: async () => ({
-      choices: [{ message: { content: JSON.stringify({
+    config: llmConfig, fetchImpl: async () => ({ status: 200, json: async () => ({
+      choices: [{ message: { role: 'assistant', content: JSON.stringify({
         title: 'Bad plan', acceptance_checks: ['test'], files_allowed: ['../secrets'],
       }) } }],
     }) }),
+    env: { ROSTER_API_KEY: 'test-key' },
   }), /protected files/);
 });
 
 test('planner repairs invalid JSON within its configured budget and fails when exhausted', async () => {
   let calls = 0;
   const plan = await planAsk('Update README.md.', {
-    config: llmConfig,
+    config: llmConfig, env: {}, vault: { get: async () => undefined },
     fetchImpl: async (_url, request) => {
       calls += 1;
       const body = JSON.parse(request.body);
       assert.equal(body.tools, undefined);
       if (calls === 2) assert.match(body.messages.at(-1).content, /invalid JSON/);
-      return { ok: true, json: async () => ({
-        choices: [{ message: { content: calls === 1 ? '{' : JSON.stringify({
+      return { status: 200, json: async () => ({
+        choices: [{ message: { role: 'assistant', content: calls === 1 ? '{' : JSON.stringify({
           title: 'Update README', acceptance_checks: ['node --test exits 0'],
           files_allowed: ['README.md'],
         }) } }],
@@ -127,10 +128,10 @@ test('planner repairs invalid JSON within its configured budget and fails when e
     .replace('model: ""', 'model: test-model').replace('turn_budget: 2', 'turn_budget: 1'));
   let failures = 0;
   await assert.rejects(planAsk('Update README.md.', {
-    config: singleTurn,
+    config: singleTurn, env: {}, vault: { get: async () => undefined },
     fetchImpl: async () => {
       failures += 1;
-      return { ok: true, json: async () => ({ choices: [{ message: { content: '{' } }] }) };
+      return { status: 200, json: async () => ({ choices: [{ message: { role: 'assistant', content: '{' } }] }) };
     },
   }), /Planner turn budget \(1\) exhausted: LLM planner returned invalid JSON/);
   assert.equal(failures, 1);
@@ -142,11 +143,11 @@ test('planner rejects write_file requests without touching source or task files'
   await assert.rejects(runPlanner({
     worktree,
     issue: { number: 42, title: 'Protect the task', body: 'Edit `src/app.mjs`.' },
-    config: llmConfig,
+    config: llmConfig, env: {}, vault: { get: async () => undefined },
     fetchImpl: async (_url, request) => {
       assert.equal(JSON.parse(request.body).tools, undefined);
-      return { ok: true, json: async () => ({ choices: [{ finish_reason: 'tool_calls',
-        message: { tool_calls: [{ id: 'write', type: 'function', function: {
+      return { status: 200, json: async () => ({ choices: [{ finish_reason: 'tool_calls',
+        message: { role: 'assistant', tool_calls: [{ id: 'write', type: 'function', function: {
           name: 'write_file',
           arguments: JSON.stringify({ path: 'src/app.mjs', content: 'bad' }),
         } }] },

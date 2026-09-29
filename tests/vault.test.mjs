@@ -173,6 +173,22 @@ test('invalid secret names and values do not create a vault', async (t) => {
   assert.equal(existsSync(directory), false);
 });
 
+test('GitHub App names and PEM private keys cannot enter the LLM vault', async (t) => {
+  const { directory, vault } = fixture(t);
+  for (const name of ['GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH', 'github_app_key']) {
+    await assert.rejects(vault.set(name, secret), /GitHub App credentials/);
+    await assert.rejects(vault.get(name), /GitHub App credentials/);
+  }
+  await assert.rejects(vault.set('ROSTER_API_KEY',
+    '-----BEGIN RSA PRIVATE KEY-----\ntest-only\n-----END RSA PRIVATE KEY-----'),
+  /PEM private keys/);
+  assert.equal(existsSync(directory), false);
+
+  mkdirSync(directory);
+  writeFileSync(join(directory, entryName('GITHUB_APP_ID')), '{}');
+  await assert.rejects(vault.list(), /forbidden GitHub App entry/);
+});
+
 test('vault writes are refused inside repositories and linked worktrees before creating directories', async (t) => {
   const { root } = fixture(t);
   for (const kind of ['repository', 'worktree']) {
