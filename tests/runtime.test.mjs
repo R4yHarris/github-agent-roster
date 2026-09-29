@@ -128,6 +128,60 @@ test('LLM coder uses only offered tools within the turn budget, then verifies te
   assert.ok(!memory.includes('private-value'));
 });
 
+test('a nonzero run_test returns captured output for the coder to fix in the next turn', async (context) => {
+  const options = fixture(context, llmConfig);
+  let turns = 0;
+  let testRuns = 0;
+  const fetchImpl = async (_url, request) => {
+    turns += 1;
+    const sent = JSON.parse(request.body);
+    if (turns === 1) {
+      return { status: 200, json: async () => ({
+        choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant', content: null,
+          tool_calls: [{ id: 'failed-test', type: 'function',
+            function: { name: 'run_test', arguments: '{}' } }],
+        } }],
+      }) };
+    }
+    if (turns === 2) {
+      assert.deepEqual(JSON.parse(sent.messages.at(-1).content), {
+        exit_code: 1, stdout: 'not ok', stderr: 'assertion failed',
+      });
+      return { status: 200, json: async () => ({
+        choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant', content: null,
+          tool_calls: [{ id: 'fix-code', type: 'function', function: {
+            name: 'write_file',
+            arguments: JSON.stringify({ path: 'README.md', content: '# Example\n\n## Status\nReady.\n' }),
+          } }],
+        } }],
+      }) };
+    }
+    assert.match(sent.messages.at(-1).content, /README\.md/);
+    return { status: 200, json: async () => ({
+      choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Fixed tests.' } }],
+    }) };
+  };
+  const result = await runCoder({
+    ...options, env: { ROSTER_API_KEY: 'test-only-key' }, fetchImpl,
+    runTestCommand: async (_program, _args, { timeout }) => {
+      testRuns += 1;
+      assert.equal(timeout, 60_000);
+      if (testRuns === 1) throw Object.assign(new Error('tests failed'), {
+        code: 1, stdout: 'not ok', stderr: 'assertion failed',
+      });
+      return { stdout: 'all tests pass', stderr: '' };
+    },
+  });
+  assert.equal(result.mode, 'llm');
+  assert.equal(result.turns, 3);
+  assert.equal(testRuns, 2);
+  assert.equal(result.tests.exit_code, 0);
+  assert.match(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), /## Status\nReady/);
+  assert.equal(JSON.parse(readFileSync(options.memoryPath, 'utf8')).status, 'llm');
+});
+
 test('budget exhaustion and a failed final test stop without claiming success', async (context) => {
   const budget = parseConfig(example.replace('base_url: ""', 'base_url: http://localhost:3456/v1')
     .replace('model: ""', 'model: local-model').replace('turn_budget: 8', 'turn_budget: 1'));
