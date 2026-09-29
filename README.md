@@ -97,6 +97,10 @@ cd github-agent-roster
 For an existing checkout, run `git submodule update --init --recursive`.
 The submodule at [`vendor/github-agent-contracts`](vendor/github-agent-contracts)
 is pinned to `v0.2.0`; do not copy or rewrite its source.
+Run `roster doctor` from the target repository root to check Node 20,
+the contracts publisher, App variable presence, policy, and trailer workflow.
+It is offline, prints no App values or key paths, and exits nonzero when
+prerequisites are missing.
 
 [Contracts resolution](src/lib/paths.mjs) checks the submodule first, then
 `GITHUB_AGENT_CONTRACTS`, then the sibling clone at `../github-agent-contracts`.
@@ -112,6 +116,7 @@ Tests run with no API key or model endpoint.
 ```sh
 node src/cli.mjs
 node src/cli.mjs --help
+node src/cli.mjs doctor
 node src/cli.mjs ask "Add a Status section to README.md"
 node src/cli.mjs run --issue 42
 node src/cli.mjs run --issue 42 --runtime builtin
