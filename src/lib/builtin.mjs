@@ -172,7 +172,7 @@ export async function runBuiltinIssue(issueNumber, {
   const taskClass = inferTaskClass(prepared.issue.title);
   const recordSeat = async (session, run) => recordRun({
     session, task: prepared.task, task_class: taskClass,
-  }, { cwd: prepared.repoRoot, env: { ...metricEnv, ...run?.env } });
+  }, { cwd: prepared.repoRoot, env: { ...metricEnv, ...run?.env }, createDirectory: true });
   const plannerRun = activeConfig.llm.base_url ? buildRun({
     config: activeConfig, usage: planner.usage ?? {}, session: sessions.planner, task: prepared.task,
     env,

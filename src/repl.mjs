@@ -8,7 +8,7 @@ import {
   closeMergedIssue, issueMergeMessage, mergedPullNumber, mergedPullNumberFromFailure,
 } from './lib/issue-board.mjs';
 import { loadConfig, setConfigValue } from './lib/config.mjs';
-import { recordEvaluation } from './lib/eval.mjs';
+import { formatEvaluationResult, recordHumanEvaluation } from './lib/eval.mjs';
 import { formatRecommendation, recommend, repositoryRoot, TASK_CLASSES } from './lib/learn.mjs';
 import { formatMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
 import { resolveContractsPath } from './lib/paths.mjs';
@@ -72,7 +72,8 @@ async function publishWithContracts({ contractsPath, cwd, env, message, output, 
 }
 
 const defaultServices = {
-  submitAsk, runBuiltinIssue, recordEvaluation, repositoryRoot, loadMetrics,
+  submitAsk, runBuiltinIssue, recordHumanEvaluation, formatEvaluationResult,
+  repositoryRoot, loadMetrics,
   summarizeMetrics, formatMetrics, recommend, formatRecommendation,
   resolveContractsPath, prepareBuiltinPublication, createFileVault,
   validateSecretName, readStatus, formatStatus, setConfigValue,
@@ -189,8 +190,8 @@ export function createDispatcher({
       case 'eval': {
         const fields = args.split(/\s+/);
         if (fields.length !== 4) throw new TypeError('Use /eval TARGET accept|reject|rework 1-5 y|n.');
-        const evaluation = await api.recordEvaluation(...fields, { cwd: currentRoot() });
-        output.write(`Recorded AI-Eval for ${evaluation.sha ?? evaluation.session}.\n`);
+        output.write(api.formatEvaluationResult(
+          await api.recordHumanEvaluation(...fields, { cwd: currentRoot() })));
         return true;
       }
       case 'publish': {

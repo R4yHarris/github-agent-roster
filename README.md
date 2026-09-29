@@ -24,7 +24,8 @@ it does not replace Git.
    GitHub App identity, human-owned policy, and `AI-Run` trailers.
 7. **Evaluate:** a human reviews the PR and posts `AI-Eval:`. Locally recorded
    decisions inform `roster stats` and opt-in `roster recommend` for later
-   assignments; PR comments are not automatically imported.
+   assignments; `roster eval` posts an associated PR comment when `gh` is
+   available, but PR comments are not imported.
 
 This is a single-process, sequential loop, not a multi-node DGX deployment
 or GUI. No Hermes, Claude Code, or Copilot worker is required.
@@ -70,7 +71,7 @@ evaluations or keeps the stub. `roster status --issue N` queries GitHub;
 needs neither GitHub nor a model. See the [shell guide](docs/REPL.md) for
 `/model`, `/effort`, and `/publish`.
 
-`roster stats` combines contracts `AI-Run` history with opt-in local runs and
+`roster stats` combines contracts `AI-Run` history with recorded seat runs and
 local `roster eval` decisions. `roster recommend` does not route automatically
 or fetch evaluations from GitHub. `roster vault set NAME` reads piped stdin;
 `roster vault get NAME` writes a value only to redirected stdout. There are no
@@ -127,10 +128,12 @@ the coder, and prints a publishing command. The explicit `prepare` command
 writes only a manual assignment and ignored `.env`; load that environment into
 the worker before publishing. See [same-session seats](docs/MULTIAGENT.md).
 
-Create `.roster/runs` at the repository root to opt into successful-run JSONL
-recording. `stats` joins local Git history through the resolved contracts pack
-with local runs and `.roster/evals.jsonl`; `--ref` and `--evals` remain supported.
-Human `eval` appends a decision, never the coder path. `recommend` suggests the
+Completed seats append ignored `.roster/runs/runs.jsonl` automatically; manual
+`roster prepare` recording remains opt-in. `stats` joins local Git history
+through the resolved contracts pack with local runs and `.roster/evals.jsonl`;
+`--ref` and `--evals` remain supported. Human `eval` appends a decision and
+comments on its associated PR when `gh` is available; the coder cannot write
+human feedback. `recommend` suggests the
 highest accept-rate only with at least three evaluated samples, otherwise
 printing `insufficient data`. Nothing fetches human evaluations from GitHub.
 

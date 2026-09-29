@@ -20,8 +20,9 @@ The returned `deny.read` and `deny.write` predicates are the same rules used
 by the [runtime tools](../src/runtime/tools.mjs). Secrets (`.env`, `.env.*`,
 `*.pem`, and `.roster/vault`), Git metadata, worktree escapes, and symlinks
 cannot be accessed. Policy, workflows, the contracts submodule, and
-harness-owned task/result files cannot be edited. Writes must also match
-TASK.md's allowed paths. The loop offers only configured builtin tools;
+harness-owned task/result files, human `.roster/evals.jsonl`, and seat run
+journals cannot be edited. Writes must also match TASK.md's allowed paths.
+The loop offers only configured builtin tools;
 principal prose cannot add a tool, increase the turn budget, or grant merge,
 protected-branch push, or deploy.
 

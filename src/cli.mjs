@@ -3,7 +3,7 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runIssue } from './lib/issue.mjs';
-import { recordEvaluation } from './lib/eval.mjs';
+import { formatEvaluationResult, recordHumanEvaluation } from './lib/eval.mjs';
 import { formatRecommendation, recommend, repositoryRoot, TASK_CLASSES } from './lib/learn.mjs';
 import { submitAsk } from './lib/ask.mjs';
 import { runBuiltinIssue } from './lib/builtin.mjs';
@@ -43,7 +43,8 @@ Init copies review-only examples; it never overwrites agent-policy.yml.
 Run plans and executes planner then coder in one worktree by default.
 Prepare creates a manual handoff without executing seats. Publishing is opt-in.
 Recipe validates strict v0 seat YAML. Stats joins contracts AI-Run history with local runs and human evals.
-Eval records a human decision locally. Recommend needs at least 3 evaluated runs.
+Eval records a human decision and comments on its associated PR when gh is available.
+Recommend needs at least 3 evaluated runs.
 Vault set reads a secret from stdin; vault list prints names, never values.
 `;
 
@@ -170,8 +171,7 @@ async function main(args) {
     if (args.length !== 5) {
       throw new TypeError('Use roster eval <sha-or-session> <accept|reject|rework> <1-5> <y|n>.');
     }
-    const evaluation = await recordEvaluation(...args.slice(1));
-    process.stdout.write(`Recorded AI-Eval for ${evaluation.sha ?? evaluation.session}.\n`);
+    process.stdout.write(formatEvaluationResult(await recordHumanEvaluation(...args.slice(1))));
   } else if (args[0] === 'recommend') {
     if (args.length !== 3 || args[1] !== '--task-class' || !TASK_CLASSES.includes(args[2])) {
       throw new TypeError('Use roster recommend --task-class feat|fix|docs|test.');

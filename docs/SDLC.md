@@ -128,8 +128,9 @@ roster's skills, and the last 20 memory JSONL lines. Its
 `read_file`, `write_file`, and `list_dir` tools stay inside the worktree and
 reject symlink escapes; writes must match the TASK file's allowed list and
 cannot touch `.env*`, `*.pem`, `.git`, `agent-policy.yml`,
-`.github/workflows`, the pinned contracts submodule, or the generated
-task/result files. Directory listings hide protected entries. `run_test` runs
+`.github/workflows`, `.roster/evals.jsonl`, `.roster/runs/`, the pinned
+contracts submodule, or the generated task/result files. Directory listings
+hide protected entries. `run_test` runs
 `node --test` in the worktree with a 60-second timeout and without the model
 API key or App credentials. A nonzero exit returns captured stdout, stderr,
 and exit code to the coder as a failed tool result so it can correct the task

@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import {
-  cpSync, existsSync, mkdirSync, mkdtempSync, promises as fs, readFileSync, rmSync, writeFileSync,
+  cpSync, existsSync, mkdirSync, mkdtempSync, promises as fs, readFileSync, rmSync, symlinkSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -143,6 +144,49 @@ test('records only when the runs directory exists, with known fields and no inve
   });
   assert.deepEqual(loadLearning({ cwd }).runs, [record, known]);
   assert.equal(existsSync(join(cwd, '.roster', 'evals.jsonl')), false);
+});
+
+test('completed seats can create their ignored run journal without inventing metrics', async (t) => {
+  const cwd = fixture(t, { learning: false });
+  const record = { session: 'roster-42-planner', task: 'issue-42' };
+  assert.deepEqual(await recordRun(record, { cwd, env: {}, createDirectory: true }), record);
+  assert.deepEqual(loadLearning({ cwd }).runs, [record]);
+  assert.equal(existsSync(join(cwd, '.roster', 'evals.jsonl')), false);
+  const second = await recordRun({ session: 'roster-42-coder', task: 'issue-42' }, {
+    cwd, createDirectory: true,
+    env: { AI_MODEL: 'local-model', AI_EFFORT: 'high',
+      AI_CONTEXT_USED: '4', AI_CONTEXT_OUT: '0' },
+  });
+  assert.deepEqual(second, {
+    session: 'roster-42-coder', task: 'issue-42', model: 'local-model',
+    effort: 'h', context_used: 4, context_out: 0,
+  });
+  assert.deepEqual(loadLearning({ cwd }).runs, [record, second]);
+  await assert.rejects(recordRun(record, { cwd, createDirectory: 'yes' }), /createDirectory must be a boolean/);
+  await assert.rejects(recordRun(record, {
+    cwd, createDirectory: true, fileSystem: {
+      ...fs, async mkdir() { throw new Error('denied'); },
+    },
+  }), /Could not create.*denied/);
+});
+
+test('automatic seat recording refuses a symlinked learning directory', async (t) => {
+  const cwd = fixture(t, { learning: false });
+  const outside = mkdtempSync(join(tmpdir(), 'roster-learn-outside-'));
+  t.after(() => rmSync(outside, { recursive: true, force: true }));
+  try {
+    symlinkSync(outside, join(cwd, '.roster'), process.platform === 'win32' ? 'junction' : 'dir');
+  } catch (error) {
+    if (['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) {
+      t.skip('Creating symlinks is unavailable on this system.');
+      return;
+    }
+    throw error;
+  }
+  await assert.rejects(recordRun({ session: 'roster-42-coder' }, {
+    cwd, env: {}, createDirectory: true,
+  }), /symlinks/);
+  assert.equal(existsSync(join(outside, 'runs')), false);
 });
 
 test('records effort and context even when the model is not reported', async (t) => {

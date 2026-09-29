@@ -4,10 +4,16 @@ Roster joins the required contracts pack's `AI-Run` export with local run
 metadata and human decisions. There is no model API, vault, analytics service,
 or separate task database. GitHub Issues and PRs remain the queue.
 
-## Opt in to local run records
+## Seat runs and manual preparation records
 
-Create `.roster/runs` in the repository root before running roster. For example,
-in PowerShell:
+Each completed planner or coder seat automatically creates and appends to
+`.roster/runs/runs.jsonl` in the issue repository. Stub seats record only
+session and task; configured seats include model, effort, and token counts
+only when known. If recording fails, the run reports the error instead of
+claiming a completed seat. A coder failure can leave a planner record.
+
+Manual `roster prepare --issue N` remains opt-in. Create `.roster/runs` in
+the repository root before preparing an assignment, for example in PowerShell:
 
 ```powershell
 New-Item -ItemType Directory -Force .roster\runs
@@ -20,11 +26,9 @@ it records nothing and does not create `.roster`. Failed setup never records a s
 Recording failures are reported explicitly, including the already-created
 worktree path; inspect that worktree rather than blindly rerunning setup.
 
-For the default `roster run --issue N`, setup adds no preparation record. It
-records one run per completed seat (`roster-N-planner`, then
-`roster-N-coder`) with only that seat's reported metrics. If the coder fails,
-the planner record may remain. The deterministic stub records the session and
-task only, with no model, AI-Run, or fabricated tokens.
+For the default `roster run --issue N`, setup adds no preparation record.
+It records one run per completed seat (`roster-N-planner`, then
+`roster-N-coder`) with only that seat's reported metrics.
 
 The prepare command assigns a worker, not a completed commit. Its generated
 `session` and `task` are known, but the eventual commit SHA is not: the starting
@@ -95,17 +99,27 @@ SHA-specific evaluation takes precedence over a session-wide evaluation.
 Malformed arguments or existing JSONL fail explicitly rather than silently
 skipping data.
 
-Optionally, the human can also post the contracts comment using their own
-authenticated GitHub CLI:
+When a GitHub origin and `gh` are available, `roster eval` finds the PR
+associated with the evaluated commit and posts a human-authored comment:
 
-```sh
-gh pr comment 123 --body "AI-Eval: 1|accept|3|n"
+```text
+AI-Eval: 1|accept|3|n
 ```
 
-Roster does not fetch PR comments, post evaluation comments, generate decisions,
-or write evaluation trailers. The coder `run` and contracts publishing paths
-never write `AI-Eval`; only the explicit human `eval` command writes the local
-evaluation file.
+For a session, Roster resolves its published commit from local AI-Run history
+first. It never guesses the PR from the current branch. If `gh` is absent,
+the repository has no GitHub origin, the session has no published commit, or
+no PR is associated with the commit, the command reports **no PR comment**
+and retains the local evaluation. If commenting or GitHub lookup fails after
+the append, it reports that the local record was saved and exits with an
+error; multiple associated PRs are treated as ambiguous and are not
+commented on. Run `roster eval` as a human with authenticated `gh`, not from
+the coder seat.
+
+Roster does not fetch PR comments, generate decisions, or write evaluation
+trailers. The coder tools cannot write `.roster/evals.jsonl` or the run
+journals; only the explicit human `eval` command writes the local evaluation
+file and posts a comment.
 
 ## Stats and recommendations
 
@@ -163,14 +177,16 @@ model applies a qualifying suggestion to that run's planner and coder,
 without editing private config or policy. Fewer than three evaluated
 samples keep the run on the deterministic stub. See [routing](ROUTING.md).
 
-Both `.roster/runs/` and `.roster/evals.jsonl` are ignored by Git. Keep human
-feedback local unless the human explicitly posts the optional PR comment.
+Both `.roster/runs/` and `.roster/evals.jsonl` are ignored by this repository.
+When running Roster against another repository, ignore those paths there
+before recording seats or evaluations. The files are evidence, not a task
+queue; GitHub Issues and PRs remain the board.
 
 ## Tests
 
-Fixture tests cover successful and failed runs, omitted unknowns, real zeros,
-joins and deduplication, human-only evaluations, existing stats flags, and the
-three-sample threshold:
+Fixture tests cover automatic and failed recording, omitted unknowns, real
+zeros, joins and deduplication, mocked GitHub comments, existing stats flags,
+and the three-sample threshold:
 
 ```sh
 node --test tests/learn.test.mjs tests/eval.test.mjs

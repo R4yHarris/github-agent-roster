@@ -18,16 +18,17 @@ a second scheduling service. An issue number identifies one human Ask.
    the merged PR, posts an App-authored issue comment with the coder's AI-Run
    when present, and closes the issue if GitHub has not already done so.
    A failure is reported; it is not treated as a successful board transition.
-4. A human reviews and posts `AI-Eval:` on the PR. The coder never invents
-   that evaluation or opens extra issues as a substitute for the Ask.
+4. A human reviews and runs `roster eval`, which posts `AI-Eval:` on the
+   associated PR when `gh` is available. The coder never invents that
+   evaluation or opens extra issues as a substitute for the Ask.
 
 `roster status --issue N` reads the issue and its open `issue-N` branch PR
 from GitHub and reports the local worktree path. `--offline` reads only the
 cached assignment and filesystem: it reports PR state as **unknown**, not
 `none`. The interactive shell offers the same behavior via `/status`.
 
-Ignored `.roster/memory/<seat>.jsonl` files are seat context; optional
-`.roster/runs/*.jsonl` and `.roster/evals.jsonl` are learning evidence.
+Ignored `.roster/memory/<seat>.jsonl` files are seat context; automatic seat
+`.roster/runs/*.jsonl` and human `.roster/evals.jsonl` are learning evidence.
 Worktrees and local Ask drafts are working material. None replaces the
 GitHub issue/PR queue. See [same-session seats](MULTIAGENT.md),
 [the issue loop](ONE_TASK_LOOP.md), [status in the shell](REPL.md), and

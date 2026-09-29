@@ -62,9 +62,12 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
       },
       formatStatus: (status) => `Issue: #${status.issue.number}\nOpen PR: none\n` +
         `Worktree: ${status.worktreePath}\n`,
-      recordEvaluation: async (target, verdict, difficulty, again, options) => {
+      recordHumanEvaluation: async (target, verdict, difficulty, again, options) => {
         calls.push(['eval', target, verdict, difficulty, again, options.cwd]);
-        return { session: target };
+        return {
+          evaluation: { session: target, verdict, difficulty: Number(difficulty), again: again === 'y' },
+          comment: { status: 'local', reason: 'no associated PR' },
+        };
       },
       resolveContractsPath: () => 'contracts',
       loadMetrics: (options) => {
@@ -133,6 +136,7 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
   assert.match(output.text, /--message "feat: issue 42" --merge-when-green/);
   assert.doesNotMatch(output.text, /--merge-when-green --merge-when-green/);
   assert.match(output.text, /Issue: #42/);
+  assert.match(output.text, /No PR comment: no associated PR/);
   assert.match(output.text, /Worktree: .+issue-42/);
   assert.match(output.text, /Commands:\n/);
   assert.ok(!output.text.includes('private-value'));
