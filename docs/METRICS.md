@@ -8,8 +8,8 @@ the compact line); a missing usage report never becomes an estimate. The
 empty-URL stub emits no AI-Run trailer and records no model or LLM usage.
 The publisher receives the coder's known `AI_*` fields
 only, not the model API key: the contracts SDK supports one AI-Run trailer per
-published code commit. Both seat runs are printed and, when local learning
-is enabled, recorded separately. Contracts owns the trailer format.
+published code commit. Both completed seat runs are printed and recorded
+separately in `.roster/runs`. Contracts owns the trailer format.
 
 An `unknown` model is a bug, not a default. Both builtin publication and
 standalone `/publish` pass the configured `llm.model` as `AI_MODEL`, falling

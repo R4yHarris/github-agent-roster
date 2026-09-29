@@ -4,10 +4,17 @@ Roster joins the required contracts pack's `AI-Run` export with local run
 metadata and human decisions. There is no model API, vault, analytics service,
 or separate task database. GitHub Issues and PRs remain the queue.
 
-## Opt in to local run records
+## Automatic seat runs and optional preparation records
 
-Create `.roster/runs` in the repository root before running roster. For example,
-in PowerShell:
+Each completed planner or coder seat automatically creates and appends to
+`.roster/runs/runs.jsonl` in the issue repository. Stub seats record session,
+task, and a recognized task class, but no model or LLM counts. Configured
+seats include model, effort, and token counts only when known. If recording
+fails, the run reports the error instead of claiming a completed seat. A
+coder failure can leave a planner record.
+
+Manual `roster prepare --issue N` remains opt-in. Create `.roster/runs` in
+the repository root before preparing an assignment, for example in PowerShell:
 
 ```powershell
 New-Item -ItemType Directory -Force .roster\runs
@@ -20,11 +27,9 @@ it records nothing and does not create `.roster`. Failed setup never records a s
 Recording failures are reported explicitly, including the already-created
 worktree path; inspect that worktree rather than blindly rerunning setup.
 
-For the default `roster run --issue N`, setup adds no preparation record. It
-records one run per completed seat (`roster-N-planner`, then
-`roster-N-coder`) with only that seat's reported metrics. If the coder fails,
-the planner record may remain. The deterministic stub records the session and
-task only, with no model, AI-Run, or fabricated tokens.
+For the default `roster run --issue N`, setup adds no preparation record.
+It records one run per completed seat (`roster-N-planner`, then
+`roster-N-coder`) with only that seat's reported metrics.
 
 The prepare command assigns a worker, not a completed commit. Its generated
 `session` and `task` are known, but the eventual commit SHA is not: the starting
@@ -162,12 +167,14 @@ model applies a qualifying suggestion to that run's planner and coder,
 without editing private config or policy. Fewer than three evaluated
 samples keep the run on the deterministic stub. See [routing](ROUTING.md).
 
-Both `.roster/runs/` and `.roster/evals.jsonl` are ignored by Git. Keep human
-feedback local unless the human explicitly posts the optional PR comment.
+Both `.roster/runs/` and `.roster/evals.jsonl` are ignored by this repository.
+When running Roster against another repository, ignore these paths there
+before recording seats or evaluations. The files are evidence, not a task
+queue; `roster eval` may also post the associated human PR comment.
 
 ## Tests
 
-Fixture tests cover successful and failed runs, omitted unknowns, real zeros,
+Fixture tests cover automatic and failed seat recording, omitted unknowns, real zeros,
 joins and deduplication, human-only evaluations, existing stats flags, and the
 three-sample threshold:
 
