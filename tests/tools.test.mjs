@@ -26,7 +26,7 @@ test('limits reading, writing, and listing to worktree files allowed by TASK.md'
   await assert.rejects(tools.write_file({ path: 'docs/no.md', content: '' }), /not allowed/);
   for (const file of ['../outside.md', path.join(worktree, '..', 'outside.md'), '.env',
     'nested/.env.local', 'key.pem', 'src/agent-policy.yml', '.github/workflows/build.yml',
-    '.git/config', 'TASK.md', 'ASSIGNMENT.md', 'RESULT.md', 'RECIPE.yml']) {
+    '.git/config', 'TASK.md', 'ASSIGNMENT.md', 'RESULT.md', 'RECIPE.yml', 'ESTIMATE.md']) {
     await assert.rejects(tools.write_file({ path: file, content: 'bad' }), /relative|inside|secret|not allowed/i, file);
   }
   await assert.rejects(tools.read_file({ path: '.env' }), /secrets/);

@@ -103,6 +103,10 @@ export function validateLocalEvaluation(record, source) {
     throw new Error(`${source}: difficulty must be an integer from 1 to 5`);
   }
   if (typeof record.again !== 'boolean') throw new Error(`${source}: again must be a boolean`);
+  validateLocalRun(record, source);
+  if (record.minutes != null && (!Number.isSafeInteger(record.minutes) || record.minutes < 0)) {
+    throw new Error(`${source}: minutes must be a nonnegative integer`);
+  }
 }
 
 export function inferTaskClass(task) {

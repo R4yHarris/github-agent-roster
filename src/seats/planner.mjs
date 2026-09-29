@@ -3,13 +3,14 @@ import path from 'node:path';
 import { parseRecipe } from '../lib/recipe.mjs';
 import { planAsk } from '../planner/stub.mjs';
 import { appendMemory, readMemory, seatMemoryPath } from '../runtime/memory.mjs';
+import { writeEstimate } from '../runtime/estimate.mjs';
 
 export async function runPlanner({
   worktree, repoRoot, issue, ask = issue?.body, title = issue?.title,
   reference = issue ? `issue:${issue.number}` : undefined, config,
   task = issue ? `issue-${issue.number}` : undefined,
   session = issue ? `roster-${issue.number}-planner` : undefined,
-  fetchImpl, env, vault,
+  fetchImpl, env, vault, learningRoot = repoRoot,
 }) {
   if (typeof repoRoot !== 'string' || !repoRoot) {
     throw new TypeError('Planner requires the roster repository root for memory');
@@ -35,6 +36,7 @@ export async function runPlanner({
         recipe.seats[1].id !== 'coder' || recipe.seats[1].worker !== 'builtin') {
       throw new Error('Builtin planner must emit exactly a planner seat followed by a coder seat');
     }
+    plan = { ...plan, ...await writeEstimate(plan.task, { worktree, learningRoot, config, env }) };
     await fs.writeFile(recipePath, plan.recipe, { encoding: 'utf8', flag: 'wx' });
     await fs.writeFile(taskPath, plan.task, { encoding: 'utf8', flag: 'wx' });
   } catch (error) {
