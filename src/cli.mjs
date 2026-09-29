@@ -25,10 +25,9 @@ const help = `Usage:
   roster doctor
   roster init
   roster ask "..."
-  roster run --issue N
+  roster run --issue N [--runtime builtin] [--seats planner,coder] [--auto-model] [--publish]
+  roster prepare --issue N
   roster run --ask-file PATH --runtime builtin
-  roster run --issue N --runtime builtin [--seats planner,coder] [--auto-model] [--publish]
-  roster run --issue N --runtime builtin --seats planner,coder
   roster status [--issue N] [--offline]
   roster recipe validate PATH
   roster stats [--ref REVISION_OR_RANGE] [--evals PATH]
@@ -41,8 +40,8 @@ const help = `Usage:
 Ask creates a GitHub issue when gh is available; otherwise it saves a local draft.
 Doctor checks local prerequisites without contacting GitHub or printing App env values.
 Init copies review-only examples; it never overwrites agent-policy.yml.
-Bare run prepares the legacy worktree; builtin run
-plans and executes planner then coder in one worktree. Publishing is opt-in.
+Run plans and executes planner then coder in one worktree by default.
+Prepare creates a manual handoff without executing seats. Publishing is opt-in.
 Recipe validates strict v0 seat YAML. Stats joins contracts AI-Run history with local runs and human evals.
 Eval records a human decision locally. Recommend needs at least 3 evaluated runs.
 Vault set reads a secret from stdin; vault list prints names, never values.
@@ -104,7 +103,10 @@ async function main(args) {
     if (!result.ok) process.exitCode = 1;
   } else if (args.length === 1 && args[0] === 'init') {
     process.stdout.write(formatInit(await initializeRoster()));
-  } else if (args.length === 3 && args[0] === 'run' && args[1] === '--issue') {
+  } else if (args[0] === 'prepare') {
+    if (args.length !== 3 || args[1] !== '--issue') {
+      throw new TypeError('Use roster prepare --issue N.');
+    }
     await runIssue(args[2]);
   } else if (args[0] === 'run' && args.includes('--ask-file')) {
     const flags = args.slice(1);
@@ -121,7 +123,7 @@ async function main(args) {
     const demo = await runDemo({ askFile: options['--ask-file'], repoRoot: rosterRoot });
     process.stdout.write(`Worktree: ${demo.worktreePath}\nRECIPE: ${demo.recipePath}\n` +
       `TASK: ${demo.taskPath}\nRESULT: ${demo.resultPath}\nMode: ${demo.mode}\n`);
-  } else if (args[0] === 'run' && args.includes('--runtime')) {
+  } else if (args[0] === 'run') {
     const options = runOptions(args.slice(1));
     await runBuiltinIssue(options.issue, { publish: options.publish, seats: options.seats,
       autoModel: options.autoModel, repoRoot: rosterRoot });
@@ -183,7 +185,7 @@ async function main(args) {
   function runOptions(args) {
     const options = {};
     const seen = new Set();
-    const usage = 'Use roster run --issue N --runtime builtin [--seats planner,coder] [--auto-model] [--publish].';
+    const usage = 'Use roster run --issue N [--runtime builtin] [--seats planner,coder] [--auto-model] [--publish].';
     for (let index = 0; index < args.length; index += 1) {
       const flag = args[index];
       if (!['--issue', '--seat', '--seats', '--runtime', '--auto-model', '--publish'].includes(flag) ||
@@ -199,7 +201,7 @@ async function main(args) {
         options[flag.slice(2)] = value;
       }
     }
-    if (!options.issue || options.runtime !== 'builtin' ||
+    if (!options.issue || (options.runtime !== undefined && options.runtime !== 'builtin') ||
         (options.seat !== undefined && options.seat !== 'coder') ||
         (options.seats !== undefined && options.seats !== 'planner,coder') ||
         (options.seat !== undefined && options.seats !== undefined)) {

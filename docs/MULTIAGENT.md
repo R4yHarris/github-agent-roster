@@ -4,13 +4,14 @@ One human GitHub issue is the Ask. One invocation runs two builtin seats in
 sequence, in the same process and issue worktree:
 
 ```sh
-node src/cli.mjs run --issue 42 --runtime builtin
-node src/cli.mjs run --issue 42 --runtime builtin --seats planner,coder
+roster run --issue 42
+roster run --issue 42 --seats planner,coder
 ```
 
 `--seats planner,coder` is the only supported selection and is the default.
-The older `--seat coder` flag is accepted as an alias for that pair. Bare
-`run --issue N` remains a prepare-only handoff, not the two-seat executor.
+The older `--seat coder` flag is accepted as an alias for that pair.
+`--runtime builtin` remains available for CI and GHCP. Use
+`roster prepare --issue N` for a handoff without executing the seats.
 This is not a concurrent swarm, two Copilot chats, or a Hermes Kanban loop.
 GitHub Issues and PRs are the board; no additional task database or issue
 is created.

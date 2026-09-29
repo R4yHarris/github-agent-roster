@@ -100,11 +100,14 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
   assert.deepEqual(recipe.seats.map(({ id }) => id), ['planner', 'coder']);
   assert.match(readFileSync(result.taskPath, 'utf8'), /## Acceptance checks/);
   assert.equal(readFileSync(result.taskPath, 'utf8'), result.planner.task);
+  assert.equal(readFileSync(result.recipePath, 'utf8'), result.planner.recipe);
   assert.deepEqual(result.sessions, { planner: 'roster-42-planner', coder: 'roster-42-coder' });
   assert.equal(readFileSync(result.envPath, 'utf8'),
     'AI_TASK=issue-42\nAI_SESSION=roster-42-coder\n');
   assert.match(readFileSync(result.result.resultPath, 'utf8'), /Deterministic stub only/);
   assert.match(result.result.summary, /Add Status to README/);
+  assert.match(result.result.summary, /README has a Status section/);
+  assert.equal(readFileSync(path.join(options.target, 'README.md'), 'utf8'), '# Example\n');
   assert.equal(result.run, result.runs.coder);
   assert.equal(result.result.mode, 'stub');
   assert.ok(logs[0].includes('node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue 42\n\nCloses #42" --merge-when-green'));
