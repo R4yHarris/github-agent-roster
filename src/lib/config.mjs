@@ -6,8 +6,11 @@ import { TextDecoder } from 'node:util';
 import { ensureLocalPath } from './paths.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
-const profileNames = ['ollama', 'lmstudio', 'openai'];
+const profileNames = ['vllm-local', 'ollama', 'lmstudio', 'openai'];
 const defaultProfiles = {
+  'vllm-local': {
+    base_url: 'http://127.0.0.1:8000/v1', api_key_env: 'ROSTER_API_KEY', api_key_optional: 'true',
+  },
   ollama: { base_url: 'http://127.0.0.1:11434/v1', api_key_env: 'ROSTER_API_KEY' },
   lmstudio: { base_url: 'http://127.0.0.1:1234/v1', api_key_env: 'ROSTER_API_KEY' },
   openai: { base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY' },
@@ -66,6 +69,11 @@ function integerValue(value, name) {
   return Number(value);
 }
 
+function booleanValue(value, name) {
+  if (!['true', 'false'].includes(value)) invalid(`${name} must be true or false`);
+  return value === 'true';
+}
+
 function relativePath(value, name) {
   const segments = value.split(/[\\/]/);
   if (path.isAbsolute(value) || !segments.length ||
@@ -110,7 +118,7 @@ export function parseConfig(source) {
     const line = uncomment(original);
     if (!line) continue;
     if (line.startsWith('    ')) {
-      const match = /^    (base_url|api_key_env): (.+)$/.exec(line);
+      const match = /^    (base_url|api_key_env|api_key_optional): (.+)$/.exec(line);
       if (!match || section !== 'profiles' || !profile ||
           Object.hasOwn(config.profiles[profile], match[1])) {
         invalid(`unsupported or duplicate profile field on line ${index + 1}`);
@@ -120,7 +128,7 @@ export function parseConfig(source) {
     }
     if (line.startsWith('  ')) {
       if (section === 'profiles') {
-        const match = /^  (ollama|lmstudio|openai):$/.exec(line);
+        const match = /^  (vllm-local|ollama|lmstudio|openai):$/.exec(line);
         if (!match || Object.hasOwn(config.profiles, match[1])) {
           invalid(`unsupported or duplicate profile on line ${index + 1}`);
         }
@@ -165,13 +173,17 @@ export function parseConfig(source) {
   llm.context_max = integerValue(llm.context_max, 'llm.context_max');
   llm.profile = Object.hasOwn(llm, 'profile') ? stringValue(llm.profile, 'llm.profile') : '';
   if (llm.profile && !profileNames.includes(llm.profile)) {
-    invalid('llm.profile must be ollama, lmstudio, openai, or empty');
+    invalid('llm.profile must be vllm-local, ollama, lmstudio, openai, or empty');
   }
   const profiles = roots.has('profiles') ? config.profiles :
     Object.fromEntries(profileNames.map((name) => [name, { ...defaultProfiles[name] }]));
+  if (roots.has('profiles') && !Object.hasOwn(profiles, 'vllm-local')) {
+    profiles['vllm-local'] = { ...defaultProfiles['vllm-local'] };
+  }
   if (profileNames.some((name) => !Object.hasOwn(profiles, name) ||
-      ['base_url', 'api_key_env'].some((field) => !Object.hasOwn(profiles[name], field)))) {
-    invalid('profiles must define ollama, lmstudio, and openai with base_url and api_key_env');
+      ['base_url', 'api_key_env', ...(name === 'vllm-local' ? ['api_key_optional'] : [])]
+        .some((field) => !Object.hasOwn(profiles[name], field)))) {
+    invalid('profiles need base_url and api_key_env for every named profile, plus api_key_optional for vllm-local');
   }
   for (const name of profileNames) {
     profiles[name].base_url = baseUrl(stringValue(profiles[name].base_url, `profiles.${name}.base_url`),
@@ -179,12 +191,19 @@ export function parseConfig(source) {
     profiles[name].api_key_env = apiKeyName(
       stringValue(profiles[name].api_key_env, `profiles.${name}.api_key_env`),
       `profiles.${name}.api_key_env`);
+    if (Object.hasOwn(profiles[name], 'api_key_optional')) {
+      profiles[name].api_key_optional = booleanValue(
+        profiles[name].api_key_optional, `profiles.${name}.api_key_optional`);
+    }
     Object.freeze(profiles[name]);
   }
   if (llm.profile) {
     if (llm.base_url) invalid('choose either llm.profile or llm.base_url');
     llm.base_url = profiles[llm.profile].base_url;
     llm.api_key_env = profiles[llm.profile].api_key_env;
+    if (Object.hasOwn(profiles[llm.profile], 'api_key_optional')) {
+      llm.api_key_optional = profiles[llm.profile].api_key_optional;
+    }
   }
   if (!['l', 'm', 'h', 'x'].includes(llm.effort)) invalid('llm.effort must be l, m, h, or x');
   if (llm.model && !/^[A-Za-z0-9._:/-]+$/.test(llm.model)) invalid('llm.model must be a model name without whitespace');

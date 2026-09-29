@@ -27,6 +27,9 @@ test('loads the tracked example when private config is absent', (context) => {
       profile: '',
     },
     profiles: {
+      'vllm-local': {
+        base_url: 'http://127.0.0.1:8000/v1', api_key_env: 'ROSTER_API_KEY', api_key_optional: true,
+      },
       ollama: { base_url: 'http://127.0.0.1:11434/v1', api_key_env: 'ROSTER_API_KEY' },
       lmstudio: { base_url: 'http://127.0.0.1:1234/v1', api_key_env: 'ROSTER_API_KEY' },
       openai: { base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY' },
@@ -45,22 +48,33 @@ test('loads the tracked example when private config is absent', (context) => {
   assert.equal(Object.isFrozen(config.llm), true);
   assert.equal(Object.isFrozen(config.planner), true);
   assert.equal(Object.isFrozen(config.profiles), true);
+  assert.equal(Object.isFrozen(config.profiles['vllm-local']), true);
   assert.equal(Object.isFrozen(config.profiles.openai), true);
 });
 
-test('named profiles select local or hosted endpoint and API-key name without secrets', () => {
-  for (const [name, url, key] of [
-    ['ollama', 'http://127.0.0.1:11434/v1', 'ROSTER_API_KEY'],
-    ['lmstudio', 'http://127.0.0.1:1234/v1', 'ROSTER_API_KEY'],
-    ['openai', 'https://api.openai.com/v1', 'OPENAI_API_KEY'],
+test('named profiles select endpoints and optional-key settings without secrets', () => {
+  for (const [name, url, key, optional] of [
+    ['vllm-local', 'http://127.0.0.1:8000/v1', 'ROSTER_API_KEY', true],
+    ['ollama', 'http://127.0.0.1:11434/v1', 'ROSTER_API_KEY', undefined],
+    ['lmstudio', 'http://127.0.0.1:1234/v1', 'ROSTER_API_KEY', undefined],
+    ['openai', 'https://api.openai.com/v1', 'OPENAI_API_KEY', undefined],
   ]) {
     const selected = parseConfig(example.replace('profile: ""', `profile: ${name}`)
       .replace('model: ""', 'model: chosen-model'));
     assert.equal(selected.llm.profile, name);
     assert.equal(selected.llm.base_url, url);
     assert.equal(selected.llm.api_key_env, key);
+    assert.equal(selected.llm.api_key_optional, optional);
     assert.equal(selected.llm.model, 'chosen-model');
   }
+});
+
+test('vllm-local accepts a served HF model handle and explicit required keys', () => {
+  const selected = parseConfig(example.replace('profile: ""', 'profile: vllm-local')
+    .replace('model: ""', 'model: owner/served-model')
+    .replace('api_key_optional: true', 'api_key_optional: false'));
+  assert.equal(selected.llm.model, 'owner/served-model');
+  assert.equal(selected.llm.api_key_optional, false);
 });
 
 test('an endpoint with an empty model remains valid for explicitly gated auto-model routing', async (context) => {
@@ -131,6 +145,10 @@ test('rejects invalid schema, fields, roles, paths, tool names, and endpoint set
     ['principal', example.replace('principal: coder', 'principal: merger')],
     ['App key name', example.replace('api_key_env: ROSTER_API_KEY', 'api_key_env: GITHUB_APP_PRIVATE_KEY_PATH')],
     ['unknown profile', example.replace('profile: ""', 'profile: unknown')],
+    ['invalid optional key', example.replace('api_key_optional: true', 'api_key_optional: yes')],
+    ['missing vllm optional key', example.replace(/    api_key_optional: true\r?\n/, '')],
+    ['duplicate optional key', example.replace('    api_key_optional: true',
+      '    api_key_optional: true\n    api_key_optional: false')],
     ['missing named profile', example.replace(/  lmstudio:\r?\n    base_url:.*\r?\n    api_key_env:.*\r?\n/, '')],
     ['duplicate profile field', example.replace('    api_key_env: OPENAI_API_KEY',
       '    api_key_env: OPENAI_API_KEY\n    api_key_env: OTHER_KEY')],
@@ -163,6 +181,12 @@ test('rejects invalid schema, fields, roles, paths, tool names, and endpoint set
     .replace(/profiles:\r?\n[\s\S]*?(?=planner:)/, '');
   assert.equal(parseConfig(withoutProfiles).llm.profile, '');
   assert.equal(parseConfig(withoutProfiles).profiles.openai.api_key_env, 'OPENAI_API_KEY');
+  assert.equal(parseConfig(withoutProfiles).profiles['vllm-local'].api_key_optional, true);
+  const olderProfiles = example.replace(
+    /  vllm-local:\r?\n    base_url:.*\r?\n    api_key_env:.*\r?\n    api_key_optional:.*\r?\n/, '');
+  const legacyProfile = parseConfig(olderProfiles.replace('profile: ""', 'profile: vllm-local'));
+  assert.equal(legacyProfile.llm.base_url, 'http://127.0.0.1:8000/v1');
+  assert.equal(legacyProfile.llm.api_key_optional, true);
 });
 
 test('only a missing private config triggers the example fallback', (context) => {
