@@ -33,11 +33,14 @@ function oneLine(value, label) {
 }
 
 export function cleanAskText(ask) {
-  if (typeof ask !== 'string' || !ask.trim() || Buffer.byteLength(ask, 'utf8') > 16_384 ||
-      /[\x00-\x08\x0b-\x1f\x7f]/.test(ask)) {
+  if (typeof ask !== 'string' || !ask.trim() || Buffer.byteLength(ask, 'utf8') > 16_384) {
     throw new TypeError('Ask must be nonempty UTF-8 text of at most 16 KiB');
   }
-  return ask.replace(/\r\n/g, '\n').trim();
+  const normalized = ask.replace(/\r\n/g, '\n');
+  if (/[\x00-\x08\x0b-\x1f\x7f]/.test(normalized)) {
+    throw new TypeError('Ask must be nonempty UTF-8 text of at most 16 KiB');
+  }
+  return normalized.trim();
 }
 
 function allowedFile(value) {

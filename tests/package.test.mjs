@@ -12,7 +12,8 @@ test('npx exposes the Node 20 ESM roster binary without runtime dependencies', (
 });
 
 test('npm files include the pinned publisher but exclude test directories', () => {
-  for (const path of ['src/', 'templates/', 'skills/', 'roster.config.example.yml',
+  for (const path of ['src/', 'templates/', 'skills/', 'fixtures/demo-task/',
+    'roster.config.example.yml',
     'vendor/github-agent-contracts/scripts/']) {
     assert.ok(manifest.files.includes(path), `missing ${path}`);
   }
