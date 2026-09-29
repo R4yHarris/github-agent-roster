@@ -95,7 +95,9 @@ API key or App credentials. A nonzero exit returns captured stdout, stderr,
 and exit code to the coder as a failed tool result so it can correct the task
 within its turn budget; a timeout reports an explicit error. Final nonzero
 verification fails the run and records failed memory instead of claiming
-success. A successful run records `RESULT.md` and appends memory.
+success. A successful run records `RESULT.md` and appends memory. See the
+[four-tool contract and denylist](TOOLS.md) for the exact inputs and
+protected surfaces.
 
 With no endpoint, the stub writes a deterministic `RESULT.md` summary, exits
 zero, and **does not edit code or run tests**. It cannot deliver a software
