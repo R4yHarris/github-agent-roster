@@ -61,6 +61,35 @@ export async function stageReviewedFiles(worktree, allowedFiles, { env = process
   return files;
 }
 
+export async function prepareBuiltinPublication(run, {
+  cwd = process.cwd(),
+  config = loadConfig({ repoRoot: rosterRoot }),
+  env = process.env,
+} = {}) {
+  if (typeof run?.worktreePath !== 'string' || typeof run.planner?.recipe !== 'string' ||
+      typeof run.planner?.task !== 'string' || !run.runs?.coder?.env) {
+    throw new TypeError('Publishing requires a completed builtin run');
+  }
+  if (run.result?.mode !== 'llm' || run.result.tests?.exit_code !== 0) {
+    throw new Error('Publishing requires a configured coder run with passing tests');
+  }
+  if (!env.GITHUB_APP_ID || !env.GITHUB_APP_PRIVATE_KEY_PATH) {
+    throw new Error('Publishing requires GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH');
+  }
+  await ensureUnchanged(run.recipePath, run.planner.recipe);
+  await ensureUnchanged(run.taskPath, run.planner.task);
+  const commandEnv = { ...env };
+  delete commandEnv[config.llm.api_key_env];
+  await git(run.worktreePath, ['submodule', 'update', '--init', '--recursive'], commandEnv);
+  const contractsPath = resolveContractsPath({ repoRoot: run.worktreePath, cwd, env });
+  await stageReviewedFiles(run.worktreePath, taskFilesAllowed(run.planner.task), { env: commandEnv });
+  const publishEnv = { ...commandEnv };
+  for (const name of runNames) delete publishEnv[name];
+  publishEnv.GITHUB_APP_PRIVATE_KEY_PATH = path.resolve(cwd, env.GITHUB_APP_PRIVATE_KEY_PATH);
+  Object.assign(publishEnv, run.runs.coder.env);
+  return { contractsPath, worktreePath: run.worktreePath, publishEnv };
+}
+
 export async function runBuiltinIssue(issueNumber, {
   cwd = process.cwd(),
   repoRoot = rosterRoot,
@@ -130,22 +159,19 @@ export async function runBuiltinIssue(issueNumber, {
     `Coder session: ${sessions.coder}\nAI-Run: ${coderRun.line}\n` +
     `From the worktree root, publish only after reviewing changes:\n${command}`);
 
+  const completed = {
+    ...prepared, recipePath: planner.recipePath, taskPath: planner.taskPath,
+    planner, result, sessions, runs, run: coderRun, command,
+  };
   if (publish) {
-    await git(worktreePath, ['submodule', 'update', '--init', '--recursive'], commandEnv);
-    const contractsPath = resolveContractsPath({ repoRoot: worktreePath, cwd, env });
-    await stageReviewedFiles(worktreePath, taskFilesAllowed(planner.task), { env: commandEnv });
-    const publishEnv = { ...commandEnv };
-    for (const name of runNames) delete publishEnv[name];
-    publishEnv.GITHUB_APP_PRIVATE_KEY_PATH = path.resolve(cwd, env.GITHUB_APP_PRIVATE_KEY_PATH);
-    Object.assign(publishEnv, coderRun.env);
+    const { contractsPath, publishEnv } = await prepareBuiltinPublication(completed, {
+      cwd, config, env,
+    });
     const { stdout } = await publisher(process.execPath,
       [path.join(contractsPath, 'scripts', 'agent-pr.mjs'),
         '--message', `feat: issue ${prepared.issue.number}`],
       { cwd: worktreePath, env: publishEnv, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
     if (stdout?.trim()) log(stdout.trim());
   }
-  return {
-    ...prepared, recipePath: planner.recipePath, taskPath: planner.taskPath,
-    planner, result, sessions, runs, run: coderRun, command,
-  };
+  return completed;
 }
