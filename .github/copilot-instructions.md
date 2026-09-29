@@ -14,11 +14,16 @@ contains the `scripts/agent-pr.mjs` file. See
 Copilot subagent names `planner` and `coder` map to Roster's sequential builtin
 seats in one run/worktree, not separate chats, a second queue, Hermes Kanban,
 or a new runtime. See the [GHCP bridge](../docs/GHCP.md).
+The GitHub App is the publishing principal, not the model or subagent name;
+policy and workflows are human-owned.
 
 When `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_PATH` are set, publish reviewed
-GHCP changes from the feature worktree's repository root with
+GHCP changes only from the feature worktree's repository root using
 `node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "<conventional subject>" --merge-when-green`.
-Never leave a draft PR for the human. Never `git commit` as the signed-in human or use `gh pr create` or `git push`
-with human credentials. If `--merge-when-green` fails with HTTP 422, stop and
-report that Checks permission is not accepted on the installation; do not use
-a workaround. Do not edit vendor sources, `agent-policy.yml`, or workflows.
+Never leave a draft PR for the human. When `GITHUB_APP_ID` is set, never
+`git commit` as the signed-in human, even if the private-key path is missing;
+stop and report incomplete App credentials instead. Never use `gh pr create`
+or `git push` with human credentials. If `--merge-when-green` fails with HTTP
+422, stop and report that Checks permission is not accepted on the installation;
+do not use a workaround. Do not edit vendor sources, the human-owned
+`agent-policy.yml`, or `.github/workflows/*`.

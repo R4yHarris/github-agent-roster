@@ -8,6 +8,8 @@ GitHub is the board and the forge. This repo owns planning, task files, coder
 execution, skills, tools, memory, and worktrees. Identity, policy, trailers,
 and `agent-pr.mjs` live in **github-agent-contracts**, the GitHub publish SDK
 only. This repo does not replace git.
+The GitHub App is the authenticated principal; neither the model, a GHCP
+subagent name, nor `AI_*` metadata grants policy capabilities.
 
 ## Hard boundaries
 
@@ -15,10 +17,13 @@ only. This repo does not replace git.
 - Do not invent a Kanban database. Issues + PRs are the queue.
 - Do not commit PEMs, tokens, or `.env`.
 - Do not edit `agent-policy.yml` in a consumer repo; humans own policy.
-- Publish reviewed code changes from the current feature worktree's repository root with `node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "..." --merge-when-green` when App env is set. Never leave a draft PR for the human.
-- Never `git commit` as the signed-in human when App env is set.
+- Publish reviewed code changes only from the current feature worktree's
+  repository root using `node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "..." --merge-when-green`
+  with both App credentials set. Never leave a draft PR for the human.
+- Never `git commit` as the signed-in human when `GITHUB_APP_ID` is set, even
+  if the App private-key path is missing. Stop instead of using human credentials.
 - Never use `gh pr create` or `git push` with human credentials for GHCP publication.
-- Never edit `.github/workflows/*` from the coder seat.
+- Never edit `.github/workflows/*` from the coder seat; humans own workflows.
 
 ## Contracts dependency
 
