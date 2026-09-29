@@ -10,12 +10,13 @@ it does not replace Git.
 
 1. **Ask:** a human states an ask in the `roster` shell or a GitHub issue.
 2. **Plan:** the planner breaks the ask into a RECIPE and TASK.
-3. **Assign:** roster sequences planner and coder seats in one process and
-   worktree. The reviewer role is human today, not a concurrent model seat.
-4. **Infer:** configured planner and coder seats call a model through the
-   **vLLM OpenAI API on DGX Spark** first. Hosted APIs are a later, explicit
-   profile using the same HTTP shape. With no endpoint, the deterministic
-   stub does not edit code or run tests.
+3. **Assign:** the intended planner, coder, and reviewer seats run
+   sequentially in one process. Today planner and coder are builtin; the
+   reviewer is the human PR reviewer.
+4. **Infer:** each model-backed seat calls the **vLLM OpenAI API on DGX Spark**
+   first. Today this is the configured planner and coder. Hosted APIs are a
+   later, explicit profile using the same HTTP shape. With no endpoint, the
+   deterministic stub does not edit code or run tests.
 5. **Code:** the coder uses worktree-scoped tools, skills, and recent memory,
    then runs `node --test` after its last edit.
 6. **Publish:** reviewed code goes through the required
