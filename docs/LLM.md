@@ -21,11 +21,27 @@ const config = {
 ```
 
 For the builtin YAML config, copy [`roster.config.example.yml`](../roster.config.example.yml),
-set `llm.base_url` to `http://127.0.0.1:8000/v1` and `llm.model` to an ID
-served by vLLM, and leave `llm.profile: ""`. `vllm-local` names this documented
-recipe, not a selectable schema 1 YAML profile. The named profiles are
-`ollama`, `lmstudio`, and `openai`; hosted APIs are a later opt-in profile
-using the same HTTP shape. See [endpoint profiles](ENDPOINTS.md).
+set `llm.profile: vllm-local` and `llm.model` to the HF handle served by
+vLLM, and leave `llm.base_url: ""`. The profile sets the URL above and
+`api_key_optional: true`; a configured key is still sent. The tracked
+example selects no endpoint until you set a profile or custom URL. Hosted
+APIs are a later opt-in profile using the same HTTP shape. See
+[endpoint profiles](ENDPOINTS.md).
+
+To check the local server without an API key, replace the model below with
+the handle vLLM is serving:
+
+```sh
+curl --fail http://127.0.0.1:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"your-org/served-model","messages":[{"role":"user","content":"Say hello."}]}'
+```
+
+Loopback works when Roster and vLLM run on the same host. From WSL,
+`127.0.0.1` refers to that local environment, not to a separate DGX Spark.
+If the server is on another host, use a secure tunnel to its loopback port
+or configure a protected, reachable endpoint; do not expose a keyless vLLM
+server to an untrusted network.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
@@ -44,12 +60,12 @@ factory; it does not add a separate runner, planner, or task queue.
 The builtin [planner](../src/planner/stub.mjs) and
 [coder](../src/runtime/loop.mjs) use this client through a shared adapter
 when `.roster/config.yml` sets the vLLM URL in `llm.base_url` or selects
-`llm.profile` for Ollama, LM Studio, or OpenAI. The resolved
+`llm.profile` for vLLM, Ollama, LM Studio, or OpenAI. The resolved
 `llm.api_key_env` is both the environment-variable and vault entry name:
 a non-empty environment value wins without reading the vault, while an
-unset or empty value falls back to the vault. Keys are optional for local
-endpoints such as Ollama at `http://127.0.0.1:11434/v1`; a resolved key
-is still sent when present. The empty-URL stub makes no chat request.
+unset or empty value falls back to the vault. Keys are optional for the
+`vllm-local` profile; a resolved key is still sent when present. The
+empty-URL stub makes no chat request.
 Both seats pass only reported token usage to their AI-Run metadata. The
 client does not log API keys or HTTP request/response bodies.
 

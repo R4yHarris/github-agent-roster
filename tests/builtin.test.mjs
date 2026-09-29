@@ -16,6 +16,8 @@ const example = readFileSync(new URL('../roster.config.example.yml', import.meta
 const stubConfig = parseConfig(example);
 const llmConfig = parseConfig(example.replace('base_url: ""', 'base_url: http://localhost:1234/v1')
   .replace('model: ""', 'model: local-model'));
+const vllmConfig = parseConfig(example.replace('profile: ""', 'profile: vllm-local')
+  .replace('model: ""', 'model: local-model'));
 
 function git(cwd, ...args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
@@ -248,7 +250,8 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
   let completion = 0;
   let published = 0;
   let closed = 0;
-  const fetchImpl = async (_url, request) => {
+  const fetchImpl = async (url, request) => {
+    assert.equal(url, 'http://127.0.0.1:8000/v1/chat/completions');
     completion += 1;
     const body = JSON.parse(request.body);
     assert.equal(body.model, 'local-model');
@@ -286,7 +289,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
     }) };
   };
   const result = await runBuiltinIssue(42, {
-    ...options, config: llmConfig,
+    ...options, config: vllmConfig,
     env: { ...options.env, ROSTER_API_KEY: 'private-key', GITHUB_APP_ID: '123',
       AI_MODEL: 'unknown', AI_PROVIDER: 'vllm',
       GITHUB_APP_PRIVATE_KEY_PATH: path.join(options.base, 'app.pem') },

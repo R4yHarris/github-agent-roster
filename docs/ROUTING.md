@@ -8,6 +8,7 @@ an endpoint and an API-key **name**, never a key value:
 
 | Profile | Default endpoint | Key name |
 | --- | --- | --- |
+| `vllm-local` | `http://127.0.0.1:8000/v1` | `ROSTER_API_KEY` (optional) |
 | `ollama` | `http://127.0.0.1:11434/v1` | `ROSTER_API_KEY` |
 | `lmstudio` | `http://127.0.0.1:1234/v1` | `ROSTER_API_KEY` |
 | `openai` | `https://api.openai.com/v1` | `OPENAI_API_KEY` |

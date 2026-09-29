@@ -18,10 +18,10 @@ The human [shell](REPL.md) can atomically persist `/model` and `/effort`
 without editing the tracked example or storing credentials.
 
 - `llm.base_url`: OpenAI-compatible chat completions base (for example
-  `http://localhost:1234/v1`). Empty with no selected `llm.profile` means a
-  network-free deterministic stub. Select `ollama`, `lmstudio`, or `openai`
-  from `profiles` instead of setting a custom URL, then set `llm.model` or
-  explicitly use `--auto-model` with an empty model. With fewer than three
+  `http://127.0.0.1:8000/v1`). Empty with no selected `llm.profile` means a
+  network-free deterministic stub. Select `vllm-local`, `ollama`, `lmstudio`,
+  or `openai` from `profiles` instead of setting a custom URL. Then set
+  `llm.model` or explicitly use `--auto-model` with an empty model. With fewer than three
   matching human evaluations, auto-model runs the deterministic stub; see
   [routing](ROUTING.md).
   Local endpoints may work without
