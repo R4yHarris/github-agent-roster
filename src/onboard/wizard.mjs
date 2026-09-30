@@ -295,7 +295,7 @@ export async function runOnboard({
     const checked = doctor({ cwd: projectRoot, installationRoot, env });
     output.write(formatDoctor(checked));
     if (!checked.ok) output.write('Doctor found missing prerequisites; config is saved, not a grant to publish.\n');
-    return { exitCode: 0, saved: true, configPath, config, doctor: checked, appStatus,
+    return { exitCode: checked.ok ? 0 : 1, saved: true, configPath, config, doctor: checked, appStatus,
       modelsProbed: Boolean(models) };
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {

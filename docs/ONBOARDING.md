@@ -95,3 +95,30 @@ export GITHUB_APP_PRIVATE_KEY_PATH="<absolute-path-to-existing-pem>"
 Never paste PEM contents or tokens into a prompt, config, or Git. Presence
 checks are not App authentication, an installation-token probe, or policy
 grants. Humans still own policy, workflows, and the external private key.
+
+## Doctor after confirmation
+
+After a successful confirmed write, onboarding calls doctor in the **same
+Node process**. It makes no network requests and prints no secret values.
+It checks Node major >=20, the vendor publisher, opted-in App environment
+and key-file presence, the human-owned policy and trailer workflow when
+publishing is enabled, and a real model in the project's `.roster/config.yml`
+when run or publish is expected. `AI_MODEL` cannot substitute for the saved
+vLLM model.
+
+Publishing disabled means App/policy/workflow checks are shown as `SKIP`,
+not failures; a configured run-only endpoint still requires its saved model.
+An offline nonpublishing stub does not require a model. Invalid private
+config is an explicit failure, never a successful default.
+
+Onboarding exits 0 only when the required checks pass. A failed doctor
+exits 1 **after retaining the confirmed config**; fix the listed blocker:
+
+- Use Node 20+ on PATH for a runtime failure.
+- Initialize the contracts submodule for a missing vendor publisher.
+- Set the App environment and an existing external PEM for App failures.
+- Ask a human to provision policy or workflows; the wizard never writes them.
+- Rerun onboarding or fix the saved private model/config for a model failure.
+
+Then run `roster doctor` again from the project. These are local preflight
+checks, not GitHub policy grants, authentication, chat, or internet-tool probes.

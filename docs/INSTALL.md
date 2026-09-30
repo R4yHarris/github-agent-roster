@@ -140,9 +140,10 @@ keys; keep the App key outside Git.
 
 ## Preflight and publication
 
-From the target repository root, `roster doctor` checks Node 20, a usable
-contracts publisher, presence of both App environment variables, a
-regular root `agent-policy.yml`, and the trailer workflow. It makes no
+From the target repository root, `roster doctor` checks Node 20, the vendor
+contracts publisher, opted-in App variables and private-key file,
+regular root `agent-policy.yml` and trailer workflow when publishing is
+enabled, and a saved private model when run/publish is expected. It makes no
 network call and never prints App values or private-key paths. A failed
 check exits nonzero; it does not repair human-owned policy or workflows.
 
