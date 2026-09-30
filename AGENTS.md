@@ -25,6 +25,20 @@ subagent name, nor `AI_*` metadata grants policy capabilities.
 - Never use `gh pr create` or `git push` with human credentials for GHCP publication.
 - Never edit `.github/workflows/*` from the coder seat; humans own workflows.
 
+## Publish metadata
+
+For GHCP-authored changes with no completed Roster seat, declare the actual
+model (`AI_MODEL=GPT-6.1-Sol` here, or explicit `--model`) and use
+`AI_PROVIDER=github-copilot`, `AI_MODEL_VERSION=-`, and `AI_EFFORT=x` for this
+Max session. `AI_CONTEXT_MAX=1000000` is declared capacity only: clear
+`AI_CONTEXT_USED` and `AI_CONTEXT_OUT`; both compact slots must be `-`.
+Use a `ghcp-<date-or-pid>` session and the branch slug or issue ID as task.
+
+If this process completed a Roster seat, its response-backed run object wins
+over GHCP environment declarations, model flags, and later LLM configuration.
+Never replace measured seat model/usage with this Copilot session's settings.
+See [metrics](docs/METRICS.md) and the [GHCP example](docs/GHCP.md).
+
 ## Contracts dependency
 
 Use the required [`vendor/github-agent-contracts`](vendor/github-agent-contracts)

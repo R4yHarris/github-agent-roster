@@ -34,7 +34,7 @@ function harness(issueResponse = issue) {
     cwd: path.join(repoRoot, 'nested'),
     runCommand,
     fileSystem,
-    env: {},
+    env: { AI_MODEL: 'GPT-6.1-Sol' },
     config: { llm: { model: 'configured-model' } },
     now: () => new Date('2026-09-28T22:25:50.149Z'),
     log: (message) => messages.push(message),
@@ -47,9 +47,9 @@ test('reads the issue in the current repository and prepares one coder worktree'
   const result = await runIssue('42', options);
   const worktreePath = path.join(repoRoot, '.worktrees', 'issue-42');
   const nextCommand = formatPublishCommand({
-    model: 'configured-model',
+    model: 'GPT-6.1-Sol',
     message: buildPublishMessage({
-      subject: 'feat: issue 42', model: 'configured-model', summary: issue.title, issueNumber: 42,
+      subject: 'feat: issue 42', model: 'GPT-6.1-Sol', summary: issue.title, issueNumber: 42, ghcp: true,
     }),
     script: process.platform === 'win32'
       ? '"$env:GITHUB_AGENT_CONTRACTS\\scripts\\agent-pr.mjs"'
@@ -98,6 +98,10 @@ ${issue.body}
   });
   assert.equal(messages.length, 1);
   assert.match(messages[0], /After editing inside the worktree, load \.env/);
+  assert.match(messages[0], /AI_PROVIDER=github-copilot\n/);
+  assert.match(messages[0], /AI_CONTEXT_USED=\n/);
+  assert.match(messages[0], /AI_CONTEXT_OUT=\n/);
+  assert.match(messages[0], /AI_SESSION=ghcp-\d+\n/);
   assert.ok(messages[0].endsWith(nextCommand));
 });
 
@@ -137,7 +141,7 @@ test('invalid or ambiguous issue metadata fails before creating a worktree', asy
 
 test('manual preparation omits a runnable publication command until a model is set', async () => {
   const { options, messages } = harness();
-  const result = await runIssue(42, { ...options, config: { llm: { model: '' } } });
+  const result = await runIssue(42, { ...options, env: {} });
   assert.equal(result.nextCommand, null);
   assert.match(messages[0], /set model/);
   assert.doesNotMatch(messages[0], /agent-pr\.mjs --message/);
@@ -152,9 +156,9 @@ test('manual handoff does not print a publisher command when publication is disa
   assert.match(messages[0], /publishing is disabled by publish\.enabled/);
   assert.doesNotMatch(messages[0], /agent-pr\.mjs --message/);
 });
-test('manual handoff forwards config, then AI_MODEL, then ROSTER_MODEL as --model', async () => {
+test('manual GHCP handoff ignores configured served models and requires AI_MODEL', async () => {
   for (const [configured, supplied, expected] of [
-    ['configured', 'session', 'configured'], ['', 'session', 'session'], ['', '', 'served'],
+    ['configured', 'copilot-model', 'copilot-model'], ['', 'copilot-model', 'copilot-model'],
   ]) {
     const { options } = harness();
     const result = await runIssue(42, {
@@ -165,6 +169,9 @@ test('manual handoff forwards config, then AI_MODEL, then ROSTER_MODEL as --mode
     assert.ok(result.nextCommand.includes('## Summary'));
     assert.ok(result.nextCommand.includes('node --test'));
   }
+  const { options } = harness();
+  const result = await runIssue(42, { ...options, env: { ROSTER_MODEL: 'served-model' } });
+  assert.equal(result.nextCommand, null);
 });
 
 test('builtin preparation can set a seat session without a third preparation run', async () => {

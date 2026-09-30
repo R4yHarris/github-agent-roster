@@ -51,8 +51,9 @@ preserves the work but blocks Roster-managed publication unless `--skip-review`
 is explicit; the flag does not waive tests or human-owned policy. Human PR
 review and AI-Eval remain separate. Review the delivered evidence yourself
 before a direct SDK invocation, which does not enforce this in-process gate.
-Every publish path supplies the real `--model` from config,
-then `AI_MODEL`, then `ROSTER_MODEL`; no candidate means `set model`, not
+Every publish path supplies the real `--model` from completed seat evidence,
+or explicit `--model` / `AI_MODEL` for GHCP without a seat. GHCP uses
+`github-copilot` and unknown used/out; no candidate means `set model`, not
 `AI-Model: unknown`. This GHCP agent sets `AI_MODEL=GPT-6.1-Sol`.
 The PR body includes `## Model`, `## Summary`, and how to test the change.
 See the [reviewed publication example](GHCP.md).

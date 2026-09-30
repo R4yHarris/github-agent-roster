@@ -161,8 +161,10 @@ Run it from the **issue worktree root** after reviewing code and initializing
 the pinned submodule there (`git submodule update --init --recursive`) if
 needed. Missing or invalid model configuration reports `set model` before
 the SDK; stub runs print no runnable publication command.
-Model resolution is config, then `AI_MODEL`, then `ROSTER_MODEL`, while
-completed runs retain the actual coder model. PR messages include `## Model`,
+Completed runs retain their actual coder model and reported usage. Without
+a completed seat, GHCP publication requires `AI_MODEL` or an explicit publish
+model, sets `github-copilot`, and leaves used/out unknown rather than borrowing
+the configured served model. PR messages include `## Model`,
 `## Summary`, and how to test, not just the subject.
 `--publish` executes it only after an LLM run and passing tests, with
 `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_PATH` set. It stages only changed,

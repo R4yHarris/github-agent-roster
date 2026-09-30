@@ -16,7 +16,7 @@ agents and CI.
 | `/run N [--auto-model]` or `/run --issue N [--auto-model]` | Run builtin planner, coder, then read-only reviewer in one issue worktree. The optional flag chooses a registered fleet profile from qualifying human evaluations or starting priors without rewriting the saved default; no eligible profile leaves an unverified stub. |
 | `/status [N] [--offline]` | Show an issue, its open branch PR, and worktree path. Defaults to the last run or created issue; offline reads only the cached assignment and reports PR state as unknown. |
 | `/eval TARGET accept\|reject\|rework 1-5 y\|n [--minutes N] [--comment "TEXT"]` | Record the [human retrospective](RETRO.md), including actual minutes and local feedback. |
-| `/publish [SUBJECT] [--skip-review]` | Publish with an unchanged passing REVIEW.md, or explicitly bypass that verdict. After `/run N`, the default subject is `feat: issue N`; a confirmed merge comments on the still-open issue with PR URL and model ID. The human closes it after AI-Eval. Otherwise supply a conventional subject. |
+| `/publish [SUBJECT] [--model MODEL] [--skip-review]` | Publish with an unchanged passing REVIEW.md, or explicitly bypass that verdict. After `/run N`, the default subject is `feat: issue N`; a confirmed merge comments on the still-open issue with PR URL and model ID. Otherwise supply a conventional subject and declare the GHCP model with `--model` or `AI_MODEL`. Completed seat metadata wins over the flag. |
 | `/stats [REF]` | Summarize contracts and local AI-Run records, optionally at a Git ref. |
 | `/recommend feat\|fix\|docs\|test [--difficulty 1-5]` | Print the same read-only fleet choice as auto-model routing, including its evals/prior reason, or show insufficient data and the config default. |
 | `/vault` or `/vault list` | List vault entry names, never values. |
@@ -78,13 +78,19 @@ it:
 node vendor\github-agent-contracts\scripts\agent-pr.mjs --message "<subject plus Model, Summary, and how-to-test sections>" --model GPT-6.1-Sol --merge-when-green
 ```
 
-Publication resolves `config.llm.model`, then `AI_MODEL`, then `ROSTER_MODEL`.
+Without a completed seat, publication requires `AI_MODEL` or `/publish --model MODEL`,
+uses `github-copilot`, and omits used/out. Configured LLM model/effort/provider
+are not Copilot declarations. `AI_EFFORT=x` declares Max; `AI_CONTEXT_MAX`
+describes only known capacity. The task is an issue ID, `AI_TASK`, or branch slug,
+and the session uses `ghcp-<date-or-pid>`.
 An absent or invalid ID reports `set model` without invoking the publisher
 or printing a model-free command. A completed run keeps the actual coder
-model rather than a later `/model` setting. GHCP sessions use
+model/usage rather than a later `/model` setting or explicit publication flag. GHCP sessions use
 `AI_MODEL=GPT-6.1-Sol`; see the [full SDK example](GHCP.md).
 Generated PR bodies include `## Model`, `## Summary`, and `node --test`
-instructions (or an explicit task test waiver). After a run, the summary
+instructions (or an explicit task test waiver); GHCP bodies state that used/out
+are `-`. Printed manual commands include metadata assignments and empty values
+to clear stale counts. After a run, the summary
 comes from the reviewed result; without a run, the conventional subject
 describes the staged changes. Issue-run bodies also list the three seats and
 disclose a bypass.

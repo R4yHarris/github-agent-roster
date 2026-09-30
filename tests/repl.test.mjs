@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { parseConfig } from '../src/lib/config.mjs';
 import { buildPublishMessage } from '../src/lib/publication.mjs';
 import { createDispatcher, startRepl } from '../src/repl.mjs';
+import { buildRun } from '../src/metrics/run.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const cli = join(root, 'src', 'cli.mjs');
@@ -25,7 +26,8 @@ function dispatcher({ env = {}, services = {}, config: activeConfig = config } =
   const errorOutput = capture();
   const commands = createDispatcher({
     cwd, repoRoot: root, config: activeConfig, env, output, errorOutput,
-    services: { repositoryRoot: () => cwd, ...services },
+    services: { repositoryRoot: () => cwd,
+      publicationTask: ({ task, env }) => task || env.AI_TASK || 'feat-ghcp-metadata', ...services },
   });
   return { ...commands, output, errorOutput };
 }
@@ -232,6 +234,10 @@ test('/publish prints the SDK command without App env and uses the reviewed work
     /--message '<conventional subject>[\s\S]+--model GPT-6-Sol --merge-when-green/);
   assert.match(withoutApp.output.text, /## Model\n\nGPT-6-Sol\n\n## Summary/);
   assert.match(withoutApp.output.text, /node --test/);
+  assert.match(withoutApp.output.text, /AI_PROVIDER=github-copilot\n/);
+  assert.match(withoutApp.output.text, /AI_CONTEXT_USED=\n/);
+  assert.match(withoutApp.output.text, /AI_CONTEXT_OUT=\n/);
+  assert.match(withoutApp.output.text, /AI_TASK=feat-ghcp-metadata\n/);
 
   const calls = [];
   const withApp = dispatcher({
@@ -276,6 +282,54 @@ test('/publish prints the SDK command without App env and uses the reviewed work
   assert.match(calls[2][1].runLine, /\|roster-42-coder\|issue-42$/);
   assert.match(withApp.output.text, /left it open for human AI-Eval/);
   await assert.rejects(withApp.dispatch('/publish'), /already published/);
+});
+
+test('/publish --model declares GHCP without changing the configured served model', async () => {
+  const activeConfig = { ...config, llm: { ...config.llm, model: 'configured-served-model', effort: 'h' } };
+  const shell = dispatcher({
+    config: activeConfig, env: { AI_MODEL: 'unknown', AI_PROVIDER: 'openai',
+      AI_CONTEXT_USED: '1000000', AI_CONTEXT_OUT: '999' },
+    services: { resolveContractsPath: () => 'contracts' },
+  });
+  await shell.dispatch('/publish --model GPT-6.1-Sol fix: metadata --skip-review');
+  assert.equal(shell.state.config.llm.model, 'configured-served-model');
+  assert.match(shell.output.text, /--model GPT-6\.1-Sol --merge-when-green/);
+  assert.match(shell.output.text, /AI_PROVIDER=github-copilot\n/);
+  assert.match(shell.output.text, /AI_MODEL_VERSION=-\n/);
+  assert.match(shell.output.text, /AI_EFFORT=-\n/);
+  assert.match(shell.output.text, /AI_CONTEXT_USED=\n/);
+  assert.match(shell.output.text, /AI_CONTEXT_OUT=\n/);
+  assert.doesNotMatch(shell.output.text, /AI_CONTEXT_USED=1000000|AI_CONTEXT_OUT=999/);
+});
+
+test('/publish preserves measured seat attribution over a GHCP model flag and stale session declarations', async () => {
+  const activeConfig = { ...config, llm: { ...config.llm,
+    model: 'later-request-alias', provider: 'vllm', context_max: 8192 } };
+  const run = buildRun({ config: activeConfig, response: {
+    model: 'actual-response-model', usage: { prompt_tokens: 100, completion_tokens: 40 },
+  }, session: 'roster-42-coder', task: 'issue-42', env: {} });
+  const shell = dispatcher({
+    config: activeConfig, env: { AI_MODEL: 'GPT-6.1-Sol', AI_PROVIDER: 'github-copilot',
+      AI_CONTEXT_USED: '1000000', AI_CONTEXT_MAX: '1000000', AI_CONTEXT_OUT: '999' },
+    services: {
+      resolveContractsPath: () => 'contracts',
+      publicationTask: () => assert.fail('Measured seat must not derive GHCP task'),
+      runBuiltinIssue: async () => ({
+        issue: { number: 42 }, repoRoot: cwd, task: 'issue-42',
+        worktreePath: join(cwd, '.worktrees', 'issue-42'),
+        runs: { coder: run }, result: { summary: 'Reviewed measured changes.' },
+      }),
+    },
+  });
+  await shell.dispatch('/run 42');
+  await shell.dispatch('/publish --model GPT-6.1-Sol --skip-review');
+  assert.match(shell.output.text, /--model actual-response-model --merge-when-green/);
+  assert.match(shell.output.text, /AI_PROVIDER=local\n/);
+  assert.match(shell.output.text, /AI_CONTEXT_USED=100\n/);
+  assert.match(shell.output.text, /AI_CONTEXT_OUT=40\n/);
+  assert.match(shell.output.text, /AI_CONTEXT_MAX=8192\n/);
+  assert.match(shell.output.text, /AI_SESSION=roster-42-coder\n/);
+  assert.doesNotMatch(shell.output.text, /1000000|GHCP used\/out are/);
 });
 
 test('/publish blocks a failed in-session review until --skip-review is explicit', async () => {
@@ -340,14 +394,19 @@ test('an issue publish without a confirmed merge leaves the issue untouched', as
   assert.equal(shell.state.published, false);
 });
 
-test('/publish without a run forwards config, then AI_MODEL, then ROSTER_MODEL explicitly to agent-pr', async () => {
-  for (const [model, supplied, expected] of [
-    ['configured-model', 'unknown', 'configured-model'], ['', 'GPT-6-Sol', 'GPT-6-Sol'], ['', '', 'served-model'],
+test('/publish without a run declares GHCP instead of borrowing the configured endpoint metadata', async () => {
+  for (const [model, supplied, flag, expected] of [
+    ['configured-model', 'GPT-6.1-Sol', '', 'GPT-6.1-Sol'],
+    ['configured-model', 'unknown', ' --model explicit-copilot-model', 'explicit-copilot-model'],
+    ['', 'GPT-6.1-Sol', '', 'GPT-6.1-Sol'],
   ]) {
     const shell = dispatcher({
-      config: { ...config, llm: { ...config.llm, model, effort: 'h' } },
+      config: { ...config, llm: { ...config.llm, model, effort: 'h', provider: 'openai', context_max: 8192 } },
       env: { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'key.pem',
-        AI_MODEL: supplied, ROSTER_MODEL: 'served-model', ROSTER_API_KEY: 'private-value' },
+        AI_MODEL: supplied, ROSTER_MODEL: 'served-model', ROSTER_API_KEY: 'private-value',
+        AI_PROVIDER: 'local', AI_EFFORT: 'max', AI_CONTEXT_MAX: '1000000',
+        AI_CONTEXT_USED: '1000000', AI_CONTEXT_OUT: '999', AI_MODEL_VERSION: 'stale',
+        AI_SESSION: 'roster-stale-coder' },
       services: {
         resolveContractsPath: () => 'contracts',
         publisher: async ({ env, model: publishModel, message }) => {
@@ -356,14 +415,20 @@ test('/publish without a run forwards config, then AI_MODEL, then ROSTER_MODEL e
           assert.ok(message.includes(`## Model\n\n${expected}`));
           assert.match(message, /## Summary\n\nmetadata/);
           assert.match(message, /node --test/);
-          assert.equal(env.AI_PROVIDER, 'local');
+          assert.equal(env.AI_PROVIDER, 'github-copilot');
           assert.equal(env.AI_MODEL_VERSION, '-');
-          assert.equal(env.AI_EFFORT, 'h');
+          assert.equal(env.AI_EFFORT, 'x');
+          assert.equal(env.AI_CONTEXT_MAX, '1000000');
+          assert.equal(Object.hasOwn(env, 'AI_CONTEXT_USED'), false);
+          assert.equal(Object.hasOwn(env, 'AI_CONTEXT_OUT'), false);
+          assert.match(env.AI_SESSION, /^ghcp-\d+$/);
+          assert.equal(env.AI_TASK, 'feat-ghcp-metadata');
+          assert.match(message, /GHCP used\/out are `-` \(unknown\)/);
           assert.equal(env.ROSTER_API_KEY, undefined);
         },
       },
     });
-    await shell.dispatch('/publish fix: metadata --skip-review');
+    await shell.dispatch(`/publish fix: metadata${flag} --skip-review`);
     assert.equal(shell.state.published, true);
   }
 });
@@ -409,6 +474,8 @@ test('imported contracts publisher receives merge-when-green and reports HTTP 42
   writeFileSync(script, `export async function main(argv, { cwd, env, stdout }) {
     stdout.write(JSON.stringify({
       argv, cwd, keyPath: env.GITHUB_APP_PRIVATE_KEY_PATH, apiKey: env.ROSTER_API_KEY ?? null,
+      provider: env.AI_PROVIDER, version: env.AI_MODEL_VERSION,
+      used: env.AI_CONTEXT_USED ?? null, out: env.AI_CONTEXT_OUT ?? null,
     }) + '\\n');
     return 0;
   }\n`);
@@ -423,11 +490,15 @@ test('imported contracts publisher receives merge-when-green and reports HTTP 42
   const result = JSON.parse(success.output.text);
   assert.deepEqual(result.argv,
     ['--message', buildPublishMessage({
-      subject: 'docs: interactive roster shell', model: 'GPT-6-Sol', summary: 'interactive roster shell',
+      subject: 'docs: interactive roster shell', model: 'GPT-6-Sol', summary: 'interactive roster shell', ghcp: true,
     }), '--model', 'GPT-6-Sol', '--merge-when-green']);
   assert.equal(result.cwd, cwd);
   assert.equal(result.keyPath, resolve(cwd, 'key.pem'));
   assert.equal(result.apiKey, null);
+  assert.equal(result.provider, 'github-copilot');
+  assert.equal(result.version, '-');
+  assert.equal(result.used, null);
+  assert.equal(result.out, null);
 
   writeFileSync(script, `export async function main(_argv, { stderr }) {
     stderr.write('GitHub API request failed (HTTP 422).\\n');

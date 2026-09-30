@@ -41,6 +41,13 @@ GHCP sessions set the real model explicitly before publication. In PowerShell:
 ```powershell
 $env:AI_PROVIDER = "github-copilot"
 $env:AI_MODEL = "GPT-6.1-Sol"
+$env:AI_MODEL_VERSION = "-"
+$env:AI_EFFORT = "x"
+$env:AI_CONTEXT_MAX = "1000000"
+$env:AI_CONTEXT_USED = ""
+$env:AI_CONTEXT_OUT = ""
+$env:AI_SESSION = "ghcp-$(Get-Date -Format yyyyMMdd)-$PID"
+$env:AI_TASK = "feature-branch-slug"
 $message = @'
 fix: refuse publish without a model id
 
@@ -51,6 +58,7 @@ GPT-6.1-Sol
 ## Summary
 
 Require a real model on every publish path and retain reviewed change and test instructions.
+GHCP used/out are `-` (unknown); 1M is declared capacity, not used tokens.
 
 ### How to test
 
@@ -62,9 +70,12 @@ node vendor\github-agent-contracts\scripts\agent-pr.mjs --message $message --mod
 Use a summary of the actual reviewed changes, not just the conventional
 subject. The SDK derives the PR body from the message, so direct calls must
 include `## Model`, `## Summary`, and how to test. Roster's builtin and REPL
-paths add these sections automatically. They pass `--model` from
-`config.llm.model`, otherwise `AI_MODEL`, otherwise `ROSTER_MODEL`; missing
-or invalid IDs fail with `set model` before the SDK. The pinned publisher
+paths add these sections automatically. Without a completed seat, they require
+`AI_MODEL` or explicit `/publish --model MODEL`, set `github-copilot`, and
+leave used/out as `-`. They do not borrow the configured vLLM/cloud model.
+A completed seat's actual response-backed metadata wins over those declarations
+and is passed with `--model`; missing or invalid IDs fail with `set model`
+before the SDK. The pinned publisher
 also exits nonzero for missing or unknown model input.
 When ready to PR from this Copilot session, the canonical command is
 `node vendor\github-agent-contracts\scripts\agent-pr.mjs --message "..." --model GPT-6.1-Sol --merge-when-green`.

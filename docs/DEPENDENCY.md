@@ -67,8 +67,10 @@ from its own root before manual publication. The builtin `--publish` path
 requires a passing REVIEW.md (or explicit `--skip-review`), initializes it,
 selects reviewed task files, and invokes the SDK from that
 root; without the flag, it prints the next command but does not invoke it.
-Every Roster publish path resolves the model from `config.llm.model`, then
-`AI_MODEL`, then `ROSTER_MODEL`, and passes it explicitly with `--model`.
+Every Roster publish path passes `--model` explicitly. Completed seats supply
+their actual response-backed model and usage. Without a completed seat, GHCP
+publication requires `AI_MODEL` or explicit `/publish --model MODEL`, uses
+`github-copilot`, and omits used/out; configured served models are not GHCP models.
 An absent or invalid ID aborts with `set model` before invoking the SDK.
 Completed runs retain the actual coder model even if configuration changes.
 Model-free preparation and stub runs report that publication is unavailable
