@@ -24,7 +24,10 @@ runtime is created.
 The coder uses the selected model and known effort; the planner's own model and
 AI-Run identity do not change retroactively. An empty endpoint remains a stub:
 history does not enable hosted inference, model calls, edits, tests, or
-publication. The existing upfront `--auto-model` path is still available.
+publication. The upfront [fleet `--auto-model` path](ROUTING.md) instead
+locks a registered profile/model before planning, so feedback or a model
+response cannot silently change its chosen endpoint/model. The per-task
+selection above remains available outside that explicit routing path.
 
 ## Prior feedback
 

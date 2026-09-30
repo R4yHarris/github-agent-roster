@@ -11,15 +11,17 @@ import { runPlanner } from '../seats/planner.mjs';
 import { requirePassingReview, runReviewer } from '../seats/reviewer.mjs';
 import { isAllowedFile, isForbiddenWrite, isManagedFile } from '../runtime/tools.mjs';
 import { checkExcellence, redactEvidence } from '../runtime/excellence.mjs';
-import { isReviewRequired, loadConfig, requirePublicationEnabled } from './config.mjs';
-import { runIssue } from './issue.mjs';
+import { isReviewRequired, loadConfig, requirePublicationEnabled, withoutLlmKeys } from './config.mjs';
+import { loadFleet, withFleetProfile } from './fleet.mjs';
+import { runIssue, validateIssueNumber } from './issue.mjs';
 import {
   commentMergedIssue, mergedPullNumber, mergedPullNumberFromFailure,
 } from './issue-board.mjs';
-import { IDENTIFIER, inferTaskClass, recommend, recordRun } from './learn.mjs';
+import { IDENTIFIER, inferTaskClass, recordRun } from './learn.mjs';
 import { loadMetrics } from './metrics.mjs';
 import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
 import { buildPublishMessage, formatPublishCommand } from './publication.mjs';
+import { formatRoute, routeTask } from './route.mjs';
 
 const execFileAsync = promisify(execFile);
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -114,8 +116,7 @@ export async function prepareBuiltinPublication(run, {
     });
     throw new Error(`Publishing refused by excellence gate: ${excellence.reasons[0]}`);
   }
-  const commandEnv = { ...env };
-  delete commandEnv[config.llm.api_key_env];
+  const commandEnv = withoutLlmKeys(env, config);
   await git(run.worktreePath, ['submodule', 'update', '--init', '--recursive'], commandEnv);
   const contractsPath = resolveContractsPath({ repoRoot: run.worktreePath, cwd, env });
   await stageReviewedFiles(run.worktreePath, taskFilesAllowed(run.planner.task), { env: commandEnv });
@@ -203,7 +204,8 @@ export async function runBuiltinIssue(issueNumber, {
   metricsLoader = loadMetrics,
   now,
 } = {}) {
-  if (!config.llm.model && (env.AI_MODEL || env.ROSTER_MODEL)) {
+  validateIssueNumber(issueNumber);
+  if (!autoModel && !config.llm.model && (env.AI_MODEL || env.ROSTER_MODEL)) {
     config = { ...config, llm: Object.freeze({ ...config.llm, model: resolvePublishModel({ config, env }) }) };
   }
   if (!['planner,coder', 'planner,coder,reviewer'].includes(seats)) {
@@ -213,19 +215,19 @@ export async function runBuiltinIssue(issueNumber, {
   if (typeof skipReview !== 'boolean') throw new TypeError('--skip-review must be a boolean');
   if (publish) requirePublicationEnabled(config);
   const reviewBypass = skipReview || !isReviewRequired(config);
-  if (autoModel && config.llm.model) {
-    throw new Error('--auto-model requires an empty config.llm.model');
+  const fleet = autoModel ? await loadFleet({ cwd }) : null;
+  if (autoModel && !fleet.profiles.length) {
+    throw new Error('--auto-model requires at least one registered fleet profile; run roster onboard or fleet add');
   }
   if (!autoModel && config.llm.base_url && !config.llm.model) {
     throw new Error('set model: Set config.llm.model, AI_MODEL, or ROSTER_MODEL, or use --auto-model');
   }
   if (publish && !autoModel) resolvePublishModel({ config, env });
-  if (config.llm.base_url && config.llm.model) buildRun({ config, env });
-  if (publish && (!config.llm.base_url || !env.GITHUB_APP_ID || !env.GITHUB_APP_PRIVATE_KEY_PATH)) {
+  if (!autoModel && config.llm.base_url && config.llm.model) buildRun({ config, env });
+  if (publish && ((!autoModel && !config.llm.base_url) || !env.GITHUB_APP_ID || !env.GITHUB_APP_PRIVATE_KEY_PATH)) {
     throw new Error('--publish requires an LLM endpoint and GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH');
   }
-  const commandEnv = { ...env };
-  delete commandEnv[config.llm.api_key_env];
+  const commandEnv = withoutLlmKeys(env, config);
   const contractsPath = resolveContractsPath({ repoRoot, cwd, env });
   const issueCommand = runCommand ?? (async (program, args, workingDirectory) =>
     (await execFileAsync(program, args, { cwd: workingDirectory, env: commandEnv, encoding: 'utf8' })).stdout);
@@ -237,26 +239,26 @@ export async function runBuiltinIssue(issueNumber, {
   const { worktreePath } = prepared;
   let activeConfig = config;
   let autoRecommendation = null;
+  let route = null;
   if (autoModel) {
-    const taskClass = inferTaskClass(prepared.issue.title);
-    if (config.llm.base_url && taskClass) {
-      autoRecommendation = recommend(metricsLoader({
-        contractsPath, cwd: prepared.repoRoot,
-      }), taskClass);
+    const taskClass = prepared.metadata?.task_class ?? inferTaskClass(prepared.issue.title);
+    if (taskClass) {
+      route = await routeTask({
+        cwd: prepared.repoRoot, installationRoot: repoRoot, fleet,
+        taskClass, difficulty: prepared.metadata?.difficulty ?? 2,
+        records: metricsLoader({ contractsPath, cwd: prepared.repoRoot }),
+      });
     }
-    if (autoRecommendation) {
-      if (!/^[A-Za-z0-9._:/-]+$/.test(autoRecommendation.model)) {
-        throw new Error('The recommended model name is invalid');
-      }
-      activeConfig = { ...config, llm: Object.freeze({
-        ...config.llm, model: autoRecommendation.model,
-        effort: autoRecommendation.effort ?? config.llm.effort,
+    if (route) {
+      autoRecommendation = route.recommendation;
+      const selected = withFleetProfile(config, route.profile);
+      activeConfig = { ...selected, llm: Object.freeze({
+        ...selected.llm, effort: autoRecommendation?.effort ?? config.llm.effort,
       }) };
-      log(`Auto-model: ${autoRecommendation.model} from ${autoRecommendation.n} human evaluations`);
+      log(`Auto-model: ${formatRoute(route, taskClass).trimEnd()}`);
     } else {
       activeConfig = { ...config, llm: Object.freeze({ ...config.llm, base_url: '', model: '' }) };
-      log(`Auto-model: ${config.llm.base_url && taskClass
-        ? 'insufficient evaluated data' : 'no configured endpoint or task class'}; deterministic stub`);
+      log(`Auto-model: ${taskClass ? 'no eligible fleet profile or evidence' : 'no recognized task class'}; deterministic stub`);
     }
   }
   const sessions = {
@@ -268,6 +270,7 @@ export async function runBuiltinIssue(issueNumber, {
     worktree: worktreePath, repoRoot, issue: prepared.issue, config: activeConfig,
     ask: prepared.ask, metadata: prepared.metadata ?? undefined, task: prepared.task,
     session: sessions.planner, fetchImpl, env, vault, learningRoot: prepared.repoRoot,
+    lockedModel: route?.profile.model,
   });
   const metricEnv = { ...commandEnv };
   for (const name of [...RUN_ENV_NAMES, 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH',
@@ -355,7 +358,7 @@ export async function runBuiltinIssue(issueNumber, {
 
   const completed = {
     ...prepared, recipePath: planner.recipePath, taskPath: planner.taskPath,
-    planner, result, review, sessions, runs, run: coderRun, command, autoRecommendation,
+    planner, result, review, sessions, runs, run: coderRun, command, autoRecommendation, route,
   };
   if (publish) {
     const { contractsPath, publishEnv, model: publishModel } = await prepareBuiltinPublication(completed, {

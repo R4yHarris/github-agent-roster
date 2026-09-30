@@ -1,4 +1,5 @@
 import { taskFilesAllowed } from '../planner/stub.mjs';
+import { withoutLlmKeys } from '../lib/config.mjs';
 import { buildRun, mergeUsage } from '../metrics/run.mjs';
 import { loadContext } from '../runtime/context.mjs';
 import { estimateTask, readTaskMetadata } from '../runtime/estimate.mjs';
@@ -45,7 +46,7 @@ export async function runCoder({
     result.model = config.llm.base_url ? metadata.model : 'builtin-stub';
     const tools = await createTools({
       worktree, allowedFiles: taskFilesAllowed(context.task), memoryPath,
-      apiKeyEnv: config.llm.api_key_env, env, runCommand: runTestCommand,
+      apiKeyEnv: config.llm.api_key_env, env: withoutLlmKeys(env, config), runCommand: runTestCommand,
       allowRunTest: config.tools?.run_test !== false,
     });
     research = await runResearch({

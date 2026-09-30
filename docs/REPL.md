@@ -13,12 +13,12 @@ agents and CI.
 | `/ask TEXT` | Create an issue through `gh`, or write a local Ask, recipe, task, and create command when `gh` is missing. |
 | `/model [MODEL]` | Show the current model or persist a new one to ignored `.roster/config.yml`. |
 | `/effort [l|m|h|x]` | Show the current effort or persist a new level to ignored `.roster/config.yml`. |
-| `/run N [--auto-model]` or `/run --issue N [--auto-model]` | Run builtin planner, coder, then read-only reviewer in one issue worktree. The optional flag routes an empty configured model only with enough human evaluations; otherwise the stub writes an unverified result and failing review without editing code or testing. |
+| `/run N [--auto-model]` or `/run --issue N [--auto-model]` | Run builtin planner, coder, then read-only reviewer in one issue worktree. The optional flag chooses a registered fleet profile from qualifying human evaluations or starting priors without rewriting the saved default; no eligible profile leaves an unverified stub. |
 | `/status [N] [--offline]` | Show an issue, its open branch PR, and worktree path. Defaults to the last run or created issue; offline reads only the cached assignment and reports PR state as unknown. |
 | `/eval TARGET accept\|reject\|rework 1-5 y\|n [--minutes N] [--comment "TEXT"]` | Record the [human retrospective](RETRO.md), including actual minutes and local feedback. |
 | `/publish [SUBJECT] [--skip-review]` | Publish with an unchanged passing REVIEW.md, or explicitly bypass that verdict. After `/run N`, the default subject is `feat: issue N`; a confirmed merge comments on the still-open issue with PR URL and model ID. The human closes it after AI-Eval. Otherwise supply a conventional subject. |
 | `/stats [REF]` | Summarize contracts and local AI-Run records, optionally at a Git ref. |
-| `/recommend feat\|fix\|docs\|test [--difficulty 1-5]` | Recommend model/effort with enough evidence at the requested difficulty, or show insufficient data and the config default. |
+| `/recommend feat\|fix\|docs\|test [--difficulty 1-5]` | Print the same read-only fleet choice as auto-model routing, including its evals/prior reason, or show insufficient data and the config default. |
 | `/vault` or `/vault list` | List vault entry names, never values. |
 | `/vault get NAME` | Check whether an entry exists without revealing its value; use piped `roster vault get NAME` to retrieve it. |
 | `/vault set NAME` | Read the next line with terminal echo and readline history disabled, then store it in the existing file vault. |
@@ -35,10 +35,12 @@ Roster CLI process or add a queue.
 fields in the private config, keeping the other fields and comments. The
 updated values apply to the next `/run` in this shell. With no selected
 endpoint or profile, setting a model alone still leaves the stub active.
-`/model clear` leaves the model empty; `/run N --auto-model` can then apply
-a recommendation in memory only when at least three matching human
-evaluations exist. Without that flag, an empty model with a configured
-endpoint is an explicit error.
+`/model clear` leaves the model empty. `/run N --auto-model` explicitly
+selects a registered fleet endpoint/model in memory, even if a saved
+default exists. It prefers at least three qualifying human evaluations,
+otherwise starting priors/class hints; the [routing guide](ROUTING.md)
+defines the bounds. Without the flag, an empty model with a configured
+endpoint is still an explicit error.
 Running `/model` or `/effort` without a value shows the current setting.
 Do not put API key values in the config; it remains ignored by Git.
 When [onboarding](ONBOARDING.md) saved a project private config, the shell

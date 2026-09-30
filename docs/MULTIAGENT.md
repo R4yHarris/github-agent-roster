@@ -18,6 +18,10 @@ runs the [single coder stack](SEAT.md) on an existing TASK.md instead.
 This is not a concurrent swarm, two Copilot chats, or a Hermes Kanban loop.
 GitHub Issues and PRs are the board; no additional task database or issue
 is created.
+`--auto-model` explicitly selects a registered fleet profile for that one
+run, using qualifying human evaluations before starting priors. It changes
+neither the saved default nor the sequential seat/worktree topology.
+See [opt-in routing](ROUTING.md) for the source and context constraints.
 
 1. The issue lookup creates `.worktrees/issue-N` once, with `ASSIGNMENT.md`
    and an ignored `.env` holding `AI_TASK=issue-N` and

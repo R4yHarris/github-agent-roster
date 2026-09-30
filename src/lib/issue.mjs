@@ -81,6 +81,13 @@ export function parseIssueBody(body) {
   };
 }
 
+export function validateIssueNumber(issueNumber) {
+  if (!/^[1-9]\d*$/.test(String(issueNumber)) || !Number.isSafeInteger(Number(issueNumber))) {
+    throw new TypeError('Issue number must be a positive safe integer');
+  }
+  return Number(issueNumber);
+}
+
 export async function runIssue(issueNumber, {
   cwd = process.cwd(),
   runCommand = execute,
@@ -94,9 +101,7 @@ export async function runIssue(issueNumber, {
   sessionId,
   recordPreparation = true,
 } = {}) {
-  if (!/^[1-9]\d*$/.test(String(issueNumber)) || !Number.isSafeInteger(Number(issueNumber))) {
-    throw new TypeError('Issue number must be a positive safe integer');
-  }
+  const number = validateIssueNumber(issueNumber);
   if (sessionId !== undefined && (typeof sessionId !== 'string' || !IDENTIFIER.test(sessionId))) {
     throw new TypeError('Session ID must be an opaque identifier of at most 64 characters');
   }
@@ -108,7 +113,6 @@ export async function runIssue(issueNumber, {
       worktrees.split(/[\\/]/).some((part) => !part || part === '.' || part === '..')) {
     throw new TypeError('Worktrees path must be relative to the repository root');
   }
-  const number = Number(issueNumber);
 
   async function command(program, args, workingDirectory) {
     try {

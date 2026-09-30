@@ -1,4 +1,4 @@
-import { requirePublicationEnabled } from '../lib/config.mjs';
+import { requirePublicationEnabled, withoutLlmKeys } from '../lib/config.mjs';
 
 const countFields = ['prompt_tokens', 'completion_tokens'];
 export const RUN_ENV_NAMES = [
@@ -102,9 +102,8 @@ export function buildPublishEnv({ config, env = process.env, run }) {
   const activeConfig = run?.env?.AI_MODEL
     ? { ...config, llm: { ...config.llm, model: run.env.AI_MODEL } } : config;
   const model = resolvePublishModel({ config: activeConfig, env });
-  const publishEnv = { ...env };
+  const publishEnv = withoutLlmKeys(env, config);
   for (const name of RUN_ENV_NAMES) delete publishEnv[name];
-  delete publishEnv[config.llm.api_key_env];
   const metadata = run === undefined
     ? buildRun({
       config: { ...activeConfig, llm: { ...activeConfig.llm, model } },

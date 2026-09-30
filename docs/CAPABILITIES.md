@@ -41,6 +41,10 @@ is opt-in through `roster run --auto-model`. Concurrency is only a weak
 tie-break, not a throughput benchmark or instruction to launch parallel seats.
 Passing tests never create a human acceptance. See [learning](LEARNING.md)
 for the evidence threshold and defect-to-reject rules.
+The [implemented selector](ROUTING.md) prints `source=prior` when using
+these guesses and `source=evals` for qualifying human evidence. Unknown
+catalog context is never filled in from a guessed prior for AI-Run or a
+positive required context threshold.
 
 Run `node --test tests/capabilities.test.mjs` to validate example and overlay
 behavior. Loading priors contacts neither a model endpoint nor the internet.

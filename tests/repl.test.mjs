@@ -74,11 +74,15 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
       },
       summarizeMetrics: (records) => records,
       formatMetrics: () => 'No AI-Run records found.\n',
-      recommend: (_records, taskClass) => {
+      loadAvailableMetrics: () => {
+        calls.push(['recommend-metrics']);
+        return [];
+      },
+      routeTask: async ({ taskClass }) => {
         calls.push(['recommend', taskClass]);
         return null;
       },
-      formatRecommendation: () => 'insufficient data\n',
+      formatRoute: () => 'insufficient data\n',
       createFileVault: () => vault,
       setConfigValue: async (field, value) => {
         calls.push(['set-config', field, value]);
@@ -121,7 +125,7 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
     ['status', 42, true],
     ['eval', 'roster-42-coder', 'accept', '3', 'n', cwd],
     ['stats', 'HEAD'],
-    ['stats', 'HEAD'],
+    ['recommend-metrics'],
     ['recommend', 'feat'],
     ['vault-list'],
     ['vault-set', 'ROSTER_TOKEN', 'private-value'],
@@ -161,8 +165,8 @@ test('/recommend forwards requested capacity and displays the actual config defa
   const shell = dispatcher({
     config: { ...config, llm: { ...config.llm, model: 'fallback-model', effort: 'h' } },
     services: {
-      resolveContractsPath: () => 'contracts', loadMetrics: () => [],
-      recommend: (_records, taskClass, difficulty) => {
+      loadAvailableMetrics: () => [],
+      routeTask: async ({ taskClass, difficulty }) => {
         assert.equal(taskClass, 'fix');
         assert.equal(difficulty, 4);
         return null;

@@ -1,60 +1,82 @@
-# Explicit LLM routing
+# Opt-in fleet routing
 
-Roster uses the strict [schema 1 config](../roster.config.example.yml).
-Its `llm.profile` is empty by default, as are `llm.base_url` and
-`llm.model`: the run is a deterministic stub. Copy the example to ignored
-`.roster/config.yml` before changing settings. The named profiles supply
-an endpoint and an API-key **name**, never a key value:
+Onboarding selects one default endpoint/model and seeds a private
+[fleet catalog](FLEET.md). Normal `roster run --issue N` keeps that
+configuration; neither fleet discovery nor a read-only recommendation
+silently rewrites it. GitHub Issues and PRs remain the board, not a
+routing database or concurrent worker runtime.
 
-| Profile | Default endpoint | Key name |
-| --- | --- | --- |
-| `vllm-local` | `http://127.0.0.1:8000/v1` | `ROSTER_API_KEY` (optional) |
-| `ollama` | `http://127.0.0.1:11434/v1` | `ROSTER_API_KEY` |
-| `lmstudio` | `http://127.0.0.1:1234/v1` | `ROSTER_API_KEY` |
-| `openai` | `https://api.openai.com/v1` | `OPENAI_API_KEY` |
+## Selecting a profile
 
-Select `llm.profile` and a model, or leave the profile empty and supply a
-custom `llm.base_url` and model. Do not set a profile and a custom base URL
-together. Hosted inference is never selected implicitly. The configured
-environment key wins over a same-named file-vault entry; no App PEM belongs
-in the LLM vault. See [endpoint setup](ENDPOINTS.md).
+[`route.mjs`](../src/lib/route.mjs) selects only models actually registered
+in `.roster/fleet.yml`:
 
-In the [human shell](REPL.md), `/model MODEL` and `/effort h` atomically
-persist those fields to the private config. `/model clear` removes the
-chosen model without selecting another one. An empty model with a
-configured endpoint is an explicit error on a normal run.
+1. Prefer the highest acceptance rate among fleet models with at least
+   **three distinct human evaluations** for the requested task class and
+   effort, sufficient median human-rated difficulty, and a positive
+   declared context limit. Ties prefer more samples, then stable profile
+   and effort ordering. A defect still turns a later human acceptance into
+   a derived reject; automatic test/excellence passes are not human evals.
+2. Otherwise use matching [capability priors](CAPABILITIES.md) and fleet
+   task-class hints. Profile-specific priors take precedence over model
+   priors. A prior's suggested difficulty must cover the request; a bare
+   class hint has no measured difficulty claim. Prefer explicit fleet
+   class hints, then higher declared concurrency as a **weak tie-break**,
+   then stable ID ordering. No throughput or benchmark claim is made.
 
-`--auto-model` opts into selecting a model for both seats up front:
+A route caller can supply a minimum token context requirement. A declared
+limit must meet that exact threshold. Unknown `context_max: 0` cannot
+satisfy a positive requirement or qualify the human-evidence tier.
+The seeded default may remain a first-run prior choice when no minimum is
+specified, but its context stays **unknown**; the prior does not fabricate
+capacity or AI-Run usage. A requested missing profile ID is an error.
+Models present only in evaluations or fictional examples are never chosen.
+
+## Read-only recommendation
+
+```sh
+roster recommend --task-class fix --difficulty 3
+```
+
+The shell equivalent is `/recommend fix --difficulty 3`. Both use the same
+route selector as an opted-in run and print the chosen model, profile,
+`source=evals` or `source=prior`, declared limits, and why. They use local
+history only and never fetch leaderboard scores or PR evaluations.
+Without a requested difficulty, the routing baseline is 2.
+
+When no profile qualifies, output reports insufficient data and the saved
+configuration default as information, **not** an automatic fleet choice.
+Stats and the internal learning helper still expose evidence for other
+models; displaying history does not register them.
+
+## Execution remains explicit
 
 ```sh
 roster run --issue N --auto-model
 ```
 
-The shell equivalent is `/run N --auto-model`. The issue title supplies a
-recognized `feat`, `fix`, `docs`, or `test` task class. Roster joins
-contracts AI-Run history with local runs and explicit human evaluations;
-[`recommend`](../src/lib/learn.mjs) considers distinct evaluated samples
-for the same class, model, and effort. Unknown models and `builtin-stub`
-are not candidates. At least **three** evaluated samples must support a
-configuration. `roster recommend --task-class feat` remains read-only. Add
-`--difficulty 4` to require median human-rated difficulty of at least four;
-insufficient evidence prints the config default without silently routing.
-Recorded excellence failures count as rejects; passing tests never fabricate
-acceptance. See [capacity statistics](LEARNING.md).
+The shell equivalent is `/run N --auto-model`. The flag permits a
+run-scoped endpoint/model choice even when a saved default already exists.
+An empty fleet is refused before worktree creation; onboard or register
+an endpoint first. Issue metadata supplies class and initial difficulty,
+or a conventional issue-title prefix supplies class with baseline
+difficulty 2. No recognized class or eligible profile leaves a truthful
+deterministic stub, not a hidden fallback to an unregistered model.
 
-When a qualifying model exists and an endpoint is configured, Roster
-uses that model and recommended effort for **both seats in the current
-run**, including their AI-Run metadata. It does not persist the automatic
-choice to `.roster/config.yml`. With fewer than three samples, no
-recognized task class, or no endpoint, the run stays on the stub: no
-model request, code edit, or test execution is claimed. A manually chosen
-model cannot be overridden by `--auto-model`; clear it first. Metrics
-errors remain errors, not silent routing fallbacks. GitHub Issues and PRs
-remain the [board](BOARD.md), not a model-routing database. See
-[human evaluations](LEARNING.md) for the evidence threshold.
+The selected profile's endpoint/model and declared context feed the
+planner and coder; the read-only reviewer follows that model. A routed
+planner cannot switch to another model: malformed/mismatched plans must
+be repaired within its existing budget or fail. The route and reason are
+printed, but `.roster/config.yml` is never rewritten. Outside this explicit
+routing path, existing task-specific [feedback selection](NEXT.md) remains
+separate from fleet routing.
 
-During planning, [next-task feedback](NEXT.md) can fill an empty **task** model
-from capacity evidence for the coder, without changing the planner's identity
-or endpoint. Explicit task models are preserved. A single prior acceptance
-can seed an unconfigured baseline but cannot enable LLM execution; normal runs
-still need an upfront configured model or the explicit `--auto-model` path.
+All configured profile API keys are excluded from test children and the
+publisher when switching endpoints. Model inference still resolves only
+the selected key name through the existing environment/vault path.
+Routing grants no tools, App identity, policy, publication, merge, or
+deploy capabilities. Internet remains a stored-only preference.
+
+Run `node --test tests/route.test.mjs tests/builtin.test.mjs` for threshold,
+prior, context-boundary, missing-profile, opt-in, and saved-default
+regressions.

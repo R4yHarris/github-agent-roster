@@ -109,9 +109,11 @@ without `--issue`, `--seat coder --runtime builtin` instead executes the
 existing TASK.md in the current worktree, without replanning or publishing.
 `--publish` explicitly requests App publication after a model-backed run,
 a passing excellence gate, and an unchanged passing REVIEW.md unless
-`--skip-review` explicitly bypasses that verdict. `--auto-model`
-requires an empty configured model and at least three matching local human
-evaluations or keeps the stub. `roster status --issue N` queries GitHub;
+`--skip-review` explicitly bypasses that verdict. `--auto-model` explicitly
+chooses a registered [fleet profile](docs/FLEET.md) for one run, preferring
+three qualifying human evaluations over labeled starting priors/class hints.
+It does not require clearing or rewriting the saved default; no eligible
+profile keeps the stub. `roster status --issue N` queries GitHub;
 `--offline` uses cached worktree data only. The [offline demo](docs/DEMO.md)
 needs neither GitHub nor a model. See the [shell guide](docs/REPL.md) for
 `/model`, `/effort`, and `/publish`.
@@ -182,9 +184,11 @@ Completed issue seats append ignored `.roster/runs/runs.jsonl` automatically;
 manual `roster prepare` and standalone coder recording remain opt-in. `stats` joins local Git
 history through the resolved contracts pack with local runs and
 `.roster/evals.jsonl`; `--ref` and `--evals` remain supported.
-Human `eval` appends a decision, never the coder path. `recommend` suggests the
-highest accept-rate only with at least three evaluated samples, otherwise
-printing `insufficient data`. Nothing fetches human evaluations from GitHub.
+Human `eval` appends a decision, never the coder path. `recommend` prints the
+same registered fleet choice and evals/prior reason as opt-in routing;
+three qualifying human evaluations take precedence over starting guesses.
+Without a candidate it prints `insufficient data`. Nothing fetches human
+evaluations from GitHub.
 
 See [the one-task loop](docs/ONE_TASK_LOOP.md), [same-session seats](docs/MULTIAGENT.md),
 [the human shell](docs/REPL.md), [recipes](docs/SEATS.md), and

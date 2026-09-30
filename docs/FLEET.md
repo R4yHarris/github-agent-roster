@@ -93,3 +93,19 @@ No command invokes an App publisher, adds a queue, or launches a worker.
 First-run routing uses explicitly labeled [capability priors](CAPABILITIES.md),
 not scraped scores. Qualifying local human evaluations take precedence;
 a prior cannot nominate a model that is absent from the private catalog.
+
+## Opt-in routing
+
+`roster recommend --task-class fix --difficulty 3` and
+`roster run --issue N --auto-model` use the same
+[route selector](ROUTING.md). At least three distinct human evaluations
+with sufficient rated difficulty and declared context outrank starting
+priors; otherwise matching prior/class hints guide the first run.
+Output states the profile, model, and `evals` versus `prior` reason.
+Concurrency is a weak tie-break only, never a parallel-execution command.
+
+`--auto-model` is the explicit permission to select a different endpoint
+and model for one run. It does not require clearing a saved default and
+does not rewrite that default. Ordinary runs and recommendations do not
+switch or persist a fleet choice. Models outside this catalog cannot be
+automatically nominated, even if they appear in evaluation history.
