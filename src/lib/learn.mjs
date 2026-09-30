@@ -3,6 +3,7 @@ import { promises as fs, readFileSync, readdirSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
+import { materializeRun } from '../metrics/run.mjs';
 
 export const EFFORTS = ['l', 'm', 'h', 'x'];
 export const TASK_CLASSES = ['feat', 'fix', 'docs', 'test'];
@@ -11,7 +12,7 @@ export const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 export const IDENTIFIER = /^(?!-$)[A-Za-z0-9._-]{1,64}$/;
 const RUN_FIELDS = [
   'sha', 'session', 'task', 'task_class', 'provider', 'model', 'effort',
-  'context_used', 'context_max', 'context_out', 'excellence', 'defects',
+  'prompt_tokens', 'completion_tokens', 'context_used', 'context_max', 'context_out', 'excellence', 'defects',
 ];
 
 export function isObject(value) {
@@ -86,6 +87,16 @@ function validateLocalRun(record, source) {
     if (value != null && !(Number.isSafeInteger(value) && value >= 0) &&
         !(typeof value === 'string' && /^\d+$/.test(value))) {
       throw new Error(`${source}: ${field} must be a nonnegative integer or decimal string`);
+    }
+    for (const field of ['prompt_tokens', 'completion_tokens']) {
+      if (record[field] != null && (!Number.isSafeInteger(record[field]) || record[field] < 0)) {
+        throw new Error(`${source}: ${field} must be a reported nonnegative safe integer`);
+      }
+      for (const [alias, field] of [['context_used', 'prompt_tokens'], ['context_out', 'completion_tokens']]) {
+        if (record[alias] != null && record[field] != null && String(record[alias]) !== String(record[field])) {
+          throw new Error(`${source}: token aliases must match reported usage`);
+        }
+      }
     }
   }
   if (record.excellence != null && !['pass', 'fail'].includes(record.excellence) &&
@@ -197,6 +208,7 @@ export async function recordRun(record, {
   env = process.env,
   fileSystem = fs,
   createDirectory = false,
+  run,
 } = {}) {
   if (typeof createDirectory !== 'boolean') throw new TypeError('createDirectory must be a boolean');
   const directory = resolve(cwd, '.roster', 'runs');
@@ -220,22 +232,34 @@ export async function recordRun(record, {
 
   const parser = resolve(resolveContractsPath({ env, cwd }), 'scripts', 'parse-agent-run.mjs');
   const { packAgentRun, parseAgentRun } = await import(pathToFileURL(parser).href);
-  const model = record.model ?? env.AI_MODEL;
+  const completed = run?.metrics ? materializeRun(run.metrics, run.version) : null;
+  for (const field of ['session', 'task']) {
+    if (completed?.metrics[field] !== undefined && record[field] !== undefined &&
+        completed.metrics[field] !== record[field]) {
+      throw new TypeError('A completed run session/task cannot be changed while recording');
+    }
+  }
+  const model = completed?.metrics.model ?? record.model ?? env.AI_MODEL;
   // Model-free local journals retain partial evidence without packing a fabricated AI-Run.
-  const metadata = model ? parseAgentRun(packAgentRun({
+  const metadata = completed ? parseAgentRun(packAgentRun(completed.env, model)) : model ? parseAgentRun(packAgentRun({
     ...env, AI_PROVIDER: env.AI_PROVIDER === 'vllm' ? 'local' : env.AI_PROVIDER,
     AI_MODEL: model, AI_SESSION: record.session ?? '', AI_TASK: record.task ?? '',
   }, model)) : partialRunMetadata(env);
+  const measuredFields = ['provider', 'model', 'effort', 'prompt_tokens', 'completion_tokens',
+    'context_used', 'context_max', 'context_out'];
+  const additions = completed ? Object.fromEntries(Object.entries(record)
+    .filter(([field]) => !measuredFields.includes(field))) : record;
   const supplied = {
-    ...metadata, ...(model && env.AI_PROVIDER === 'vllm' ? { provider: 'vllm' } : {}), ...record,
+    ...metadata, ...(!completed && model && env.AI_PROVIDER === 'vllm' ? { provider: 'vllm' } : {}), ...additions,
+    ...completed?.metrics,
   };
-  const run = Object.fromEntries(RUN_FIELDS
+  const stored = Object.fromEntries(RUN_FIELDS
     .filter((field) => supplied[field] != null)
     .map((field) => [field, supplied[field]]));
   const file = resolve(directory, 'runs.jsonl');
-  validateLocalRun(run, file);
-  await appendJsonl(file, run, validateLocalRun, fileSystem);
-  return run;
+  validateLocalRun(stored, file);
+  await appendJsonl(file, stored, validateLocalRun, fileSystem);
+  return stored;
 }
 
 export function loadLearning({ cwd = process.cwd(), readFile = readFileSync } = {}) {

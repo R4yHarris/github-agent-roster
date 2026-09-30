@@ -42,6 +42,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     progress.turns = turn;
     progress.usage = null;
     const response = await chat({ messages, tools: definitions });
+    progress.response = chat.lastResponse;
     usages.push(response.usage);
     progress.usage = mergeUsage(...usages);
     const { message, finish_reason: finishReason } = response;
@@ -129,7 +130,7 @@ export async function runLoop(options) {
   const progress = {
     mode: options.config.llm.base_url ? 'llm' : 'stub',
     model: options.config.llm.base_url ? options.config.llm.model : 'builtin-stub',
-    turns: 0, usage: null,
+    turns: 0, usage: null, response: null,
   };
   try {
     const result = await executeLoop(options, progress);

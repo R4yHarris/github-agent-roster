@@ -265,7 +265,7 @@ export function createDispatcher({
           state.published = true;
           await api.issueCommenter({
             issue: state.lastRun.issue, pullNumber, model,
-            runLine: state.lastRun.runs?.coder?.line,
+            runLine: state.lastRun.runs?.coder?.line, run: state.lastRun.runs?.coder,
             repoRoot: state.lastRun.repoRoot, cwd, env,
           });
           output.write(`Commented on issue #${state.lastRun.issue.number}; left it open for human AI-Eval.\n`);

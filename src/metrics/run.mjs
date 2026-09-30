@@ -57,50 +57,81 @@ function runProvider(config, env) {
   return provider;
 }
 
-export function buildRun({ config, usage = {}, session, task, env = process.env }) {
-  const model = config.llm.model || env.ROSTER_MODEL;
-  if (!model) return null;
-  const effort = config.llm.effort;
-  const contextMax = config.llm.context_max;
-  const version = env.AI_MODEL_VERSION || '-';
-  if (!isModelId(model) ||
+export function materializeRun(metrics, version = '-') {
+  if (!metrics || typeof metrics !== 'object' || Array.isArray(metrics) ||
+      !isModelId(metrics.model) ||
+      !['vllm', 'github-copilot', 'anthropic', 'openai', 'local', 'other'].includes(metrics.provider) ||
       typeof version !== 'string' || !/^[A-Za-z0-9._-]+$/.test(version) ||
-      !['l', 'm', 'h', 'x', '-'].includes(effort) ||
-      !Number.isSafeInteger(contextMax) || contextMax < 0) {
+      !['l', 'm', 'h', 'x', '-'].includes(metrics.effort) ||
+      (metrics.context_max !== undefined &&
+        (!Number.isSafeInteger(metrics.context_max) || metrics.context_max <= 0))) {
     throw new TypeError('Invalid LLM model, version, effort, or context_max for AI-Run; unknown is not a model');
   }
-  const counts = mergeUsage(usage);
-  const provider = runProvider(config, env);
-  const runEnv = {
-    AI_PROVIDER: provider === 'vllm' ? 'local' : provider,
-    AI_MODEL: model, AI_MODEL_VERSION: version, AI_EFFORT: effort,
+  const counts = mergeUsage(metrics);
+  for (const [alias, field] of [['context_used', 'prompt_tokens'], ['context_out', 'completion_tokens']]) {
+    if (metrics[alias] !== undefined && metrics[alias] !== counts[field]) {
+      throw new TypeError('Run token aliases must match the reported response usage');
+    }
+  }
+  const record = {
+    provider: metrics.provider, model: metrics.model, effort: metrics.effort,
+    ...(metrics.context_max === undefined ? {} : { context_max: metrics.context_max }),
+    ...(counts.prompt_tokens === undefined ? {} : {
+      prompt_tokens: counts.prompt_tokens, context_used: counts.prompt_tokens,
+    }),
+    ...(counts.completion_tokens === undefined ? {} : {
+      completion_tokens: counts.completion_tokens, context_out: counts.completion_tokens,
+    }),
   };
-  if (contextMax > 0) runEnv.AI_CONTEXT_MAX = String(contextMax);
+  const runEnv = {
+    AI_PROVIDER: record.provider === 'vllm' ? 'local' : record.provider,
+    AI_MODEL: record.model, AI_MODEL_VERSION: version, AI_EFFORT: record.effort,
+  };
+  if (record.context_max !== undefined) runEnv.AI_CONTEXT_MAX = String(record.context_max);
   if (counts.prompt_tokens !== undefined) runEnv.AI_CONTEXT_USED = String(counts.prompt_tokens);
   if (counts.completion_tokens !== undefined) runEnv.AI_CONTEXT_OUT = String(counts.completion_tokens);
-  for (const [name, value] of [['AI_SESSION', session], ['AI_TASK', task]]) {
+  for (const [name, field] of [['AI_SESSION', 'session'], ['AI_TASK', 'task']]) {
+    const value = metrics[field];
     if (value !== undefined) {
       if (typeof value !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(value)) {
         throw new TypeError(`${name} must be an opaque identifier of at most 64 characters`);
       }
       runEnv[name] = value;
+      record[field] = value;
     }
   }
-  return {
-    provider,
+  return Object.freeze({
+    provider: record.provider, metrics: Object.freeze(record), version,
     line: [
-      '1', runEnv.AI_PROVIDER, `${model}@${version}`, effort,
+      '1', runEnv.AI_PROVIDER, `${record.model}@${version}`, record.effort,
       `${runEnv.AI_CONTEXT_USED ?? '-'}/${runEnv.AI_CONTEXT_MAX ?? '-'}`,
       runEnv.AI_CONTEXT_OUT ?? '-', runEnv.AI_SESSION ?? '-', runEnv.AI_TASK ?? '-',
     ].join('|'),
-    env: runEnv,
-  };
+    env: Object.freeze(runEnv),
+  });
+}
+
+export function buildRun({ config, usage = {}, response, session, task, env = process.env }) {
+  const live = response !== undefined;
+  const model = response?.model ?? (config.llm.model || (!live ? env.ROSTER_MODEL : undefined));
+  if (!model) return null;
+  const contextMax = config.llm.context_max;
+  if (contextMax !== undefined && (!Number.isSafeInteger(contextMax) || contextMax < 0)) {
+    throw new TypeError('Invalid context_max for AI-Run');
+  }
+  const counts = mergeUsage(live ? response?.usage ?? {} : usage);
+  return materializeRun({
+    provider: runProvider(config, live ? {} : env), model, effort: config.llm.effort,
+    ...(contextMax > 0 ? { context_max: contextMax } : {}),
+    ...counts, ...(session === undefined ? {} : { session }), ...(task === undefined ? {} : { task }),
+  }, live ? '-' : env.AI_MODEL_VERSION || '-');
 }
 
 export function buildPublishEnv({ config, env = process.env, run }) {
   requirePublicationEnabled(config);
-  const activeConfig = run?.env?.AI_MODEL
-    ? { ...config, llm: { ...config.llm, model: run.env.AI_MODEL } } : config;
+  const measured = run?.metrics ? materializeRun(run.metrics, run.version) : run;
+  const activeConfig = measured?.env?.AI_MODEL
+    ? { ...config, llm: { ...config.llm, model: measured.env.AI_MODEL } } : config;
   const model = resolvePublishModel({ config: activeConfig, env });
   const publishEnv = withoutLlmKeys(env, config);
   for (const name of RUN_ENV_NAMES) delete publishEnv[name];
@@ -108,11 +139,18 @@ export function buildPublishEnv({ config, env = process.env, run }) {
     ? buildRun({
       config: { ...activeConfig, llm: { ...activeConfig.llm, model } },
       env, session: env.AI_SESSION, task: env.AI_TASK,
-    }) : run;
+    }) : measured;
   Object.assign(publishEnv, metadata?.env);
   if (run === undefined && !config.llm.provider && !config.llm.model && env.AI_MODEL && env.AI_PROVIDER) {
     publishEnv.AI_PROVIDER = env.AI_PROVIDER === 'vllm' ? 'local' : env.AI_PROVIDER;
   }
   publishEnv.AI_MODEL = model;
+  if (run === undefined && publishEnv.AI_PROVIDER === 'github-copilot' &&
+      env.AI_CONTEXT_MAX !== undefined && env.AI_CONTEXT_MAX !== '') {
+    if (typeof env.AI_CONTEXT_MAX !== 'string' || !/^[1-9]\d*$/.test(env.AI_CONTEXT_MAX)) {
+      throw new TypeError('GHCP-only AI_CONTEXT_MAX must be a positive decimal integer');
+    }
+    publishEnv.AI_CONTEXT_MAX = env.AI_CONTEXT_MAX;
+  }
   return publishEnv;
 }

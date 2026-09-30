@@ -29,7 +29,7 @@ export async function runCoder({
   let result = {
     mode: config.llm.base_url ? 'llm' : 'stub',
     model: config.llm.base_url ? config.llm.model : 'builtin-stub',
-    turns: 0, usage: null, summary: 'Coder preparation stopped before implementation.',
+    turns: 0, usage: null, response: null, summary: 'Coder preparation stopped before implementation.',
   };
   try {
     const principal = await loadPrincipal({ repoRoot, id: config.seat.principal });
@@ -54,6 +54,7 @@ export async function runCoder({
     });
     stages.push('research');
     result.usage = research.usage;
+    result.response = research.response;
     const skills = await loadSkills({ repoRoot, skillsPath: config.paths.skills, task: context.task });
     if (JSON.stringify(previewSkills(skills)) !== JSON.stringify(context.skills)) {
       throw new Error('Task skills changed after the context pack; refusing coder edits');
@@ -86,6 +87,7 @@ export async function runCoder({
     });
     stages.push('tool_loop');
     result = { ...result, tests: result.tests ?? tests,
+      response: result.response ?? research.response ?? null,
       usage: research.turns ? mergeUsage(research.usage, result.usage) : result.usage };
   } catch (error) {
     if (!(error instanceof Error)) throw error;
@@ -123,7 +125,7 @@ export async function runCoder({
   let run = null;
   try {
     if (result.mode === 'llm') run = buildRun({
-      config, usage: result.usage ?? {}, task, session, env,
+      config, response: result.response, task, session, env,
     });
   } catch (error) {
     if (!(error instanceof Error)) throw error;

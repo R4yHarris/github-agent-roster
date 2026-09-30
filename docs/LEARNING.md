@@ -53,9 +53,11 @@ Only reported fields are written:
 | `sha` | Full commit SHA, when known in a local run record or Git export |
 | `session`, `task` | Generated worker assignment; contracts `AI_SESSION`, `AI_TASK` |
 | `provider` | Actual configured or supplied backend: `vllm` for the named vLLM profile, `github-copilot` for an explicitly identified Copilot endpoint. The pinned contracts AI-Run uses `local` for vLLM. |
-| `model` | `AI_MODEL` |
-| `effort` | Contracts-normalized `AI_EFFORT`: `l`, `m`, `h`, or `x` |
-| `context_used`, `context_max`, `context_out` | Corresponding `AI_CONTEXT_*` environment variables |
+| `model` | Live seat's last response model, falling back to its request model; `AI_MODEL` for legacy/manual records |
+| `effort` | Seat configuration, or contracts-normalized `AI_EFFORT` for legacy/manual records |
+| `prompt_tokens`, `completion_tokens` | Live seat's last response usage, omitted when unreported; never accumulated or estimated |
+| `context_used`, `context_out` | Aliases for live prompt/completion counts; corresponding `AI_CONTEXT_*` values for legacy/manual records |
+| `context_max` | Selected fleet profile or seat configuration; `AI_CONTEXT_MAX` only for legacy/manual records |
 | `task_class` | A recognized `feat`, `fix`, `docs`, or `test` prefix in the issue title |
 | `excellence` | A recorded `pass`/`fail` or report with boolean `pass`; never a human evaluation |
 | `defects` | Redacted excellence failure reasons; an empty array means no recorded gate defects, not human acceptance |
@@ -65,7 +67,10 @@ Run metadata normalization uses the contracts parser through
 Model-free journals normalize only partial effort and count fields locally;
 they do not fabricate a model to serialize a contracts AI-Run.
 Unknown fields are omitted, not filled with zero. A genuinely reported zero is
-preserved; counts beyond JavaScript's safe integer range remain decimal strings.
+preserved. Live token counts must be nonnegative safe integers; legacy
+contracts-sourced counts beyond JavaScript's safe integer range remain decimal
+strings. Completed seat records do not inherit Copilot model or context values;
+see [metrics](METRICS.md).
 No environment secrets, issue bodies, prompts, or traces are recorded.
 
 Example with only the assignment known:

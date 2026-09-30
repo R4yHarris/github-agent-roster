@@ -170,6 +170,8 @@ test('planner repairs invalid JSON within its configured budget and fails when e
   assert.equal(calls, 2);
   assert.equal(plan.turns, 2);
   assert.deepEqual(plan.usage, { prompt_tokens: 3, completion_tokens: 4 });
+  assert.deepEqual(plan.response, { model: llmConfig.llm.model,
+    usage: { prompt_tokens: 2, completion_tokens: 2 } });
 
   const singleTurn = parseConfig(configExample.replace('base_url: ""', 'base_url: http://localhost:1234/v1')
     .replace('model: ""', 'model: test-model').replace('turn_budget: 2', 'turn_budget: 1'));

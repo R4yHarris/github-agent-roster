@@ -111,7 +111,7 @@ export async function prepareBuiltinPublication(run, {
       provider: run.runs.coder.provider,
       ...excellenceFields(excellence, { config, env }),
     }, {
-      cwd: run.repoRoot ?? run.worktreePath, env: run.runs.coder.env,
+      cwd: run.repoRoot ?? run.worktreePath, env: run.runs.coder.env, run: run.runs.coder,
       createDirectory: Boolean(run.repoRoot),
     });
     throw new Error(`Publishing refused by excellence gate: ${excellence.reasons[0]}`);
@@ -145,7 +145,7 @@ export async function runBuiltinTask({
       task, session, task_class: result.taskMetadata?.task_class,
       provider: result.run?.provider,
       ...excellenceFields(result.excellence, { config, env }),
-    }, { cwd: worktreePath, env: { ...metricEnv, ...result.run?.env } });
+    }, { cwd: worktreePath, env: { ...metricEnv, ...result.run?.env }, run: result.run });
   };
   const reviewSeat = async (result) => {
     const reviewConfig = { ...config, llm: { ...config.llm,
@@ -155,10 +155,10 @@ export async function runBuiltinTask({
       env, fetchImpl, vault,
     });
     const reviewRun = review.queried ? buildRun({
-      config: reviewConfig, usage: review.usage ?? {}, task, session: reviewerSession, env,
+      config: reviewConfig, response: review.response, task, session: reviewerSession, env,
     }) : null;
     await recordRun({ task, session: reviewerSession, provider: reviewRun?.provider }, {
-      cwd: worktreePath, env: { ...metricEnv, ...reviewRun?.env },
+      cwd: worktreePath, env: { ...metricEnv, ...reviewRun?.env }, run: reviewRun,
     });
     return { review, reviewRun };
   };
@@ -223,7 +223,7 @@ export async function runBuiltinIssue(issueNumber, {
     throw new Error('set model: Set config.llm.model, AI_MODEL, or ROSTER_MODEL, or use --auto-model');
   }
   if (publish && !autoModel) resolvePublishModel({ config, env });
-  if (!autoModel && config.llm.base_url && config.llm.model) buildRun({ config, env });
+  if (!autoModel && config.llm.base_url && config.llm.model) buildRun({ config, response: null, env });
   if (publish && ((!autoModel && !config.llm.base_url) || !env.GITHUB_APP_ID || !env.GITHUB_APP_PRIVATE_KEY_PATH)) {
     throw new Error('--publish requires an LLM endpoint and GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH');
   }
@@ -266,24 +266,32 @@ export async function runBuiltinIssue(issueNumber, {
     coder: prepared.session,
     reviewer: `roster-${prepared.issue.number}-reviewer`,
   };
-  const planner = await runPlanner({
-    worktree: worktreePath, repoRoot, issue: prepared.issue, config: activeConfig,
-    ask: prepared.ask, metadata: prepared.metadata ?? undefined, task: prepared.task,
-    session: sessions.planner, fetchImpl, env, vault, learningRoot: prepared.repoRoot,
-    lockedModel: route?.profile.model,
-  });
   const metricEnv = { ...commandEnv };
   for (const name of [...RUN_ENV_NAMES, 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH',
     'GH_TOKEN', 'GITHUB_TOKEN']) delete metricEnv[name];
+  let planner;
+  try {
+    planner = await runPlanner({
+      worktree: worktreePath, repoRoot, issue: prepared.issue, config: activeConfig,
+      ask: prepared.ask, metadata: prepared.metadata ?? undefined, task: prepared.task,
+      session: sessions.planner, fetchImpl, env, vault, learningRoot: prepared.repoRoot,
+      lockedModel: route?.profile.model,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.run) {
+      await recordRun({ session: sessions.planner, task: prepared.task,
+        task_class: prepared.metadata?.task_class ?? inferTaskClass(prepared.issue.title) }, {
+        cwd: prepared.repoRoot, env: { ...metricEnv, ...error.run.env }, createDirectory: true, run: error.run,
+      });
+    }
+    throw error;
+  }
   const taskClass = planner.metadata.task_class;
   const recordSeat = async (session, run, excellence) => recordRun({
     session, task: prepared.task, task_class: taskClass, provider: run?.provider,
     ...(excellence ? excellenceFields(excellence, { config, env }) : {}),
-  }, { cwd: prepared.repoRoot, env: { ...metricEnv, ...run?.env }, createDirectory: true });
-  const plannerRun = activeConfig.llm.base_url ? buildRun({
-    config: activeConfig, usage: planner.usage ?? {}, session: sessions.planner, task: prepared.task,
-    env,
-  }) : null;
+  }, { cwd: prepared.repoRoot, env: { ...metricEnv, ...run?.env }, createDirectory: true, run });
+  const plannerRun = planner.run;
   await recordSeat(sessions.planner, plannerRun);
   const coderConfig = { ...activeConfig, llm: Object.freeze({
     ...activeConfig.llm, model: planner.metadata.model || activeConfig.llm.model,
@@ -298,7 +306,7 @@ export async function runBuiltinIssue(issueNumber, {
       coderResult, fetchImpl, env, vault,
     });
     const reviewerRun = review.queried ? buildRun({
-      config: reviewConfig, usage: review.usage ?? {}, session: sessions.reviewer,
+      config: reviewConfig, response: review.response, session: sessions.reviewer,
       task: prepared.task, env,
     }) : null;
     await recordSeat(sessions.reviewer, reviewerRun);
@@ -317,17 +325,14 @@ export async function runBuiltinIssue(issueNumber, {
     }
     throw error;
   }
-  const coderRun = result.mode === 'llm' ? buildRun({
-    config: coderConfig, usage: result.usage ?? {}, session: sessions.coder, task: prepared.task,
-    env,
-  }) : null;
+  const coderRun = result.run;
   await recordSeat(sessions.coder, coderRun, result.excellence);
   const { review, reviewerRun } = await reviewSeat(result);
   await ensureUnchanged(planner.recipePath, planner.recipe);
   await ensureUnchanged(planner.taskPath, planner.task);
   await ensureUnchanged(planner.estimatePath, planner.estimate);
   const runs = { planner: plannerRun, coder: coderRun, reviewer: reviewerRun };
-  const model = result.mode === 'llm' ? resolvePublishModel({ config: coderConfig, env }) : null;
+  const model = result.mode === 'llm' ? coderRun.metrics.model : null;
   const publishMessage = model ? buildPublishMessage({
     subject: `feat: issue ${prepared.issue.number}`, model, issueNumber: prepared.issue.number,
     summary: redactEvidence(result.summary, { env, apiKeyEnv: config.llm.api_key_env }),
@@ -344,8 +349,8 @@ export async function runBuiltinIssue(issueNumber, {
     (plannerRun ? `AI-Run: ${plannerRun.line}\n` : '') +
     `Coder session: ${sessions.coder}\n` +
     (coderRun ? `AI-Run: ${coderRun.line}\n` +
-      `For manual publication, set these environment variables:\n` +
-      Object.entries(coderRun.env).map(([name, value]) => `${name}=${value}\n`).join('')
+      `For manual publication, set these variables (empty values clear inherited fields):\n` +
+      RUN_ENV_NAMES.map((name) => `${name}=${coderRun.env[name] ?? ''}\n`).join('')
       : 'Stub run: no AI-Run metadata and no code to publish.\n') +
     `Reviewer session: ${sessions.reviewer}\n` +
     (reviewerRun ? `AI-Run: ${reviewerRun.line}\n` : '') +
@@ -379,7 +384,7 @@ export async function runBuiltinIssue(issueNumber, {
       try {
         await issueCommenter({
           issue: prepared.issue, pullNumber: merged, model: coderRun.env.AI_MODEL,
-          runLine: coderRun.line,
+          runLine: coderRun.line, run: coderRun,
           repoRoot: prepared.repoRoot, cwd, env,
         });
       } catch (commentError) {
@@ -395,7 +400,7 @@ export async function runBuiltinIssue(issueNumber, {
     const pullNumber = mergedPullNumber(stdout);
     await issueCommenter({
       issue: prepared.issue, pullNumber, model: coderRun.env.AI_MODEL,
-      runLine: coderRun.line,
+      runLine: coderRun.line, run: coderRun,
       repoRoot: prepared.repoRoot, cwd, env,
     });
   }

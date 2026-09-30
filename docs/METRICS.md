@@ -1,44 +1,67 @@
 # Local metrics
 
-[`buildRun`](../src/metrics/run.mjs) constructs two compact schema 1 AI-Run
-lines in a builtin issue run: one for `roster-N-planner` from planner token
-reports and one for `roster-N-coder` from coder token reports. Both use task
-`issue-N`. Unknown version, context, or counts stay unset (`-` in
-the compact line); a missing usage report never becomes an estimate. The
-empty-URL stub emits no AI-Run trailer and records no model or LLM usage.
-The publisher receives the coder's known `AI_*` fields
-only, not the model API key: the contracts SDK supports one AI-Run trailer per
-published code commit. Both completed seat runs are printed and recorded
-separately in `.roster/runs`. Contracts owns the trailer format.
+[`createChat`](../src/llm/openai.mjs) retains an immutable `lastResponse`
+snapshot containing the response's `model` (or the actual request model when
+the response omits it) and reported `usage.prompt_tokens` /
+`usage.completion_tokens`. It retains neither prompts nor response text,
+API keys, or arbitrary usage fields. Each seat uses its last successful
+completion, not accumulated usage from earlier requests. A final response
+without usage clears the reported token slots rather than reusing an earlier
+response's counts. Aggregate `result.usage` remains available separately for
+operational totals.
 
-An `unknown` model is a bug, not a default. Both builtin publication and
-standalone `/publish` pass the configured `llm.model` as `AI_MODEL`, falling
-back to `ROSTER_MODEL` when config has no model. Builtin seats use that same
-selection for their LLM requests. Publication clears inherited run metadata
-and never forwards the LLM API key. A completed coder's metadata wins over
-later configuration changes. Every publication resolves a real model from
-config, then `AI_MODEL`, then `ROSTER_MODEL`, and passes `--model` explicitly.
-Missing or invalid IDs fail with `set model` before the SDK; its required
-`AI-Model` trailer has no unknown fallback. Stub runs still omit AI-Run and
-cannot publish. This GHCP agent sets `AI_MODEL=GPT-6.1-Sol`.
+[`buildRun`](../src/metrics/run.mjs) constructs a canonical `run.metrics`
+object and a contracts-compatible compact schema 1 AI-Run line. Builtin issue
+runs record planner, coder, and reviewer sessions (`roster-N-planner`,
+`roster-N-coder`, and `roster-N-reviewer`) with task `issue-N`. The same known
+model, provider, effort, prompt/completion counts, context capacity, session,
+and task are written into `.roster/runs/*.jsonl`. Legacy `context_used` and
+`context_out` fields mirror reported prompt and completion tokens for existing
+stats consumers. Context capacity comes only from the selected fleet profile
+or `llm.context_max`; an absent or zero capacity stays unknown. Missing counts
+are omitted, not estimated as zero or 1,000,000. An explicitly reported zero
+is retained. Unknown slots are `-` in the compact line.
+
+The publisher derives `AI_PROVIDER`, `AI_MODEL`, `AI_EFFORT`,
+`AI_CONTEXT_USED`, `AI_CONTEXT_MAX`, `AI_CONTEXT_OUT`, `AI_SESSION`, and
+`AI_TASK` from the completed coder's metrics object, not process metadata
+or later configuration changes. The SDK receives the actual response model
+with `--model`; it supports one AI-Run trailer per published code commit.
+Inherited token counts, capacity, model version, and LLM API keys cannot
+override completed seat evidence. After a confirmed App merge, the issue
+comment includes the measured model, provider, known prompt/completion counts
+and context capacity, session, task, and compact AI-Run. The issue stays open
+for human AI-Eval.
+
+An `unknown` model is a bug, not a default. Missing or invalid publication
+model IDs fail before the SDK; its required `AI-Model` trailer has no unknown
+fallback. The empty-URL stub emits no AI-Run and cannot publish code.
+
+### GHCP-only attribution
+
+Hardcoded Copilot session settings apply only to GHCP-authored commits with
+no Roster seat run and no vLLM call. For those publications, model selection
+remains config, then `AI_MODEL`, then `ROSTER_MODEL`; for example, this GHCP
+agent declares `AI_MODEL=GPT-6.1-Sol` and `AI_PROVIDER=github-copilot`.
+An explicitly declared positive `AI_CONTEXT_MAX` can describe that session's
+capacity only when there is no completed run object. It is never a measured
+used-token count. Inherited `AI_CONTEXT_USED` and `AI_CONTEXT_OUT` are cleared.
+These declarations must not be applied to vLLM seat runs.
 
 The pinned contracts `v0.2.1` schema does **not** accept `AI_PROVIDER=vllm`.
 Roster encodes vLLM as its supported `local` provider (`openai` for the explicit
 OpenAI profile), without modifying the submodule. The local run journal
-retains the actual `provider: "vllm"` for the named vLLM profile (or
-an explicitly supplied `AI_PROVIDER=vllm`), while the compact
-AI-Run and published trailer use `local`. With no selected profile,
-`AI_PROVIDER=github-copilot` is carried through to both the journal
-and AI-Run; a named profile takes precedence over an inherited
-provider environment value. Model IDs and reported usage counts
-come from the completed planner/coder turns, never an estimate.
-An explicit `llm.provider` has precedence over profile and inherited
-`AI_PROVIDER`; onboarding sets it to `vllm` for the chosen vLLM endpoint.
-`AI_MODEL_VERSION` is the
-known environment value or `-`; `AI_EFFORT` comes from config. Builtin sessions
-are `roster-N-planner` and `roster-N-coder`, with `AI_TASK=issue-N`.
-The printed manual publication instructions include the coder's environment
-fields; set those before running the SDK command directly.
+retains the actual `provider: "vllm"` for the named vLLM profile or explicit
+`llm.provider`, while the compact AI-Run and published trailer use `local`.
+For live seats, an explicit `llm.provider` takes precedence over the selected
+profile; an unprofiled compatible endpoint defaults to `local`, never
+inherited `AI_PROVIDER=github-copilot`. Onboarding sets `llm.provider` to
+`vllm`. Seat model version stays unknown (`-`) unless independently known;
+the client does not infer one from Copilot's environment. Effort comes from
+the seat configuration.
+The printed manual publication instructions include every AI-Run environment
+field. Empty values clear inherited unknown slots; apply those as well as the
+known coder values before running the SDK command directly.
 
 `src/lib/metrics.mjs` reads compact AI-Run JSONL by invoking contracts
 `scripts/export-agent-metrics.mjs` with Node. Contracts resolution checks the
@@ -105,4 +128,4 @@ model/effort default. See [learning](LEARNING.md) for exact denominators and
 missing-data handling; there is no hidden score.
 
 Run the focused tests with
-`node --test tests/metrics.test.mjs tests/learn.test.mjs tests/eval.test.mjs`.
+`node --test tests/openai.test.mjs tests/run-metrics.test.mjs tests/builtin.test.mjs tests/issue-board.test.mjs tests/metrics.test.mjs tests/learn.test.mjs tests/eval.test.mjs`.

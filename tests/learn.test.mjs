@@ -17,6 +17,9 @@ import {
 import { formatMetrics, loadMetrics, summarizeMetrics } from '../src/lib/metrics.mjs';
 import { resolveContractsPath } from '../src/lib/paths.mjs';
 import { formatFleet } from '../src/lib/fleet.mjs';
+import { parseConfig } from '../src/lib/config.mjs';
+import { createBuiltinChat } from '../src/lib/llm.mjs';
+import { buildRun } from '../src/metrics/run.mjs';
 
 const exported = readFileSync(new URL('./fixtures/learn-metrics.jsonl', import.meta.url), 'utf8');
 const runs = readFileSync(new URL('./fixtures/learn-runs.jsonl', import.meta.url), 'utf8');
@@ -396,6 +399,64 @@ test('model-free journal normalization preserves large counts and rejects invali
   }
   await assert.rejects(recordRun({ session: 'unknown-model', model: 'unknown' }, { cwd, env: {} }),
     /Invalid AI-Run model/);
+});
+
+test('journals the same live 100/40 metrics object and omits missing usage despite stale session fields', async (t) => {
+  const secret = 'test-only-llm-secret';
+  for (const usage of [{ prompt_tokens: 100, completion_tokens: 40 }, undefined]) {
+    const cwd = fixture(t, { learning: false });
+    const configured = parseConfig(readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8')
+      .replace('base_url: ""', 'base_url: http://localhost:8000/v1')
+      .replace('model: ""', 'model: request-alias'));
+    const config = { ...configured, llm: { ...configured.llm,
+      provider: 'vllm', effort: 'h', api_key_optional: true } };
+    const env = { AI_MODEL: 'GPT-6.1-Sol', AI_PROVIDER: 'github-copilot', AI_EFFORT: 'x',
+      AI_CONTEXT_USED: '1000000', AI_CONTEXT_MAX: '1000000', AI_CONTEXT_OUT: '999',
+      [config.llm.api_key_env]: secret };
+    const chat = createBuiltinChat(config, { env, fetchImpl: async () => Response.json({
+      model: 'actual-served-model', ...(usage ? { usage } : {}),
+      choices: [{ message: { role: 'assistant', content: 'test-only-private-response' } }],
+    }) });
+    await chat({ messages: [{ role: 'user', content: 'test-only-private-prompt' }] });
+    const run = buildRun({ config, response: chat.lastResponse, session: 'live-coder', task: 'issue-42', env });
+    const stored = await recordRun({
+      session: 'live-coder', task: 'issue-42', model: 'GPT-6.1-Sol', provider: 'github-copilot',
+      effort: 'x', context_used: 1000000, context_max: 1000000, context_out: 999,
+      prompt_tokens: 1000000, completion_tokens: 999,
+    }, { cwd, env, run, createDirectory: true });
+    assert.deepEqual(stored, run.metrics);
+    assert.deepEqual(loadLearning({ cwd }).runs, [run.metrics]);
+    assert.equal(stored.model, 'actual-served-model');
+    assert.equal(stored.provider, 'vllm');
+    assert.equal(Object.hasOwn(stored, 'context_max'), false);
+    if (usage) {
+      assert.equal(stored.prompt_tokens, 100);
+      assert.equal(stored.completion_tokens, 40);
+    } else {
+      for (const field of ['prompt_tokens', 'completion_tokens', 'context_used', 'context_out']) {
+        assert.equal(Object.hasOwn(stored, field), false);
+      }
+    }
+    const raw = readFileSync(join(cwd, '.roster', 'runs', 'runs.jsonl'), 'utf8');
+    for (const sensitive of [secret, 'test-only-private-prompt', 'test-only-private-response', '1000000']) {
+      assert.ok(!raw.includes(sensitive));
+    }
+    await assert.rejects(recordRun({ session: 'different-session', task: 'issue-42' }, {
+      cwd, env, run,
+    }), /session\/task cannot be changed/);
+    assert.equal(loadLearning({ cwd }).runs.length, 1);
+  }
+});
+
+test('journal rejects invalid canonical token counts and inconsistent legacy aliases', async (t) => {
+  const cwd = fixture(t, { learning: false });
+  for (const fields of [{ prompt_tokens: -1 }, { completion_tokens: '40' },
+    { prompt_tokens: 100, context_used: 1000000 }]) {
+    await assert.rejects(recordRun({ session: 'bad-count', ...fields }, {
+      cwd, env: {}, createDirectory: true,
+    }), /safe integer|aliases must match/);
+  }
+  assert.deepEqual(loadLearning({ cwd }).runs, []);
 });
 
 test('appends a complete JSONL line to a file with no final newline', async (t) => {

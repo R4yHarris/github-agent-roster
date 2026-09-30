@@ -149,7 +149,7 @@ export async function writeResult({ worktree, result, excellence, env, apiKeyEnv
   const body = `# Result\n\n## Verification\n\nChecks: ${excellence.pass ? 'PASS' : 'FAIL'}\n` +
     (excellence.pass ? '- Operational checks passed.\n'
       : excellence.reasons.map((reason, index) => `- ${index === 0 ? 'First failure: ' : ''}${reason}`).join('\n') + '\n') +
-    `- ${tests}\n\n## Run\n\nModel: ${result.model}\nTool-loop turns: ${result.turns}\n` +
+    `- ${tests}\n\n## Run\n\nModel: ${run?.metrics?.model ?? result.model}\nTool-loop turns: ${result.turns}\n` +
     `Research turns: ${result.research?.turns ?? 0}\n` +
     (result.stages ? `Stages: ${result.stages.join(' -> ')} -> result\n` : '') +
     (run ? `AI-Run: ${run.line}\n` : result.mode === 'stub'

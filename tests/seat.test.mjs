@@ -136,7 +136,8 @@ test('configured seat respects the task model and materializes artifacts before 
   assert.equal(result.model, 'task-model');
   assert.equal(result.excellence.pass, true);
   assert.match(result.run.line, /task-model@/);
-  assert.equal(result.run.env.AI_CONTEXT_USED, '6');
+  assert.equal(result.run.env.AI_CONTEXT_USED, '3');
+  assert.deepEqual(result.usage, { prompt_tokens: 6, completion_tokens: 3 });
   assert.equal(result.turns, 2);
   assert.equal(result.research.turns, 1);
   assert.equal(JSON.parse(readFileSync(memoryPath, 'utf8')).tests, 'node --test exited 0');
