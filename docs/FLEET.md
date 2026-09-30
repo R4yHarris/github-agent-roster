@@ -60,6 +60,8 @@ unknown capacity; other catalog profiles require a positive context limit.
 No capacity is guessed from a model name. Config and fleet are prepared
 before replacement and saved together with rollback on write failure.
 Declining Continue or final confirmation writes neither file.
+Enter accepts each bracket default: Continue `[yes]` proceeds, and the final
+write confirmation `[yes]` saves the default profile without retyping yes.
 
 ## Fleet CLI
 

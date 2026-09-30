@@ -118,6 +118,79 @@ for (const platform of ['win32', 'linux', 'darwin']) {
   });
 }
 
+test('simulated Enter accepts bracket defaults including Continue and writes the default profile', async (t) => {
+  for (const blank of ['', ' \t ']) {
+    for (const advanced of [false, true]) {
+      const options = fixture(t);
+      const prompts = [];
+      const result = await runOnboard({
+        ...options, fetchImpl: models('served-model'),
+        question: async (prompt) => {
+          prompts.push(prompt);
+          return advanced && prompt === 'Show advanced settings? [no] ' ? 'yes' : blank;
+        },
+      });
+      assert.equal(result.saved, true);
+      assert.equal(result.config.llm.base_url, 'http://127.0.0.1:8000/v1');
+      assert.equal(result.config.llm.model, 'served-model');
+      assert.equal(result.config.llm.context_max, 0);
+      assert.equal(result.config.publish.enabled, true);
+      assert.equal(result.config.review.required, true);
+      assert.equal(result.config.tools.run_test, true);
+      assert.equal(result.config.tools.internet, advanced);
+      assert.equal(result.config.loop.turns, 12);
+      assert.equal(result.config.context.budget, 8000);
+      assert.equal(prompts.filter((prompt) =>
+        prompt === 'Add more endpoints later with roster fleet add. Continue? [yes] ').length, 1);
+      assert.equal(prompts.filter((prompt) => prompt === 'Confirm write .roster/config.yml? [yes] ').length, 1);
+      assert.equal(prompts.some((prompt) => prompt.startsWith('Max tool turns')), advanced);
+      assert.deepEqual((await loadFleet({ cwd: options.cwd })).profiles, [{
+        id: 'default', base_url: 'http://127.0.0.1:8000/v1', model: 'served-model',
+        provider: 'vllm', context_max: 0, concurrency: 1, hardware: 'unspecified',
+        notes: 'Default endpoint selected during onboarding.',
+      }]);
+      assert.doesNotMatch(options.output.text, /Please answer yes or no|Enter an integer|Enter a listed model/);
+    }
+  }
+});
+
+test('invalid nonempty yes/no input retries but Enter then accepts Continue yes', async (t) => {
+  const options = fixture(t);
+  let continueQuestions = 0;
+  const result = await runOnboard({
+    ...options, fetchImpl: models('served-model'), question: async (prompt) => {
+      if (prompt === 'Add more endpoints later with roster fleet add. Continue? [yes] ') {
+        continueQuestions += 1;
+        if (continueQuestions === 1) return 'maybe';
+      }
+      return '';
+    },
+  });
+  assert.equal(result.saved, true);
+  assert.equal(continueQuestions, 2);
+  assert.equal((options.output.text.match(/Please answer yes or no/g) ?? []).length, 1);
+  assert.equal((await loadFleet({ cwd: options.cwd })).profiles[0].id, 'default');
+});
+
+test('required model input has no bracket default when discovery fails', async (t) => {
+  const options = fixture(t);
+  let modelQuestions = 0;
+  const result = await runOnboard({
+    ...options, fetchImpl: async () => new Response('', { status: 503 }),
+    question: async (prompt) => {
+      if (prompt === 'Model ID [required]: ') {
+        modelQuestions += 1;
+        return modelQuestions === 1 ? '' : 'operator-model';
+      }
+      return '';
+    },
+  });
+  assert.equal(modelQuestions, 2);
+  assert.equal(result.saved, true);
+  assert.equal(result.config.llm.model, 'operator-model');
+  assert.match(options.output.text, /Enter the actual single-line served model ID/);
+});
+
 test('SGLang max_model_len sets the selected model context_max without asking for tokens', async (t) => {
   const options = fixture(t, ['', '2', 'no', '', '', '', ''], 16384);
   let requests = 0;
@@ -447,8 +520,8 @@ test('non-TTY onboard prints the required message and exits 2 without writing or
   assert.deepEqual(readdirSync(options.cwd), []);
 });
 
-test('real readline TTY handles answers and Ctrl+C without an injected question function', async (t) => {
-  for (const cancel of [false, true]) {
+test('real readline TTY accepts LF/CRLF Enter defaults and Ctrl+C without an injected question function', async (t) => {
+  for (const [cancel, lineEnding] of [[false, '\n'], [false, '\r\n'], [true, '\n']]) {
     const options = fixture(t);
     const input = new PassThrough();
     input.isTTY = true;
@@ -486,13 +559,16 @@ test('real readline TTY handles answers and Ctrl+C without an injected question 
         assert.match(text, /Onboarding cancelled/);
       } else {
         for (const prompt of ['vLLM base URL [', 'Select a model [', 'Model context tokens',
-          'Add more endpoints later with roster fleet add. Continue?', 'Allow publish through GitHub App?',
+          'Add more endpoints later with roster fleet add. Continue? [yes]', 'Allow publish through GitHub App?',
           'Require reviewer before publish?', 'Allow run_test?', 'Show advanced settings?', 'Confirm write .roster/config.yml?']) {
           await waitFor(prompt);
-          input.write(prompt === 'Allow publish through GitHub App?' ? 'no\n' : '\n');
+          input.write((prompt === 'Allow publish through GitHub App?' ? 'no' : '') + lineEnding);
         }
         assert.equal((await done).exitCode, 0);
         assert.match(text, /Saved private config/);
+        assert.equal((await loadFleet({ cwd: options.cwd })).profiles[0].id, 'default');
+        assert.equal((await loadFleet({ cwd: options.cwd })).profiles[0].model, 'served-model');
+        assert.doesNotMatch(text, /Please answer yes or no/);
       }
     } finally {
       input.destroy();
