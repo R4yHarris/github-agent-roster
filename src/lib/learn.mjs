@@ -10,7 +10,7 @@ export const VERDICTS = ['accept', 'reject', 'rework'];
 export const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 export const IDENTIFIER = /^(?!-$)[A-Za-z0-9._-]{1,64}$/;
 const RUN_FIELDS = [
-  'sha', 'session', 'task', 'task_class', 'model', 'effort',
+  'sha', 'session', 'task', 'task_class', 'provider', 'model', 'effort',
   'context_used', 'context_max', 'context_out', 'excellence', 'defects',
 ];
 
@@ -70,6 +70,10 @@ function validateLocalRun(record, source) {
   if (record.model != null &&
       (typeof record.model !== 'string' || !record.model || /\s/.test(record.model))) {
     throw new Error(`${source}: model must be a nonempty name without whitespace`);
+  }
+  if (record.provider != null &&
+      !['vllm', 'github-copilot', 'anthropic', 'openai', 'local', 'other'].includes(record.provider)) {
+    throw new Error(`${source}: provider must name a supported model backend`);
   }
   if (record.effort != null && !EFFORTS.includes(record.effort)) {
     throw new Error(`${source}: effort must be l, m, h, x, or null`);
@@ -219,9 +223,12 @@ export async function recordRun(record, {
   const model = record.model ?? env.AI_MODEL;
   // Model-free local journals retain partial evidence without packing a fabricated AI-Run.
   const metadata = model ? parseAgentRun(packAgentRun({
-    ...env, AI_MODEL: model, AI_SESSION: record.session ?? '', AI_TASK: record.task ?? '',
+    ...env, AI_PROVIDER: env.AI_PROVIDER === 'vllm' ? 'local' : env.AI_PROVIDER,
+    AI_MODEL: model, AI_SESSION: record.session ?? '', AI_TASK: record.task ?? '',
   }, model)) : partialRunMetadata(env);
-  const supplied = { ...metadata, ...record };
+  const supplied = {
+    ...metadata, ...(model && env.AI_PROVIDER === 'vllm' ? { provider: 'vllm' } : {}), ...record,
+  };
   const run = Object.fromEntries(RUN_FIELDS
     .filter((field) => supplied[field] != null)
     .map((field) => [field, supplied[field]]));
@@ -299,7 +306,11 @@ export function joinLearning(exported, local, evaluations, includeUnpublished = 
         const failure = reportFailed(run) ? run.excellence
           : reportFailed(entry.record) ? entry.record.excellence : undefined;
         const defects = mergeDefects(entry.record, run);
+        const vllm = run.provider === 'vllm' || entry.record.provider === 'vllm';
         entry.record = { ...entry.record, ...knownFields(run), ...knownFields(entry.git ?? {}) };
+        if (vllm && (!entry.git?.provider || entry.git.provider === 'local')) {
+          entry.record.provider = 'vllm';
+        }
         if (failure !== undefined) entry.record.excellence = failure;
         if (defects.length) entry.record.defects = defects;
       }

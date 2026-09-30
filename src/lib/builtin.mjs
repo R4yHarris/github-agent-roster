@@ -102,6 +102,7 @@ export async function prepareBuiltinPublication(run, {
     await recordRun({
       task: run.task, session: run.runs.coder.env.AI_SESSION,
       task_class: run.planner.metadata?.task_class,
+      provider: run.runs.coder.provider,
       ...excellenceFields(excellence, { config, env }),
     }, {
       cwd: run.repoRoot ?? run.worktreePath, env: run.runs.coder.env,
@@ -136,6 +137,7 @@ export async function runBuiltinTask({
       'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH', 'GH_TOKEN', 'GITHUB_TOKEN']) delete metricEnv[name];
     await recordRun({
       task, session, task_class: result.taskMetadata?.task_class,
+      provider: result.run?.provider,
       ...excellenceFields(result.excellence, { config, env }),
     }, { cwd: worktreePath, env: { ...metricEnv, ...result.run?.env } });
   };
@@ -239,7 +241,7 @@ export async function runBuiltinIssue(issueNumber, {
     'GH_TOKEN', 'GITHUB_TOKEN']) delete metricEnv[name];
   const taskClass = planner.metadata.task_class;
   const recordSeat = async (session, run, excellence) => recordRun({
-    session, task: prepared.task, task_class: taskClass,
+    session, task: prepared.task, task_class: taskClass, provider: run?.provider,
     ...(excellence ? excellenceFields(excellence, { config, env }) : {}),
   }, { cwd: prepared.repoRoot, env: { ...metricEnv, ...run?.env }, createDirectory: true });
   const plannerRun = activeConfig.llm.base_url ? buildRun({

@@ -22,6 +22,7 @@ export async function runCoder({
   let context;
   let research;
   let baseline;
+  let verifiedSnapshot;
   let metadata;
   let tests;
   let result = {
@@ -67,7 +68,17 @@ export async function runCoder({
         return tests;
       },
     };
-    result = await runLoop({ config, context, tools: trackedTools, fetchImpl, env, vault });
+    result = await runLoop({
+      config, context, tools: trackedTools, fetchImpl, env, vault,
+      verify: async (candidate) => {
+        const evidence = await checkExcellence({
+          worktree, task: context.task, result: candidate, baseline, memoryPath,
+          env, apiKeyEnv: config.llm.api_key_env,
+        });
+        if (evidence.pass) verifiedSnapshot = evidence.snapshot;
+        return evidence;
+      },
+    });
     stages.push('tool_loop');
     result = { ...result, tests: result.tests ?? tests,
       usage: research.turns ? mergeUsage(research.usage, result.usage) : result.usage };
@@ -94,7 +105,8 @@ export async function runCoder({
   let excellence;
   try {
     excellence = context ? await checkExcellence({
-      worktree, task: context.task, result, baseline, memoryPath, env, apiKeyEnv: config.llm.api_key_env,
+      worktree, task: context.task, result, baseline, verifiedSnapshot, memoryPath,
+      env, apiKeyEnv: config.llm.api_key_env,
     }) : { pass: false, reasons: [result.error.message], files: [], model: result.model, turns: result.turns };
   } catch (error) {
     if (!(error instanceof Error)) throw error;

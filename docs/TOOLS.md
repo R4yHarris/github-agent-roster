@@ -18,10 +18,21 @@ File paths must be relative to the issue worktree. Absolute paths, path
 escapes, symlinked components, and paths resolving outside the worktree
 fail rather than being followed. Ambiguous Windows components (trailing
 dots/spaces) and alternate data streams are refused on every platform.
+`write_file` checks existing path components before creating missing
+parent directories, so a denied symlinked parent does not create
+directories outside the worktree.
 `write_file` also requires an exact file
 or directory pattern under `## Files allowed` in the generated
 [`TASK.md`](../templates/sdlc/TASK.md); a broad pattern never overrides
 the denylist.
+For a named vLLM profile the example endpoint is
+`http://127.0.0.1:8000/v1`; the coder POSTs to `/chat/completions`
+with only the selected five function tools. Its bounded context pack
+contains the principal, TASK.md, AGENTS.md, requested skill excerpts,
+up to the last 20 memory entries, and allowed paths. With an empty
+`llm.base_url` it uses the deterministic stub: no model request, tool
+calls, tests, or fabricated code diff, and RESULT.md reports that checks
+were not run.
 
 All file tools deny `.env`, `.env.*`, and `*.env` anywhere, `*.pem`, vault
 storage under `.roster/vault`, Git metadata,
@@ -55,6 +66,16 @@ error. Final verification must pass before a configured run reports
 success or publishes. The [excellence gate](EXCELLENCE.md) verifies actual
 diff paths and secret checks before RESULT.md and again before publication;
 a test process cannot bypass those checks by editing outside task scope.
+After a final summary, the configured coder runs final tests and checks
+excellence before ending its loop. Failed final tests return redacted,
+bounded diagnostics for another tool turn while the configured turn
+budget remains. An unsafe path or detected secret stops immediately;
+a summary alone is never a passing gate. The harness checks the verified
+worktree snapshot again after recording memory. Successful model and
+reported usage feed the run journal and contracts-compatible AI-Run;
+vLLM's journal provider is `vllm` but its AI-Run provider is `local`,
+while an explicitly identified GitHub Copilot endpoint uses
+`github-copilot` for both.
 Tests themselves execute project code; these
 application-level guards are **not** an OS sandbox. See the
 [threat model](THREAT_MODEL.md) for deployment boundaries.

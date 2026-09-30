@@ -24,7 +24,15 @@ cannot publish. GHCP sessions set `AI_MODEL=GPT-6-Sol`.
 
 The pinned contracts `v0.2.1` schema does **not** accept `AI_PROVIDER=vllm`.
 Roster encodes vLLM as its supported `local` provider (`openai` for the explicit
-OpenAI profile), without modifying the submodule. `AI_MODEL_VERSION` is the
+OpenAI profile), without modifying the submodule. The local run journal
+retains the actual `provider: "vllm"` for the named vLLM profile (or
+an explicitly supplied `AI_PROVIDER=vllm`), while the compact
+AI-Run and published trailer use `local`. With no selected profile,
+`AI_PROVIDER=github-copilot` is carried through to both the journal
+and AI-Run; a named profile takes precedence over an inherited
+provider environment value. Model IDs and reported usage counts
+come from the completed planner/coder turns, never an estimate.
+`AI_MODEL_VERSION` is the
 known environment value or `-`; `AI_EFFORT` comes from config. Builtin sessions
 are `roster-N-planner` and `roster-N-coder`, with `AI_TASK=issue-N`.
 The printed manual publication instructions include the coder's environment
