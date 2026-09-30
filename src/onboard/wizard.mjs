@@ -44,7 +44,7 @@ export async function probeModels(baseUrl, {
   const deadline = new Promise((_, reject) => {
     timer = schedule(() => {
       controller.abort();
-      reject(new ModelProbeError('the models request timed out after 5 seconds'));
+      reject(new ModelProbeError('timeout'));
     }, probeTimeoutMs);
   });
   const request = async () => {
@@ -54,17 +54,23 @@ export async function probeModels(baseUrl, {
     });
     if (!Number.isInteger(response.status) || response.status < 200 || response.status >= 300) {
       throw new ModelProbeError(Number.isInteger(response.status)
-        ? `the models endpoint returned HTTP ${response.status}` : 'the models endpoint returned an invalid status');
+        ? `HTTP ${response.status}` : 'invalid response');
     }
-    const payload = await response.json();
+    let payload;
+    try {
+      payload = await response.json();
+    } catch (error) {
+      if (!(error instanceof Error)) throw error;
+      throw new ModelProbeError('invalid response');
+    }
     if (!Array.isArray(payload?.data) || !payload.data.length) {
-      throw new ModelProbeError('the models response has no data[].id entries');
+      throw new ModelProbeError('invalid response');
     }
     try {
       return [...new Set(payload.data.map((entry) => modelId(entry?.id, env, apiKeyEnv)))];
     } catch (error) {
       if (!(error instanceof Error)) throw error;
-      throw new ModelProbeError('the models response contains invalid or secret-like model IDs');
+      throw new ModelProbeError('invalid response');
     }
   };
   try {
@@ -72,7 +78,8 @@ export async function probeModels(baseUrl, {
   } catch (error) {
     if (error instanceof ModelProbeError) throw error;
     if (!(error instanceof Error)) throw error;
-    throw new ModelProbeError('the models request failed; check the endpoint and connectivity');
+    throw new ModelProbeError(error.code === 'ECONNREFUSED' || error.cause?.code === 'ECONNREFUSED'
+      ? 'refused' : 'network');
   } finally {
     cancel(timer);
     controller.abort();
@@ -193,6 +200,7 @@ export async function runOnboard({
       return { exitCode: 0, saved: false };
     }
     output.write('\n2. LLM endpoint\n');
+    output.write('WSL talking to a Windows-hosted server may need the Windows host IP, not localhost.\n');
     let baseUrl;
     for (;;) {
       const value = await answer(`vLLM base URL [${defaultBaseUrl}]: `) || defaultBaseUrl;
@@ -212,7 +220,7 @@ export async function runOnboard({
       models = await probeModels(baseUrl, { fetchImpl, env, apiKeyEnv });
     } catch (error) {
       if (!(error instanceof ModelProbeError)) throw error;
-      output.write(`Model probe failed: ${error.message}. Enter the actual served model ID.\n`);
+      output.write(`Model probe failed: ${error.message}\n`);
     }
     let model;
     if (models) {
