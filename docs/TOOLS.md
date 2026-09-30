@@ -77,6 +77,10 @@ as task context; both reads and writes are denied.
 The human evaluation ledger `.roster/evals.jsonl` and seat notebooks under
 `.roster/memory` are also write-protected,
 even when TASK.md grants broad write scope.
+Live `.roster/runs/*.log` files are managed and write-protected too, and their
+append-only activity is excluded from verification and publication diffs.
+Run logging records only the tool name and requested path, never arguments
+containing file bodies, search queries, tool results, or test output.
 
 `search_text` is a case-sensitive, fixed-string grep, not a regex or a shell
 command. It walks regular worktree files in sorted directory order, uses

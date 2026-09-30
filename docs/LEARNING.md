@@ -37,6 +37,12 @@ it records nothing and does not create `.roster`. Failed setup never records a s
 Recording failures are reported explicitly, including the already-created
 worktree path; inspect that worktree rather than blindly rerunning setup.
 
+Live `.log` files are always written by builtin runs, independently of this
+JSONL opt-in. A standalone run records JSONL only when the runs directory was
+already empty (explicit opt-in), or contained JSONL records, before it started.
+A directory containing only automatically created logs does not enable
+standalone metric recording. Stats and recommendations ignore those logs.
+
 For the default `roster run --issue N`, setup adds no preparation record.
 It records one run per completed seat (`roster-N-planner`, then
 `roster-N-coder`, then `roster-N-reviewer`) with only that seat's reported metrics.

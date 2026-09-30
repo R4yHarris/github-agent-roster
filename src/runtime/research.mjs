@@ -51,7 +51,7 @@ async function selectFiles(allowed, tools) {
   return { files: [...files], gaps, truncated };
 }
 
-export async function runResearch({ worktree, tools, expectedTask, config, fetchImpl, env, vault }) {
+export async function runResearch({ worktree, tools, expectedTask, config, fetchImpl, env, vault, onEvent }) {
   if (typeof tools?.read_file !== 'function' || typeof tools?.list_dir !== 'function') {
     throw new TypeError('Research requires read_file and list_dir tools');
   }
@@ -104,7 +104,7 @@ export async function runResearch({ worktree, tools, expectedTask, config, fetch
       let summary;
       turns = 1;
       try {
-        const chat = createBuiltinChat(config, { fetchImpl, env, vault });
+        const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent });
         const response = await chat({ messages: [
           { role: 'system', content: instructions },
           { role: 'user', content: boundedText(report) },
@@ -120,6 +120,7 @@ export async function runResearch({ worktree, tools, expectedTask, config, fetch
         summaryStatus = 'complete';
       } catch (error) {
         if (!(error instanceof Error)) throw error;
+        if (error.code === 'ROSTER_RUN_LOG') throw error;
         summaryStatus = 'failed';
         warning = 'Optional LLM research summary failed; the read-only inventory was retained.';
       }

@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { parseConfig } from '../src/lib/config.mjs';
 import { readStatus, formatStatus } from '../src/lib/status.mjs';
 import { renderAssignment } from '../src/planner/stub.mjs';
+import { createRunLog } from '../src/lib/run-log.mjs';
 
 const config = parseConfig(readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8'));
 
@@ -72,7 +73,24 @@ test('offline status reports missing cache and unknown PR instead of claiming th
     runCommand: () => assert.fail('Offline status must not fetch GitHub data'),
   });
   assert.equal(formatStatus(status),
-    `Issue: #42 (not cached offline)\nOpen PR: unknown (offline)\nWorktree: ${worktreePath} (missing)\n`);
+    `Issue: #42 (not cached offline)\nOpen PR: unknown (offline)\nWorktree: ${worktreePath} (missing)\n` +
+    'Last seat: unknown (no run log)\nLast log line: none\n');
+});
+
+test('offline status shows active seat activity while the run has not yet finished', async (t) => {
+  const { repoRoot } = fixture(t);
+  const logger = await createRunLog({ repoRoot, session: 'roster-42-coder', errorOutput: { write() {} }, env: {} });
+  await logger.seat('coder', 'roster-42-coder', config, async (onEvent) => {
+    await onEvent({ type: 'tool', name: 'write_file', path: 'README.md' });
+    const status = await readStatus({
+      issue: 42, repoRoot, config, offline: true, env: {},
+      runCommand: () => assert.fail('Offline activity must be local only'),
+    });
+    assert.equal(status.runLog.lastSeat, 'coder');
+    assert.match(status.runLog.lastLine, /seat coder tool write_file path="README\.md"$/);
+    assert.match(formatStatus(status), /Last seat: coder\nLast log line: .+ write_file/);
+    return { mode: 'stub' };
+  });
 });
 
 test('invalid cached metadata and ambiguous issue selection fail without GitHub access', async (t) => {

@@ -1,7 +1,7 @@
 import { createChat } from '../llm/openai.mjs';
 
 export function createBuiltinChat(config, {
-  fetchImpl = globalThis.fetch, env = process.env, vault,
+  fetchImpl = globalThis.fetch, env = process.env, vault, onEvent,
 } = {}) {
   return createChat({ llm: {
     base_url: config.llm.base_url,
@@ -9,11 +9,11 @@ export function createBuiltinChat(config, {
     api_key_name: config.llm.api_key_env,
     api_key_optional: config.llm.api_key_optional ?? true,
     timeout_ms: 60_000,
-  } }, { fetch: fetchImpl, env, vault });
+  } }, { fetch: fetchImpl, env, vault, onEvent });
 }
 
-export async function chatCompletion({ config, messages, tools, env, fetchImpl, vault }) {
-  const chat = createBuiltinChat(config, { fetchImpl, env, vault });
+export async function chatCompletion({ config, messages, tools, env, fetchImpl, vault, onEvent }) {
+  const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent });
   if (chat === null) throw new Error('An LLM base_url is required for chat completion');
   const response = await chat({ messages, ...(tools ? { tools } : {}) });
   return {

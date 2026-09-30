@@ -6,6 +6,7 @@ import { inspect } from 'node:util';
 import { parseConfig } from '../src/lib/config.mjs';
 import { createBuiltinChat } from '../src/lib/llm.mjs';
 import { createChat } from '../src/llm/openai.mjs';
+import { RunLogError } from '../src/lib/run-log.mjs';
 
 const secret = 'test-only-private-api-key';
 const messages = [{ role: 'user', content: 'test-only-private-prompt' }];
@@ -14,7 +15,7 @@ const completion = {
   usage: { prompt_tokens: 4, completion_tokens: 6, total_tokens: 10 },
 };
 
-function client(fetch, { llm = {}, env = {}, vault = { get: async () => undefined } } = {}) {
+function client(fetch, { llm = {}, env = {}, vault = { get: async () => undefined }, onEvent } = {}) {
   return createChat({
     llm: {
       base_url: 'http://127.0.0.1:8000/v1/',
@@ -22,7 +23,7 @@ function client(fetch, { llm = {}, env = {}, vault = { get: async () => undefine
       api_key_optional: true,
       ...llm,
     },
-  }, { fetch, env, vault });
+  }, { fetch, env, vault, onEvent });
 }
 
 function safeError(error, pattern) {
@@ -322,6 +323,53 @@ test('retains only the last successful response model and reported usage without
   assert.equal(snapshot.model, 'actual-served-model');
   await assert.rejects(chat({ messages }), (error) => safeError(error, /HTTP 500/));
   assert.deepEqual(chat.lastResponse, { model: 'next-request-model', usage: null });
+});
+
+test('live HTTP events expose only model, host, phase, and status without request/response content', async () => {
+  const events = [];
+  const chat = client(async () => {
+    assert.equal(events.at(-1).phase, 'start', 'The start event must be emitted before fetch');
+    return Response.json({ ...completion, model: 'actual-model' });
+  }, { llm: { base_url: 'http://localhost:8000/private/v1' },
+    env: { OPENAI_API_KEY: secret }, onEvent: async (event) => { events.push(event); } });
+  await chat({ messages });
+  assert.deepEqual(events, [
+    { type: 'model', model: 'local-test-model', host: 'localhost:8000' },
+    { type: 'http', phase: 'start' },
+    { type: 'model', model: 'actual-model', host: 'localhost:8000' },
+    { type: 'http', phase: 'ok', status: 200 },
+  ]);
+  for (const sensitive of [secret, messages[0].content, completion.choices[0].message.content, '/private/v1']) {
+    assert.ok(!JSON.stringify(events).includes(sensitive));
+  }
+});
+
+test('HTTP failures emit safe error classes rather than network or upstream error messages', async () => {
+  for (const [fetchImpl, expected] of [
+    [async () => new Response('PRIVATE_UPSTREAM_BODY', { status: 503 }), 'http'],
+    [async () => { throw new Error('PRIVATE_NETWORK_PROMPT'); }, 'network'],
+    [async () => new Response('PRIVATE_INVALID_JSON'), 'response'],
+  ]) {
+    const events = [];
+    const chat = client(fetchImpl, { onEvent: async (event) => { events.push(event); } });
+    await assert.rejects(chat({ messages }));
+    assert.equal(events.at(-1).phase, 'error');
+    assert.equal(events.at(-1).errorClass, expected);
+    assert.doesNotMatch(JSON.stringify(events), /PRIVATE_|test-only-private-prompt/);
+  }
+  const events = [];
+  const chat = client(async () => new Promise(() => {}), {
+    llm: { timeout_ms: 25 }, onEvent: async (event) => { events.push(event); },
+  });
+  await assert.rejects(chat({ messages }), /timed out/);
+  assert.equal(events.at(-1).errorClass, 'timeout');
+});
+
+test('live log failures propagate instead of being mislabeled as HTTP failures', async () => {
+  const chat = client(() => assert.fail('A failed logger must stop the request'), {
+    onEvent: async () => { throw new RunLogError('Could not persist log'); },
+  });
+  await assert.rejects(chat({ messages }), (error) => error instanceof RunLogError && /persist log/.test(error.message));
 });
 
 test('invalid returned models fail safely rather than falling back to the request model', async () => {

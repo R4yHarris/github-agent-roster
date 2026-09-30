@@ -7,6 +7,7 @@ import { loadConfig } from './config.mjs';
 import { githubRepository } from './issue.mjs';
 import { repositoryRoot } from './learn.mjs';
 import { ensureLocalPath } from './paths.mjs';
+import { readLastRunLog } from './run-log.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
 const execFileAsync = promisify(execFile);
@@ -54,6 +55,7 @@ export async function readStatus({
   repoRoot,
   config = loadConfig({ repoRoot: rosterRoot }),
   runCommand = execute,
+  env = process.env,
 } = {}) {
   if (typeof offline !== 'boolean') throw new TypeError('offline must be a boolean');
   const root = repoRoot === undefined ? repositoryRoot(cwd) : path.resolve(repoRoot);
@@ -92,10 +94,14 @@ export async function readStatus({
     if (error.code !== 'ENOENT') throw error;
   }
   const localIssue = worktreeExists ? await cachedIssue(worktreePath, number) : null;
+  const runLog = await readLastRunLog({
+    repoRoot: root, session: `roster-${number}-coder`, env, apiKeyEnv: config.llm.api_key_env,
+  });
   if (offline) {
     return {
       issue: localIssue ?? { number, title: null, url: null, state: 'UNKNOWN' },
       openPr: undefined, worktreePath, worktreeExists, offline: true,
+      ...(runLog ? { runLog } : {}),
     };
   }
   const origin = await runCommand('git', ['remote', 'get-url', 'origin'], root);
@@ -135,7 +141,8 @@ export async function readStatus({
     pr.url.toLowerCase() !== `https://github.com/${repository}/pull/${pr.number}`.toLowerCase())) {
     throw new Error(`gh pr list returned invalid open PRs for issue #${number}`);
   }
-  return { issue, openPr: prs[0] ?? null, worktreePath, worktreeExists, offline: false };
+  return { issue, openPr: prs[0] ?? null, worktreePath, worktreeExists, offline: false,
+    ...(runLog ? { runLog } : {}) };
 }
 
 export function formatStatus(status) {
@@ -148,5 +155,7 @@ export function formatStatus(status) {
   const pr = status.offline ? 'unknown (offline)' : status.openPr
     ? `#${status.openPr.number} ${status.openPr.title} ${status.openPr.url}` : 'none';
   return `Issue: ${issue}\nOpen PR: ${pr}\n` +
-    `Worktree: ${status.worktreePath} (${status.worktreeExists ? 'present' : 'missing'})\n`;
+    `Worktree: ${status.worktreePath} (${status.worktreeExists ? 'present' : 'missing'})\n` +
+    `Last seat: ${status.runLog?.lastSeat ?? 'unknown (no run log)'}\n` +
+    `Last log line: ${status.runLog?.lastLine ?? 'none'}\n`;
 }

@@ -22,6 +22,7 @@ import { loadMetrics } from './metrics.mjs';
 import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
 import { buildPublishMessage, formatPublishCommand, formatPublishEnvironment } from './publication.mjs';
 import { archiveRunArtifacts } from './run-artifacts.mjs';
+import { createRunLog } from './run-log.mjs';
 import { formatRoute, routeTask } from './route.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -129,7 +130,7 @@ export async function runBuiltinTask({
   cwd = process.cwd(), repoRoot = rosterRoot, config = loadConfig({ repoRoot, cwd }), env = process.env,
   task = env.AI_TASK || `local-${randomBytes(8).toString('hex')}`,
   session = env.AI_SESSION || `roster-${randomBytes(8).toString('hex')}-coder`,
-  log = console.log, fetchImpl, vault, runTestCommand,
+  log = console.log, errorOutput = process.stderr, fetchImpl, vault, runTestCommand,
 } = {}) {
   if (typeof task !== 'string' || !IDENTIFIER.test(task) ||
       typeof session !== 'string' || !IDENTIFIER.test(session)) {
@@ -138,10 +139,20 @@ export async function runBuiltinTask({
   resolveContractsPath({ repoRoot, cwd, env });
   const worktreePath = path.resolve(cwd);
   const reviewerSession = `roster-${randomBytes(8).toString('hex')}-reviewer`;
+  const existingRuns = await fs.readdir(path.join(worktreePath, '.roster', 'runs')).catch((error) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  const journalEnabled = existingRuns !== null &&
+    (!existingRuns.length || existingRuns.some((file) => file.endsWith('.jsonl')));
+  const liveLog = await createRunLog({
+    repoRoot: worktreePath, session, env, apiKeyEnv: config.llm.api_key_env, errorOutput,
+  });
   const metricEnv = { ...env };
   for (const name of [...RUN_ENV_NAMES, config.llm.api_key_env,
     'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH', 'GH_TOKEN', 'GITHUB_TOKEN']) delete metricEnv[name];
   const record = async (result) => {
+    if (!journalEnabled) return;
     await recordRun({
       task, session, task_class: result.taskMetadata?.task_class,
       provider: result.run?.provider,
@@ -151,22 +162,24 @@ export async function runBuiltinTask({
   const reviewSeat = async (result) => {
     const reviewConfig = { ...config, llm: { ...config.llm,
       model: result.mode === 'llm' ? result.model : config.llm.model } };
-    const review = await runReviewer({
+    const review = await liveLog.seat('reviewer', reviewerSession, reviewConfig, (onEvent) => runReviewer({
       worktree: worktreePath, repoRoot, config: reviewConfig, coderResult: result,
-      env, fetchImpl, vault,
-    });
+      env, fetchImpl, vault, onEvent,
+    }));
     const reviewRun = review.queried ? buildRun({
       config: reviewConfig, response: review.response, task, session: reviewerSession, env,
     }) : null;
-    await recordRun({ task, session: reviewerSession, provider: reviewRun?.provider }, {
+    if (journalEnabled) await recordRun({ task, session: reviewerSession, provider: reviewRun?.provider }, {
       cwd: worktreePath, env: { ...metricEnv, ...reviewRun?.env }, run: reviewRun,
     });
     return { review, reviewRun };
   };
   let result;
   try {
-    result = await runCoder({ worktree: worktreePath, repoRoot, config, env, task, session,
-      fetchImpl, vault, runTestCommand });
+    result = await liveLog.seat('coder', session, config, (onEvent) => runCoder({
+      worktree: worktreePath, repoRoot, config, env, task, session,
+      fetchImpl, vault, runTestCommand, onEvent,
+    }));
   } catch (error) {
     if (error instanceof Error && error.result) {
       await record(error.result);
@@ -177,13 +190,14 @@ export async function runBuiltinTask({
   await record(result);
   const { review, reviewRun } = await reviewSeat(result);
   log(`Worktree: ${worktreePath}\nTASK: ${path.join(worktreePath, 'TASK.md')}\n` +
+    `Live log: ${liveLog.path}\n` +
     `CONTEXT: ${result.contextPath}\nRESEARCH: ${result.researchPath}\nRESULT: ${result.resultPath}\n` +
     `REVIEW: ${review.reviewPath} (${review.verdict})\n` +
     `Mode: ${result.mode}\n` + (result.run ? `AI-Run: ${result.run.line}\n` : '') +
     (reviewRun ? `Reviewer AI-Run: ${reviewRun.line}\n` : '') +
     'Single coder task complete; publication remains an explicit reviewed App SDK handoff.');
   return { worktreePath, task, session, reviewerSession, result, review, run: result.run,
-    reviewerRun: reviewRun };
+    reviewerRun: reviewRun, logPath: liveLog.path, logSession: liveLog.session };
 }
 
 export async function runBuiltinIssue(issueNumber, {
@@ -196,6 +210,7 @@ export async function runBuiltinIssue(issueNumber, {
   autoModel = false,
   skipReview = false,
   log = console.log,
+  errorOutput = process.stderr,
   runCommand,
   fetchImpl,
   vault,
@@ -271,17 +286,21 @@ export async function runBuiltinIssue(issueNumber, {
     coder: prepared.session,
     reviewer: `roster-${prepared.issue.number}-reviewer`,
   };
+  const liveLog = await createRunLog({
+    repoRoot: prepared.repoRoot, session: prepared.session, env,
+    apiKeyEnv: activeConfig.llm.api_key_env, errorOutput, now,
+  });
   const metricEnv = { ...commandEnv };
   for (const name of [...RUN_ENV_NAMES, 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH',
     'GH_TOKEN', 'GITHUB_TOKEN']) delete metricEnv[name];
   let planner;
   try {
-    planner = await runPlanner({
+    planner = await liveLog.seat('planner', sessions.planner, activeConfig, (onEvent) => runPlanner({
       worktree: worktreePath, repoRoot, issue: prepared.issue, config: activeConfig,
       ask: prepared.ask, metadata: prepared.metadata ?? undefined, task: prepared.task,
       session: sessions.planner, fetchImpl, env, vault, learningRoot: prepared.repoRoot,
-      lockedModel: route?.profile.model,
-    });
+      lockedModel: route?.profile.model, onEvent,
+    }));
   } catch (error) {
     if (error instanceof Error && error.run) {
       await recordRun({ session: sessions.planner, task: prepared.task,
@@ -308,10 +327,10 @@ export async function runBuiltinIssue(issueNumber, {
     const reviewConfig = { ...coderConfig, llm: {
       ...coderConfig.llm, model: coderResult.mode === 'llm' ? coderResult.model : coderConfig.llm.model,
     } };
-    const review = await runReviewer({
+    const review = await liveLog.seat('reviewer', sessions.reviewer, reviewConfig, (onEvent) => runReviewer({
       worktree: worktreePath, repoRoot, config: reviewConfig,
-      coderResult, fetchImpl, env, vault,
-    });
+      coderResult, fetchImpl, env, vault, onEvent,
+    }));
     const reviewerRun = review.queried ? buildRun({
       config: reviewConfig, response: review.response, session: sessions.reviewer,
       task: prepared.task, env,
@@ -321,10 +340,10 @@ export async function runBuiltinIssue(issueNumber, {
   };
   let result;
   try {
-    result = await runCoder({
+    result = await liveLog.seat('coder', sessions.coder, coderConfig, (onEvent) => runCoder({
       worktree: worktreePath, repoRoot, config: coderConfig, task: prepared.task, session: sessions.coder,
-      fetchImpl, env, vault, runTestCommand, priorFeedback: planner.feedback?.context,
-    });
+      fetchImpl, env, vault, runTestCommand, priorFeedback: planner.feedback?.context, onEvent,
+    }));
   } catch (error) {
     if (error instanceof Error && error.result) {
       await recordSeat(sessions.coder, error.result.run, error.result.excellence);
@@ -350,6 +369,7 @@ export async function runBuiltinIssue(issueNumber, {
   const command = model && config.publish?.enabled !== false && (review.verdict === 'pass' || reviewBypass)
     ? formatPublishCommand({ message: publishMessage, model }) : null;
   log(`Worktree: ${worktreePath}\nAssignment: ${prepared.assignmentPath}\n` +
+    `Live log: ${liveLog.path}\n` +
     `RECIPE: ${planner.recipePath}\nTASK: ${planner.taskPath}\nESTIMATE: ${planner.estimatePath}\n` +
     `RESULT: ${result.resultPath}\nREVIEW: ${review.reviewPath} (${review.verdict})\n` +
     `Planner session: ${sessions.planner}\n` +
@@ -372,6 +392,7 @@ export async function runBuiltinIssue(issueNumber, {
     ...prepared, recipePath: planner.recipePath, taskPath: planner.taskPath,
     planner, result, review, sessions, runs, run: coderRun, command, autoRecommendation, route, archivePath,
     failed: Boolean(planner.error),
+    logPath: liveLog.path, logSession: liveLog.session,
   };
   if (publish && planner.error) log('Publication skipped: planning failed; inspect the stub and rerun the issue.');
   if (publish && !planner.error) {
