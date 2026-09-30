@@ -42,6 +42,30 @@ and verdict; [learning](docs/LEARNING.md) informs the [next task](docs/NEXT.md)
 with model capacity and redacted prior feedback. Zero defects is the target,
 not a claim inferred from passing tests.
 
+### First run
+
+From a clone initialized with its contracts submodule:
+
+```sh
+npm install -g .
+roster onboard
+roster doctor
+roster
+```
+
+Use Node 20+ and the global npm bin on PATH in the current terminal.
+Windows and WSL need separate Node installs. For another target project,
+run the last three commands from that project's worktree root after
+installation. The [complete onboarding path](docs/ONBOARDING.md) covers
+PowerShell, WSL, Linux, and macOS, including Windows-hosted or DGX vLLM.
+If doctor reports a blocker, the confirmed config stays saved; fix the
+required prerequisite and rerun doctor before attempting publication.
+
+Onboarding saves the real served model in `llm.model` for `roster run`
+against vLLM. User `AI_MODEL` identifies a GHCP publication model, not a
+replacement for the configured vLLM model. Internet research remains a
+stored-only Advanced preference, not an implemented network tool.
+
 The builtin planner, coder, and reviewer run in one issue worktree when a model endpoint
 and model are configured. The [single SWE seat stack](docs/SEAT.md) runs
 **principal -> context pack -> research -> skills -> tool loop -> memory ->
