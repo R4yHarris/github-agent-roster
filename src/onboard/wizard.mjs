@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
-import { parseConfig, readConfigFile, validateBaseUrl } from '../lib/config.mjs';
+import { formatConfig, parseConfig, readConfigFile, validateBaseUrl } from '../lib/config.mjs';
 import { checkDoctor, formatDoctor } from '../lib/doctor.mjs';
 import { formatFleet, normalizeFleetBaseUrl, parseFleet, validateFleet } from '../lib/fleet.mjs';
 import { ensurePrivateFilesIgnored, readPrivateFile, writePrivateDocuments } from '../lib/private-files.mjs';
@@ -96,13 +96,7 @@ function renderConfig(base, { baseUrl, model, contextMax, publish, internet, run
     tools: { ...(internet === undefined ? {} : { internet }), run_test: runTest },
     review: { required: reviewer }, loop: { turns }, context: { budget },
   };
-  const scalar = (value) => Array.isArray(value) ? `[${value.join(', ')}]`
-    : typeof value === 'string' ? JSON.stringify(value) : String(value);
-  const mapping = (values, indent = '') => Object.entries(values).map(([name, value]) =>
-    value && typeof value === 'object' && !Array.isArray(value)
-      ? `${indent}${name}:\n${mapping(value, `${indent}  `)}`
-      : `${indent}${name}: ${scalar(value)}\n`).join('');
-  return '# Private onboarding settings. No credentials belong in this file.\n' + mapping(config);
+  return formatConfig(config);
 }
 
 export async function runOnboard({

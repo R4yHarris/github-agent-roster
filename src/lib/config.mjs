@@ -317,6 +317,18 @@ export function readConfigFile(file) {
   }
 }
 
+export function formatConfig(config) {
+  const scalar = (value) => Array.isArray(value) ? `[${value.join(', ')}]`
+    : typeof value === 'string' ? JSON.stringify(value) : String(value);
+  const mapping = (values, indent = '') => Object.entries(values).map(([name, value]) =>
+    value && typeof value === 'object' && !Array.isArray(value)
+      ? `${indent}${name}:\n${mapping(value, `${indent}  `)}`
+      : `${indent}${name}: ${scalar(value)}\n`).join('');
+  const source = '# Private settings. No credentials belong in this file.\n' + mapping(config);
+  parseConfig(source);
+  return source;
+}
+
 export function resolveConfigRoot({ repoRoot = rosterRoot, cwd } = {}) {
   if (cwd !== undefined) {
     const project = resolveProjectRoot(cwd);

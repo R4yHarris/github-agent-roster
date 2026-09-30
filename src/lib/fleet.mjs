@@ -30,15 +30,20 @@ export function normalizeFleetBaseUrl(value) {
   return url.href;
 }
 
+export function validateFleetId(value) {
+  const id = text(value, 'id', { maximum: 64 });
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) {
+    throw new TypeError('Fleet id must be an opaque identifier of at most 64 characters');
+  }
+  return id;
+}
+
 export function validateFleetProfile(profile) {
   if (!isObject(profile) || required.some((field) => !Object.hasOwn(profile, field)) ||
       Object.keys(profile).some((field) => !fields.includes(field))) {
     throw new TypeError('Fleet profile must contain the documented fields');
   }
-  const id = text(profile.id, 'id', { maximum: 64 });
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(id)) {
-    throw new TypeError('Fleet id must be an opaque identifier of at most 64 characters');
-  }
+  const id = validateFleetId(profile.id);
   const model = resolvePublishModel({ env: { AI_MODEL: profile.model } });
   if (model === 'builtin-stub') throw new TypeError('Fleet model must be an actual served model');
   if (profile.provider !== 'vllm') throw new TypeError('Fleet provider must be vllm');
@@ -83,9 +88,22 @@ export function formatFleet(catalog) {
 }
 
 export function getFleetProfile(catalog, id) {
+  validateFleetId(id);
   const profile = catalog.profiles.find((item) => item.id === id);
   if (!profile) throw new Error('Fleet profile ID was not found in .roster/fleet.yml');
   return profile;
+}
+
+export function withFleetProfile(config, profile) {
+  const selected = validateFleetProfile(profile);
+  return {
+    ...config, llm: {
+      ...config.llm, profile: 'vllm-local', base_url: selected.base_url, model: selected.model,
+      provider: selected.provider, context_max: selected.context_max,
+      api_key_env: config.profiles['vllm-local'].api_key_env,
+      api_key_optional: config.llm.api_key_optional ?? config.profiles['vllm-local'].api_key_optional,
+    },
+  };
 }
 
 export async function loadFleet({ cwd = process.cwd(), repoRoot = resolveProjectRoot(cwd) } = {}) {

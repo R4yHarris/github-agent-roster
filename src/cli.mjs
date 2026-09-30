@@ -12,6 +12,7 @@ import { runDemo } from './lib/demo.mjs';
 import { checkDoctor, formatDoctor } from './lib/doctor.mjs';
 import { formatInit, initializeRoster } from './lib/init.mjs';
 import { runOnboard } from './onboard/wizard.mjs';
+import { runFleet } from './lib/fleet-cli.mjs';
 import { formatMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
 import { resolveContractsPath } from './lib/paths.mjs';
 import { formatStatus, readStatus } from './lib/status.mjs';
@@ -26,6 +27,11 @@ const help = `Usage:
   roster doctor
   roster init
   roster onboard
+  roster fleet list
+  roster fleet add --id NAME --base-url URL [--model MODEL] [--context N] [--concurrency N] [--hardware TEXT] [--task-class feat,fix,docs,test]
+  roster fleet probe ID [--set-model [MODEL]]
+  roster fleet default ID
+  roster fleet remove ID
   roster ask "..."
   roster run --issue N [--runtime builtin] [--seats planner,coder,reviewer] [--auto-model] [--publish] [--skip-review]
   roster run --seat coder --runtime builtin
@@ -110,6 +116,8 @@ async function main(args) {
     process.stdout.write(formatInit(await initializeRoster()));
   } else if (args.length === 1 && args[0] === 'onboard') {
     process.exitCode = (await runOnboard({ installationRoot: rosterRoot })).exitCode;
+  } else if (args[0] === 'fleet') {
+    await runFleet(args.slice(1), { installationRoot: rosterRoot });
   } else if (args[0] === 'prepare') {
     if (args.length !== 3 || args[1] !== '--issue') {
       throw new TypeError('Use roster prepare --issue N.');
