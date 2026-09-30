@@ -22,6 +22,14 @@ or `llm.context_max`; an absent or zero capacity stays unknown. Missing counts
 are omitted, not estimated as zero or 1,000,000. An explicitly reported zero
 is retained. Unknown slots are `-` in the compact line.
 
+The separate live `.roster/runs/<session>.log` is append-only operational
+activity, printed simultaneously to stderr. For an issue, one
+`roster-N-coder.log` contains all three seats; timestamps, mode, elapsed time,
+HTTP status/error classes, and tool/file names are metadata only. It stores no
+prompts, responses, file bodies, or credentials. Offline status shows its last
+seat and complete line. JSONL metrics/stats ignore `.log` files; a log is not
+an AI-Run token report or a human evaluation.
+
 The publisher derives `AI_PROVIDER`, `AI_MODEL`, `AI_EFFORT`,
 `AI_CONTEXT_USED`, `AI_CONTEXT_MAX`, `AI_CONTEXT_OUT`, `AI_SESSION`, and
 `AI_TASK` from the completed coder's metrics object, not process metadata

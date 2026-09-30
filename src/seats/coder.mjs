@@ -13,7 +13,7 @@ import { loadPrincipal } from './principal.mjs';
 
 export async function runCoder({
   worktree, repoRoot, config, task, session, fetchImpl, env = process.env, vault, runTestCommand,
-  priorFeedback = null,
+  priorFeedback = null, onEvent,
 }) {
   const stages = [];
   const memoryPath = seatMemoryPath({
@@ -48,9 +48,10 @@ export async function runCoder({
       worktree, allowedFiles: taskFilesAllowed(context.task), memoryPath,
       apiKeyEnv: config.llm.api_key_env, env: withoutLlmKeys(env, config), runCommand: runTestCommand,
       allowRunTest: config.tools?.run_test !== false,
+      onEvent,
     });
     research = await runResearch({
-      worktree, tools, expectedTask: context.task, config, fetchImpl, env, vault,
+      worktree, tools, expectedTask: context.task, config, fetchImpl, env, vault, onEvent,
     });
     stages.push('research');
     result.usage = research.usage;
@@ -75,7 +76,7 @@ export async function runCoder({
       },
     };
     result = await runLoop({
-      config, context, tools: trackedTools, fetchImpl, env, vault,
+      config, context, tools: trackedTools, fetchImpl, env, vault, onEvent,
       verify: async (candidate) => {
         const evidence = await checkExcellence({
           worktree, task: context.task, result: candidate, baseline, memoryPath,
@@ -135,6 +136,7 @@ export async function runCoder({
   const resultPath = await writeResult({
     worktree, result, excellence, run, env, apiKeyEnv: config.llm.api_key_env,
   });
+  await onEvent?.({ type: 'wrote', path: 'RESULT.md' });
   stages.push('result');
   result = { ...result, excellence, resultPath, baseline, memoryPath, run, taskMetadata: metadata,
     contextPath: context?.contextPath, researchPath: research?.researchPath };

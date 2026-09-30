@@ -10,6 +10,7 @@ import {
   prepareBuiltinPublication, runBuiltinIssue as runIssueWithSeats, stageReviewedFiles,
 } from '../src/lib/builtin.mjs';
 import { loadLearning } from '../src/lib/learn.mjs';
+import { readStatus, formatStatus } from '../src/lib/status.mjs';
 import { resolveContractsPath } from '../src/lib/paths.mjs';
 import { buildPublishMessage } from '../src/lib/publication.mjs';
 import { parseRecipe } from '../src/lib/recipe.mjs';
@@ -76,12 +77,15 @@ function fixture(context) {
     url: 'https://github.com/example/project/issues/42',
   };
   const calls = [];
+  let stderr = '';
+  const errorOutput = { write(text) { stderr += String(text); } };
   const runCommand = async (program, args, workingDirectory) => {
     calls.push({ program, args, workingDirectory });
     if (program === 'gh') return JSON.stringify(issue);
     return git(workingDirectory, ...args);
   };
-  return { base, repoRoot, target, cwd, env, contracts, issue, calls, runCommand };
+  return { base, repoRoot, target, cwd, env, contracts, issue, calls, runCommand, errorOutput,
+    get stderr() { return stderr; } };
 }
 
 test('roster ask writes a local draft ask, recipe, and executable task without network', async (context) => {
@@ -107,6 +111,27 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
     fetchImpl: () => { throw new Error('stub must not contact an LLM'); },
   });
   assert.equal(result.worktreePath, path.join(options.target, '.worktrees', 'issue-42'));
+  assert.equal(result.logPath, path.join(options.target, '.roster', 'runs', 'roster-42-coder.log'));
+  const liveLog = readFileSync(result.logPath, 'utf8');
+  assert.equal(liveLog, options.stderr);
+  assert.deepEqual([...liveLog.matchAll(/start seat (planner|coder|reviewer)/g)].map((match) => match[1]),
+    ['planner', 'coder', 'reviewer']);
+  for (const seat of ['planner', 'coder', 'reviewer']) {
+    assert.match(liveLog, new RegExp(`seat ${seat} mode stub`));
+    assert.match(liveLog, new RegExp(`seat ${seat} elapsed_ms=\\d+ mode=stub`));
+  }
+  for (const file of ['RECIPE.yml', 'TASK.md', 'RESULT.md', 'REVIEW.md']) {
+    assert.ok(liveLog.includes(`wrote ${file}\n`));
+  }
+  assert.doesNotMatch(liveLog, /http chat\.completions|README has a Status section|## Acceptance checks/);
+  const offline = await readStatus({
+    issue: 42, offline: true, repoRoot: options.target, config: stubConfig,
+    runCommand: () => assert.fail('Logged offline status must not call GitHub or Git'),
+  });
+  assert.equal(offline.runLog.lastSeat, 'reviewer');
+  assert.equal(offline.runLog.lastLine, liveLog.trimEnd().split('\n').at(-1));
+  assert.match(formatStatus(offline), /Last seat: reviewer/);
+  assert.ok(formatStatus(offline).includes(`Last log line: ${offline.runLog.lastLine}`));
   assert.equal(git(result.worktreePath, 'branch', '--show-current'), 'issue-42');
   assert.match(readFileSync(result.assignmentPath, 'utf8'), /Issue URL: https:\/\/github.com\/example\/project\/issues\/42/);
   assert.match(readFileSync(result.assignmentPath, 'utf8'), /README has a Status section/);
@@ -965,6 +990,7 @@ test('a tool-writing planner hands validated artifacts to the scoped coder and r
     fetchImpl: async (_url, request) => {
       const body = JSON.parse(request.body);
       if (body.messages[0].content.startsWith('You are the builtin planner seat.')) {
+        assert.match(options.stderr, /start seat planner[\s\S]*http chat\.completions start/);
         plannerTurns += 1;
         assert.deepEqual(body.tools.map(({ function: tool }) => tool.name), ['write_file']);
         if (plannerTurns === 1) return Response.json({
@@ -1001,6 +1027,17 @@ test('a tool-writing planner hands validated artifacts to the scoped coder and r
   assert.equal(coderTurns, 2);
   assert.equal(result.result.excellence.pass, true);
   assert.equal(result.review.verdict, 'pass');
+  const liveLog = readFileSync(result.logPath, 'utf8');
+  assert.equal(liveLog, options.stderr);
+  assert.match(liveLog, /seat planner tool write_file path="TASK\.md"/);
+  assert.match(liveLog, /seat coder tool write_file path="README\.md"/);
+  assert.match(liveLog, /seat coder tool run_test/);
+  for (const seat of ['planner', 'coder', 'reviewer']) {
+    assert.match(liveLog, new RegExp(`seat ${seat} http chat\\.completions ok status=200`));
+    assert.match(liveLog, new RegExp(`seat ${seat} elapsed_ms=\\d+ mode=llm`));
+  }
+  assert.match(liveLog, /model="local-model" host="localhost:1234"/);
+  assert.doesNotMatch(liveLog, /http:\/\/|\/v1|test-only-key|Added the Status section|## Status|# Example|You are the builtin/);
   assert.equal(readFileSync(result.taskPath, 'utf8'), result.planner.task);
   assert.equal(readFileSync(result.recipePath, 'utf8'), result.planner.recipe);
   assert.equal(readFileSync(result.planner.estimatePath, 'utf8'), result.planner.estimate);

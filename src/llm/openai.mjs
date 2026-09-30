@@ -1,7 +1,12 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { resolveSecret } from '../lib/secrets.mjs';
 
-class ChatError extends Error {}
+class ChatError extends Error {
+  constructor(message, category = 'response') {
+    super(message);
+    this.category = category;
+  }
+}
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 function endpointFor(baseUrl) {
@@ -57,7 +62,9 @@ function parseCompletion(payload, requestedModel) {
   };
 }
 
-export function createChat(config = {}, { fetch: fetchImpl = globalThis.fetch, env = process.env, vault } = {}) {
+export function createChat(config = {}, {
+  fetch: fetchImpl = globalThis.fetch, env = process.env, vault, onEvent,
+} = {}) {
   if (!isObject(config) || (config.llm !== undefined && !isObject(config.llm))) {
     throw new TypeError('LLM configuration must be an object with an optional llm object.');
   }
@@ -74,6 +81,8 @@ export function createChat(config = {}, { fetch: fetchImpl = globalThis.fetch, e
     throw new TypeError('llm.timeout_ms must be an integer between 1 and 2147483647.');
   }
   if (typeof fetchImpl !== 'function') throw new TypeError('A fetch implementation is required.');
+  if (onEvent !== undefined && typeof onEvent !== 'function') throw new TypeError('Live chat observer must be a function.');
+  const host = new URL(endpoint).host;
 
   let lastResponse = null;
   const chat = async function chat(request) {
@@ -94,21 +103,26 @@ export function createChat(config = {}, { fetch: fetchImpl = globalThis.fetch, e
     }
     const key = await resolveSecret(llm.api_key_name ?? 'OPENAI_API_KEY', { env, vault });
     if (!key && !optionalKey) {
-      throw new ChatError('An LLM API key is required. Set the configured environment variable or vault entry.');
+      await onEvent?.({ type: 'http', phase: 'error', errorClass: 'authentication' });
+      throw new ChatError('An LLM API key is required. Set the configured environment variable or vault entry.', 'authentication');
     }
     const headers = { 'Content-Type': 'application/json' };
     if (key) headers.Authorization = `Bearer ${key}`;
     const controller = new AbortController();
+    let status;
     let timer;
     const deadline = new Promise((_, reject) => {
       timer = setTimeout(() => {
-        reject(new ChatError('The LLM request timed out.'));
+        reject(new ChatError('The LLM request timed out.', 'timeout'));
         controller.abort();
       }, timeoutMs);
     });
 
     async function send() {
       for (let attempt = 0; attempt < 2; attempt += 1) {
+        controller.signal.throwIfAborted();
+        await onEvent?.({ type: 'model', model: key ? model.split(key).join('[redacted]') : model, host });
+        await onEvent?.({ type: 'http', phase: 'start' });
         controller.signal.throwIfAborted();
         const response = await fetchImpl(endpoint, {
           method: 'POST',
@@ -121,14 +135,16 @@ export function createChat(config = {}, { fetch: fetchImpl = globalThis.fetch, e
         if (!Number.isInteger(response.status) || response.status < 100 || response.status > 599) {
           throw new ChatError('The LLM response had an invalid HTTP status.');
         }
+        status = response.status;
         if (response.status === 429 && attempt === 0) {
+          await onEvent?.({ type: 'http', phase: 'error', status, errorClass: 'http' });
           await response.body?.cancel();
           await delay(retryDelay(response, timeoutMs), undefined, { signal: controller.signal });
           continue;
         }
         if (response.status < 200 || response.status >= 300) {
           await response.body?.cancel();
-          throw new ChatError(`The LLM request failed (HTTP ${response.status}).`);
+          throw new ChatError(`The LLM request failed (HTTP ${response.status}).`, 'http');
         }
         let payload;
         try {
@@ -136,7 +152,12 @@ export function createChat(config = {}, { fetch: fetchImpl = globalThis.fetch, e
         } catch {
           throw new ChatError('The LLM response was not valid JSON.');
         }
-        return parseCompletion(payload, model);
+        controller.signal.throwIfAborted();
+        const completion = parseCompletion(payload, model);
+        await onEvent?.({ type: 'model',
+          model: key ? completion.model.split(key).join('[redacted]') : completion.model, host });
+        await onEvent?.({ type: 'http', phase: 'ok', status });
+        return completion;
       }
     }
 
@@ -149,8 +170,11 @@ export function createChat(config = {}, { fetch: fetchImpl = globalThis.fetch, e
       lastResponse = Object.freeze({ model: response.model, usage });
       return response;
     } catch (error) {
+      if (error?.code === 'ROSTER_RUN_LOG') throw error;
+      await onEvent?.({ type: 'http', phase: 'error', ...(status === undefined ? {} : { status }),
+        errorClass: error instanceof ChatError ? error.category : error?.name === 'AbortError' ? 'abort' : 'network' });
       if (error instanceof ChatError) throw error;
-      throw new ChatError('The LLM request failed. Check the endpoint and connection.');
+      throw new ChatError('The LLM request failed. Check the endpoint and connection.', 'network');
     } finally {
       clearTimeout(timer);
       controller.abort();

@@ -100,7 +100,7 @@ function formatReview({ verdict, reasons, securityNotes }) {
 }
 
 export async function runReviewer({
-  worktree, repoRoot, config, coderResult, env = process.env, fetchImpl, vault,
+  worktree, repoRoot, config, coderResult, env = process.env, fetchImpl, vault, onEvent,
 } = {}) {
   if (typeof worktree !== 'string' || typeof repoRoot !== 'string' ||
       typeof coderResult?.resultPath !== 'string' || !config?.llm || !config.seat) {
@@ -146,7 +146,7 @@ export async function runReviewer({
       if (evidence.length + principal.content.length + instructions.length > budget) {
         throw new Error('Reviewer evidence exceeds seat.context_chars');
       }
-      const chat = createBuiltinChat(config, { fetchImpl, env, vault });
+      const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent });
       queried = true;
       const response = await chat({ messages: [
         { role: 'system', content: `${instructions}\n\n${principal.content.trim()}` },
@@ -163,6 +163,7 @@ export async function runReviewer({
     }
   } catch (error) {
     if (!(error instanceof Error)) throw error;
+    if (error.code === 'ROSTER_RUN_LOG') throw error;
     report = {
       verdict: 'fail',
       reasons: [`Reviewer could not complete: ${redactEvidence(error.message, redaction)
@@ -175,6 +176,7 @@ export async function runReviewer({
   const content = formatReview({ verdict: report.verdict, reasons, securityNotes });
   await ensureLocalPath(reviewPath, worktree);
   await fs.writeFile(reviewPath, content, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+  await onEvent?.({ type: 'wrote', path: 'REVIEW.md' });
   return { verdict: report.verdict, reasons, securityNotes, content, reviewPath, usage, response: lastResponse, queried,
     taskDigest, resultDigest };
 }

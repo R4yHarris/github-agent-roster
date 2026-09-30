@@ -137,7 +137,7 @@ function planFromTask(task, ask) {
 
 export async function planAsk(ask, {
   config, reference = 'local:draft', title, fetchImpl, env, vault, memory = [], learningRoot, metadata, lockedModel,
-  onResponse, tools,
+  onResponse, tools, onEvent,
 } = {}) {
   const cleanAsk = cleanAskText(ask);
   if (!Array.isArray(memory) || memory.some((line) => typeof line !== 'string')) {
@@ -192,7 +192,7 @@ export async function planAsk(ask, {
     messages.push({ role: 'user', content: 'Emit only tool_calls for write_file with JSON string arguments.' });
   };
   for (let turn = 1; turn <= budget + Number(repairUsed); turn += 1) {
-    const response = await chatCompletion({ config, fetchImpl, env, vault, messages,
+    const response = await chatCompletion({ config, fetchImpl, env, vault, messages, onEvent,
       ...(tools ? { tools: plannerToolDefinitions } : {}) });
     lastResponse = response.response;
     onResponse?.(lastResponse);
@@ -230,6 +230,7 @@ export async function planAsk(ask, {
           if (args.path === 'TASK.md') taskDraft = args.content;
         } catch (error) {
           if (!(error instanceof Error)) throw error;
+          if (error.code === 'ROSTER_RUN_LOG') throw error;
           result = { error: redactSecrets(error.message, { env, apiKeyEnv: config.llm.api_key_env }) };
         }
         messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });

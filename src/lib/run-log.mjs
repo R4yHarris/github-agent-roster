@@ -1,0 +1,176 @@
+import { constants, promises as fs } from 'node:fs';
+import path from 'node:path';
+import { performance } from 'node:perf_hooks';
+import { ensureLocalPath } from './paths.mjs';
+import { redactSecrets } from '../runtime/memory.mjs';
+
+const seats = ['planner', 'coder', 'reviewer'];
+const tools = ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text'];
+const artifacts = ['RECIPE.yml', 'TASK.md', 'ESTIMATE.md', 'RESULT.md', 'REVIEW.md'];
+const httpErrors = ['authentication', 'network', 'timeout', 'http', 'response', 'abort'];
+const maximumLineBytes = 2048;
+
+export class RunLogError extends Error {
+  code = 'ROSTER_RUN_LOG';
+}
+
+function logPath(repoRoot, session) {
+  if (typeof session !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(session)) {
+    throw new TypeError('Run log session must be an opaque identifier of at most 64 characters');
+  }
+  return path.resolve(repoRoot, '.roster', 'runs', `${session}.log`);
+}
+
+function errorClass(error) {
+  if (error?.code === 'ROSTER_RUN_LOG') return 'RunLogError';
+  if (error instanceof TypeError) return 'TypeError';
+  if (error instanceof RangeError) return 'RangeError';
+  if (error?.name === 'AbortError') return 'AbortError';
+  return 'Error';
+}
+
+export async function createRunLog({
+  repoRoot, session, env = process.env, apiKeyEnv = 'ROSTER_API_KEY',
+  errorOutput = process.stderr, now = () => new Date(), clock = () => performance.now(),
+}) {
+  if (typeof repoRoot !== 'string' || typeof errorOutput?.write !== 'function' ||
+      typeof now !== 'function' || typeof clock !== 'function') {
+    throw new TypeError('Run log requires a repository root, stderr writer, and clocks');
+  }
+  const safe = (value) => redactSecrets(value, { env, apiKeyEnv }).replace(/[\x00-\x1f\x7f]/g, '?');
+  if (safe(session) !== session) throw new TypeError('Run log session must not contain credentials');
+  const file = logPath(repoRoot, session);
+  await ensureLocalPath(file, repoRoot);
+  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+  await ensureLocalPath(file, repoRoot);
+  let pending = Promise.resolve();
+
+  function append(message) {
+    const write = pending.then(async () => {
+      const line = `${now().toISOString()} ${safe(message)}\n`;
+      if (Buffer.byteLength(line) > maximumLineBytes) throw new RunLogError('Run log metadata line exceeds 2 KiB');
+      await ensureLocalPath(file, repoRoot);
+      const handle = await fs.open(file, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT |
+        (constants.O_NOFOLLOW ?? 0), 0o600);
+      try {
+        const entry = await handle.stat();
+        if (!entry.isFile() || entry.nlink !== 1) throw new RunLogError('Run log must be a regular, single-link file');
+        await handle.writeFile(line, 'utf8');
+      } finally {
+        await handle.close();
+      }
+      errorOutput.write(line);
+    }).catch((error) => {
+      if (error instanceof RunLogError) throw error;
+      throw new RunLogError(`Could not write live run log (${typeof error.code === 'string' &&
+        /^[A-Z0-9_]+$/.test(error.code) ? error.code : errorClass(error)})`);
+    });
+    pending = write;
+    return write;
+  }
+
+  function eventText(event) {
+    switch (event.type) {
+      case 'model': {
+        const model = typeof event.model === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,239}$/.test(event.model)
+          ? safe(event.model) : '[unavailable]';
+        const host = typeof event.host === 'string' && /^[A-Za-z0-9.:[\]-]{1,255}$/.test(event.host)
+          ? safe(event.host) : '-';
+        return `model=${JSON.stringify(model)} host=${JSON.stringify(host)}`;
+      }
+      case 'http': {
+        if (!['start', 'ok', 'error'].includes(event.phase) ||
+            event.phase === 'ok' && (!Number.isInteger(event.status) || event.status < 200 || event.status > 299) ||
+            event.phase === 'error' && !httpErrors.includes(event.errorClass)) {
+          throw new TypeError('Invalid live HTTP event');
+        }
+        return `http chat.completions ${event.phase}` +
+          (event.status === undefined ? '' : ` status=${event.status}`) +
+          (event.phase === 'error' ? ` class=${event.errorClass}` : '');
+      }
+      case 'tool': {
+        if (!tools.includes(event.name)) throw new TypeError('Invalid live tool event');
+        const location = typeof event.path === 'string' ? safe(event.path).slice(0, 512) : '[invalid]';
+        return `tool ${event.name}` + (event.path === undefined ? '' : ` path=${JSON.stringify(location)}`);
+      }
+      case 'wrote':
+        if (!artifacts.includes(event.path)) throw new TypeError('Invalid live artifact event');
+        return `wrote ${event.path}`;
+      default:
+        throw new TypeError('Unsupported live run event');
+    }
+  }
+
+  async function seat(name, seatSession, config, operation) {
+    if (!seats.includes(name) || typeof operation !== 'function') throw new TypeError('Invalid logged seat');
+    logPath(repoRoot, seatSession);
+    let mode = config.llm.base_url ? 'llm' : 'stub';
+    let modelEvent;
+    const onEvent = async (event) => {
+      const text = eventText(event);
+      if (event.type === 'model') {
+        if (text === modelEvent) return;
+        modelEvent = text;
+      }
+      await append(`seat ${name} ${text}`);
+    };
+    const started = clock();
+    await append(`start seat ${name} session=${safe(seatSession)}`);
+    await onEvent({ type: 'model', model: mode === 'stub' ? 'builtin-stub' : config.llm.model,
+      host: mode === 'stub' ? '-' : new URL(config.llm.base_url).host });
+    await append(`seat ${name} mode ${mode}`);
+    try {
+      const result = await operation(onEvent);
+      const actualMode = result?.mode ?? (typeof result?.queried === 'boolean' ? result.queried ? 'llm' : 'stub' : mode);
+      if (actualMode !== mode) {
+        mode = actualMode;
+        await append(`seat ${name} mode ${mode}`);
+      }
+      if (result?.error) await append(`seat ${name} error class=Error`);
+      return result;
+    } catch (error) {
+      mode = error?.result?.mode ?? mode;
+      await append(`seat ${name} error class=${errorClass(error)}`);
+      throw error;
+    } finally {
+      await append(`seat ${name} elapsed_ms=${Math.max(0, Math.round(clock() - started))} mode=${mode}`);
+    }
+  }
+
+  return { path: file, session, seat };
+}
+
+export async function readLastRunLog({
+  repoRoot, session, env = process.env, apiKeyEnv = 'ROSTER_API_KEY',
+}) {
+  const file = logPath(repoRoot, session);
+  await ensureLocalPath(file, repoRoot);
+  let handle;
+  try {
+    handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw new RunLogError('Could not read live run log');
+  }
+  try {
+    const entry = await handle.stat();
+    if (!entry.isFile() || entry.nlink !== 1) throw new RunLogError('Run log must be a regular, single-link file');
+    const size = Math.min(entry.size, 65_536);
+    const buffer = Buffer.alloc(size);
+    const { bytesRead } = await handle.read(buffer, 0, size, entry.size - size);
+    const text = buffer.subarray(0, bytesRead).toString('utf8');
+    const lines = text.split('\n');
+    lines.pop();
+    const lastLine = lines.at(-1);
+    if (!lastLine) return null;
+    const parsed = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z (?:start seat|seat) (planner|coder|reviewer) (.+)$/.exec(lastLine);
+    const metadata = /^(?:session=[A-Za-z0-9._[\]-]{1,128}|model="(?:[^"\\]|\\.)*" host="(?:[^"\\]|\\.)*"|mode (?:stub|llm)|http chat\.completions (?:start|ok status=2\d\d|error(?: status=[1-5]\d\d)? class=(?:authentication|network|timeout|http|response|abort))|tool (?:read_file|write_file|list_dir|run_test|search_text)(?: path="(?:[^"\\]|\\.)*")?|wrote (?:RECIPE\.yml|TASK\.md|ESTIMATE\.md|RESULT\.md|REVIEW\.md)|error class=(?:Error|TypeError|RangeError|AbortError|RunLogError)|elapsed_ms=\d+ mode=(?:stub|llm))$/;
+    if (!parsed || !metadata.test(parsed[2]) || /[\x00-\x1f\x7f]/.test(lastLine) ||
+        Buffer.byteLength(lastLine) > maximumLineBytes) {
+      throw new RunLogError('Last live run log line has invalid metadata');
+    }
+    return { path: file, session, lastSeat: parsed[1], lastLine: redactSecrets(lastLine, { env, apiKeyEnv }) };
+  } finally {
+    await handle.close();
+  }
+}

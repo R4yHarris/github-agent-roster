@@ -200,6 +200,26 @@ test('/model clear and /run --auto-model opt into routing without persisting a s
   assert.match(shell.output.text, /Model: \(unset\)/);
 });
 
+test('/run sends live events to its stderr writer before the final summary is ready', async () => {
+  let finish;
+  const pending = new Promise((resolve) => { finish = resolve; });
+  const shell = dispatcher({
+    services: { runBuiltinIssue: async (_issue, { log, errorOutput }) => {
+      errorOutput.write('2026-09-30T22:00:00.000Z start seat planner session=roster-92-planner\n');
+      await pending;
+      log('Final run summary.');
+      return { failed: false, command: null, issue: { number: 92 }, task: 'issue-92' };
+    } },
+  });
+  const running = shell.dispatch('/run 92');
+  assert.match(shell.errorOutput.text, /start seat planner/);
+  assert.equal(shell.output.text, '');
+  finish();
+  assert.equal(await running, true);
+  assert.match(shell.output.text, /Final run summary/);
+  assert.doesNotMatch(shell.output.text, /start seat planner/);
+});
+
 test('/run reports a failed planner stub without throwing and leaves the shell usable', async () => {
   const shell = dispatcher({
     services: { runBuiltinIssue: async (_issue, { log }) => {

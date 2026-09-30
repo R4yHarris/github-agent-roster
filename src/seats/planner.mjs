@@ -11,7 +11,7 @@ export async function runPlanner({
   reference = issue ? `issue:${issue.number}` : undefined, config, metadata, lockedModel,
   task = issue ? `issue-${issue.number}` : undefined,
   session = issue ? `roster-${issue.number}-planner` : undefined,
-  fetchImpl, env, vault, learningRoot = repoRoot,
+  fetchImpl, env, vault, learningRoot = repoRoot, onEvent,
 }) {
   if (typeof repoRoot !== 'string' || !repoRoot) {
     throw new TypeError('Planner requires the roster repository root for memory');
@@ -31,10 +31,10 @@ export async function runPlanner({
   const recipePath = path.join(worktree, 'RECIPE.yml');
   const taskPath = path.join(worktree, 'TASK.md');
   try {
-    const tools = await createTools({ worktree, seat: 'planner', env, apiKeyEnv: config.llm.api_key_env });
+    const tools = await createTools({ worktree, seat: 'planner', env, apiKeyEnv: config.llm.api_key_env, onEvent });
     plan = await planAsk(ask, {
       config, reference, title, fetchImpl, env, vault, memory, learningRoot, metadata, lockedModel,
-      tools,
+      tools, onEvent,
       onResponse: (response) => { lastResponse = response; },
     });
     const recipe = parseRecipe(plan.recipe);

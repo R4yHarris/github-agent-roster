@@ -166,7 +166,7 @@ export function createDispatcher({
         const messages = [];
         state.lastRun = await api.runBuiltinIssue(issue[1], {
           cwd, repoRoot, config: state.config, env, publish: false, autoModel,
-          log: (message) => messages.push(message),
+          log: (message) => messages.push(message), errorOutput,
         });
         state.published = false;
         const command = state.lastRun.command;

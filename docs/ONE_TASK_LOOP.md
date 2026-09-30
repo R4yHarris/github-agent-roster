@@ -14,6 +14,23 @@ before new outputs are written. Tracked or unsafe artifact paths are refused.
 Malformed planner tool calls receive one repair attempt; failure writes a clear
 unverified planning stub and disables coding/publication. The standalone CLI
 returns a failed exit status, while the REPL stays open for another command.
+
+Each builtin run prints live timestamped metadata lines to **stderr** and
+appends the same lines to `.roster/runs/<session>.log`. Issue runs use the
+existing `roster-N-coder` run session for one shared planner/coder/reviewer log
+in the issue repository root; the standalone coder uses its own session in
+the current worktree. Repeated issue runs append rather than truncate it.
+Entries include seat start, model ID and endpoint **host only**, HTTP
+`chat.completions` start/status/error class, tool name and path, managed
+artifact writes, `stub|llm` mode, and elapsed milliseconds per seat.
+They never include prompts, completions, file bodies, HTTP bodies/headers,
+API keys, or exception messages. Logging failures stop the run explicitly.
+
+`roster status --issue N --offline` shows the last seat and last complete log
+line, even while a seat is active, without contacting GitHub. Missing logs
+are shown as unknown/none. Live logs are local managed files, not evidence
+that tests or human AI-Eval passed, and are never staged by the coder.
+
 When no LLM endpoint
 is configured, the deterministic stub writes only the result summary and
 does **not** implement the ask or run tests. With an endpoint, the coder uses

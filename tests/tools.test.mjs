@@ -37,6 +37,8 @@ test('limits reading, writing, and listing to worktree files allowed by TASK.md'
   assert.equal(isForbiddenWrite('other/.github/workflows/ci.yml'), true);
   assert.equal(isAllowedFile('src/other.mjs', ['src/**']), true);
   assert.equal(isAllowedFile('docs/file.md', ['src/**']), false);
+  const broad = await createTools({ worktree, allowedFiles: ['**/*'] });
+  await assert.rejects(broad.write_file({ path: '.roster/runs/session.log', content: 'forged' }), /not allowed/);
 });
 
 test('coder tools cannot write human evaluations even with broad task scope or a test child process', async (context) => {

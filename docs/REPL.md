@@ -38,6 +38,14 @@ to `git worktree add -b`. Malformed planner tool output is repaired once; if it
 still cannot be decoded, RECIPE/TASK stubs and a clear error are written, coding
 and publication stay disabled, and `/help`, `/quit`, or a later `/run` still work.
 
+`/run N` streams timestamped seat activity to stderr immediately, independently
+of its final summary. The same metadata is appended to the issue repository's
+`.roster/runs/roster-N-coder.log`: seat starts, model/endpoint host, HTTP
+phase/status/error class, tool names/paths, managed file writes, mode, and elapsed
+milliseconds. No prompts, completions, file bodies, keys, or upstream error
+messages are logged. `/status N --offline` reads a bounded local tail and shows
+the last seat and last complete line; it does not contact GitHub.
+
 `/model MODEL` and `/effort h` validate and atomically replace only those
 fields in the private config, keeping the other fields and comments. The
 updated values apply to the next `/run` in this shell. With no selected

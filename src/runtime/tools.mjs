@@ -47,7 +47,12 @@ export function isForbiddenWrite(file) {
 
 export function isManagedFile(file) {
   const parts = partsOf(file);
-  return parts.length === 1 && managedFiles.has(parts[0]);
+  return parts.length === 1 && managedFiles.has(parts[0]) || isRunLog(file);
+}
+
+export function isRunLog(file) {
+  const parts = partsOf(file);
+  return parts.length === 3 && parts[0] === '.roster' && parts[1] === 'runs' && parts[2].endsWith('.log');
 }
 
 export function isAllowedFile(file, allowedFiles) {
@@ -152,9 +157,11 @@ export async function createTools({
   memoryPath,
   allowRunTest = true,
   runCommand = execute,
+  onEvent,
 } = {}) {
   if (!['planner', 'coder'].includes(seat)) throw new TypeError('Only planner and coder seats have file tools');
   if (typeof allowRunTest !== 'boolean') throw new TypeError('run_test permission must be a boolean');
+  if (onEvent !== undefined && typeof onEvent !== 'function') throw new TypeError('Live tool observer must be a function');
   const root = path.resolve(worktree);
   const status = await fs.lstat(root);
   if (!status.isDirectory() || status.isSymbolicLink()) {
@@ -368,5 +375,15 @@ export async function createTools({
       return { matches: matches.slice(0, 50), truncated: matches.length > 50 };
     },
   };
-  return seat === 'planner' ? { write_file: tools.write_file } : tools;
+  const selected = seat === 'planner' ? { write_file: tools.write_file } : tools;
+  if (!onEvent) return selected;
+  return Object.fromEntries(Object.entries(selected).map(([name, execute]) => [name, async (args) => {
+    const location = args?.path ?? (['list_dir', 'search_text'].includes(name) ? '.' : undefined);
+    await onEvent({ type: 'tool', name, ...(location === undefined ? {} : { path: location }) });
+    const result = await execute(args);
+    if (name === 'write_file' && plannerArtifactFiles.includes(result.path)) {
+      await onEvent({ type: 'wrote', path: result.path });
+    }
+    return result;
+  }]));
 }

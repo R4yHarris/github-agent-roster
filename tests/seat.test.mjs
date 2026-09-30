@@ -52,12 +52,52 @@ test('standalone stub follows all stages without a planner, source diff, test, o
   assert.equal(readFileSync(path.join(options.worktree, 'TASK.md'), 'utf8'), options.taskText);
   assert.equal(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), '# Before\n');
   assert.deepEqual(readdirSync(options.worktree).sort(),
-    ['AGENTS.md', 'CONTEXT.md', 'README.md', 'RESEARCH.md', 'RESULT.md', 'REVIEW.md', 'TASK.md']);
+    ['.roster', 'AGENTS.md', 'CONTEXT.md', 'README.md', 'RESEARCH.md', 'RESULT.md', 'REVIEW.md', 'TASK.md']);
+  const liveLog = readFileSync(result.logPath, 'utf8');
+  assert.match(liveLog, /start seat coder[\s\S]*mode stub[\s\S]*wrote RESULT\.md/);
+  assert.match(liveLog, /start seat reviewer[\s\S]*wrote REVIEW\.md[\s\S]*elapsed_ms=\d+ mode=stub/);
+  assert.equal(existsSync(path.join(options.worktree, '.roster', 'runs', 'runs.jsonl')), false);
   assert.equal(result.review.verdict, 'fail');
   assert.match(readFileSync(result.review.reviewPath, 'utf8'), /Verdict: fail/);
   assert.match(readFileSync(result.result.resultPath, 'utf8'), /Add a Status section/);
   assert.match(readFileSync(result.result.resultPath, 'utf8'), /Stages: principal -> context -> research -> skills -> tool_loop -> memory -> excellence -> result/);
   assert.equal(existsSync(path.join(options.repoRoot, '.roster', 'memory', 'planner.jsonl')), false);
+});
+
+test('configured standalone logging does not become an app diff or opt into JSONL metrics', async (context) => {
+  const options = fixture(context);
+  let toolTurns = 0;
+  let stderr = '';
+  const result = await runBuiltinTask({
+    ...options, cwd: options.worktree, config: configured, log: () => {},
+    errorOutput: { write(text) { stderr += String(text); } },
+    env: { ROSTER_API_KEY: 'test-only-live-key' },
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      if (body.messages[0].content.startsWith('You are the builtin research step.')) {
+        return Response.json({ choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant', content: 'PRIVATE_RESEARCH_RESPONSE',
+        } }] });
+      }
+      toolTurns += 1;
+      return Response.json({ choices: [toolTurns === 1 ? { finish_reason: 'tool_calls', message: {
+        role: 'assistant', tool_calls: [{ id: 'write', type: 'function', function: {
+          name: 'write_file', arguments: JSON.stringify({ path: 'README.md', content: '# Before\n\n## Status\nReady.\n' }),
+        } }],
+      } } : { finish_reason: 'stop', message: { role: 'assistant', content: 'PRIVATE_CODER_COMPLETION' } }] });
+    },
+    runTestCommand: async () => ({ stdout: 'PRIVATE_TEST_OUTPUT', stderr: '' }),
+  });
+  assert.equal(toolTurns, 2);
+  assert.equal(result.result.mode, 'llm');
+  assert.equal(result.result.excellence.pass, true);
+  assert.deepEqual(result.result.excellence.files, ['README.md']);
+  assert.equal(readFileSync(result.logPath, 'utf8'), stderr);
+  assert.match(stderr, /seat coder tool write_file path="README\.md"/);
+  assert.match(stderr, /seat coder http chat\.completions ok status=200/);
+  assert.match(stderr, /model="config-model" host="localhost:3456"/);
+  assert.doesNotMatch(stderr, /PRIVATE_|test-only-live-key|# Before|## Status/);
+  assert.equal(existsSync(path.join(options.worktree, '.roster', 'runs', 'runs.jsonl')), false);
 });
 
 test('the exact standalone CLI command consumes TASK.md in cwd with no GitHub dependency', (context) => {
@@ -76,6 +116,9 @@ test('the exact standalone CLI command consumes TASK.md in cwd with no GitHub de
   assert.match(result.stdout, /Mode: stub/);
   assert.match(result.stdout, /CONTEXT: .+CONTEXT\.md/);
   assert.match(result.stdout, /RESEARCH: .+RESEARCH\.md/);
+  assert.match(result.stderr, /\d{4}-\d\d-\d\dT.* start seat coder/);
+  assert.match(result.stderr, /seat coder wrote RESULT\.md/);
+  assert.equal(readFileSync(path.join(options.worktree, '.roster', 'runs', 'single-seat-test.log'), 'utf8'), result.stderr);
   assert.equal(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), '# Before\n');
   assert.equal(existsSync(path.join(options.worktree, 'RECIPE.yml')), false);
   for (const flag of ['--publish', '--auto-model']) {
