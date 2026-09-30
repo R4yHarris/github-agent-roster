@@ -144,9 +144,12 @@ async function main(args) {
   } else if (args[0] === 'run') {
     const options = runOptions(args.slice(1));
     if (options.issue === undefined) await runBuiltinTask({ repoRoot: rosterRoot });
-    else await runBuiltinIssue(options.issue, { publish: options.publish, seats: options.seats,
-      skipReview: options.skipReview,
-      autoModel: options.autoModel, repoRoot: rosterRoot });
+    else {
+      const result = await runBuiltinIssue(options.issue, { publish: options.publish, seats: options.seats,
+        skipReview: options.skipReview,
+        autoModel: options.autoModel, repoRoot: rosterRoot });
+      if (result.failed) process.exitCode = 1;
+    }
   } else if (args[0] === 'status') {
     let issue;
     let offline = false;

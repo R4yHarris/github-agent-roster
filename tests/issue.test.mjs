@@ -23,6 +23,7 @@ function harness(issueResponse = issue) {
     if (program === 'git' && args[0] === 'remote') return `${originUrl}\n`;
     if (program === 'gh' && args[0] === 'issue') return JSON.stringify(issueResponse);
     if (program === 'git' && args[0] === 'worktree') return '';
+    if (program === 'git' && args[0] === 'for-each-ref') return '';
     throw new Error(`Unexpected command: ${program} ${args.join(' ')}`);
   };
   const fileSystem = {
@@ -60,6 +61,8 @@ test('reads the issue in the current repository and prepares one coder worktree'
     { program: 'git', args: ['rev-parse', '--show-toplevel'], cwd: options.cwd },
     { program: 'git', args: ['remote', 'get-url', 'origin'], cwd: repoRoot },
     { program: 'gh', args: ['issue', 'view', '42', '--repo', 'example/repository', '--json', 'number,title,body,url'], cwd: repoRoot },
+    { program: 'git', args: ['worktree', 'list', '--porcelain', '-z'], cwd: repoRoot },
+    { program: 'git', args: ['for-each-ref', '--format=%(refname)', 'refs/heads/issue-42'], cwd: repoRoot },
     { program: 'git', args: ['worktree', 'add', '-b', 'issue-42', worktreePath], cwd: repoRoot },
   ]);
   assert.deepEqual(writes, [
@@ -95,6 +98,7 @@ ${issue.body}
     task: 'issue-42',
     session: 'roster-20260928T222550149Z',
     nextCommand,
+    reused: false,
   });
   assert.equal(messages.length, 1);
   assert.match(messages[0], /After editing inside the worktree, load \.env/);
@@ -103,6 +107,53 @@ ${issue.body}
   assert.match(messages[0], /AI_CONTEXT_OUT=\n/);
   assert.match(messages[0], /AI_SESSION=ghcp-\d+\n/);
   assert.ok(messages[0].endsWith(nextCommand));
+});
+
+test('an existing registered issue worktree is reused without add or overwriting its assignment/env', async () => {
+  const { options, calls, writes, messages } = harness();
+  const worktreePath = path.join(repoRoot, '.worktrees', 'issue-42');
+  const original = options.runCommand;
+  options.runCommand = async (program, args, cwd) => program === 'git' && args[0] === 'worktree'
+    ? `worktree ${worktreePath}\0HEAD abc\0branch refs/heads/issue-42\0\0`
+    : original(program, args, cwd);
+  options.fileSystem.stat = async (file) => {
+    if (![worktreePath, path.join(worktreePath, 'ASSIGNMENT.md'), path.join(worktreePath, '.env')].includes(file)) {
+      throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    }
+    return { isDirectory: () => file === worktreePath, isFile: () => file !== worktreePath };
+  };
+  options.fileSystem.writeFile = async () => { throw Object.assign(new Error('exists'), { code: 'EEXIST' }); };
+  const result = await runIssue(42, options);
+  assert.equal(result.reused, true);
+  assert.equal(result.worktreePath, worktreePath);
+  assert.equal(calls.some(({ args }) => args[0] === 'worktree' && args[1] === 'add'), false);
+  assert.deepEqual(writes, []);
+  assert.match(messages[0], /\(reused\)/);
+});
+
+test('an existing issue branch without a worktree is added without -b', async () => {
+  const { options, calls } = harness();
+  const original = options.runCommand;
+  options.runCommand = async (program, args, cwd) => {
+    if (program === 'git' && args[0] === 'for-each-ref') {
+      calls.push({ program, args, cwd });
+      return 'refs/heads/issue-42\n';
+    }
+    return original(program, args, cwd);
+  };
+  await runIssue(42, options);
+  const add = calls.find(({ args }) => args[0] === 'worktree' && args[1] === 'add');
+  assert.deepEqual(add.args, ['worktree', 'add', path.join(repoRoot, '.worktrees', 'issue-42'), 'issue-42']);
+});
+
+test('a conflicting registered worktree branch is refused before any writes', async () => {
+  const { options, writes } = harness();
+  const original = options.runCommand;
+  options.runCommand = async (program, args, cwd) => program === 'git' && args[0] === 'worktree'
+    ? `worktree ${path.join(repoRoot, '.worktrees', 'issue-42')}\0branch refs/heads/other\0\0`
+    : original(program, args, cwd);
+  await assert.rejects(runIssue(42, options), /different branch/);
+  assert.deepEqual(writes, []);
 });
 
 test('issue metadata round-trips without leaking the metadata section into the planner Ask', async () => {
@@ -259,12 +310,12 @@ test('surfaces worktree errors without writing assignment files', async () => {
   const { calls, writes, messages, options } = harness();
   const originalRunCommand = options.runCommand;
   options.runCommand = async (program, args, cwd) => {
-    if (program === 'git' && args[0] === 'worktree') throw new Error('branch already exists');
+    if (program === 'git' && args[0] === 'worktree' && args[1] === 'add') throw new Error('branch already exists');
     return originalRunCommand(program, args, cwd);
   };
 
   await assert.rejects(runIssue(42, options), /git worktree add .*failed.*branch already exists/);
-  assert.deepEqual(calls.map(({ program }) => program), ['git', 'git', 'gh']);
+  assert.deepEqual(calls.map(({ program }) => program), ['git', 'git', 'gh', 'git', 'git']);
   assert.equal(writes.length, 1);
   assert.deepEqual(messages, []);
 });

@@ -26,6 +26,11 @@ See [opt-in routing](ROUTING.md) for the source and context constraints.
 1. The issue lookup creates `.worktrees/issue-N` once, with `ASSIGNMENT.md`
    and an ignored `.env` holding `AI_TASK=issue-N` and
    `AI_SESSION=roster-N-coder`. All three seats use that worktree.
+   Repeating `/run N` reuses its registered worktree and branch. An existing
+   branch without a worktree is added without `-b`; mismatched registrations
+   are refused. App files, ASSIGNMENT.md, and `.env` are preserved. Previous
+   untracked generated run artifacts are archived under the repository's Git
+   metadata before replanning, not deleted or mixed into the app diff.
 2. The planner session `roster-N-planner` uses the deterministic stub when
    `llm.base_url` is empty. Otherwise it requests a strict JSON plan from
    the configured model. Within `planner.turn_budget` (1-64), it may use
@@ -37,6 +42,12 @@ See [opt-in routing](ROUTING.md) for the source and context constraints.
    through the same scoped writer, including trusted history-based estimates.
    Draft recipe/estimate text cannot add seats or replace estimation evidence.
    One issue produces one task in this loop.
+   OpenAI `function.arguments` JSON strings are decoded once; a JSON tool
+   payload embedded in model text is also accepted. Malformed output gets
+   exactly one short `emit only tool_calls` repair, at most one supplemental
+   response beyond the normal budget. If repair fails, the planner returns
+   a clear error and unverified RECIPE/TASK stubs. No configured coder, tests,
+   or publisher runs; the interactive shell remains usable.
    It reads and appends only its own recent planner memory outside the issue
    worktree, not app code. It also reads the issue repository's human evaluation
    history for [next-task model/estimate selection and redacted prior feedback](NEXT.md).

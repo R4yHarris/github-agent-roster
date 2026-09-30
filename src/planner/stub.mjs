@@ -7,6 +7,7 @@ import { estimateTask, readTaskMetadata } from '../runtime/estimate.mjs';
 import { isForbiddenWrite, plannerToolDefinitions } from '../runtime/tools.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
 import { applyFeedback } from './feedback.mjs';
+import { parsePlannerToolCalls } from './tool-calls.mjs';
 
 const templates = new Map();
 const defaultChecks = ['node --test exits 0', 'The requested behavior in the Ask is implemented'];
@@ -174,45 +175,57 @@ export async function planAsk(ask, {
   let lastResponse = null;
   let taskDraft;
   const callIds = new Set();
-  for (let turn = 1; turn <= budget; turn += 1) {
+  let repairUsed = false;
+  let awaitingRepair = false;
+  const fallback = (reason, turn) => {
+    const error = `LLM planner tool-call error after one retry: ${reason}. Unverified stub; coding and publication are disabled.`;
+    const stub = planStub(cleanAsk, { reference, title: fixedTitle, metadata: {
+      ...metadata, ...(lockedModel ? { model: lockedModel } : {}),
+    } });
+    return { ...stub, task: stub.task.replace('## Acceptance checks\n',
+      `## Planning failure\n\n${error}\n\n## Acceptance checks\n`),
+    mode: 'stub', error, usage: mergeUsage(...usages), turns: turn, response: lastResponse };
+  };
+  const repair = () => {
+    repairUsed = true;
+    awaitingRepair = true;
+    messages.push({ role: 'user', content: 'Emit only tool_calls for write_file with JSON string arguments.' });
+  };
+  for (let turn = 1; turn <= budget + Number(repairUsed); turn += 1) {
     const response = await chatCompletion({ config, fetchImpl, env, vault, messages,
       ...(tools ? { tools: plannerToolDefinitions } : {}) });
     lastResponse = response.response;
     onResponse?.(lastResponse);
     usages.push(response?.usage ?? null);
-    const choice = response?.choices?.[0];
-    const message = choice?.message;
-    if (message?.tool_calls !== undefined && !Array.isArray(message.tool_calls)) {
-      throw new Error('LLM planner returned malformed tool calls');
+    let choice = response?.choices?.[0];
+    let message = choice?.message;
+    const decoded = parsePlannerToolCalls(message, { turn, usedIds: callIds });
+    if (decoded.error || awaitingRepair && !decoded.calls?.length ||
+        choice?.finish_reason === 'tool_calls' && !decoded.calls?.length) {
+      const reason = decoded.error ?? 'Repair did not emit valid tool_calls';
+      if (repairUsed) return fallback(reason, turn);
+      repair();
+      continue;
     }
-    if (message?.tool_calls?.length) {
+    if (decoded.calls.length) {
       if (!tools) throw new Error('LLM planner cannot call tools without a bound artifact worktree');
-      if (message.tool_calls.length > 3 || choice.finish_reason === 'stop') {
-        throw new Error('LLM planner requested an invalid planning tool batch');
-      }
-      if (turn === budget) throw new Error(`Planner turn budget (${budget}) exhausted before a final task plan`);
-      const calls = message.tool_calls.map((call) => {
-        if (typeof call?.id !== 'string' || !call.id || callIds.has(call.id) || call.type !== 'function' ||
-            call.function?.name !== 'write_file' || typeof call.function.arguments !== 'string' ||
-            Buffer.byteLength(call.function.arguments, 'utf8') > 131_072) {
-          throw new Error('LLM planner requested an invalid or unavailable tool');
-        }
+      awaitingRepair = false;
+      const calls = decoded.calls;
+      for (const call of calls) {
         callIds.add(call.id);
-        return { id: call.id, type: 'function',
-          function: { name: call.function.name, arguments: call.function.arguments } };
-      });
+      }
       messages.push({
         role: 'assistant',
-        content: typeof message.content === 'string'
+        content: decoded.fromText ? null : typeof message.content === 'string'
           ? redactSecrets(message.content, { env, apiKeyEnv: config.llm.api_key_env }) : message.content ?? null,
-        tool_calls: calls.map((call) => ({ ...call, function: {
+        tool_calls: calls.map((call) => ({ id: call.id, type: call.type, function: {
           ...call.function, arguments: redactSecrets(call.function.arguments, { env, apiKeyEnv: config.llm.api_key_env }),
         } })),
       });
       for (const call of calls) {
         let result;
         try {
-          const args = JSON.parse(call.function.arguments);
+          const args = call.args;
           result = await tools.write_file(args);
           if (args.path === 'TASK.md') taskDraft = args.content;
         } catch (error) {
@@ -221,15 +234,26 @@ export async function planAsk(ask, {
         }
         messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
       }
-      continue;
-    }
-    if (choice?.finish_reason === 'tool_calls') {
-      throw new Error('LLM planner requested tools without any calls');
+      if (turn < budget + Number(repairUsed)) continue;
+      if (taskDraft === undefined) {
+        if (!repairUsed) {
+          repair();
+          continue;
+        }
+        return fallback('No complete TASK.md was written within the turn budget', turn);
+      }
+      choice = { finish_reason: 'stop' };
+      message = { content: 'Planning artifacts complete.' };
     }
     if (choice?.finish_reason != null && choice.finish_reason !== 'stop') {
       throw new Error('LLM planner returned an unsupported chat response');
     }
     if (typeof message?.content !== 'string' || !message.content.trim()) {
+      if (tools) {
+        if (repairUsed) return fallback('Planner returned no JSON plan or tool calls', turn);
+        repair();
+        continue;
+      }
       throw new Error('LLM planner did not return a JSON task plan');
     }
     if (Buffer.byteLength(message.content, 'utf8') > 16_384) {
@@ -250,6 +274,11 @@ export async function planAsk(ask, {
       } catch {
         failure = 'LLM planner returned invalid JSON';
       }
+    }
+    if (tools && failure === 'LLM planner returned invalid JSON') {
+      if (repairUsed) return fallback(failure, turn);
+      repair();
+      continue;
     }
     if (!failure && (!plan || typeof plan !== 'object' || Array.isArray(plan) ||
         ['title', 'acceptance_checks', 'files_allowed'].some((field) => !Object.hasOwn(plan, field)) ||
@@ -274,7 +303,10 @@ export async function planAsk(ask, {
       }
       if (built) return finish({ ...built, usage: mergeUsage(...usages), turns: turn, response: lastResponse });
     }
-    if (turn === budget) throw new Error(`Planner turn budget (${budget}) exhausted: ${failure}`);
+    if (turn >= budget + Number(repairUsed)) {
+      if (repairUsed) return fallback(failure, turn);
+      throw new Error(`Planner turn budget (${budget}) exhausted: ${failure}`);
+    }
     messages.push(
       { role: 'assistant', content: message.content },
       { role: 'user', content: `The plan is invalid (${failure}). Return only the required JSON object.` },

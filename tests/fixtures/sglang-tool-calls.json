@@ -1,0 +1,18 @@
+{
+  "model": "deepseek-v4.1-flash",
+  "choices": [{
+    "finish_reason": "tool_calls",
+    "message": {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [{
+        "id": "call-sglang-1",
+        "type": "function",
+        "function": {
+          "name": "write_file",
+          "arguments": "{\"path\":\"TASK.md\",\"content\":\"# Draft task\\n\"}"
+        }
+      }]
+    }
+  }]
+}

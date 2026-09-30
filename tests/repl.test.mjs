@@ -200,6 +200,22 @@ test('/model clear and /run --auto-model opt into routing without persisting a s
   assert.match(shell.output.text, /Model: \(unset\)/);
 });
 
+test('/run reports a failed planner stub without throwing and leaves the shell usable', async () => {
+  const shell = dispatcher({
+    services: { runBuiltinIssue: async (_issue, { log }) => {
+      log('Planning failed: malformed tool calls; RECIPE/TASK stubs written.');
+      return { failed: true, command: null, issue: { number: 92 }, task: 'issue-92' };
+    } },
+  });
+  assert.equal(await shell.dispatch('/run 92'), true);
+  assert.equal(shell.state.lastRun.failed, true);
+  assert.equal(await shell.dispatch('/help'), true);
+  assert.match(shell.output.text, /Planning failed; stubs are unverified/);
+  assert.doesNotMatch(shell.output.text, /Use \/publish/);
+  assert.match(shell.output.text, /Commands:/);
+  assert.equal(await shell.dispatch('/quit'), false);
+});
+
 test('slash ask prints the created issue URL when gh is available', async () => {
   const { dispatch, state, output } = dispatcher({
     services: { submitAsk: async () => ({

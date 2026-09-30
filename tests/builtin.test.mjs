@@ -135,9 +135,9 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
   assert.match(logs[0], /Publication unavailable: set model/);
   assert.equal((logs[0].match(/AI-Run:/g) ?? []).length, 0);
   assert.deepEqual(result.runs, { planner: null, coder: null, reviewer: null });
-  assert.deepEqual(options.calls.map(({ program }) => program), ['git', 'git', 'gh', 'git']);
+  assert.deepEqual(options.calls.map(({ program }) => program), ['git', 'git', 'gh', 'git', 'git', 'git']);
   assert.equal(options.calls.filter(({ program, args }) =>
-    program === 'git' && args[0] === 'worktree').length, 1);
+    program === 'git' && args[0] === 'worktree' && args[1] === 'add').length, 1);
   assert.equal(JSON.parse(readFileSync(path.join(options.repoRoot,
     '.roster', 'memory', 'coder.jsonl'), 'utf8')).session, 'roster-42-coder');
   assert.deepEqual(JSON.parse(readFileSync(path.join(options.repoRoot,
@@ -174,6 +174,115 @@ test('issue body task metadata reaches TASK.md and ESTIMATE.md before coder/revi
   assert.match(result.planner.task, /difficulty: 4\nestimate_min: 35\ntask_class: fix\n/);
   assert.match(result.planner.estimate, /difficulty: 4\nestimate_min: 35\ntask_class: fix\n/);
   assert.equal(result.review.verdict, 'fail');
+});
+
+test('rerunning an issue reuses its worktree and preserves prior run artifacts without changing app code', async (context) => {
+  const options = fixture(context);
+  const initial = await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {} });
+  const oldTask = readFileSync(initial.taskPath, 'utf8');
+  const oldEnv = readFileSync(initial.envPath, 'utf8');
+  writeFileSync(path.join(initial.worktreePath, 'README.md'), '# Operator change\n');
+  const rerun = await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {},
+    fetchImpl: () => assert.fail('Stub rerun must not call an endpoint') });
+  assert.equal(rerun.reused, true);
+  assert.equal(rerun.worktreePath, initial.worktreePath);
+  assert.equal(git(rerun.worktreePath, 'branch', '--show-current'), 'issue-42');
+  assert.equal(readFileSync(path.join(rerun.archivePath, 'TASK.md'), 'utf8'), oldTask);
+  assert.equal(readFileSync(rerun.envPath, 'utf8'), oldEnv);
+  assert.equal(readFileSync(path.join(rerun.worktreePath, 'README.md'), 'utf8'), '# Operator change\n');
+  assert.equal(options.calls.filter(({ args }) => args[0] === 'worktree' && args[1] === 'add').length, 1);
+});
+
+test('an existing branch is reused when its issue worktree needs to be created', async (context) => {
+  const options = fixture(context);
+  git(options.target, 'branch', 'issue-42');
+  const result = await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {} });
+  assert.equal(git(result.worktreePath, 'branch', '--show-current'), 'issue-42');
+  const add = options.calls.find(({ args }) => args[0] === 'worktree' && args[1] === 'add');
+  assert.equal(add.args.includes('-b'), false);
+});
+
+test('garbage planner arguments retry once then write visible stubs without coding or publishing', async (context) => {
+  const options = fixture(context);
+  const logs = [];
+  let calls = 0;
+  let originalReadme;
+  const result = await runBuiltinIssue(42, {
+    ...options, config: llmConfig, publish: true, log: (text) => logs.push(text),
+    env: { ...options.env, ROSTER_API_KEY: 'test-key', GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'app.pem' },
+    fetchImpl: async (_url, request) => {
+      calls += 1;
+      if (calls === 1) originalReadme = readFileSync(path.join(options.target, '.worktrees', 'issue-42', 'README.md'), 'utf8');
+      const body = JSON.parse(request.body);
+      assert.match(body.messages[0].content, /builtin planner seat/);
+      if (calls === 2) assert.match(body.messages.at(-1).content, /Emit only tool_calls/);
+      return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+        role: 'assistant', content: null, tool_calls: [{ id: `bad-${calls}`, type: 'function', function: {
+          name: 'write_file', arguments: 'garbage',
+        } }],
+      } }] });
+    },
+    runTestCommand: () => assert.fail('Failed planning cannot run tests'),
+    publisher: () => assert.fail('Failed planning cannot publish'),
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.failed, true);
+  assert.equal(result.result.mode, 'stub');
+  assert.equal(result.command, null);
+  assert.match(readFileSync(result.taskPath, 'utf8'), /## Planning failure[\s\S]*after one retry/);
+  assert.deepEqual(parseRecipe(readFileSync(result.recipePath, 'utf8')).seats.map(({ id }) => id),
+    ['planner', 'coder', 'reviewer']);
+  assert.equal(readFileSync(path.join(result.worktreePath, 'README.md'), 'utf8'), originalReadme);
+  assert.match(logs.join('\n'), /Planning failed:[\s\S]*Publication skipped/);
+});
+
+test('a configured rerun recovers from previous planner failure in the same issue worktree', async (context) => {
+  const options = fixture(context);
+  const failed = await runBuiltinIssue(42, {
+    ...options, config: llmConfig, log: () => {},
+    fetchImpl: async () => Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+      role: 'assistant', content: null, tool_calls: [{ function: { name: 'write_file', arguments: 'garbage' } }],
+    } }] }),
+  });
+  assert.equal(failed.failed, true);
+  let coderTurns = 0;
+  const result = await runBuiltinIssue(42, {
+    ...options, config: llmConfig, log: () => {},
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      if (body.messages[0].content.startsWith('You are the builtin planner seat.')) {
+        return Response.json({ choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant', content: JSON.stringify({
+            title: options.issue.title, acceptance_checks: ['node --test exits 0'], files_allowed: ['README.md'],
+          }),
+        } }] });
+      }
+      coderTurns += 1;
+      return Response.json({ choices: [coderTurns === 1 ? { finish_reason: 'tool_calls', message: {
+        role: 'assistant', tool_calls: [{ id: 'readme', type: 'function', function: {
+          name: 'write_file', arguments: JSON.stringify({ path: 'README.md', content: '# Example\n\n## Status\nReady.\n' }),
+        } }],
+      } } : { finish_reason: 'stop', message: { role: 'assistant', content: 'Added Status.' } }] });
+    },
+    runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+  });
+  assert.equal(result.reused, true);
+  assert.equal(result.failed, false);
+  assert.equal(result.worktreePath, failed.worktreePath);
+  assert.equal(result.result.excellence.pass, true);
+  assert.equal(result.review.verdict, 'pass');
+  assert.match(readFileSync(path.join(result.archivePath, 'TASK.md'), 'utf8'), /Planning failure/);
+  assert.match(readFileSync(path.join(result.worktreePath, 'README.md'), 'utf8'), /## Status\nReady/);
+});
+
+test('a rerun never archives or overwrites tracked run artifacts', async (context) => {
+  const options = fixture(context);
+  const initial = await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {} });
+  const before = readFileSync(initial.taskPath, 'utf8');
+  git(initial.worktreePath, 'add', '--', 'TASK.md');
+  await assert.rejects(runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {} }),
+    /Refusing to replace tracked planning\/run artifacts/);
+  assert.equal(readFileSync(initial.taskPath, 'utf8'), before);
 });
 
 test('--publish requires an LLM and App environment before any GitHub or worktree action', async (context) => {
@@ -290,7 +399,7 @@ test('a failed planner journals its last measured response rather than aggregate
   const options = fixture(context);
   let requests = 0;
   const config = { ...llmConfig, planner: { ...llmConfig.planner, turn_budget: 2 } };
-  await assert.rejects(runBuiltinIssue(42, {
+  const result = await runBuiltinIssue(42, {
     ...options, config, log: () => {},
     env: { ...options.env, ROSTER_API_KEY: 'test-only-key', AI_MODEL: 'GPT-6.1-Sol',
       AI_PROVIDER: 'github-copilot', AI_MODEL_VERSION: 'stale|invalid',
@@ -304,14 +413,17 @@ test('a failed planner journals its last measured response rather than aggregate
           : { prompt_tokens: 100, completion_tokens: 40 },
       });
     },
-  }), /Planner turn budget \(2\) exhausted/);
+  });
+  assert.equal(result.failed, true);
+  assert.equal(result.result.mode, 'stub');
   assert.equal(requests, 2);
   const records = loadLearning({ cwd: options.target }).runs;
-  assert.deepEqual(records, [{
-    session: 'roster-42-planner', task: 'issue-42', provider: 'local',
+  assert.deepEqual(records[0], {
+    session: 'roster-42-planner', task: 'issue-42', provider: 'local', task_class: 'feat',
     model: 'actual-planner-2', effort: 'm', prompt_tokens: 100, completion_tokens: 40,
     context_used: 100, context_out: 40,
-  }]);
+  });
+  assert.equal(records.slice(1).every(({ model }) => model === undefined), true);
 });
 
 test('live unprofiled seats report their backend and usage without inheriting Copilot provenance', async (context) => {
@@ -840,7 +952,7 @@ test('default planner/coder run preserves the task handoff while the coder edits
   assert.equal(readFileSync(run.recipePath, 'utf8'), run.planner.recipe);
   assert.equal(readFileSync(run.taskPath, 'utf8'), run.planner.task);
   assert.equal(options.calls.filter(({ program, args }) =>
-    program === 'git' && args[0] === 'worktree').length, 1);
+    program === 'git' && args[0] === 'worktree' && args[1] === 'add').length, 1);
 });
 
 test('a tool-writing planner hands validated artifacts to the scoped coder and read-only reviewer', async (context) => {

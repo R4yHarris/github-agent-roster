@@ -7,6 +7,13 @@ builtin planner to write `RECIPE.yml` and `TASK.md`, then loads roster
 context/skills/memory into the bounded coder loop and writes `RESULT.md`.
 The same-process, read-only [reviewer](REVIEW.md) then reads the task,
 result, and diff and writes REVIEW.md with pass/fail reasons and security notes.
+Rerunning the same issue reuses its branch/worktree rather than creating a
+second branch. Existing app changes and assignment/environment files remain;
+the previous generated run outputs are preserved in a Git-metadata archive
+before new outputs are written. Tracked or unsafe artifact paths are refused.
+Malformed planner tool calls receive one repair attempt; failure writes a clear
+unverified planning stub and disables coding/publication. The standalone CLI
+returns a failed exit status, while the REPL stays open for another command.
 When no LLM endpoint
 is configured, the deterministic stub writes only the result summary and
 does **not** implement the ask or run tests. With an endpoint, the coder uses

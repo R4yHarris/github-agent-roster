@@ -277,9 +277,15 @@ test('planner tool errors redact known credentials before another model turn', a
           name: 'write_file', arguments: secret,
         } }],
       } }] });
-      const error = JSON.parse(body.messages.at(-1).content).error;
-      assert.ok(!error.includes(secret));
       assert.ok(!request.body.includes(secret));
+      if (calls === 2) {
+        assert.match(body.messages.at(-1).content, /Emit only tool_calls/);
+        return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant', tool_calls: [{ id: 'repaired', type: 'function', function: {
+            name: 'write_file', arguments: JSON.stringify({ path: 'TASK.md', content: '# Draft\n' }),
+          } }],
+        } }] });
+      }
       return Response.json({ choices: [{ finish_reason: 'stop', message: {
         role: 'assistant', content: JSON.stringify({
           title: 'Update README', acceptance_checks: ['node --test exits 0'], files_allowed: ['README.md'],
@@ -287,7 +293,59 @@ test('planner tool errors redact known credentials before another model turn', a
       } }] });
     },
   });
+  assert.equal(calls, 3);
+});
+
+test('a JSON tool payload embedded in planner text writes a task and finishes normally', async (t) => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'roster-sglang-text-tools-'));
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  const worktree = join(repoRoot, 'worktree');
+  mkdirSync(worktree);
+  const ask = 'Update README.md.';
+  const task = planStub(ask, { reference: 'issue:42', title: 'Update README' }).task;
+  let calls = 0;
+  const result = await runPlanner({
+    worktree, repoRoot, issue: { number: 42, title: 'Update README', body: ask }, config: llmConfig, env: {},
+    fetchImpl: async (_url, request) => {
+      calls += 1;
+      if (calls === 1) return Response.json({ choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant', content: `Use this tool:\n${JSON.stringify({ name: 'write_file', arguments: { path: 'TASK.md', content: task } })}`,
+        tool_calls: [],
+      } }] });
+      assert.equal(JSON.parse(JSON.parse(request.body).messages.at(-1).content).path, 'TASK.md');
+      return Response.json({ choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant', content: 'Task ready.',
+      } }] });
+    },
+  });
   assert.equal(calls, 2);
+  assert.equal(result.error, undefined);
+  assert.equal(readFileSync(result.taskPath, 'utf8'), result.task);
+});
+
+test('malformed calls use only one repair even with a one-turn configured budget and return stubs without throwing', async (t) => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'roster-sglang-failed-tools-'));
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  const worktree = join(repoRoot, 'worktree');
+  mkdirSync(worktree);
+  let calls = 0;
+  const result = await runPlanner({
+    worktree, repoRoot, issue: { number: 42, title: 'Update README', body: 'Update README.md.' },
+    config: { ...llmConfig, planner: { turn_budget: 1 } }, env: {},
+    fetchImpl: async (_url, request) => {
+      calls += 1;
+      if (calls === 2) assert.match(JSON.parse(request.body).messages.at(-1).content, /Emit only tool_calls/);
+      return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+        role: 'assistant', content: null, tool_calls: [{ function: { name: 'write_file', arguments: 'garbage' } }],
+      } }] });
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.mode, 'stub');
+  assert.match(result.error, /tool-call error after one retry/);
+  assert.match(readFileSync(result.taskPath, 'utf8'), /Planning failure/);
+  assert.equal(readFileSync(result.recipePath, 'utf8'), result.recipe);
+  assert.equal(JSON.parse(readFileSync(join(repoRoot, '.roster', 'memory', 'planner.jsonl'), 'utf8')).status, 'failed');
 });
 
 test('written TASK validation rejects a changed Ask, protected paths, and routed-model drift', async (t) => {
