@@ -92,6 +92,8 @@ for (const platform of ['win32', 'linux', 'darwin']) {
     assert.match(options.output.text, /Doctor\nOK Node\.js >=20/);
     assert.match(options.output.text, /FAIL agent-policy\.yml/);
     assert.match(options.output.text, /not a grant to publish/);
+    assert.match(options.output.text, /App env present/);
+    assert.match(options.output.text, /App private-key file is missing/);
     for (const secret of Object.values(env)) {
       assert.ok(!options.output.text.includes(secret));
       assert.ok(!readFileSync(result.configPath, 'utf8').includes(secret));
@@ -118,6 +120,7 @@ test('WSL can use a Windows host URL and choose no permissions plus Advanced int
   assert.match(options.output.text, /\nAdvanced\n/);
   assert.ok(options.prompts.some((prompt) => prompt.startsWith('Internet search')));
   assert.match(options.output.text, /no live internet tool/);
+  assert.doesNotMatch(options.output.text, /App identity \(environment only\)/);
   assert.match(options.output.text, /Windows host IP, not localhost/);
 });
 
@@ -163,6 +166,7 @@ test('failed models probe still saves a supplied actual model and never invents 
   assert.equal(result.config.llm.model, 'owner/manual-model');
   assert.match(options.output.text, /Model probe failed/);
   assert.match(options.output.text, /model supplied manually/);
+  assert.match(options.output.text, /App env missing[\s\S]*setx GITHUB_APP_ID/);
   assert.doesNotMatch(options.output.text, /private-fetch-secret/);
   assert.equal(options.prompts.filter((prompt) => prompt === 'Model ID [required]: ').length, 3);
 });
