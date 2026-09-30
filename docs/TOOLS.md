@@ -34,11 +34,18 @@ must still be an object with string `path` and `content`; parsing never grants
 an additional tool or path. Malformed calls are retried once with a short
 tool-only instruction. Another failure produces a visible error and unverified
 planning stubs, not an exception that ends `/run` in the shell.
-It accepts the existing JSON plan format or a complete written TASK followed
-by confirmation. Written tasks must retain the original Ask and pass the
+It accepts the existing JSON plan format or a complete written TASK, which
+finishes planning in that tool response without another confirmation turn.
+Written tasks accept case-insensitive title, `Original Ask`/`Ask`,
+`Acceptance Checks`/`acceptance_checks`, and `Allowed Files`/`Files allowed`
+headings in any order, with other sections such as Scope retained. They must
+contain the issue Ask text and pass the
 same title, metadata, acceptance-check, allowed-path, and routed-model checks.
 The harness finalizes the managed recipe/task/estimate through this writer;
 recipe topology and estimation evidence remain harness-owned, not model grants.
+Coder context, estimation, file allowlists, and reviewer evidence use the same
+task section parser. A validated cached recipe/task can be handed directly
+to the coder without giving the planner an app-code tool.
 Draft-only Ask planning outside an issue worktree has no file tool. Empty
 endpoints still use the deterministic stub; trusted planning artifacts are
 written without any model calls or app-code changes.

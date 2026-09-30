@@ -10,7 +10,11 @@ result, and diff and writes REVIEW.md with pass/fail reasons and security notes.
 Rerunning the same issue reuses its branch/worktree rather than creating a
 second branch. Existing app changes and assignment/environment files remain;
 the previous generated run outputs are preserved in a Git-metadata archive
-before new outputs are written. Tracked or unsafe artifact paths are refused.
+before new outputs are written. Valid existing RECIPE/TASK files are kept and
+skip the planner; invalid handoffs are archived and replanned. Archived outputs
+must be untracked and safe; no app code is archived or replaced.
+Complete tool-written tasks finish without a second model turn and accept the
+case-insensitive section aliases described in [tools](TOOLS.md).
 Malformed planner tool calls receive one repair attempt; failure writes a clear
 unverified planning stub and disables coding/publication. The standalone CLI
 returns a failed exit status, while the REPL stays open for another command.

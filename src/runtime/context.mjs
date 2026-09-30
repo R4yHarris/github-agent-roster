@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { ensureLocalPath } from '../lib/paths.mjs';
 import { taskFilesAllowed } from '../planner/stub.mjs';
+import { parseTaskDocument } from '../planner/task.mjs';
 import { loadPrincipal } from '../seats/principal.mjs';
 import { readMemory, redactSecrets } from './memory.mjs';
 import { loadSkills, previewSkills } from './skills.mjs';
@@ -59,9 +60,7 @@ export async function loadContext({ worktree, memoryPath, repoRoot, config, prin
     readMemory({ file: memoryPath, repoRoot, limit: 20, env, apiKeyEnv: config?.llm?.api_key_env }),
   ]);
   const files = taskFilesAllowed(task);
-  if (!/^# Task: .+$/m.test(task) || !/^## Acceptance checks\n(?:- .+\n)+/m.test(task)) {
-    throw new Error('TASK.md needs a title and acceptance checks');
-  }
+  parseTaskDocument(task);
   const skills = previewSkills(await loadSkills({ repoRoot, skillsPath: config?.paths?.skills, task }));
   const { pack, truncated } = boundedPack([
     { heading: `Principal ${principal.id}:`, body: principal.content.trim(), required: true },

@@ -1,10 +1,68 @@
+import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { TextDecoder } from 'node:util';
 import { parseRecipe } from '../lib/recipe.mjs';
-import { planAsk } from '../planner/stub.mjs';
+import { planAsk, planFromTask } from '../planner/stub.mjs';
 import { appendMemory, readMemory, seatMemoryPath } from '../runtime/memory.mjs';
 import { writeEstimate } from '../runtime/estimate.mjs';
 import { buildRun } from '../metrics/run.mjs';
 import { createTools } from '../runtime/tools.mjs';
+import { ensureLocalPath } from '../lib/paths.mjs';
+import { taskSections } from '../planner/task.mjs';
+
+function validateBuiltinRecipe(source, reference) {
+  const recipe = parseRecipe(source);
+  if (recipe.ask !== reference || recipe.seats.length !== 3 ||
+      recipe.seats[0].id !== 'planner' || recipe.seats[0].worker !== 'builtin' ||
+      recipe.seats[1].id !== 'coder' || recipe.seats[1].worker !== 'builtin' ||
+      recipe.seats[2].id !== 'reviewer' || recipe.seats[2].worker !== 'builtin') {
+    throw new TypeError('Builtin planner must emit planner, coder, and reviewer seats for this issue in order');
+  }
+}
+
+async function readArtifact(worktree, name) {
+  const file = path.join(worktree, name);
+  await ensureLocalPath(file, worktree);
+  const entry = await fs.lstat(file).catch((error) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (!entry) return null;
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1 || entry.size > 65_536) {
+    throw new Error('Existing planning artifacts must be regular, single-link files of at most 64 KiB');
+  }
+  return new TextDecoder('utf-8', { fatal: true }).decode(await fs.readFile(file));
+}
+
+export async function readPlannerHandoff({ worktree, reference, ask, lockedModel }) {
+  const [recipe, task] = await Promise.all([
+    readArtifact(worktree, 'RECIPE.yml'), readArtifact(worktree, 'TASK.md'),
+  ]);
+  if (recipe === null || task === null) return { plan: null, reason: 'Existing RECIPE/TASK handoff is incomplete' };
+  try {
+    validateBuiltinRecipe(recipe, reference);
+    const metadata = planFromTask(task, ask);
+    if (taskSections(task).sections.some(({ name }) => name === 'planning failure')) {
+      throw new TypeError('Existing TASK records a failed planner attempt');
+    }
+    if (lockedModel && metadata.model && metadata.model !== lockedModel) {
+      throw new TypeError('The routed planner must keep the selected fleet model');
+    }
+  } catch (error) {
+    if (!(error instanceof Error)) throw error;
+    return { plan: null, reason: 'Existing RECIPE/TASK do not validate for this issue; replanning is required' };
+  }
+  return { plan: { recipe, task, recipePath: path.join(worktree, 'RECIPE.yml'),
+    taskPath: path.join(worktree, 'TASK.md'), reused: true, run: null, turns: 0, usage: null, response: null } };
+}
+
+export async function preparePlannerHandoff(plan, { worktree, learningRoot, config, env }) {
+  if (await readArtifact(worktree, 'RECIPE.yml') !== plan.recipe || await readArtifact(worktree, 'TASK.md') !== plan.task) {
+    throw new Error('Existing RECIPE/TASK changed after validation; refusing the cached handoff');
+  }
+  const { task: _updatedTask, ...estimated } = await writeEstimate(plan.task, { worktree, learningRoot, config, env });
+  return { ...plan, ...estimated };
+}
 
 export async function runPlanner({
   worktree, repoRoot, issue, ask = issue?.body, title = issue?.title,
@@ -37,13 +95,7 @@ export async function runPlanner({
       tools, onEvent,
       onResponse: (response) => { lastResponse = response; },
     });
-    const recipe = parseRecipe(plan.recipe);
-    if (recipe.ask !== reference || recipe.seats.length !== 3 ||
-        recipe.seats[0].id !== 'planner' || recipe.seats[0].worker !== 'builtin' ||
-        recipe.seats[1].id !== 'coder' || recipe.seats[1].worker !== 'builtin' ||
-        recipe.seats[2].id !== 'reviewer' || recipe.seats[2].worker !== 'builtin') {
-      throw new Error('Builtin planner must emit planner, coder, and reviewer seats in order');
-    }
+    validateBuiltinRecipe(plan.recipe, reference);
     plan = { ...plan, ...await writeEstimate(plan.task, {
       worktree, learningRoot, config, env, recommendation: plan.feedback?.recommendation,
       writeArtifact: tools.write_file,

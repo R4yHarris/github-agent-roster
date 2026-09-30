@@ -208,7 +208,7 @@ test('planner write_file creates TASK.md and finalizes all three artifacts befor
           }).map(([path, content], index) => ({ id: `plan-${index}`, type: 'function',
             function: { name: 'write_file', arguments: JSON.stringify({ path, content }) } })),
         } }],
-        usage: { prompt_tokens: 10, completion_tokens: 5 },
+        model: 'actual-planner-model', usage: { prompt_tokens: 100, completion_tokens: 40 },
       });
       assert.equal(readFileSync(join(worktree, 'TASK.md'), 'utf8'), draft.task);
       assert.equal(readFileSync(join(worktree, 'ESTIMATE.md'), 'utf8'), '# Draft estimate\n');
@@ -220,9 +220,9 @@ test('planner write_file creates TASK.md and finalizes all three artifacts befor
       });
     },
   });
-  assert.equal(calls, 2);
-  assert.equal(result.turns, 2);
-  assert.deepEqual(result.usage, { prompt_tokens: 110, completion_tokens: 45 });
+  assert.equal(calls, 1);
+  assert.equal(result.turns, 1);
+  assert.deepEqual(result.usage, { prompt_tokens: 100, completion_tokens: 40 });
   assert.equal(result.run.metrics.model, 'actual-planner-model');
   assert.equal(result.run.metrics.prompt_tokens, 100);
   assert.equal(result.run.metrics.completion_tokens, 40);
@@ -318,7 +318,7 @@ test('a JSON tool payload embedded in planner text writes a task and finishes no
       } }] });
     },
   });
-  assert.equal(calls, 2);
+  assert.equal(calls, 1);
   assert.equal(result.error, undefined);
   assert.equal(readFileSync(result.taskPath, 'utf8'), result.task);
 });

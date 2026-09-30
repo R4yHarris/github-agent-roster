@@ -37,6 +37,13 @@ the assignment/environment are preserved. An existing branch is never passed
 to `git worktree add -b`. Malformed planner tool output is repaired once; if it
 still cannot be decoded, RECIPE/TASK stubs and a clear error are written, coding
 and publication stay disabled, and `/help`, `/quit`, or a later `/run` still work.
+When the existing RECIPE/TASK validate for the issue, `/run N` preserves them
+and skips planner execution entirely. A complete newly written TASK also ends
+planning immediately instead of consuming another turn for confirmation.
+Heading case and the `Original Ask`, `Acceptance Checks`/`acceptance_checks`,
+and `Allowed Files` aliases are accepted by all task consumers. Allowed Files
+must be explicit, and cached recipes must still match the builtin runtime
+schema; a model's task-plan YAML is not a runtime seat recipe.
 
 `/run N` streams timestamped seat activity to stderr immediately, independently
 of its final summary. The same metadata is appended to the issue repository's

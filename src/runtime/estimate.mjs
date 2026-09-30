@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import { excellenceFailed, inferTaskClass, joinLearning, loadLearning, median, TASK_CLASSES, validateLocalEvaluation } from '../lib/learn.mjs';
-import { splitTaskFrontmatter } from './skills.mjs';
+import { taskSections } from '../planner/task.mjs';
 
 const fields = ['difficulty', 'estimate_min', 'task_class', 'model'];
 
@@ -47,9 +47,10 @@ export function estimateTask(metadata = {}, evaluations = [], defaultModel = '')
 function readMetadata(header) {
   const metadata = {};
   for (const line of header.split('\n')) {
-    const match = /^(difficulty|estimate_min|task_class|model):[ \t]*(.*)$/.exec(line);
+    const match = /^(?:-[ \t]+)?(difficulty|estimate_min|task_class|model):[ \t]*(.*)$/i.exec(line.trim());
     if (!match) continue;
-    const [, field, value] = match;
+    const field = match[1].toLowerCase();
+    const value = match[2];
     if (Object.hasOwn(metadata, field)) throw new TypeError(`TASK.md has duplicate ${field}`);
     if (['difficulty', 'estimate_min'].includes(field)) {
       if (!/^\d+$/.test(value)) throw new TypeError(`Task ${field} must be an integer`);
@@ -103,27 +104,21 @@ export async function writeEstimate(task, {
   return { task: updatedTask, metadata, estimate, estimatePath };
 }
 
-function taskParts(task) {
-  if (typeof task !== 'string') {
-    throw new TypeError('Estimation requires a TASK.md document');
-  }
-  const { frontmatter, body: normalized } = splitTaskFrontmatter(task);
-  if (!normalized.startsWith('# Task: ')) {
-    throw new TypeError('Estimation requires a TASK.md document');
-  }
-  const section = normalized.search(/^## /m);
-  const header = section < 0 ? normalized : normalized.slice(0, section);
-  const body = section < 0 ? '' : normalized.slice(section);
-  return { frontmatter, header, body };
+function taskMetadata(parts) {
+  const metadata = parts.sections.find(({ name }) => name === 'metadata')?.content ?? '';
+  return readMetadata(`# Task: ${parts.title}\n${parts.header.split('\n').slice(1).join('\n')}\n${metadata}`);
 }
 
 export function readTaskMetadata(task) {
-  return estimateTask(readMetadata(taskParts(task).header));
+  return estimateTask(taskMetadata(taskSections(task)));
 }
 
 export function updateTaskMetadata(task, metadata) {
-  const { frontmatter, header, body } = taskParts(task);
-  const values = estimateTask({ ...readMetadata(header), ...metadata });
-  const cleanHeader = header.replace(/^(difficulty|estimate_min|task_class|model):[^\n]*\n?/gm, '').trimEnd();
-  return `${frontmatter}${cleanHeader}\n\n${formatMetadata(values)}\n\n${body}`;
+  const parts = taskSections(task);
+  const values = estimateTask({ ...taskMetadata(parts), ...metadata });
+  const removeFields = (text) => text.replace(/^(?:-[ \t]+)?(?:difficulty|estimate_min|task_class|model):[^\n]*\n?/gim, '');
+  const cleanHeader = removeFields(parts.header).trimEnd();
+  const body = parts.sections.map((section) => section.name === 'metadata'
+    ? removeFields(section.source) : section.source).join('');
+  return `${parts.frontmatter}${cleanHeader}\n\n${formatMetadata(values)}\n\n${body}`;
 }
