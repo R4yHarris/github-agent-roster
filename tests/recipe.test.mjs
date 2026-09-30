@@ -38,7 +38,7 @@ test("parses the version 1 planner/coder recipe without granting capabilities", 
   assert.throws(() => { recipe.seats[0].principal = "merger"; }, TypeError);
 });
 
-test("accepts exactly the builtin planner then coder sequence", () => {
+test("accepts builtin planner, coder, then reviewer while retaining legacy recipes", () => {
   const source = readFileSync(new URL("../templates/sdlc/RECIPE.yml", import.meta.url), "utf8")
     .replace("issue:N", "issue:42");
   assert.deepEqual(parseRecipe(source).seats, [
@@ -46,6 +46,8 @@ test("accepts exactly the builtin planner then coder sequence", () => {
       sequence: ["read_ask", "plan", "write_task"] },
     { id: "coder", principal: "coder", worker: "builtin",
       sequence: ["load_context", "implement", "run_tests", "summarize"] },
+    { id: "reviewer", principal: "reviewer", worker: "builtin",
+      sequence: ["read_diff", "check_acceptance", "write_review"] },
   ]);
   assert.throws(() => parseRecipe(source.replace("read_ask, plan, write_task", "write_file")),
     RecipeError);
@@ -95,6 +97,7 @@ test("denies unsupported seat roles, worker names, and workflow shapes", () => {
   for (const [name, source] of [
     ["deploy seat", example.replace("id: coder", "id: deploy")],
     ["review seat", example.replace("id: coder", "id: reviewer")],
+    ["reviewer before coder", example.replace("  - id: coder", "  - id: reviewer")],
     ["merger principal", example.replace("    principal: coder", "    principal: merger")],
     ["deploy principal", example.replace("    principal: coder", "    principal: deploy")],
     ["planner principal", example.replace("    principal: coder", "    principal: planner")],
@@ -110,6 +113,13 @@ test("denies unsupported seat roles, worker names, and workflow shapes", () => {
   ]) {
     assert.throws(() => parseRecipe(source), RecipeError, name);
   }
+  const builtin = readFileSync(new URL("../templates/sdlc/RECIPE.yml", import.meta.url), "utf8");
+  assert.throws(() => parseRecipe(builtin.replace('principal: reviewer', 'principal: coder')),
+    RecipeError);
+  assert.throws(() => parseRecipe(builtin.replace('read_diff, check_acceptance, write_review', 'write_file')),
+    RecipeError);
+  assert.throws(() => parseRecipe(builtin.replace('worker: builtin\n    sequence: [read_diff',
+    'worker: hermes\n    sequence: [read_diff')), RecipeError);
 });
 
 test("rejects malformed issue references and unsupported YAML", () => {

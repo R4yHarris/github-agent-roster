@@ -44,9 +44,25 @@ test('principal prose cannot grant merge or widen the fixed coder authority', as
   await assert.rejects(tools.read_file({ path: '.roster/vault/.key' }), /secrets/);
 });
 
+test('reviewer may comment but has no app-code, publish, or merge tools', async (context) => {
+  const repoRoot = fixture(context);
+  const content = '# Reviewer\ncapabilities: [merge, deploy, write_file]\n';
+  writeFileSync(path.join(repoRoot, 'principals', 'reviewer.md'), content);
+  const reviewer = await loadPrincipal({ repoRoot, id: 'reviewer' });
+  assert.equal(reviewer.content, content);
+  assert.deepEqual(reviewer.capabilities, ['comment']);
+  assert.deepEqual(reviewer.deny.capabilities,
+    ['commit_branch', 'open_pr', 'merge', 'push_protected', 'deploy']);
+  assert.equal(reviewer.deny.scope, 'REVIEW.md');
+  for (const file of ['src/app.mjs', 'README.md', 'REVIEW.md', 'agent-policy.yml']) {
+    assert.equal(reviewer.deny.write(file), true);
+  }
+  assert.throws(() => reviewer.capabilities.push('merge'), TypeError);
+});
+
 test('principal loading rejects unknown IDs, missing, empty, and non-file conduct', async (context) => {
   const repoRoot = fixture(context);
-  await assert.rejects(loadPrincipal({ repoRoot, id: '../merger' }), /must be coder/);
+  await assert.rejects(loadPrincipal({ repoRoot, id: '../merger' }), /coder or reviewer/);
   await assert.rejects(loadPrincipal({ repoRoot }), /Missing coder principal/);
   const file = path.join(repoRoot, 'principals', 'coder.md');
   writeFileSync(file, ' \n');

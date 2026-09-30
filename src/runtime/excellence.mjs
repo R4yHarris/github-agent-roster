@@ -45,7 +45,8 @@ export async function snapshotWorktree(worktree, { memoryPath } = {}) {
   async function visit(directory = '') {
     for (const entry of await fs.readdir(path.join(root, directory), { withFileTypes: true })) {
       const file = path.posix.join(directory, entry.name);
-      if (file === '.git' || file === 'RESULT.md' || ignoredNotebook(file, root, memoryPath)) continue;
+      if (file === '.git' || file === 'RESULT.md' || file === 'REVIEW.md' ||
+          ignoredNotebook(file, root, memoryPath)) continue;
       const target = path.join(root, file);
       const stat = await fs.lstat(target, { bigint: true });
       if (entry.isDirectory() && !entry.isSymbolicLink()) {

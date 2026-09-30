@@ -36,6 +36,8 @@ Research usage joins coder usage; loop and research turns are separate.
 Configured runs expose the existing contracts AI-Run without inventing unknown
 counts. Private before/after snapshots are in-process evidence, not source
 bodies or a persistent board.
+Once RESULT.md is written, the same-process [reviewer seat](REVIEW.md)
+checks the task and diff without coder tools and writes REVIEW.md.
 Duplicate or malformed test declarations fail during preparation rather than
 silently waiving verification; `tests: required` explicitly retains the default.
 
@@ -56,12 +58,13 @@ otherwise local opaque IDs are generated. Opt-in `.roster/runs` recording
 includes the gate outcome so operational failures cannot look like accepted
 runs to [feedback-based routing](ROUTING.md).
 
-`--auto-model` and `--publish` belong to the issue pipeline and are not accepted
+`--auto-model`, `--publish`, and `--skip-review` belong to the issue pipeline and are not accepted
 on the standalone command. Review a passing run before the explicit App SDK
 handoff. The command never creates a draft PR or publishes by itself.
 
-The existing `roster run --issue N` and shell `/run N` still run planner then
-coder. For compatibility, `--issue N --seat coder` still aliases that pair;
+The existing `roster run --issue N` and shell `/run N` run planner, coder,
+then reviewer. For compatibility, `--issue N --seat coder` still aliases the
+full sequence;
 only the **no-issue** form above runs an already-planned coder alone.
 
 ## Stub and failures

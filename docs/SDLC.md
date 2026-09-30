@@ -142,6 +142,11 @@ success. A successful run appends memory, runs the excellence gate, and writes R
 Failed configured runs also save a truthful result before rejecting. See the
 [five-tool contract and denylist](TOOLS.md) for the exact inputs and
 protected surfaces.
+After RESULT.md, the read-only builtin reviewer checks the task acceptance
+checks and the Git diff against that result, then writes REVIEW.md with
+pass/fail reasons and security notes. A failed review leaves the coder's
+changes intact but blocks Roster-managed publication by default; see
+[review and explicit bypass](REVIEW.md).
 
 With no endpoint, the stub writes a deterministic `RESULT.md` summary, exits
 zero, and **does not edit code or run tests**. It cannot deliver a software
@@ -165,13 +170,16 @@ task-allowed files, excluding generated task files and refusing policy,
 workflows, secrets, or other out-of-scope changes. The SDK enforces the
 human-owned policy, waits for required checks, then marks the App PR ready
 and merges only when reviewed policy and repository rules permit it. No
-deploy is requested. For an issue run, the PR body links `Closes #N`. With
+deploy is requested. A passing, unchanged REVIEW.md is required unless
+`--skip-review` explicitly bypasses **only** the reviewer verdict; tests
+and coder excellence must still pass. For an issue run, the PR body lists
+the seats, notes any bypass, and links `Closes #N`. With
 builtin `--publish` or REPL `/publish`, once the SDK confirms a merge,
 Roster verifies the PR, comments on the issue
 with the coder's AI-Run line, and closes it through an issue-scoped App token.
 If post-merge issue operations fail, the merged PR remains merged and the
 error is reported; do not publish a duplicate commit to retry. The runner
-prints one AI-Run for each seat with its own
+prints one AI-Run for each model-backed planner, coder, and reviewer seat with its own
 session and reported token counts; the single code commit published through
 the SDK carries the coder's run. Unknown slots remain unset or `-`. An API key
 is not forwarded to tests or the publisher.

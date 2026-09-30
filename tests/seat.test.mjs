@@ -52,7 +52,9 @@ test('standalone stub follows all stages without a planner, source diff, test, o
   assert.equal(readFileSync(path.join(options.worktree, 'TASK.md'), 'utf8'), options.taskText);
   assert.equal(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), '# Before\n');
   assert.deepEqual(readdirSync(options.worktree).sort(),
-    ['AGENTS.md', 'CONTEXT.md', 'README.md', 'RESEARCH.md', 'RESULT.md', 'TASK.md']);
+    ['AGENTS.md', 'CONTEXT.md', 'README.md', 'RESEARCH.md', 'RESULT.md', 'REVIEW.md', 'TASK.md']);
+  assert.equal(result.review.verdict, 'fail');
+  assert.match(readFileSync(result.review.reviewPath, 'utf8'), /Verdict: fail/);
   assert.match(readFileSync(result.result.resultPath, 'utf8'), /Add a Status section/);
   assert.match(readFileSync(result.result.resultPath, 'utf8'), /Stages: principal -> context -> research -> skills -> tool_loop -> memory -> excellence -> result/);
   assert.equal(existsSync(path.join(options.repoRoot, '.roster', 'memory', 'planner.jsonl')), false);

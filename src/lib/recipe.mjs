@@ -2,11 +2,12 @@ import { lstatSync, readFileSync } from "node:fs";
 import { TextDecoder } from "node:util";
 
 const MAX_RECIPE_BYTES = 65_536;
-const SEAT_IDS = ["planner", "coder"];
+const SEAT_IDS = ["planner", "coder", "reviewer"];
 const WORKERS = ["copilot", "hermes", "builtin"];
 const BUILTIN_SEQUENCES = {
   planner: ["read_ask", "plan", "write_task"],
   coder: ["load_context", "implement", "run_tests", "summarize"],
+  reviewer: ["read_diff", "check_acceptance", "write_review"],
 };
 
 export class RecipeError extends Error {}
@@ -30,8 +31,12 @@ export function parseRecipe(source) {
     if (
       !Object.hasOwn(fields, "id") || !Object.hasOwn(fields, "principal") ||
       !Object.hasOwn(fields, "worker") || !SEAT_IDS.includes(fields.id) ||
-      fields.principal !== "coder" || !WORKERS.includes(fields.worker) ||
-      seatIds.has(fields.id) || (fields.id === "planner" && seatIds.has("coder"))
+      fields.principal !== (fields.id === "reviewer" ? "reviewer" : "coder") ||
+      !WORKERS.includes(fields.worker) || (fields.id === "reviewer" && fields.worker !== "builtin") ||
+      seatIds.has(fields.id) ||
+      (fields.id === "planner" && seatIds.size > 0) ||
+      (fields.id === "coder" && seatIds.has("reviewer")) ||
+      (fields.id === "reviewer" && !seatIds.has("coder"))
     ) invalidRecipe();
     const builtin = fields.worker === "builtin";
     if (builtin !== Object.hasOwn(fields, "sequence") ||

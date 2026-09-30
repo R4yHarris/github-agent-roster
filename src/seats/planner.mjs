@@ -33,10 +33,11 @@ export async function runPlanner({
       config, reference, title, fetchImpl, env, vault, memory, learningRoot,
     });
     const recipe = parseRecipe(plan.recipe);
-    if (recipe.ask !== reference || recipe.seats.length !== 2 ||
+    if (recipe.ask !== reference || recipe.seats.length !== 3 ||
         recipe.seats[0].id !== 'planner' || recipe.seats[0].worker !== 'builtin' ||
-        recipe.seats[1].id !== 'coder' || recipe.seats[1].worker !== 'builtin') {
-      throw new Error('Builtin planner must emit exactly a planner seat followed by a coder seat');
+        recipe.seats[1].id !== 'coder' || recipe.seats[1].worker !== 'builtin' ||
+        recipe.seats[2].id !== 'reviewer' || recipe.seats[2].worker !== 'builtin') {
+      throw new Error('Builtin planner must emit planner, coder, and reviewer seats in order');
     }
     plan = { ...plan, ...await writeEstimate(plan.task, {
       worktree, learningRoot, config, env, recommendation: plan.feedback?.recommendation,

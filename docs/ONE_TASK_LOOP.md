@@ -5,14 +5,21 @@ The default builtin path is `roster run --issue N` ([SDLC](SDLC.md)).
 existing issue, creates one worktree, runs a
 builtin planner to write `RECIPE.yml` and `TASK.md`, then loads roster
 context/skills/memory into the bounded coder loop and writes `RESULT.md`.
+The same-process, read-only [reviewer](REVIEW.md) then reads the task,
+result, and diff and writes REVIEW.md with pass/fail reasons and security notes.
 When no LLM endpoint
 is configured, the deterministic stub writes only the result summary and
 does **not** implement the ask or run tests. With an endpoint, the coder uses
-four guarded tools and must pass a final `node --test` run. It prints an
+five guarded tools and must pass a final `node --test` run. A failed review
+keeps the work but suppresses the publish command. It prints an
 `agent-pr.mjs` command with an explicit `--model` and a `Closes #N` message for the issue worktree
-root; `--publish` alone opts into staging task-allowed
+root; `--publish` opts into staging task-allowed
 changes and invoking the App SDK. Policy, workflows, and credentials are
 never staged by the coder seat.
+An unchanged passing REVIEW.md is required for Roster-managed publication
+unless `--skip-review` explicitly bypasses the reviewer verdict; neither
+option waives coder excellence or required checks. A direct contracts SDK
+command is outside this gate and requires human review.
 
 Manual handoff remains available explicitly:
 

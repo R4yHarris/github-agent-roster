@@ -13,10 +13,10 @@ agents and CI.
 | `/ask TEXT` | Create an issue through `gh`, or write a local Ask, recipe, task, and create command when `gh` is missing. |
 | `/model [MODEL]` | Show the current model or persist a new one to ignored `.roster/config.yml`. |
 | `/effort [l|m|h|x]` | Show the current effort or persist a new level to ignored `.roster/config.yml`. |
-| `/run N [--auto-model]` or `/run --issue N [--auto-model]` | Run the builtin planner then coder in one issue worktree. The optional flag routes an empty configured model only with enough human evaluations; otherwise the stub writes a task and result without editing code or testing. |
+| `/run N [--auto-model]` or `/run --issue N [--auto-model]` | Run builtin planner, coder, then read-only reviewer in one issue worktree. The optional flag routes an empty configured model only with enough human evaluations; otherwise the stub writes an unverified result and failing review without editing code or testing. |
 | `/status [N] [--offline]` | Show an issue, its open branch PR, and worktree path. Defaults to the last run or created issue; offline reads only the cached assignment and reports PR state as unknown. |
 | `/eval TARGET accept\|reject\|rework 1-5 y\|n [--minutes N] [--comment "TEXT"]` | Record the [human retrospective](RETRO.md), including actual minutes and local feedback. |
-| `/publish [SUBJECT]` | Publish reviewed changes using the pinned contracts SDK. After `/run N`, the default subject is `feat: issue N`; a confirmed merge comments on and closes that issue. Otherwise supply a conventional subject. |
+| `/publish [SUBJECT] [--skip-review]` | Publish with an unchanged passing REVIEW.md, or explicitly bypass that verdict. After `/run N`, the default subject is `feat: issue N`; a confirmed merge comments on and closes that issue. Otherwise supply a conventional subject. |
 | `/stats [REF]` | Summarize contracts and local AI-Run records, optionally at a Git ref. |
 | `/recommend feat\|fix\|docs\|test [--difficulty 1-5]` | Recommend model/effort with enough evidence at the requested difficulty, or show insufficient data and the config default. |
 | `/vault` or `/vault list` | List vault entry names, never values. |
@@ -51,11 +51,17 @@ GitHub and does not turn unknown PR state into `none`.
 
 Review the worktree changes before `/publish`. When both `GITHUB_APP_ID` and
 `GITHUB_APP_PRIVATE_KEY_PATH` are set, `/publish` prepares task-allowed files
-from a successful configured `/run`, initializes that worktree's contracts
+from a successful configured `/run` with a passing reviewer verdict,
+initializes that worktree's contracts
 submodule, and invokes the SDK's exported `main` in-process with
 `--model` and `--merge-when-green`. Without a run in this shell, it operates on the
 current feature worktree and requires you to stage reviewed changes first.
 It never commits or pushes with human credentials.
+The [review gate](REVIEW.md) checks that REVIEW.md and the exact task/result
+evidence it reviewed remain unchanged. Without an in-session run, no trusted
+report is available: `/publish` fails unless `--skip-review` is explicit.
+The flag bypasses only the reviewer verdict, not tests, excellence, or App
+policy. A failed review never deletes coder changes.
 
 Without App credentials, `/publish` prints the command instead of executing
 it:
@@ -72,7 +78,8 @@ model rather than a later `/model` setting. GHCP sessions use
 Generated PR bodies include `## Model`, `## Summary`, and `node --test`
 instructions (or an explicit task test waiver). After a run, the summary
 comes from the reviewed result; without a run, the conventional subject
-describes the staged changes.
+describes the staged changes. Issue-run bodies also list the three seats and
+disclose a bypass.
 
 Setting only one App variable is an error. An HTTP 422 response from
 `--merge-when-green` stops the shell and reports that Checks permission is

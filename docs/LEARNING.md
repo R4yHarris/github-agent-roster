@@ -7,7 +7,7 @@ analytics service, or separate task database. GitHub Issues and PRs remain the q
 
 ## Automatic seat runs and optional preparation records
 
-For paired issue runs, each completed planner or coder seat automatically creates
+For issue runs, each completed planner, coder, or reviewer seat automatically creates
 and appends to `.roster/runs/runs.jsonl` in the issue repository. Stub seats record session,
 task, and a recognized task class, but no model or LLM counts. Configured
 seats include model, effort, and token counts only when known. If recording
@@ -17,6 +17,10 @@ outcome and redacted failure reasons as `defects`, including configured failures
 with result evidence, before the error is propagated. Publication rechecks
 append new defects if the verified worktree changes. A recorded failure is
 never treated as a human acceptance.
+Reviewer records use a distinct `roster-N-reviewer` session and only
+model/usage fields from an actual reviewer request. Its pass/fail verdict is
+in REVIEW.md, not a human AI-Eval; a stub or incomplete review does not
+invent usage or acceptance.
 
 Manual `roster prepare --issue N` and the standalone
 `roster run --seat coder --runtime builtin` remain opt-in. Create `.roster/runs` in
@@ -35,7 +39,7 @@ worktree path; inspect that worktree rather than blindly rerunning setup.
 
 For the default `roster run --issue N`, setup adds no preparation record.
 It records one run per completed seat (`roster-N-planner`, then
-`roster-N-coder`) with only that seat's reported metrics.
+`roster-N-coder`, then `roster-N-reviewer`) with only that seat's reported metrics.
 
 The prepare command assigns a worker, not a completed commit. Its generated
 `session` and `task` are known, but the eventual commit SHA is not: the starting

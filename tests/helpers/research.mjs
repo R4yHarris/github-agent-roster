@@ -11,6 +11,15 @@ export function withResearchSummary(fetchImpl) {
         usage: { prompt_tokens: 0, completion_tokens: 0 },
       }) };
     }
+    if (body?.messages?.[0]?.content?.startsWith('You are the builtin reviewer seat.')) {
+      assert.equal(body.tools, undefined);
+      return { status: 200, json: async () => ({
+        choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
+          verdict: 'pass', reasons: [], security_notes: [],
+        }) } }],
+        usage: { prompt_tokens: 4, completion_tokens: 2 },
+      }) };
+    }
     return await fetchImpl(url, request);
   };
 }

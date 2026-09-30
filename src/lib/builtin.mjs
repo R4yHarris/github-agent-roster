@@ -8,6 +8,7 @@ import { buildPublishEnv, buildRun, resolvePublishModel, RUN_ENV_NAMES } from '.
 import { taskFilesAllowed } from '../planner/stub.mjs';
 import { runCoder } from '../seats/coder.mjs';
 import { runPlanner } from '../seats/planner.mjs';
+import { requirePassingReview, runReviewer } from '../seats/reviewer.mjs';
 import { isAllowedFile, isForbiddenWrite, isManagedFile } from '../runtime/tools.mjs';
 import { checkExcellence, redactEvidence } from '../runtime/excellence.mjs';
 import { loadConfig } from './config.mjs';
@@ -76,6 +77,7 @@ export async function prepareBuiltinPublication(run, {
   cwd = process.cwd(),
   config = loadConfig({ repoRoot: rosterRoot }),
   env = process.env,
+  skipReview = false,
 } = {}) {
   if (typeof run?.worktreePath !== 'string' || typeof run.planner?.recipe !== 'string' ||
       typeof run.planner?.task !== 'string' || !run.runs?.coder?.env) {
@@ -89,6 +91,7 @@ export async function prepareBuiltinPublication(run, {
     throw new Error('Publishing requires GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH');
   }
   const publishEnv = buildPublishEnv({ config, env, run: run.runs.coder });
+  await requirePassingReview(run, skipReview);
   await ensureUnchanged(run.recipePath, run.planner.recipe);
   await ensureUnchanged(run.taskPath, run.planner.task);
   await ensureUnchanged(run.planner.estimatePath, run.planner.estimate);
@@ -131,30 +134,53 @@ export async function runBuiltinTask({
   }
   resolveContractsPath({ repoRoot, cwd, env });
   const worktreePath = path.resolve(cwd);
+  const reviewerSession = `roster-${randomBytes(8).toString('hex')}-reviewer`;
+  const metricEnv = { ...env };
+  for (const name of [...RUN_ENV_NAMES, config.llm.api_key_env,
+    'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH', 'GH_TOKEN', 'GITHUB_TOKEN']) delete metricEnv[name];
   const record = async (result) => {
-    const metricEnv = { ...env };
-    for (const name of [...RUN_ENV_NAMES, config.llm.api_key_env,
-      'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH', 'GH_TOKEN', 'GITHUB_TOKEN']) delete metricEnv[name];
     await recordRun({
       task, session, task_class: result.taskMetadata?.task_class,
       provider: result.run?.provider,
       ...excellenceFields(result.excellence, { config, env }),
     }, { cwd: worktreePath, env: { ...metricEnv, ...result.run?.env } });
   };
+  const reviewSeat = async (result) => {
+    const reviewConfig = { ...config, llm: { ...config.llm,
+      model: result.mode === 'llm' ? result.model : config.llm.model } };
+    const review = await runReviewer({
+      worktree: worktreePath, repoRoot, config: reviewConfig, coderResult: result,
+      env, fetchImpl, vault,
+    });
+    const reviewRun = review.queried ? buildRun({
+      config: reviewConfig, usage: review.usage ?? {}, task, session: reviewerSession, env,
+    }) : null;
+    await recordRun({ task, session: reviewerSession, provider: reviewRun?.provider }, {
+      cwd: worktreePath, env: { ...metricEnv, ...reviewRun?.env },
+    });
+    return { review, reviewRun };
+  };
   let result;
   try {
     result = await runCoder({ worktree: worktreePath, repoRoot, config, env, task, session,
       fetchImpl, vault, runTestCommand });
   } catch (error) {
-    if (error instanceof Error && error.result) await record(error.result);
+    if (error instanceof Error && error.result) {
+      await record(error.result);
+      error.result.review = (await reviewSeat(error.result)).review;
+    }
     throw error;
   }
   await record(result);
+  const { review, reviewRun } = await reviewSeat(result);
   log(`Worktree: ${worktreePath}\nTASK: ${path.join(worktreePath, 'TASK.md')}\n` +
     `CONTEXT: ${result.contextPath}\nRESEARCH: ${result.researchPath}\nRESULT: ${result.resultPath}\n` +
+    `REVIEW: ${review.reviewPath} (${review.verdict})\n` +
     `Mode: ${result.mode}\n` + (result.run ? `AI-Run: ${result.run.line}\n` : '') +
+    (reviewRun ? `Reviewer AI-Run: ${reviewRun.line}\n` : '') +
     'Single coder task complete; publication remains an explicit reviewed App SDK handoff.');
-  return { worktreePath, task, session, result, run: result.run };
+  return { worktreePath, task, session, reviewerSession, result, review, run: result.run,
+    reviewerRun: reviewRun };
 }
 
 export async function runBuiltinIssue(issueNumber, {
@@ -163,8 +189,9 @@ export async function runBuiltinIssue(issueNumber, {
   config = loadConfig({ repoRoot }),
   env = process.env,
   publish = false,
-  seats = 'planner,coder',
+  seats = 'planner,coder,reviewer',
   autoModel = false,
+  skipReview = false,
   log = console.log,
   runCommand,
   fetchImpl,
@@ -178,10 +205,11 @@ export async function runBuiltinIssue(issueNumber, {
   if (!config.llm.model && (env.AI_MODEL || env.ROSTER_MODEL)) {
     config = { ...config, llm: Object.freeze({ ...config.llm, model: resolvePublishModel({ config, env }) }) };
   }
-  if (seats !== 'planner,coder') {
-    throw new TypeError('Builtin seats must be planner,coder in that order');
+  if (!['planner,coder', 'planner,coder,reviewer'].includes(seats)) {
+    throw new TypeError('Builtin seats must be planner,coder,reviewer in that order');
   }
   if (typeof autoModel !== 'boolean') throw new TypeError('--auto-model must be a boolean');
+  if (typeof skipReview !== 'boolean') throw new TypeError('--skip-review must be a boolean');
   if (autoModel && config.llm.model) {
     throw new Error('--auto-model requires an empty config.llm.model');
   }
@@ -231,6 +259,7 @@ export async function runBuiltinIssue(issueNumber, {
   const sessions = {
     planner: `roster-${prepared.issue.number}-planner`,
     coder: prepared.session,
+    reviewer: `roster-${prepared.issue.number}-reviewer`,
   };
   const planner = await runPlanner({
     worktree: worktreePath, repoRoot, issue: prepared.issue, config: activeConfig,
@@ -253,6 +282,21 @@ export async function runBuiltinIssue(issueNumber, {
     ...activeConfig.llm, model: planner.metadata.model || activeConfig.llm.model,
     effort: planner.feedback?.effort ?? activeConfig.llm.effort,
   }) };
+  const reviewSeat = async (coderResult) => {
+    const reviewConfig = { ...coderConfig, llm: {
+      ...coderConfig.llm, model: coderResult.mode === 'llm' ? coderResult.model : coderConfig.llm.model,
+    } };
+    const review = await runReviewer({
+      worktree: worktreePath, repoRoot, config: reviewConfig,
+      coderResult, fetchImpl, env, vault,
+    });
+    const reviewerRun = review.queried ? buildRun({
+      config: reviewConfig, usage: review.usage ?? {}, session: sessions.reviewer,
+      task: prepared.task, env,
+    }) : null;
+    await recordSeat(sessions.reviewer, reviewerRun);
+    return { review, reviewerRun };
+  };
   let result;
   try {
     result = await runCoder({
@@ -260,27 +304,34 @@ export async function runBuiltinIssue(issueNumber, {
       fetchImpl, env, vault, runTestCommand, priorFeedback: planner.feedback?.context,
     });
   } catch (error) {
-    if (error instanceof Error && error.result) await recordSeat(sessions.coder, error.result.run, error.result.excellence);
+    if (error instanceof Error && error.result) {
+      await recordSeat(sessions.coder, error.result.run, error.result.excellence);
+      error.result.review = (await reviewSeat(error.result)).review;
+    }
     throw error;
   }
-  await ensureUnchanged(planner.recipePath, planner.recipe);
-  await ensureUnchanged(planner.taskPath, planner.task);
-  await ensureUnchanged(planner.estimatePath, planner.estimate);
   const coderRun = result.mode === 'llm' ? buildRun({
     config: coderConfig, usage: result.usage ?? {}, session: sessions.coder, task: prepared.task,
     env,
   }) : null;
   await recordSeat(sessions.coder, coderRun, result.excellence);
-  const runs = { planner: plannerRun, coder: coderRun };
+  const { review, reviewerRun } = await reviewSeat(result);
+  await ensureUnchanged(planner.recipePath, planner.recipe);
+  await ensureUnchanged(planner.taskPath, planner.task);
+  await ensureUnchanged(planner.estimatePath, planner.estimate);
+  const runs = { planner: plannerRun, coder: coderRun, reviewer: reviewerRun };
   const model = result.mode === 'llm' ? resolvePublishModel({ config: coderConfig, env }) : null;
   const publishMessage = model ? buildPublishMessage({
     subject: `feat: issue ${prepared.issue.number}`, model, issueNumber: prepared.issue.number,
     summary: redactEvidence(result.summary, { env, apiKeyEnv: config.llm.api_key_env }),
     testsSkipped: result.testsSkipped,
+    seats: `planner, coder, reviewer (${skipReview ? 'gate bypassed with --skip-review' : review.verdict})`,
   }) : null;
-  const command = model ? formatPublishCommand({ message: publishMessage, model }) : null;
+  const command = model && (review.verdict === 'pass' || skipReview)
+    ? formatPublishCommand({ message: publishMessage, model }) : null;
   log(`Worktree: ${worktreePath}\nAssignment: ${prepared.assignmentPath}\n` +
-    `RECIPE: ${planner.recipePath}\nTASK: ${planner.taskPath}\nESTIMATE: ${planner.estimatePath}\nRESULT: ${result.resultPath}\n` +
+    `RECIPE: ${planner.recipePath}\nTASK: ${planner.taskPath}\nESTIMATE: ${planner.estimatePath}\n` +
+    `RESULT: ${result.resultPath}\nREVIEW: ${review.reviewPath} (${review.verdict})\n` +
     `Planner session: ${sessions.planner}\n` +
     (plannerRun ? `AI-Run: ${plannerRun.line}\n` : '') +
     `Coder session: ${sessions.coder}\n` +
@@ -288,16 +339,20 @@ export async function runBuiltinIssue(issueNumber, {
       `For manual publication, set these environment variables:\n` +
       Object.entries(coderRun.env).map(([name, value]) => `${name}=${value}\n`).join('')
       : 'Stub run: no AI-Run metadata and no code to publish.\n') +
+    `Reviewer session: ${sessions.reviewer}\n` +
+    (reviewerRun ? `AI-Run: ${reviewerRun.line}\n` : '') +
     (command ? `From the worktree root, publish only after reviewing changes:\n${command}`
-      : 'Publication unavailable: set model and complete a configured coder run with passing checks.'));
+      : model
+        ? 'Publication unavailable: REVIEW.md failed; rerun the reviewer or explicitly use --skip-review.'
+        : 'Publication unavailable: set model and complete a configured coder run with passing checks.'));
 
   const completed = {
     ...prepared, recipePath: planner.recipePath, taskPath: planner.taskPath,
-    planner, result, sessions, runs, run: coderRun, command, autoRecommendation,
+    planner, result, review, sessions, runs, run: coderRun, command, autoRecommendation,
   };
   if (publish) {
     const { contractsPath, publishEnv, model: publishModel } = await prepareBuiltinPublication(completed, {
-      cwd, config: coderConfig, env,
+      cwd, config: coderConfig, env, skipReview,
     });
     let stdout;
     try {

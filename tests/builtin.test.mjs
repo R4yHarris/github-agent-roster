@@ -41,6 +41,8 @@ function fixture(context) {
   mkdirSync(path.join(repoRoot, 'principals'));
   writeFileSync(path.join(repoRoot, 'principals', 'coder.md'),
     readFileSync(new URL('../principals/coder.md', import.meta.url), 'utf8'));
+  writeFileSync(path.join(repoRoot, 'principals', 'reviewer.md'),
+    readFileSync(new URL('../principals/reviewer.md', import.meta.url), 'utf8'));
   mkdirSync(target);
   cpSync(new URL('../skills/', import.meta.url), path.join(repoRoot, 'skills'), { recursive: true });
   mkdirSync(path.join(contracts, 'scripts'), { recursive: true });
@@ -106,25 +108,29 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
   assert.match(readFileSync(result.assignmentPath, 'utf8'), /README has a Status section/);
   const recipe = parseRecipe(readFileSync(result.recipePath, 'utf8'));
   assert.equal(recipe.ask, 'issue:42');
-  assert.deepEqual(recipe.seats.map(({ id }) => id), ['planner', 'coder']);
+  assert.deepEqual(recipe.seats.map(({ id }) => id), ['planner', 'coder', 'reviewer']);
   assert.match(readFileSync(result.taskPath, 'utf8'), /## Acceptance checks/);
   assert.equal(readFileSync(result.taskPath, 'utf8'), result.planner.task);
   assert.equal(readFileSync(result.planner.estimatePath, 'utf8'), result.planner.estimate);
   assert.match(result.planner.estimate, /difficulty: 2\nestimate_min: 15/);
   assert.equal(readFileSync(result.recipePath, 'utf8'), result.planner.recipe);
-  assert.deepEqual(result.sessions, { planner: 'roster-42-planner', coder: 'roster-42-coder' });
+  assert.deepEqual(result.sessions, {
+    planner: 'roster-42-planner', coder: 'roster-42-coder', reviewer: 'roster-42-reviewer',
+  });
   assert.equal(readFileSync(result.envPath, 'utf8'),
     'AI_TASK=issue-42\nAI_SESSION=roster-42-coder\n');
   assert.match(readFileSync(result.result.resultPath, 'utf8'), /Deterministic stub only/);
   assert.match(result.result.summary, /Add Status to README/);
   assert.match(result.result.summary, /README has a Status section/);
+  assert.equal(result.review.verdict, 'fail');
+  assert.match(readFileSync(result.review.reviewPath, 'utf8'), /Verdict: fail/);
   assert.equal(readFileSync(path.join(options.target, 'README.md'), 'utf8'), '# Example\n');
   assert.equal(result.run, result.runs.coder);
   assert.equal(result.result.mode, 'stub');
   assert.equal(result.command, null);
   assert.match(logs[0], /Publication unavailable: set model/);
   assert.equal((logs[0].match(/AI-Run:/g) ?? []).length, 0);
-  assert.deepEqual(result.runs, { planner: null, coder: null });
+  assert.deepEqual(result.runs, { planner: null, coder: null, reviewer: null });
   assert.deepEqual(options.calls.map(({ program }) => program), ['git', 'git', 'gh', 'git']);
   assert.equal(options.calls.filter(({ program, args }) =>
     program === 'git' && args[0] === 'worktree').length, 1);
@@ -139,6 +145,7 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
     { session: result.sessions.planner, task: 'issue-42', task_class: 'feat' },
     { session: result.sessions.coder, task: 'issue-42', task_class: 'feat', excellence: 'fail',
       defects: result.result.excellence.reasons },
+    { session: result.sessions.reviewer, task: 'issue-42', task_class: 'feat' },
   ]);
   assert.equal(existsSync(path.join(options.target, '.roster', 'evals.jsonl')), false);
   assert.doesNotThrow(() => git(options.target, 'check-ignore', '--quiet',
@@ -150,7 +157,7 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
 test('--publish requires an LLM and App environment before any GitHub or worktree action', async (context) => {
   const options = fixture(context);
   await assert.rejects(runBuiltinIssue(42, {
-    ...options, config: stubConfig, publish: true,
+    ...options, config: stubConfig, publish: true, skipReview: true,
     env: { ...options.env, AI_MODEL: 'reviewed-model',
       GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'app.pem' },
   }), /requires an LLM endpoint/);
@@ -234,7 +241,8 @@ test('ROSTER_MODEL selects the same served model for both seats and their metada
   assert.equal(result.runs.planner.env.AI_MODEL, 'served-model');
   assert.equal(result.runs.coder.env.AI_MODEL, 'served-model');
   assert.deepEqual(loadLearning({ cwd: options.target }).runs.map(({ provider }) => provider),
-    ['local', 'local']);
+    ['local', 'local', undefined]);
+  assert.equal(result.review.verdict, 'fail');
   assert.equal(config.llm.model, '');
 });
 
@@ -262,11 +270,12 @@ test('GitHub Copilot provider and reported usage reach both seat journals and AI
   assert.equal(result.runs.coder.provider, 'github-copilot');
   assert.match(result.runs.coder.line, /^1\|github-copilot\|local-model@-\|/);
   const records = loadLearning({ cwd: options.target }).runs;
-  assert.deepEqual(records.map(({ provider, model, context_used, context_out }) =>
+  assert.deepEqual(records.slice(0, 2).map(({ provider, model, context_used, context_out }) =>
     ({ provider, model, context_used, context_out })), [
     { provider: 'github-copilot', model: 'local-model', context_used: 1, context_out: 2 },
     { provider: 'github-copilot', model: 'local-model', context_used: 2, context_out: 2 },
   ]);
+  assert.equal(records[2].model, undefined);
   assert.equal(existsSync(path.join(options.target, '.roster', 'evals.jsonl')), false);
 });
 
@@ -414,6 +423,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
         '--message', buildPublishMessage({
           subject: 'feat: issue 42', model: 'local-model',
           summary: 'Updated README; tests pass.', issueNumber: 42,
+          seats: 'planner, coder, reviewer (pass)',
         }), '--model', 'local-model', '--merge-when-green',
       ]);
       assert.equal(publication.cwd, path.join(options.target, '.worktrees', 'issue-42'));
@@ -446,22 +456,131 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
   assert.match(readFileSync(path.join(result.worktreePath, 'README.md'), 'utf8'), /## Status\nReady/);
   assert.equal(result.result.tests.exit_code, 0);
   assert.equal(result.run.line, packAgentRun(result.run.env));
+  assert.equal(result.review.verdict, 'pass');
+  assert.match(readFileSync(result.review.reviewPath, 'utf8'), /Verdict: pass/);
   assert.equal(result.run.provider, 'vllm');
   assert.match(result.runs.planner.line, /\|5\/-\|2\|roster-42-planner\|issue-42$/);
   assert.match(result.runs.coder.line, /\|17\/-\|7\|roster-42-coder\|issue-42$/);
+  assert.match(result.runs.reviewer.line, /\|4\/-\|2\|roster-42-reviewer\|issue-42$/);
   const seatRecords = loadLearning({ cwd: options.target }).runs;
-  assert.deepEqual(seatRecords.map(({ provider }) => provider), ['vllm', 'vllm']);
-  assert.deepEqual(seatRecords.map(({ model, effort, context_used, context_out }) =>
+  assert.deepEqual(seatRecords.map(({ provider }) => provider), ['vllm', 'vllm', 'vllm']);
+  assert.deepEqual(seatRecords.slice(0, 2).map(({ model, effort, context_used, context_out }) =>
     ({ model, effort, context_used, context_out })), [
     { model: 'local-model', effort: 'm', context_used: 5, context_out: 2 },
     { model: 'local-model', effort: 'm', context_used: 17, context_out: 7 },
   ]);
   assert.ok(seatRecords.every(({ context_max }) => context_max === undefined));
-  assert.deepEqual(seatRecords.map(({ excellence }) => excellence), [undefined, 'pass']);
+  assert.deepEqual(seatRecords.map(({ excellence }) => excellence), [undefined, 'pass', undefined]);
   assert.deepEqual(seatRecords[1].defects, []);
-  assert.equal((logs[0].match(/AI-Run:/g) ?? []).length, 2);
+  assert.equal((logs[0].match(/AI-Run:/g) ?? []).length, 3);
   assert.ok(logs.some((line) => line.includes('Merged PR #7')));
   assert.ok(!logs.join('\n').includes('private-key'));
+});
+
+test('a failed reviewer keeps coder changes but blocks publication unless explicitly bypassed', async (context) => {
+  for (const skipReview of [false, true]) {
+    const options = fixture(context);
+    let coderTurns = 0;
+    let published = 0;
+    const fetchImpl = async (_url, request) => {
+      const body = JSON.parse(request.body);
+      const system = body.messages[0].content;
+      if (system.startsWith('You are the builtin research step.')) {
+        return { status: 200, json: async () => ({
+          choices: [{ finish_reason: 'stop',
+            message: { role: 'assistant', content: 'Read-only inventory.' } }],
+        }) };
+      }
+      if (system.startsWith('You are the builtin reviewer seat.')) {
+        assert.equal(body.tools, undefined);
+        assert.match(body.messages[1].content, /README has a Status section/);
+        assert.match(body.messages[1].content, /\+## Status/);
+        assert.match(body.messages[1].content, /Checks: PASS/);
+        return { status: 200, json: async () => ({
+          choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
+            verdict: 'fail', reasons: ['The diff lacks sufficient evidence for a full review.'],
+            security_notes: ['Inspect downstream use of the edited section.'],
+          }) } }],
+        }) };
+      }
+      if (system.startsWith('You are the builtin planner seat.')) {
+        return { status: 200, json: async () => ({
+          choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
+            title: 'Add status', acceptance_checks: ['node --test exits 0', 'README has a Status section'],
+            files_allowed: ['README.md'],
+          }) } }],
+        }) };
+      }
+      coderTurns += 1;
+      return { status: 200, json: async () => ({
+        choices: [coderTurns === 1 ? { finish_reason: 'tool_calls',
+          message: { role: 'assistant', tool_calls: [{ id: 'edit', type: 'function', function: {
+            name: 'write_file',
+            arguments: JSON.stringify({ path: 'README.md', content: '# Example\n\n## Status\nReady.\n' }),
+          } }] } } : { finish_reason: 'stop',
+          message: { role: 'assistant', content: 'Added the Status section; tests pass.' } }],
+      }) };
+    };
+    const args = {
+      ...options, config: llmConfig, publish: true, skipReview, fetchImpl, log: () => {},
+      env: { ...options.env, GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'app.pem' },
+      runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+      publisher: async (_program, params, publication) => {
+        published += 1;
+        assert.match(params[2], /## Seats\n\nplanner, coder, reviewer \(gate bypassed with --skip-review\)/);
+        assert.equal(git(publication.cwd, 'diff', '--cached', '--name-only'), 'README.md');
+        return { stdout: 'Merged PR #7 with a merge commit, removed its branch.\n' };
+      },
+      issueCloser: async () => {},
+    };
+    if (skipReview) {
+      const run = await runIssueWithSeats(42, args);
+      assert.equal(run.review.verdict, 'fail');
+      assert.match(run.command, /--model local-model --merge-when-green/);
+    } else {
+      await assert.rejects(runIssueWithSeats(42, args), /passing REVIEW\.md/);
+    }
+    assert.equal(published, skipReview ? 1 : 0);
+    const worktree = path.join(options.target, '.worktrees', 'issue-42');
+    assert.match(readFileSync(path.join(worktree, 'README.md'), 'utf8'), /## Status/);
+    assert.match(readFileSync(path.join(worktree, 'RESULT.md'), 'utf8'), /Checks: PASS/);
+    assert.match(readFileSync(path.join(worktree, 'REVIEW.md'), 'utf8'),
+      /Verdict: fail[\s\S]*## Security notes/);
+    if (!skipReview) assert.equal(git(worktree, 'diff', '--cached', '--name-only'), '');
+  }
+});
+
+test('publication refuses a REVIEW.md changed after a passing reviewer without staging code', async (context) => {
+  const options = fixture(context);
+  let turns = 0;
+  const run = await runBuiltinIssue(42, {
+    ...options, config: llmConfig, log: () => {},
+    env: { ...options.env, ROSTER_API_KEY: 'test-only-key' },
+    fetchImpl: async (_url, request) => {
+      turns += 1;
+      return { status: 200, json: async () => ({
+        choices: [{ finish_reason: turns === 2 ? 'tool_calls' : 'stop', message: {
+          role: 'assistant',
+          content: turns === 1 ? JSON.stringify({
+            title: 'Add status', acceptance_checks: ['node --test exits 0'],
+            files_allowed: ['README.md'],
+          }) : turns === 2 ? null : 'README updated.',
+          ...(turns === 2 ? { tool_calls: [{ id: 'write', type: 'function',
+            function: { name: 'write_file', arguments: JSON.stringify({
+              path: 'README.md', content: '# Example\n\n## Status\nReady.\n',
+            }) } }] } : {}),
+        } }],
+      }) };
+    },
+    runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+  });
+  assert.equal(run.review.verdict, 'pass');
+  writeFileSync(run.review.reviewPath, run.review.content.replace('Verdict: pass', 'Verdict: fail'));
+  await assert.rejects(prepareBuiltinPublication(run, {
+    config: llmConfig, cwd: options.cwd,
+    env: { ...options.env, GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'app.pem' },
+  }), /REVIEW\.md changed after review/);
+  assert.equal(git(run.worktreePath, 'diff', '--cached', '--name-only'), '');
 });
 
 test('a merged PR still receives an issue comment when publisher local cleanup fails', async (context) => {
@@ -552,7 +671,7 @@ test('default planner/coder run preserves the task handoff while the coder edits
   });
   assert.equal(completion, 3);
   assert.deepEqual(parseRecipe(readFileSync(run.recipePath, 'utf8')).seats.map(({ id }) => id),
-    ['planner', 'coder']);
+    ['planner', 'coder', 'reviewer']);
   assert.equal(readFileSync(path.join(run.worktreePath, 'src', 'app.mjs'), 'utf8'),
     'export const ready = true;\n');
   assert.equal(readFileSync(run.recipePath, 'utf8'), run.planner.recipe);
@@ -665,6 +784,7 @@ test('builtin seats record runs automatically without an AI-Eval', async (contex
     { session: result.sessions.planner, task: 'issue-42', task_class: 'feat' },
     { session: result.sessions.coder, task: 'issue-42', task_class: 'feat', excellence: 'fail',
       defects: result.result.excellence.reasons },
+    { session: result.sessions.reviewer, task: 'issue-42', task_class: 'feat' },
   ]);
   assert.equal(existsSync(path.join(options.target, '.roster', 'evals.jsonl')), false);
 });
@@ -696,12 +816,15 @@ test('detects a changed recipe after the coder runs tests and refuses publicatio
   }), /Diff path is protected or outside TASK\.md allowed paths: RECIPE\.yml/);
   assert.equal(published, false);
   assert.equal(existsSync(path.join(options.target, '.worktrees', 'issue-42', 'RESULT.md')), true);
+  assert.match(readFileSync(path.join(options.target, '.worktrees', 'issue-42', 'REVIEW.md'), 'utf8'),
+    /Verdict: fail/);
   const records = loadLearning({ cwd: options.target }).runs;
   assert.deepEqual(records.map(({ session, excellence }) => ({ session, excellence })), [
     { session: 'roster-42-planner', excellence: undefined },
     { session: 'roster-42-coder', excellence: 'fail' },
+    { session: 'roster-42-reviewer', excellence: undefined },
   ]);
-  assert.ok(records.every(({ model }) => model === 'local-model'));
+  assert.ok(records.slice(0, 2).every(({ model }) => model === 'local-model'));
   assert.ok(records[1].defects.some((reason) => reason.includes('RECIPE.yml')));
   assert.equal(existsSync(path.join(options.target, '.roster', 'evals.jsonl')), false);
 });
@@ -765,14 +888,15 @@ test('publication rechecks append new secret-path defects after an initially pas
   writeFileSync(path.join(run.worktreePath, '.env'), 'TEST_SECRET=test-only-key\n');
   await assert.rejects(prepareBuiltinPublication(run, {
     config: llmConfig, cwd: options.cwd,
+    skipReview: true,
     env: { ...options.env, ROSTER_API_KEY: 'test-only-key',
       GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'app.pem' },
   }), /Publishing refused by excellence gate/);
   const records = loadLearning({ cwd: options.target }).runs;
-  assert.equal(records.length, 3);
+  assert.equal(records.length, 4);
   assert.equal(records[1].excellence, 'pass');
-  assert.equal(records[2].excellence, 'fail');
-  assert.ok(records[2].defects.some((reason) => reason.endsWith(': .env')));
+  assert.equal(records[3].excellence, 'fail');
+  assert.ok(records[3].defects.some((reason) => reason.endsWith(': .env')));
   assert.ok(!JSON.stringify(records).includes('test-only-key'));
 });
 

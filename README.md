@@ -11,15 +11,17 @@ it does not replace Git.
 1. **Ask:** a human states an ask in the `roster` shell or a GitHub issue.
 2. **Plan:** the planner breaks the ask into a RECIPE and TASK.
 3. **Assign:** the intended planner, coder, and reviewer seats run
-   sequentially in one process. Today planner and coder are builtin; the
-   reviewer is the human PR reviewer.
+   sequentially in one process. The builtin reviewer records REVIEW.md,
+   while a human remains responsible for PR review and AI-Eval.
 4. **Infer:** each model-backed seat calls the **vLLM OpenAI API on DGX Spark**
-   first. Today this is the configured planner and coder. Hosted APIs are a
+   first. This includes the configured planner, coder, and reviewer. Hosted APIs are a
    later, explicit profile using the same HTTP shape. With no endpoint, the
    deterministic stub does not edit code or run tests.
 5. **Code:** the coder uses worktree-scoped tools, skills, and recent memory,
    then runs `node --test` after its last edit unless the task explicitly waives tests.
-6. **Publish:** reviewed code goes through the required
+6. **Review and publish:** the read-only reviewer inspects the diff, TASK,
+   and RESULT, then writes REVIEW.md. Only a passing review (or explicit
+   `--skip-review`) permits Roster-managed publication through the required
    [github-agent-contracts](vendor/github-agent-contracts) Git submodule for
    GitHub App identity, human-owned policy, and `AI-Run` trailers.
 7. **Evaluate:** a human reviews the PR and posts `AI-Eval:`. Locally recorded
@@ -39,11 +41,12 @@ and verdict; [learning](docs/LEARNING.md) informs the [next task](docs/NEXT.md)
 with model capacity and redacted prior feedback. Zero defects is the target,
 not a claim inferred from passing tests.
 
-The builtin planner and coder run in one issue worktree when a model endpoint
+The builtin planner, coder, and reviewer run in one issue worktree when a model endpoint
 and model are configured. The [single SWE seat stack](docs/SEAT.md) runs
 **principal -> context pack -> research -> skills -> tool loop -> memory ->
 excellence -> RESULT.md**. An empty endpoint writes inspectable context,
-research, and a stub result, but never edits application code or runs tests.
+research, a stub result, and a failing REVIEW.md, but never edits application
+code or runs tests. See [review and publication](docs/REVIEW.md).
 The shell starts in a TTY. For the
 `roster` bin, see [installation](docs/INSTALL.md); these are user commands,
 not paths to the CLI source:
@@ -58,6 +61,7 @@ roster run --ask-file templates/sdlc/ASK.md --runtime builtin
 roster run --issue 42
 roster run --issue 42 --auto-model
 roster run --issue 42 --publish
+roster run --issue 42 --publish --skip-review
 roster run --seat coder --runtime builtin
 roster prepare --issue 42
 roster status --issue 42 --offline
@@ -71,13 +75,15 @@ npm test
 
 `roster ask` creates a GitHub issue when `gh` is available, or a local draft
 and printable issue command when it is not. `roster run --issue N` runs
-planner then coder by default; `roster prepare --issue N` preserves the
+planner, coder, then reviewer by default; `roster prepare --issue N` preserves the
 manual handoff without executing seats. `--runtime builtin` remains accepted
-for agents and CI. The `--seats planner,coder` selection is optional;
+for agents and CI. The `--seats planner,coder,reviewer` selection is optional;
+the older `--seats planner,coder` spelling aliases the full builtin run.
 without `--issue`, `--seat coder --runtime builtin` instead executes the
 existing TASK.md in the current worktree, without replanning or publishing.
-`--publish` explicitly requests
-App publication after a model-backed run and a passing excellence gate. `--auto-model`
+`--publish` explicitly requests App publication after a model-backed run,
+a passing excellence gate, and an unchanged passing REVIEW.md unless
+`--skip-review` explicitly bypasses that verdict. `--auto-model`
 requires an empty configured model and at least three matching local human
 evaluations or keeps the stub. `roster status --issue N` queries GitHub;
 `--offline` uses cached worktree data only. The [offline demo](docs/DEMO.md)
@@ -137,7 +143,8 @@ stub; never put keys in it.
 Both issue commands need Git and authenticated `gh` access to an existing
 issue on the current repository's GitHub origin. The default run creates
 `.worktrees/issue-N`, writes `ASSIGNMENT.md`, `RECIPE.yml`, and `TASK.md`, runs
-the coder, and prints a publishing command. The explicit `prepare` command
+the coder and reviewer, and prints a publishing command only when review passes.
+The explicit `prepare` command
 writes only a manual assignment and ignored `.env`; load that environment into
 the worker before publishing. See [same-session seats](docs/MULTIAGENT.md).
 

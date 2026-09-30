@@ -9,3 +9,7 @@ seats:
     principal: coder
     worker: builtin
     sequence: [load_context, implement, run_tests, summarize]
+  - id: reviewer
+    principal: reviewer
+    worker: builtin
+    sequence: [read_diff, check_acceptance, write_review]

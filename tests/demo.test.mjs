@@ -22,6 +22,8 @@ function fixture(t) {
   mkdirSync(path.join(repoRoot, 'principals'));
   copyFileSync(path.join(sourceRoot, 'principals', 'coder.md'),
     path.join(repoRoot, 'principals', 'coder.md'));
+  copyFileSync(path.join(sourceRoot, 'principals', 'reviewer.md'),
+    path.join(repoRoot, 'principals', 'reviewer.md'));
   cpSync(path.join(sourceRoot, 'skills'), path.join(repoRoot, 'skills'), { recursive: true });
   mkdirSync(tempRoot);
   copyFileSync(path.join(sourceRoot, 'roster.config.example.yml'),
@@ -37,7 +39,7 @@ function fixture(t) {
   return { root, repoRoot, tempRoot };
 }
 
-test('stub planner and coder write RECIPE, TASK, and RESULT in an isolated temp worktree', async (t) => {
+test('stub seats write RECIPE, TASK, RESULT, and failing REVIEW in an isolated temp worktree', async (t) => {
   const { repoRoot, tempRoot } = fixture(t);
   const example = readFileSync(path.join(repoRoot, 'roster.config.example.yml'), 'utf8');
   const configured = parseConfig(example.replace('profile: ""', 'profile: ollama')
@@ -50,12 +52,13 @@ test('stub planner and coder write RECIPE, TASK, and RESULT in an isolated temp 
   assert.equal(path.dirname(demo.worktreePath), tempRoot);
   assert.equal(existsSync(path.join(demo.worktreePath, '.git')), false);
   assert.deepEqual(parseRecipe(readFileSync(demo.recipePath, 'utf8')).seats.map(({ id }) => id),
-    ['planner', 'coder']);
+    ['planner', 'coder', 'reviewer']);
   assert.match(readFileSync(demo.recipePath, 'utf8'), /ask: local:demo-/);
   assert.match(readFileSync(demo.taskPath, 'utf8'), /# Task: Add a Status section/);
   assert.match(readFileSync(demo.taskPath, 'utf8'), /## Files allowed\n- `README\.md`/);
   assert.match(readFileSync(demo.resultPath, 'utf8'),
     /Deterministic stub only: no implementation or tests were run/);
+  assert.match(readFileSync(demo.reviewPath, 'utf8'), /Verdict: fail/);
   assert.equal(readFileSync(path.join(demo.worktreePath, 'README.md'), 'utf8'),
     readFileSync(path.join(repoRoot, 'fixtures', 'demo-task', 'README.md'), 'utf8'));
   for (const seat of ['planner', 'coder']) {
@@ -96,6 +99,7 @@ test('the exact CLI template command runs without GitHub and leaves inspectable 
   assert.match(path.basename(worktree), /^roster-demo-/);
   t.after(() => rmSync(worktree, { recursive: true, force: true }));
   assert.match(result.stdout, /^Mode: stub$/m);
+  assert.match(result.stdout, /^REVIEW: .+REVIEW\.md$/m);
   assert.match(readFileSync(path.join(worktree, 'RESULT.md'), 'utf8'),
     /no implementation or tests were run/);
 });
