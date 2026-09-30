@@ -1,0 +1,7 @@
+{
+  "object": "list",
+  "data": [
+    { "id": "first-model", "object": "model", "max_model_len": 8192 },
+    { "id": "chosen-model", "object": "model", "max_model_len": 1048576 }
+  ]
+}

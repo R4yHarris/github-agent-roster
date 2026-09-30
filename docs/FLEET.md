@@ -45,8 +45,12 @@ App identity, human-owned policy, publication rights, or the default model.
 
 ## Onboarding default
 
-After selecting a real model, onboarding asks for the model's context limit
-in **tokens**, then `Add more endpoints later with roster fleet add. Continue? [yes]`.
+After selecting a real model, onboarding uses its positive context limit
+reported by `/v1/models`, or asks for `Model context tokens` when unavailable,
+then `Add more endpoints later with roster fleet add. Continue? [yes]`.
+SGLang reports `max_model_len`; a value of `1048576` is saved as
+`context_max: 1048576` without another question. Other supported context
+fields are listed in [onboarding](ONBOARDING.md#probing-v1models).
 This is separate from the context-pack character budget. Confirmed setup
 saves the chosen endpoint/model to both private config and the first fleet
 profile, `id: default`, with concurrency 1. Other profiles are retained.
@@ -71,18 +75,22 @@ roster fleet remove sample
 Replace fictional endpoints and models with actual reachable values.
 `add` GETs `/models`, prints the served IDs, and requires a model in that
 inventory. In a TTY, omitting `--model` asks for a selection (first served
-ID by default); omitting `--context` asks for a positive token limit.
-Non-TTY add requires `--id`, `--base-url`, `--model`, and `--context`, so
-there is no prompt or capacity guess. Concurrency defaults 1, hardware
+ID by default); omitting `--context` uses the selected model's reported
+positive token limit or asks when missing. Explicit `--context` still overrides
+discovery. Non-TTY add requires `--id`, `--base-url`, and `--model`; it also
+requires `--context` if discovery does not report a valid capacity.
+There is no capacity guess. Concurrency defaults 1, hardware
 defaults `unspecified`, and task-class hints are optional. Duplicate IDs
 and invalid inputs are refused without overwriting registered profiles.
 
-`probe ID` prints the current inventory but leaves the saved model and
+`probe ID` prints the current inventory and known context limits but leaves the saved model and
 files unchanged. Only explicit `--set-model MODEL` (or a TTY selection
 with bare `--set-model`) updates the catalog. If that endpoint/model is
 the current default, its private config is updated in the same paired
-write. Recheck the declared context limit when changing models; discovery
-returns IDs, not a capacity benchmark.
+write. A reported context limit updates the selected model's catalog capacity
+and the active default config together. If none is reported, the existing
+declared limit remains and the command reminds you to recheck it. These server
+declarations are not capacity benchmarks.
 
 `default ID` explicitly updates the project's configured endpoint/model,
 provider and context limit without modifying permission choices. `remove`
@@ -141,8 +149,10 @@ client and selected key name, with no model-invokable tools.
 
 The harness validates each answer, GETs `/models` only for an operator-
 supplied safe URL, and accepts an inventory ID (or explicitly supplied
-actual model when that probe failed). Limits, hardware, hints, and notes
-come from the operator, not guesses in a model response. A final model
+actual model when that probe failed). A reported positive context limit becomes
+a validated probe fact and skips the context question; otherwise the operator
+supplies it. Other limits, hardware, hints, and notes come from the operator,
+not guesses in a model response. A final model
 proposal must exactly match those recorded facts after normalization.
 An invented value, malformed JSON, or tool request is reported and
 switches to the local template interview; its rejected values are never

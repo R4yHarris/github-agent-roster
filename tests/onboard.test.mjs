@@ -10,10 +10,11 @@ import test from 'node:test';
 import { loadConfig, parseConfig } from '../src/lib/config.mjs';
 import { checkDoctor } from '../src/lib/doctor.mjs';
 import { formatFleet, loadFleet } from '../src/lib/fleet.mjs';
-import { probeModels, runOnboard } from '../src/onboard/wizard.mjs';
+import { probeModelDetails, probeModels, runOnboard } from '../src/onboard/wizard.mjs';
 
 const installation = fileURLToPath(new URL('../', import.meta.url));
 const example = readFileSync(join(installation, 'roster.config.example.yml'), 'utf8');
+const sglangModels = JSON.parse(readFileSync(new URL('./fixtures/models-sglang.json', import.meta.url), 'utf8'));
 
 function capture() {
   let text = '';
@@ -116,6 +117,72 @@ for (const platform of ['win32', 'linux', 'darwin']) {
     assert.equal(options.errorOutput.text, '');
   });
 }
+
+test('SGLang max_model_len sets the selected model context_max without asking for tokens', async (t) => {
+  const options = fixture(t, ['', '2', 'no', '', '', '', ''], 16384);
+  let requests = 0;
+  const result = await runOnboard({ ...options, fetchImpl: async () => {
+    requests += 1;
+    return Response.json(sglangModels);
+  } });
+  assert.equal(result.saved, true);
+  assert.equal(result.exitCode, 0);
+  assert.equal(requests, 1);
+  assert.equal(result.config.llm.model, 'chosen-model');
+  assert.equal(result.config.llm.context_max, 1048576);
+  assert.equal(result.config.seat.context_chars, 8000);
+  assert.equal(result.fleet.profiles[0].context_max, 1048576);
+  assert.equal(loadConfig({ repoRoot: options.installationRoot, cwd: options.cwd }).llm.context_max, 1048576);
+  assert.equal((await loadFleet({ cwd: options.cwd })).profiles[0].context_max, 1048576);
+  assert.equal(options.prompts.some((prompt) => prompt.startsWith('Model context tokens')), false);
+  assert.match(options.output.text, /Using context_max=1048576 reported by \/v1\/models for chosen-model/);
+});
+
+test('a selected model without context metadata still asks even if another model reports a limit', async (t) => {
+  const options = fixture(t, ['', '1', 'no', '', '', '', ''], 16384);
+  const result = await runOnboard({ ...options, fetchImpl: async () => Response.json({
+    data: [{ id: 'missing-context-model' }, { id: 'other-model', max_model_len: 1048576 }],
+  }) });
+  assert.equal(result.config.llm.model, 'missing-context-model');
+  assert.equal(result.config.llm.context_max, 16384);
+  assert.equal(result.fleet.profiles[0].context_max, 16384);
+  assert.equal(options.prompts.filter((prompt) => prompt.startsWith('Model context tokens')).length, 1);
+  assert.doesNotMatch(options.output.text, /Using context_max=/);
+});
+
+test('nonpositive, fractional, string, or unsafe API context metadata keeps the token question', async (t) => {
+  for (const value of [0, -1, 1048576.5, '1048576', null, Number.MAX_SAFE_INTEGER + 1]) {
+    const options = fixture(t, ['', '1', 'no', '', '', '', ''], 16384);
+    const result = await runOnboard({ ...options, fetchImpl: async () => Response.json({
+      data: [{ id: 'served-model', max_model_len: value }],
+    }) });
+    assert.equal(result.config.llm.context_max, 16384);
+    assert.equal(options.prompts.filter((prompt) => prompt.startsWith('Model context tokens')).length, 1);
+  }
+});
+
+test('model details retain only positive context limits while the ID-only probe stays compatible', async () => {
+  const fetchImpl = async () => Response.json(sglangModels);
+  assert.deepEqual(await probeModelDetails('http://localhost:8000/v1', { env: {}, fetchImpl }), [
+    { id: 'first-model', context_max: 8192 }, { id: 'chosen-model', context_max: 1048576 },
+  ]);
+  assert.deepEqual(await probeModels('http://localhost:8000/v1', { env: {}, fetchImpl }),
+    ['first-model', 'chosen-model']);
+  for (const field of ['max_model_len', 'max_context_length', 'max_context_len',
+    'context_length', 'context_window', 'context_max']) {
+    const models = await probeModelDetails('http://localhost:8000/v1', {
+      env: {}, fetchImpl: async () => Response.json({ data: [{ id: 'served-model', [field]: 1048576,
+        private_metadata: 'test-only-secret' }] }),
+    });
+    assert.deepEqual(models, [{ id: 'served-model', context_max: 1048576 }]);
+    assert.equal(Object.isFrozen(models[0]), true);
+  }
+  assert.deepEqual(await probeModelDetails('http://localhost:8000/v1', {
+    env: {}, fetchImpl: async () => Response.json({ data: [
+      { id: 'served-model' }, { id: 'served-model', max_model_len: 1048576 }, { id: 'other-model', max_tokens: 1000 },
+    ] }),
+  }), [{ id: 'served-model', context_max: 1048576 }, { id: 'other-model' }]);
+});
 
 test('WSL can use a Windows host URL and choose no permissions plus Advanced internet off', async (t) => {
   const options = fixture(t, ['http://172.30.96.1:8000/v1/', '1', 'no', 'n', 'no', 'yes', 'no', '', '', '']);

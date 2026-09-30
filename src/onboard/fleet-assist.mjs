@@ -11,12 +11,12 @@ import { ensureLocalPath, resolveProjectRoot } from '../lib/paths.mjs';
 import { readPrivateFile } from '../lib/private-files.mjs';
 import { resolvePublishModel } from '../metrics/run.mjs';
 import { redactEvidence } from '../runtime/excellence.mjs';
-import { probeModels } from './wizard.mjs';
+import { probeModelDetails } from './wizard.mjs';
 
 const installation = fileURLToPath(new URL('../../', import.meta.url));
 const fields = ['id', 'base_url', 'model', 'hardware', 'context_max', 'concurrency', 'task_class', 'notes'];
 const hardRule = 'Hard rule: do not invent URLs or model IDs. Record only operator answers or actual ' +
-  'GET /v1/models IDs. Ask one question for the requested field, with no URLs, suggestions, or tools. ' +
+  'GET /v1/models IDs and reported positive context limits. Ask one question for the requested field, with no URLs, suggestions, or tools. ' +
   'A final profile must exactly preserve recorded facts. You cannot write files or authorize a write.';
 
 async function loadInterviewTemplate(installationRoot) {
@@ -178,7 +178,9 @@ export async function runFleetAssist({
       const fleet = previous === null ? validateFleet({ profiles: [] }) : parseFleet(previous);
       const facts = {};
       let models;
+      let modelDetails;
       for (const field of fields) {
+        if (field === 'context_max' && facts.context_max !== undefined) continue;
         let prompt = template.questions.get(field);
         if (assisted) {
           try {
@@ -210,12 +212,22 @@ export async function runFleetAssist({
         }
         if (field === 'base_url') {
           try {
-            models = await probeModels(facts.base_url, { fetchImpl: request, env, apiKeyEnv: config.llm.api_key_env });
+            modelDetails = await probeModelDetails(facts.base_url, {
+              fetchImpl: request, env, apiKeyEnv: config.llm.api_key_env,
+            });
+            models = modelDetails.map(({ id }) => id);
             output.write('Available models:\n' + models.map((id, index) => `  ${index + 1}. ${id}\n`).join(''));
           } catch (error) {
             controller.signal.throwIfAborted();
             if (!(error instanceof Error)) throw error;
             output.write(`Models probe failed: ${redact(error.message, config, env)}. Supply the actual model ID manually.\n`);
+          }
+        }
+        if (field === 'model') {
+          const contextMax = modelDetails?.find(({ id }) => id === facts.model)?.context_max;
+          if (contextMax !== undefined) {
+            facts.context_max = contextMax;
+            output.write(`Using context_max=${contextMax} reported by /v1/models for ${facts.model}.\n`);
           }
         }
       }

@@ -1,1 +1,1 @@
-export { probeModels, runOnboard } from '../onboard/wizard.mjs';
+export { probeModelDetails, probeModels, runOnboard } from '../onboard/wizard.mjs';

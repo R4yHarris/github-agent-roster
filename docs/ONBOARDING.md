@@ -140,13 +140,29 @@ only a safe class (`timeout`, `refused`, `HTTP <status>`, `network`, or
 It never displays an upstream body or error details, invents an ID, or
 uses `unknown` as a fallback.
 
+SGLang returns each model's maximum context as `data[].max_model_len` on
+`GET /v1/models`. For example:
+
+```json
+{"data":[{"id":"served-model","max_model_len":1048576}]}
+```
+
+For the selected model, a positive safe integer becomes `llm.context_max`
+and the default fleet profile's `context_max` without asking
+`Model context tokens`. Discovery also accepts `max_context_length`,
+`max_context_len`, `context_length`, `context_window`, and `context_max`.
+If no valid limit is reported for that model, the existing token question
+remains; another model's limit is never substituted. Zero, negative,
+fractional, string, or unsafe values are not accepted as discovered capacity.
+The token limit is separate from the Advanced context-pack character budget.
+
 Confirmed ignored configuration records `llm.profile: vllm-local`,
 the chosen `llm.base_url` and `llm.model`, `llm.provider: vllm`, and
 `llm.api_key_optional: true`. A custom vLLM host is not replaced with
 loopback when the config is read. Discovery is not a chat or internet-tool
 probe; no network tool is added to the coder.
 The wizard also seeds ignored `.roster/fleet.yml` with that single
-`default` endpoint/model, concurrency 1, and a supplied token context limit
+`default` endpoint/model, concurrency 1, and a reported or supplied token context limit
 or `0` for unknown. Other registered endpoints are kept. It asks
 `Add more endpoints later with roster fleet add. Continue? [yes]`;
 the [fleet catalog guide](FLEET.md) describes the schema. This does not turn
