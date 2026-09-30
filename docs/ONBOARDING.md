@@ -66,3 +66,32 @@ controls the positive context-character budget. New onboarding starts with
 saved loop/context budget. Legacy `reviewer.required`, `seat.turn_budget`,
 and `seat.context_chars` configs remain supported, while the wizard writes
 the canonical keys. Conflicting review aliases are errors, not silent defaults.
+
+## App environment
+
+When App publication is enabled, the wizard checks `GITHUB_APP_ID` and
+`GITHUB_APP_PRIVATE_KEY_PATH` without printing their values. If both are
+present it prints `App env present`; a missing, non-file, or inaccessible
+PEM path produces a warning and setup continues. The key is inspected as
+file metadata only: no PEM is created, read into a prompt, or copied into
+`.roster`.
+
+Use one GitHub App for all worktrees. On Windows, set **User** environment
+variables using placeholders replaced locally:
+
+```powershell
+setx GITHUB_APP_ID "<app-id>"
+setx GITHUB_APP_PRIVATE_KEY_PATH "<absolute-path-to-existing-pem>"
+```
+
+Restart the terminal after `setx`; an existing shell does not inherit the
+new User environment. In Unix shells:
+
+```sh
+export GITHUB_APP_ID="<app-id>"
+export GITHUB_APP_PRIVATE_KEY_PATH="<absolute-path-to-existing-pem>"
+```
+
+Never paste PEM contents or tokens into a prompt, config, or Git. Presence
+checks are not App authentication, an installation-token probe, or policy
+grants. Humans still own policy, workflows, and the external private key.

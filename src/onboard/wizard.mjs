@@ -9,6 +9,7 @@ import { checkDoctor, formatDoctor } from '../lib/doctor.mjs';
 import { ensureLocalPath, resolveProjectRoot } from '../lib/paths.mjs';
 import { resolvePublishModel } from '../metrics/run.mjs';
 import { redactEvidence } from '../runtime/excellence.mjs';
+import { checkAppIdentity, formatAppIdentity } from './app.mjs';
 
 const installation = fileURLToPath(new URL('../../', import.meta.url));
 const execute = promisify(execFile);
@@ -275,6 +276,8 @@ export async function runOnboard({
     }
     const next = renderConfig(base, { baseUrl, model, publish, internet, runTest, reviewer, turns, budget });
     parseConfig(next);
+    const appStatus = publish ? await checkAppIdentity({ cwd: projectRoot, env }) : null;
+    if (appStatus) output.write(`\nApp identity (environment only)\n${formatAppIdentity(appStatus)}`);
     output.write(`\n4. Review\nConfig: ${configPath}\n` +
       `Endpoint: ${baseUrl}\nModel: ${model}\nModels probe: ${models ? 'succeeded' : 'failed; model supplied manually'}\n` +
       `Publish enabled: ${publish}\nrun_test allowed: ${runTest}\nReviewer required: ${reviewer}\n` +
@@ -292,7 +295,7 @@ export async function runOnboard({
     const checked = doctor({ cwd: projectRoot, installationRoot, env });
     output.write(formatDoctor(checked));
     if (!checked.ok) output.write('Doctor found missing prerequisites; config is saved, not a grant to publish.\n');
-    return { exitCode: 0, saved: true, configPath, config, doctor: checked,
+    return { exitCode: 0, saved: true, configPath, config, doctor: checked, appStatus,
       modelsProbed: Boolean(models) };
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
