@@ -51,8 +51,10 @@ use principal `coder`; reviewer uses the fixed read-only `reviewer` principal
 and the builtin worker only. Each builtin seat requires its exact fixed
 `sequence` above. Legacy recipes without the reviewer remain valid for
 read-only parsing, not for the new issue execution path.
-The planner cannot call tools and writes only `RECIPE.yml` and `TASK.md`; the
-coder cannot rewrite those files or the harness-owned REVIEW.md. Older single-coder builtin recipes and
+The worktree planner may call only artifact-scoped `write_file` for root
+`RECIPE.yml`, `TASK.md`, and `ESTIMATE.md`; app-code paths are denied. The harness
+validates and finalizes those managed outputs. The coder cannot rewrite those
+files or the harness-owned REVIEW.md. Older single-coder builtin recipes and
 `copilot`/`hermes` labels remain valid for read-only validation, without being
 selected for execution. Validation alone does not start any worker.
 

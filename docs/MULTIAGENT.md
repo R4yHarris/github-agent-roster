@@ -28,11 +28,15 @@ See [opt-in routing](ROUTING.md) for the source and context constraints.
    `AI_SESSION=roster-N-coder`. All three seats use that worktree.
 2. The planner session `roster-N-planner` uses the deterministic stub when
    `llm.base_url` is empty. Otherwise it requests a strict JSON plan from
-   the configured model. It can retry invalid plans up to
-   `planner.turn_budget` (1-64) but has **no tools**: a `write_file` request,
-   including one targeting `src/`, fails instead of running. The planner
-   renders the validated [SDLC templates](../templates/sdlc/) as root
-   `RECIPE.yml` and `TASK.md`. One issue produces one task in this loop.
+   the configured model. Within `planner.turn_budget` (1-64), it may use
+   `write_file` for exactly root `RECIPE.yml`, `TASK.md`, and `ESTIMATE.md`.
+   App-code writes, including `src/`, are denied and reported as tool errors.
+   The model can return a JSON plan or finish after writing a complete
+   TASK with the unchanged Ask, acceptance checks, allowed files, and metadata.
+   The harness validates that task and finalizes all three managed artifacts
+   through the same scoped writer, including trusted history-based estimates.
+   Draft recipe/estimate text cannot add seats or replace estimation evidence.
+   One issue produces one task in this loop.
    It reads and appends only its own recent planner memory outside the issue
    worktree, not app code. It also reads the issue repository's human evaluation
    history for [next-task model/estimate selection and redacted prior feedback](NEXT.md).

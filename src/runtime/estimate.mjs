@@ -65,8 +65,11 @@ function formatMetadata(metadata) {
 }
 
 export async function writeEstimate(task, {
-  worktree, learningRoot, config, env = process.env, recommendation = null,
+  worktree, learningRoot, config, env = process.env, recommendation = null, writeArtifact,
 }) {
+  if (writeArtifact !== undefined && typeof writeArtifact !== 'function') {
+    throw new TypeError('Planner artifact writer must be a function');
+  }
   const taskMetadata = readTaskMetadata(task);
   const { runs, evaluations } = loadLearning({ cwd: learningRoot });
   const standalone = evaluations.filter((evaluation) => !runs.some((run) =>
@@ -95,7 +98,8 @@ export async function writeEstimate(task, {
   const estimate = `# Estimate\n\n${formatMetadata(metadata)}\n\nSource: ${metadata.source}\n${evidence}\n` +
     'A story-point style estimate, not a delivery promise. Compare with human-reported actuals.\n';
   const estimatePath = join(worktree, 'ESTIMATE.md');
-  await fs.writeFile(estimatePath, estimate, { encoding: 'utf8', flag: 'wx' });
+  if (writeArtifact) await writeArtifact({ path: 'ESTIMATE.md', content: estimate });
+  else await fs.writeFile(estimatePath, estimate, { encoding: 'utf8', flag: 'wx' });
   return { task: updatedTask, metadata, estimate, estimatePath };
 }
 

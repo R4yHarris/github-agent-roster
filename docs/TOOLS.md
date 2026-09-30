@@ -1,10 +1,11 @@
-# Builtin coder tools
+# Builtin seat tools
 
 The configured builtin coder can use only the function tools listed in
 `seat.tools` in the [Roster config](../roster.config.example.yml). The builtin
-planner and reviewer have no model-invokable tools, and the offline stub never calls tools
-or runs tests. The [tool implementation](../src/runtime/tools.mjs) offers
-exactly five functions:
+planner has only the artifact-scoped writer described below; reviewer has no
+model-invokable tools. The offline stub makes no model tool calls or test runs.
+The [tool implementation](../src/runtime/tools.mjs) offers the coder exactly
+five functions:
 
 | Tool | Input | Result |
 | --- | --- | --- |
@@ -13,6 +14,30 @@ exactly five functions:
 | `list_dir` | `{ "path": "src" }` or `{}` for root | Sorted entry names and types, excluding protected entries. |
 | `run_test` | `{}` | Runs `node --test` from the worktree root; returns `exit_code`, captured `stdout`, and `stderr`. |
 | `search_text` | `{ "query": "literal text", "path": "src" }` (`path` optional) | At most 50 `{ path, line, text }` matches and a `truncated` flag. |
+
+## Planner artifact writer
+
+A configured planner in an issue worktree receives only `write_file`.
+Its path schema and runtime guard allow exactly `RECIPE.yml`, `TASK.md`,
+and `ESTIMATE.md` at that root, not directories, aliases, absolute paths,
+app files, or other managed files. Planner scope does not inherit the
+coder's `files_allowed` patterns. Each UTF-8 artifact is bounded to 64 KiB;
+only drafts created by this writer may be replaced. Pre-existing files,
+symlinks, hard links, and externally modified drafts are refused.
+Known credentials and private-key material cannot be persisted in drafts.
+
+The bounded planner loop returns tool results and denials to the model,
+redacting known credentials from error messages and replayed tool-call history.
+It accepts the existing JSON plan format or a complete written TASK followed
+by confirmation. Written tasks must retain the original Ask and pass the
+same title, metadata, acceptance-check, allowed-path, and routed-model checks.
+The harness finalizes the managed recipe/task/estimate through this writer;
+recipe topology and estimation evidence remain harness-owned, not model grants.
+Draft-only Ask planning outside an issue worktree has no file tool. Empty
+endpoints still use the deterministic stub; trusted planning artifacts are
+written without any model calls or app-code changes.
+
+## Coder file scope
 
 File paths must be relative to the issue worktree. Absolute paths, path
 escapes, symlinked components, and paths resolving outside the worktree

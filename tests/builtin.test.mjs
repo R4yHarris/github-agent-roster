@@ -13,6 +13,7 @@ import { loadLearning } from '../src/lib/learn.mjs';
 import { resolveContractsPath } from '../src/lib/paths.mjs';
 import { buildPublishMessage } from '../src/lib/publication.mjs';
 import { parseRecipe } from '../src/lib/recipe.mjs';
+import { planStub } from '../src/planner/stub.mjs';
 import { renderIssueBody } from '../src/lib/issue.mjs';
 import { formatFleet } from '../src/lib/fleet.mjs';
 import { packAgentRun } from '../vendor/github-agent-contracts/scripts/parse-agent-run.mjs';
@@ -519,7 +520,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
     assert.equal(request.headers.Authorization, 'Bearer private-key');
     assert.ok(!request.body.includes('private-key'));
     if (completion === 1) {
-      assert.equal(body.tools, undefined);
+      assert.deepEqual(body.tools.map(({ function: tool }) => tool.name), ['write_file']);
       return { ok: true, status: 200, json: async () => ({
         choices: [{ message: { role: 'assistant', content: JSON.stringify({
           title: 'Add Status to README',
@@ -796,7 +797,7 @@ test('default planner/coder run preserves the task handoff while the coder edits
     completion += 1;
     const body = JSON.parse(request.body);
     if (completion === 1) {
-      assert.equal(body.tools, undefined);
+      assert.deepEqual(body.tools.map(({ function: tool }) => tool.name), ['write_file']);
       return { ok: true, status: 200, json: async () => ({ choices: [{ message: { role: 'assistant', content: JSON.stringify({
         title: 'Implement the app',
         acceptance_checks: ['node --test exits 0'],
@@ -840,6 +841,58 @@ test('default planner/coder run preserves the task handoff while the coder edits
   assert.equal(readFileSync(run.taskPath, 'utf8'), run.planner.task);
   assert.equal(options.calls.filter(({ program, args }) =>
     program === 'git' && args[0] === 'worktree').length, 1);
+});
+
+test('a tool-writing planner hands validated artifacts to the scoped coder and read-only reviewer', async (context) => {
+  const options = fixture(context);
+  const draft = planStub(options.issue.body, { reference: 'issue:42', title: options.issue.title });
+  let plannerTurns = 0;
+  let coderTurns = 0;
+  const result = await runBuiltinIssue(42, {
+    ...options, config: llmConfig, log: () => {}, env: { ...options.env, ROSTER_API_KEY: 'test-only-key' },
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      if (body.messages[0].content.startsWith('You are the builtin planner seat.')) {
+        plannerTurns += 1;
+        assert.deepEqual(body.tools.map(({ function: tool }) => tool.name), ['write_file']);
+        if (plannerTurns === 1) return Response.json({
+          choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant',
+            tool_calls: [{ id: 'task', type: 'function', function: {
+              name: 'write_file', arguments: JSON.stringify({ path: 'TASK.md', content: draft.task }),
+            } }],
+          } }],
+        });
+        assert.equal(JSON.parse(body.messages.at(-1).content).path, 'TASK.md');
+        return Response.json({ choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant', content: 'The task draft is ready.',
+        } }] });
+      }
+      coderTurns += 1;
+      assert.deepEqual(body.tools.map(({ function: tool }) => tool.name),
+        ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text']);
+      if (coderTurns === 1) return Response.json({
+        choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant',
+          tool_calls: [{ id: 'readme', type: 'function', function: {
+            name: 'write_file', arguments: JSON.stringify({
+              path: 'README.md', content: '# Example\n\n## Status\nReady.\n',
+            }),
+          } }],
+        } }],
+      });
+      return Response.json({ choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant', content: 'Added the Status section; tests pass.',
+      } }] });
+    },
+    runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+  });
+  assert.equal(plannerTurns, 2);
+  assert.equal(coderTurns, 2);
+  assert.equal(result.result.excellence.pass, true);
+  assert.equal(result.review.verdict, 'pass');
+  assert.equal(readFileSync(result.taskPath, 'utf8'), result.planner.task);
+  assert.equal(readFileSync(result.recipePath, 'utf8'), result.planner.recipe);
+  assert.equal(readFileSync(result.planner.estimatePath, 'utf8'), result.planner.estimate);
+  assert.match(readFileSync(path.join(result.worktreePath, 'README.md'), 'utf8'), /## Status\nReady/);
 });
 
 test('planner and coder use an environment key before the vault and fall back to the vault', async (context) => {
@@ -956,7 +1009,7 @@ test('detects a changed recipe after the coder runs tests and refuses publicatio
   let published = false;
   const fetchImpl = async (_url, request) => {
     const body = JSON.parse(request.body);
-    if (!body.tools) {
+    if (body.messages[0].content.startsWith('You are the builtin planner seat.')) {
       return { ok: true, status: 200, json: async () => ({ choices: [{ message: { role: 'assistant', content: JSON.stringify({
         title: 'Update README', acceptance_checks: ['node --test exits 0'],
         files_allowed: ['README.md'],
