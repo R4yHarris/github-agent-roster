@@ -6,11 +6,12 @@ import { formatFleet, getFleetProfile, normalizeFleetBaseUrl, parseFleet, valida
 import { resolveProjectRoot } from './paths.mjs';
 import { ensurePrivateFilesIgnored, readPrivateFile, writePrivateDocuments } from './private-files.mjs';
 import { probeModels } from '../onboard/wizard.mjs';
+import { runFleetAssist } from '../onboard/fleet-assist.mjs';
 
 const installation = fileURLToPath(new URL('../../', import.meta.url));
 const usage = 'Use roster fleet list, add --id NAME --base-url URL [--model MODEL] [--context N] ' +
   '[--concurrency N] [--hardware TEXT] [--task-class feat,fix,docs,test], ' +
-  'probe ID [--set-model [MODEL]], default ID, or remove ID.';
+  'probe ID [--set-model [MODEL]], default ID, remove ID, or assist.';
 
 function argumentsFor(args) {
   if (!Array.isArray(args) || !args.length || args.some((value) => typeof value !== 'string')) {
@@ -18,6 +19,7 @@ function argumentsFor(args) {
   }
   const [command, ...rest] = args;
   if (command === 'list' && !rest.length) return { command };
+  if (command === 'assist' && !rest.length) return { command };
   if (['default', 'remove'].includes(command) && rest.length === 1) {
     return { command, id: validateFleetId(rest[0]) };
   }
@@ -60,9 +62,13 @@ async function currentConfig(repoRoot, cwd, installationRoot) {
 
 export async function runFleet(args, {
   cwd = process.cwd(), installationRoot = installation, env = process.env,
-  input = process.stdin, output = process.stdout, fetchImpl = globalThis.fetch, question,
+  input = process.stdin, output = process.stdout, errorOutput = process.stderr,
+  fetchImpl = globalThis.fetch, vault, question,
 } = {}) {
   const options = argumentsFor(args);
+  if (options.command === 'assist') {
+    return runFleetAssist({ cwd, installationRoot, env, input, output, errorOutput, fetchImpl, vault, question });
+  }
   const tty = Boolean(input.isTTY && output.isTTY);
   if (options.command === 'add' && !tty && (!options.model || !options.context)) {
     throw new TypeError('Non-TTY fleet add requires --id, --base-url, --model, and --context');

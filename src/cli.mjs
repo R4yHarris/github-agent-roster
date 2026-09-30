@@ -29,6 +29,7 @@ const help = `Usage:
   roster init
   roster onboard
   roster fleet list
+  roster fleet assist
   roster fleet add --id NAME --base-url URL [--model MODEL] [--context N] [--concurrency N] [--hardware TEXT] [--task-class feat,fix,docs,test]
   roster fleet probe ID [--set-model [MODEL]]
   roster fleet default ID
@@ -118,7 +119,8 @@ async function main(args) {
   } else if (args.length === 1 && args[0] === 'onboard') {
     process.exitCode = (await runOnboard({ installationRoot: rosterRoot })).exitCode;
   } else if (args[0] === 'fleet') {
-    await runFleet(args.slice(1), { installationRoot: rosterRoot });
+    const result = await runFleet(args.slice(1), { installationRoot: rosterRoot });
+    if (result.exitCode !== undefined) process.exitCode = result.exitCode;
   } else if (args[0] === 'prepare') {
     if (args.length !== 3 || args[1] !== '--issue') {
       throw new TypeError('Use roster prepare --issue N.');
