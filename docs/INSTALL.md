@@ -2,7 +2,7 @@
 
 Roster uses Node 20+ ESM, Git, and `gh`; it has no runtime npm dependencies.
 For the complete task loop and App publication, install from a persistent
-source checkout with its pinned `v0.2.0` contracts submodule:
+source checkout with its pinned fail-closed `v0.2.1` contracts submodule:
 
 ```sh
 git clone --recurse-submodules https://github.com/R4yHarris/github-agent-roster.git
@@ -72,10 +72,12 @@ After tests and review, publish only from the current feature worktree's
 repository root with the GitHub App:
 
 ```sh
-node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "<conventional subject>" --merge-when-green
+node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "<subject plus Model, Summary, and how-to-test sections>" --model "$AI_MODEL" --merge-when-green
 ```
 
-Never commit or push as the signed-in human when App credentials are set.
+Set the real model first; GHCP sessions use `AI_MODEL=GPT-6-Sol`.
+See the complete [GHCP publication example](GHCP.md). Missing or unknown
+models cannot publish. Never commit or push as the signed-in human when App credentials are set.
 The SDK enforces reviewed policy and required checks; do not edit
 `agent-policy.yml` or `.github/workflows/*` to bypass a denial. See
 [trailer CI](CI.md), the [interactive shell](REPL.md), and the

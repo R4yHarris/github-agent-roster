@@ -4,6 +4,19 @@ export const RUN_ENV_NAMES = [
   'AI_CONTEXT_MAX', 'AI_CONTEXT_OUT', 'AI_SESSION', 'AI_TASK',
 ];
 
+function isModelId(model) {
+  return typeof model === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:+/-]*$/.test(model) &&
+    !/^(unknown|none|n\/a|unspecified)$/i.test(model);
+}
+
+export function resolvePublishModel({ config, env = process.env } = {}) {
+  const model = config?.llm?.model || env.AI_MODEL || env.ROSTER_MODEL;
+  if (!isModelId(model)) {
+    throw new TypeError('set model: configure llm.model, AI_MODEL, or ROSTER_MODEL with the actual model id (not unknown)');
+  }
+  return model;
+}
+
 export function mergeUsage(...samples) {
   const totals = {};
   for (const field of countFields) {
@@ -31,14 +44,14 @@ export function buildRun({ config, usage = {}, session, task, env = process.env 
   const effort = config.llm.effort;
   const contextMax = config.llm.context_max;
   const version = env.AI_MODEL_VERSION || '-';
-  if (typeof model !== 'string' || model === 'unknown' || !/^[A-Za-z0-9._:/-]+$/.test(model) ||
+  if (!isModelId(model) ||
       typeof version !== 'string' || !/^[A-Za-z0-9._-]+$/.test(version) ||
       !['l', 'm', 'h', 'x', '-'].includes(effort) ||
       !Number.isSafeInteger(contextMax) || contextMax < 0) {
     throw new TypeError('Invalid LLM model, version, effort, or context_max for AI-Run; unknown is not a model');
   }
   const counts = mergeUsage(usage);
-  // Contracts v0.2.0 represents vLLM with "local"; "vllm" is not a schema 1 provider.
+  // Contracts schema 1 represents vLLM with "local"; "vllm" is not a provider.
   const runEnv = {
     AI_PROVIDER: config.llm.profile === 'openai' ? 'openai' : 'local',
     AI_MODEL: model, AI_MODEL_VERSION: version, AI_EFFORT: effort,
@@ -65,11 +78,21 @@ export function buildRun({ config, usage = {}, session, task, env = process.env 
 }
 
 export function buildPublishEnv({ config, env = process.env, run }) {
+  const activeConfig = run?.env?.AI_MODEL
+    ? { ...config, llm: { ...config.llm, model: run.env.AI_MODEL } } : config;
+  const model = resolvePublishModel({ config: activeConfig, env });
   const publishEnv = { ...env };
   for (const name of RUN_ENV_NAMES) delete publishEnv[name];
   delete publishEnv[config.llm.api_key_env];
   const metadata = run === undefined
-    ? buildRun({ config, env, session: env.AI_SESSION, task: env.AI_TASK }) : run;
+    ? buildRun({
+      config: { ...activeConfig, llm: { ...activeConfig.llm, model } },
+      env, session: env.AI_SESSION, task: env.AI_TASK,
+    }) : run;
   Object.assign(publishEnv, metadata?.env);
+  if (run === undefined && !config.llm.model && env.AI_MODEL && env.AI_PROVIDER) {
+    publishEnv.AI_PROVIDER = env.AI_PROVIDER;
+  }
+  publishEnv.AI_MODEL = model;
   return publishEnv;
 }

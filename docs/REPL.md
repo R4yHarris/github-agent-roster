@@ -53,7 +53,7 @@ Review the worktree changes before `/publish`. When both `GITHUB_APP_ID` and
 `GITHUB_APP_PRIVATE_KEY_PATH` are set, `/publish` prepares task-allowed files
 from a successful configured `/run`, initializes that worktree's contracts
 submodule, and invokes the SDK's exported `main` in-process with
-`--merge-when-green`. Without a run in this shell, it operates on the
+`--model` and `--merge-when-green`. Without a run in this shell, it operates on the
 current feature worktree and requires you to stage reviewed changes first.
 It never commits or pushes with human credentials.
 
@@ -61,8 +61,18 @@ Without App credentials, `/publish` prints the command instead of executing
 it:
 
 ```sh
-node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "<conventional subject>" --merge-when-green
+node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "<subject plus Model, Summary, and how-to-test sections>" --model "$AI_MODEL" --merge-when-green
 ```
+
+Publication resolves `config.llm.model`, then `AI_MODEL`, then `ROSTER_MODEL`.
+An absent or invalid ID reports `set model` without invoking the publisher
+or printing a model-free command. A completed run keeps the actual coder
+model rather than a later `/model` setting. GHCP sessions use
+`AI_MODEL=GPT-6-Sol`; see the [full SDK example](GHCP.md).
+Generated PR bodies include `## Model`, `## Summary`, and `node --test`
+instructions (or an explicit task test waiver). After a run, the summary
+comes from the reviewed result; without a run, the conventional subject
+describes the staged changes.
 
 Setting only one App variable is an error. An HTTP 422 response from
 `--merge-when-green` stops the shell and reports that Checks permission is

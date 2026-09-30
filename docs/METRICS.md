@@ -16,12 +16,13 @@ standalone `/publish` pass the configured `llm.model` as `AI_MODEL`, falling
 back to `ROSTER_MODEL` when config has no model. Builtin seats use that same
 selection for their LLM requests. Publication clears inherited run metadata
 and never forwards the LLM API key. A completed coder's metadata wins over
-later configuration changes. With no model, all `AI_*` run fields are omitted,
-so the SDK adds no AI-Run. The SDK's separate required `AI-Model` trailer still
-has its legacy fallback when no model is supplied; Roster does not invent a
-model to replace it.
+later configuration changes. Every publication resolves a real model from
+config, then `AI_MODEL`, then `ROSTER_MODEL`, and passes `--model` explicitly.
+Missing or invalid IDs fail with `set model` before the SDK; its required
+`AI-Model` trailer has no unknown fallback. Stub runs still omit AI-Run and
+cannot publish. GHCP sessions set `AI_MODEL=GPT-6-Sol`.
 
-The pinned contracts `v0.2.0` schema does **not** accept `AI_PROVIDER=vllm`.
+The pinned contracts `v0.2.1` schema does **not** accept `AI_PROVIDER=vllm`.
 Roster encodes vLLM as its supported `local` provider (`openai` for the explicit
 OpenAI profile), without modifying the submodule. `AI_MODEL_VERSION` is the
 known environment value or `-`; `AI_EFFORT` comes from config. Builtin sessions
@@ -31,7 +32,7 @@ fields; set those before running the SDK command directly.
 
 `src/lib/metrics.mjs` reads compact AI-Run JSONL by invoking contracts
 `scripts/export-agent-metrics.mjs` with Node. Contracts resolution checks the
-required `v0.2.0` submodule first, then `GITHUB_AGENT_CONTRACTS`, then the sibling
+required `v0.2.1` submodule first, then `GITHUB_AGENT_CONTRACTS`, then the sibling
 clone; see [the dependency guide](DEPENDENCY.md). It runs against local Git
 history and joins `.roster/runs/*.jsonl` and `.roster/evals.jsonl` when present.
 It does not contact GitHub or any analytics service.

@@ -41,6 +41,10 @@ including final test failures and turn-budget exhaustion, still produce
 RESULT.md and explicit error results. A configured coder rejects after writing
 that report. If a gate discovers a new failure, the notebook receives a second
 append-only failure entry rather than rewriting the first entry.
+The run journal retains each redacted failure reason in `defects`. Paired
+issue runs record these automatically; standalone coder runs use their
+existing opt-in journal. New publication-time gate failures append another
+run record rather than erasing the original verification.
 
 The stub remains a successful *offline demonstration*, not completed software:
 it makes no code diff, runs no tests, and writes a failed/unverified excellence
@@ -53,6 +57,9 @@ including equality with the verified snapshot, so an edited file cannot reuse
 an earlier passing test.
 No publication happens automatically on excellence failure. Reviewed publication
 still requires the explicit [App SDK handoff](GHCP.md).
+Recorded defects count as rejects in recommendations, including secret-path
+and policy touches that are later accepted by a human. Passing checks do not
+create an acceptance: the human must still run `roster eval`.
 
 The model and usage feed the existing contracts AI-Run. Tool-loop and research
 turn counts are recorded alongside it in RESULT.md; the pinned contracts schema

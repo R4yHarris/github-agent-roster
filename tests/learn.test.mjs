@@ -9,6 +9,7 @@ import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { runIssue } from '../src/lib/issue.mjs';
+import { recordEvaluation } from '../src/lib/eval.mjs';
 import {
   formatRecommendation, inferTaskClass, joinLearning, loadLearning, median,
   parseRecommendationArgs, recommend, recordRun, summarizeLearning,
@@ -174,6 +175,57 @@ test('recorded excellence failures count as rejects without rewriting human eval
   assert.equal(automated.medianMinutes, null);
 });
 
+for (const file of ['.env', 'agent-policy.yml']) {
+  test(`${file} defects survive later passing reports and human acceptance as rejects`, async (t) => {
+    const cwd = fixture(t, { learning: false });
+    const reason = `Diff path is protected or outside TASK.md allowed paths: ${file}`;
+    for (let index = 0; index < 3; index += 1) {
+      const run = { session: `unsafe-${index}`, model: 'unsafe', task_class: 'fix', effort: 'h' };
+      await recordRun({ ...run, excellence: 'fail', defects: [reason] }, {
+        cwd, env: {}, createDirectory: true,
+      });
+      await recordRun({ ...run, excellence: 'pass', defects: [] }, { cwd, env: {} });
+      await recordEvaluation(run.session, 'accept', '4', 'y', {
+        cwd, env: {}, run: () => cwd, minutes: 1,
+        metricsLoader: () => joinLearning([], loadLearning({ cwd }).runs, []),
+        commenter: async () => {},
+      });
+    }
+    const history = loadLearning({ cwd });
+    const joined = joinLearning([], history.runs, history.evaluations);
+    assert.equal(joined.length, 3);
+    assert.ok(joined.every(({ defects }) => defects.length === 1 && defects[0] === reason));
+    assert.ok(history.evaluations.every(({ verdict }) => verdict === 'accept'));
+    assert.deepEqual(summarizeLearning(joined).map(({ n, accepted, acceptRate }) =>
+      ({ n, accepted, acceptRate })), [{ n: 3, accepted: 0, acceptRate: 0 }]);
+    const clean = capacitySamples('clean', Array(3).fill({ minutes: 20 }));
+    assert.equal(recommend([...joined, ...clean], 'fix', 4).model, 'clean');
+    assert.equal(readFileSync(join(cwd, '.roster', 'runs', 'runs.jsonl'), 'utf8').trimEnd().split('\n').length, 6);
+  });
+}
+
+test('defects remain rejects through Git joins and cannot be cleared by newer evaluations', () => {
+  const sha = 'a'.repeat(40);
+  const run = { sha, session: 'defective', model: 'known', task_class: 'fix', excellence: 'pass' };
+  const reason = 'Diff path is protected or outside TASK.md allowed paths: .env';
+  const records = joinLearning([run], [{ ...run, defects: [reason] }, { ...run, defects: [] }], [
+    { sha, session: run.session, verdict: 'reject', difficulty: 4, again: false },
+    { sha, session: run.session, verdict: 'accept', difficulty: 4, again: true, defects: [] },
+  ]);
+  assert.deepEqual(records[0].defects, [reason]);
+  assert.equal(records[0].evaluation.verdict, 'accept');
+  assert.equal(summarizeLearning(records)[0].accepted, 0);
+  assert.equal(summarizeLearning([{ ...run, evaluation: null }])[0].accepted, 0);
+});
+
+test('run recording rejects malformed defects instead of silently losing their evidence', async (t) => {
+  const cwd = fixture(t);
+  for (const defects of ['policy edit', [null], [''], ['bad\0reason'], [{ reason: '.env' }]]) {
+    await assert.rejects(recordRun({ session: 'invalid-defects', defects }, { cwd, env: {} }),
+      /defects must be an array/);
+  }
+});
+
 test('self-contained evals work without run exports and corrections never add samples', (t) => {
   const cwd = fixture(t, { learning: false });
   mkdirSync(join(cwd, '.roster'));
@@ -296,6 +348,19 @@ test('records effort and context even when the model is not reported', async (t)
     cwd, env: { AI_EFFORT: 'max', AI_CONTEXT_OUT: '7' },
   });
   assert.deepEqual(record, { session: 'partial', task: 'fix-one', effort: 'x', context_out: 7 });
+});
+
+test('model-free journal normalization preserves large counts and rejects invalid partial evidence', async (t) => {
+  const cwd = fixture(t);
+  const record = await recordRun({ session: 'model-free' }, {
+    cwd, env: { AI_EFFORT: '-', AI_CONTEXT_MAX: '9007199254740993', AI_CONTEXT_USED: '0' },
+  });
+  assert.deepEqual(record, { session: 'model-free', context_used: 0, context_max: '9007199254740993' });
+  for (const env of [{ AI_EFFORT: 'invalid' }, { AI_CONTEXT_USED: '-1' }, { AI_CONTEXT_OUT: 4 }]) {
+    await assert.rejects(recordRun({ session: 'invalid-partial' }, { cwd, env }), /AI_EFFORT|AI_CONTEXT/);
+  }
+  await assert.rejects(recordRun({ session: 'unknown-model', model: 'unknown' }, { cwd, env: {} }),
+    /Invalid AI-Run model/);
 });
 
 test('appends a complete JSONL line to a file with no final newline', async (t) => {

@@ -13,8 +13,10 @@ task, and a recognized task class, but no model or LLM counts. Configured
 seats include model, effort, and token counts only when known. If recording
 fails, the run reports the error instead of claiming a completed seat. A
 coder failure can leave a planner record. Coder records retain the excellence
-outcome, including configured failures with result evidence, before the error
-is propagated. A recorded failure is never treated as a human acceptance.
+outcome and redacted failure reasons as `defects`, including configured failures
+with result evidence, before the error is propagated. Publication rechecks
+append new defects if the verified worktree changes. A recorded failure is
+never treated as a human acceptance.
 
 Manual `roster prepare --issue N` and the standalone
 `roster run --seat coder --runtime builtin` remain opt-in. Create `.roster/runs` in
@@ -51,9 +53,12 @@ Only reported fields are written:
 | `context_used`, `context_max`, `context_out` | Corresponding `AI_CONTEXT_*` environment variables |
 | `task_class` | A recognized `feat`, `fix`, `docs`, or `test` prefix in the issue title |
 | `excellence` | A recorded `pass`/`fail` or report with boolean `pass`; never a human evaluation |
+| `defects` | Redacted excellence failure reasons; an empty array means no recorded gate defects, not human acceptance |
 
 Run metadata normalization uses the contracts parser through
 [`resolveContractsPath`](../src/lib/paths.mjs), not a copied parser.
+Model-free journals normalize only partial effort and count fields locally;
+they do not fabricate a model to serialize a contracts AI-Run.
 Unknown fields are omitted, not filled with zero. A genuinely reported zero is
 preserved; counts beyond JavaScript's safe integer range remain decimal strings.
 No environment secrets, issue bodies, prompts, or traces are recorded.
@@ -68,6 +73,11 @@ Local learning reads all `*.jsonl` files directly inside `.roster/runs`, in
 filename order. Records need a full SHA or opaque session identifier; other
 fields may be omitted. Matching records are combined rather than counted
 twice. Known Git-exported values take precedence over local values.
+Defects are combined without duplicates across matching records, and failure
+evidence cannot be cleared by a later passing report or evaluation. In particular,
+a secret-path or policy touch remains a reject for recommendations even if a
+human later records `accept`. The human evaluation itself is not rewritten.
+Passing the gate still requires a human `roster eval` to establish acceptance.
 
 ## Human evaluation
 

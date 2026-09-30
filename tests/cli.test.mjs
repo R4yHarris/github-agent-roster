@@ -106,9 +106,10 @@ test("builtin CLI defaults to paired seats, rejects unsupported selections, and 
   assert.match(bareRun.stderr, /Issue number must be a positive safe integer/);
   const legacySeat = run(["run", "--issue", "n/a", "--seat", "coder", "--runtime", "builtin"]);
   assert.match(legacySeat.stderr, /Issue number must be a positive safe integer/);
-  const noPublish = run(["run", "--issue", "42", "--runtime", "builtin", "--publish"]);
+  const noPublish = run(["run", "--issue", "42", "--runtime", "builtin", "--publish"],
+    { ...process.env, AI_MODEL: "", ROSTER_MODEL: "" });
   assert.notEqual(noPublish.status, 0);
-  assert.match(noPublish.stderr, /--publish requires an LLM endpoint/);
+  assert.match(noPublish.stderr, /set model/);
 });
 
 test("bare run uses the builtin planner and coder while prepare keeps manual handoff explicit", (t) => {
@@ -120,15 +121,15 @@ test("bare run uses the builtin planner and coder while prepare keeps manual han
   writeFileSync(join(fixtureRoot, "roster.config.example.yml"),
     example.replace('profile: ""', "profile: vllm-local"));
   const fixtureCli = join(fixtureRoot, "src", "cli.mjs");
-  const env = { ...process.env, ROSTER_MODEL: "" };
+  const env = { ...process.env, AI_MODEL: "", ROSTER_MODEL: "" };
   const bareRun = run(["run", "--issue", "42"], env, fixtureCli, undefined, fixtureRoot);
   assert.ifError(bareRun.error);
   assert.equal(bareRun.status, 1);
-  assert.match(bareRun.stderr, /Set config\.llm\.model or use --auto-model/);
+  assert.match(bareRun.stderr, /set model/);
   assert.equal(bareRun.stdout, "");
   const explicitBuiltin = run(["run", "--issue", "42", "--runtime", "builtin"],
     env, fixtureCli, undefined, fixtureRoot);
-  assert.match(explicitBuiltin.stderr, /Set config\.llm\.model or use --auto-model/);
+  assert.match(explicitBuiltin.stderr, /set model/);
   const manual = run(["prepare", "--issue", "0"], env, fixtureCli, undefined, fixtureRoot);
   assert.match(manual.stderr, /Issue number must be a positive safe integer/);
   const invalid = run(["run", "--issue", "42", "--runtime", "prepare"],

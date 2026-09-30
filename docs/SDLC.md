@@ -146,17 +146,20 @@ protected surfaces.
 With no endpoint, the stub writes a deterministic `RESULT.md` summary, exits
 zero, and **does not edit code or run tests**. It cannot deliver a software
 change; configure an LLM to do that. The command prints, but does not execute,
-the publishing command:
+the publishing command only for a configured, completed coder run:
 
 ```sh
-node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue 42
-
-Closes #42" --merge-when-green
+node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "<subject plus Model, Summary, how-to-test, and Closes #42>" --model "$AI_MODEL" --merge-when-green
 ```
 
 Run it from the **issue worktree root** after reviewing code and initializing
 the pinned submodule there (`git submodule update --init --recursive`) if
-needed. `--publish` executes it only after an LLM run and passing tests, with
+needed. Missing or invalid model configuration reports `set model` before
+the SDK; stub runs print no runnable publication command.
+Model resolution is config, then `AI_MODEL`, then `ROSTER_MODEL`, while
+completed runs retain the actual coder model. PR messages include `## Model`,
+`## Summary`, and how to test, not just the subject.
+`--publish` executes it only after an LLM run and passing tests, with
 `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_PATH` set. It stages only changed,
 task-allowed files, excluding generated task files and refusing policy,
 workflows, secrets, or other out-of-scope changes. The SDK enforces the
@@ -323,7 +326,7 @@ Keep the issue's agreed plan and the PR's evidence consistent with the task.
 ## 5. Publish, then let the human evaluate
 
 The PR handoff should link the issue and summarize the change, acceptance
-evidence, and remaining risks. Publication requires the pinned `v0.2.0`
+evidence, and remaining risks. Publication requires the fail-closed `v0.2.1`
 contracts dependency and the human-owned policy described in the
 [dependency guide](DEPENDENCY.md). Contracts owns identity, policy, and trailers;
 neither the recipe nor the skills grant permissions.
@@ -332,7 +335,7 @@ With `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_PATH` set, publish from the
 assigned worktree's repository root:
 
 ```sh
-node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "<type>: issue N" --merge-when-green
+node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "<type>: issue N plus Model, Summary, and how-to-test sections" --model "$AI_MODEL" --merge-when-green
 ```
 
 Use a message matching the actual change. Never fall back to committing as the

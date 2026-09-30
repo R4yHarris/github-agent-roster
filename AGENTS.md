@@ -28,7 +28,7 @@ subagent name, nor `AI_*` metadata grants policy capabilities.
 ## Contracts dependency
 
 Use the required [`vendor/github-agent-contracts`](vendor/github-agent-contracts)
-Git submodule, pinned to `v0.2.0`. Clone with `git clone --recurse-submodules`,
+Git submodule, pinned to the fail-closed `v0.2.1`. Clone with `git clone --recurse-submodules`,
 or initialize an existing checkout with `git submodule update --init --recursive`.
 Do not copy contracts source into this tree or rewrite files in the submodule.
 
