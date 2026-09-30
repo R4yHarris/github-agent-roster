@@ -1,0 +1,46 @@
+# Capability priors, not benchmarks
+
+The tracked [capabilities example](../examples/capabilities.yml) is a
+**starting guess** for first-run routing when no human evaluations exist.
+It is not a benchmark, verified model capacity, leaderboard, or performance
+promise. No internet scores are scraped. A prior cannot register an endpoint
+or make a model eligible without that model in the private [fleet](FLEET.md).
+
+Each record targets either a `profile_id` or `model_id`, not both, and one
+task class:
+
+```yaml
+capabilities:
+  - profile_id: default
+    task_class: fix
+    suggested_difficulty: 2
+    context_max: 8192
+    concurrency: 1
+    notes: "Local starting guess; revise after human evaluations."
+```
+
+`task_class` is `feat`, `fix`, `docs`, or `test`; `suggested_difficulty`
+is an integer 1-5. Context and concurrency are positive safe integers.
+Notes are short single-line text without IP addresses. Repeated selectors
+may describe different task classes, but a selector/class pair is unique.
+Fictional model/profile records are illustrative and do not select a live
+service automatically.
+
+[`loadCapabilities`](../src/lib/capabilities.mjs) loads the installed example
+first, then overlays ignored `.roster/capabilities.yml` when present.
+A matching selector/class can override only specified fields; a new record
+must provide every field. Missing optional overlays are normal, but invalid,
+duplicate, incomplete, unreadable, non-file, oversized, or symlinked input
+fails explicitly. There is no fallback that silently skips malformed data.
+For another project, keep this private overlay ignored by Git too.
+
+The routing policy uses priors for first-run hints, then prefers local
+human evidence once at least **three distinct evaluations for that class**
+qualify for a fleet model. `roster recommend` is read-only; execution routing
+is opt-in through `roster run --auto-model`. Concurrency is only a weak
+tie-break, not a throughput benchmark or instruction to launch parallel seats.
+Passing tests never create a human acceptance. See [learning](LEARNING.md)
+for the evidence threshold and defect-to-reject rules.
+
+Run `node --test tests/capabilities.test.mjs` to validate example and overlay
+behavior. Loading priors contacts neither a model endpoint nor the internet.

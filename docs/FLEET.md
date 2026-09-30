@@ -90,3 +90,6 @@ refuses the last profile and the currently configured endpoint; choose
 another default first. Missing IDs are errors, never a model fallback.
 Read-only list/probe operations do not silently alter the default config.
 No command invokes an App publisher, adds a queue, or launches a worker.
+First-run routing uses explicitly labeled [capability priors](CAPABILITIES.md),
+not scraped scores. Qualifying local human evaluations take precedence;
+a prior cannot nominate a model that is absent from the private catalog.
