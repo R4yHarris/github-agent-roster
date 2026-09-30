@@ -112,6 +112,16 @@ test('WSL can use a Windows host URL and choose no permissions plus Advanced int
   assert.match(options.output.text, /\nAdvanced\n/);
   assert.ok(options.prompts.some((prompt) => prompt.includes('internet search')));
   assert.match(options.output.text, /no live internet tool/);
+  assert.match(options.output.text, /Windows host IP, not localhost/);
+});
+
+test('model selection defaults to the first actual ID in an OpenAI models list', async (t) => {
+  const options = fixture(t, ['', '', '', '', '', '', '']);
+  const result = await runOnboard({ ...options, fetchImpl: models('first-model', 'second-model') });
+  assert.equal(result.config.llm.model, 'first-model');
+  assert.equal(result.config.llm.provider, 'vllm');
+  assert.equal(result.config.llm.profile, 'vllm-local');
+  assert.equal(result.config.llm.api_key_optional, true);
 });
 
 test('failed models probe still saves a supplied actual model and never invents one', async (t) => {
@@ -148,7 +158,7 @@ test('models timeout is exactly 5000ms and bounds an unresponsive fetch', async 
     cancel(value) { assert.equal(value, timer); cancelled = true; },
   });
   expire();
-  await assert.rejects(pending, /timed out after 5 seconds/);
+  await assert.rejects(pending, (error) => error.message === 'timeout');
   assert.equal(signal.aborted, true);
   assert.equal(cancelled, true);
 });
@@ -158,7 +168,7 @@ test('invalid or secret-like discovery data is an explicit probe failure', async
     { data: [{ id: 'bad\nid' }] }, { data: [{ id: 'private-model-secret' }] }]) {
     await assert.rejects(probeModels('http://localhost:8000/v1', {
       fetchImpl: async () => Response.json(payload), env: { ROSTER_API_KEY: 'private-model-secret' },
-    }), /models response/);
+    }), /invalid response/);
   }
   await assert.rejects(probeModels('http://localhost:8000/v1', {
     fetchImpl: async () => new Response('not-json', { status: 503 }), env: {},
@@ -166,7 +176,23 @@ test('invalid or secret-like discovery data is an explicit probe failure', async
   await assert.rejects(probeModels('http://localhost:8000/v1', {
     fetchImpl: models('custom-secret-value'), env: { CUSTOM_LLM: 'custom-secret-value' },
     apiKeyEnv: 'CUSTOM_LLM',
-  }), /invalid or secret-like/);
+  }), /invalid response/);
+});
+
+test('probe failures report only a safe class and still accept a supplied real model', async (t) => {
+  for (const [category, fetchImpl] of [
+    ['refused', async () => { throw new TypeError('private-fetch-details', {
+      cause: Object.assign(new Error('private-server-details'), { code: 'ECONNREFUSED' }),
+    }); }],
+    ['HTTP 401', async () => new Response('private-auth-details', { status: 401 })],
+    ['invalid response', async () => new Response('private-json-details', { status: 200 })],
+  ]) {
+    const options = fixture(t, ['', 'manual-model', '', '', '', '', '']);
+    const result = await runOnboard({ ...options, fetchImpl });
+    assert.equal(result.config.llm.model, 'manual-model');
+    assert.ok(options.output.text.includes(`Model probe failed: ${category}\n`));
+    assert.doesNotMatch(options.output.text, /private-(?:fetch|server|auth|json)-details/);
+  }
 });
 
 test('URL validation retries without echoing credentials and invalid selections do not choose an invented model', async (t) => {
