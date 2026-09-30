@@ -1,18 +1,16 @@
-import { execFile } from 'node:child_process';
-import { promises as fs, lstatSync } from 'node:fs';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
-import { promisify } from 'node:util';
-import { parseConfig, readConfigFile, validateBaseUrl, writePrivateConfig } from '../lib/config.mjs';
+import { parseConfig, readConfigFile, validateBaseUrl } from '../lib/config.mjs';
 import { checkDoctor, formatDoctor } from '../lib/doctor.mjs';
+import { formatFleet, normalizeFleetBaseUrl, parseFleet, validateFleet } from '../lib/fleet.mjs';
+import { ensurePrivateFilesIgnored, readPrivateFile, writePrivateDocuments } from '../lib/private-files.mjs';
 import { ensureLocalPath, resolveProjectRoot } from '../lib/paths.mjs';
 import { resolvePublishModel } from '../metrics/run.mjs';
 import { redactEvidence } from '../runtime/excellence.mjs';
 import { checkAppIdentity, formatAppIdentity } from './app.mjs';
 
 const installation = fileURLToPath(new URL('../../', import.meta.url));
-const execute = promisify(execFile);
 const defaultBaseUrl = 'http://127.0.0.1:8000/v1';
 const probeTimeoutMs = 5_000;
 
@@ -87,11 +85,11 @@ export async function probeModels(baseUrl, {
   }
 }
 
-function renderConfig(base, { baseUrl, model, publish, internet, runTest, reviewer, turns, budget }) {
+function renderConfig(base, { baseUrl, model, contextMax, publish, internet, runTest, reviewer, turns, budget }) {
   const { reviewer: _legacyReview, ...preserved } = base;
   const config = {
     ...preserved,
-    llm: { ...base.llm, profile: 'vllm-local', base_url: baseUrl, model,
+    llm: { ...base.llm, profile: 'vllm-local', base_url: baseUrl, model, context_max: contextMax,
       api_key_env: base.profiles['vllm-local'].api_key_env, api_key_optional: true, provider: 'vllm' },
     seat: { ...base.seat, turn_budget: turns, context_chars: budget },
     publish: { enabled: publish },
@@ -105,43 +103,6 @@ function renderConfig(base, { baseUrl, model, publish, internet, runTest, review
       ? `${indent}${name}:\n${mapping(value, `${indent}  `)}`
       : `${indent}${name}: ${scalar(value)}\n`).join('');
   return '# Private onboarding settings. No credentials belong in this file.\n' + mapping(config);
-}
-
-async function ensureIgnored(projectRoot) {
-  const ignoreFile = path.join(projectRoot, '.gitignore');
-  await ensureLocalPath(ignoreFile, projectRoot);
-  let source = '';
-  try {
-    const entry = await fs.lstat(ignoreFile);
-    if (!entry.isFile() || entry.isSymbolicLink()) throw new Error('.gitignore must be a regular file');
-    source = await fs.readFile(ignoreFile, 'utf8');
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-  }
-  let ignored = false;
-  if (lstatSync(path.join(projectRoot, '.git'), { throwIfNoEntry: false })) {
-    const git = (args) => execute('git', ['--no-pager', ...args], {
-      cwd: projectRoot, encoding: 'utf8', timeout: 10_000,
-    });
-    const { stdout } = await git(['ls-files', '--', '.roster/config.yml', '.roster/config.yml.*']);
-    if (stdout.trim()) throw new Error('Private config is tracked by Git; untrack it before onboarding');
-    try {
-      await Promise.all(['.roster/config.yml', '.roster/config.yml.tmp'].map((file) =>
-        git(['check-ignore', '--quiet', '--', file])));
-      ignored = true;
-    } catch (error) {
-      if (error.code !== 1) throw new Error('Could not verify private config ignore rules', { cause: error });
-    }
-  } else {
-    const lines = source.replace(/\r\n/g, '\n').split('\n');
-    ignored = lines.includes('.roster/config.yml') && lines.includes('.roster/config.yml.*');
-  }
-  if (!ignored) {
-    const separator = source && !source.endsWith('\n') ? '\n' : '';
-    await fs.appendFile(ignoreFile, `${separator}.roster/config.yml\n.roster/config.yml.*\n`, {
-      encoding: 'utf8', mode: 0o600,
-    });
-  }
 }
 
 export async function runOnboard({
@@ -160,6 +121,7 @@ export async function runOnboard({
   output.write(`Roster onboarding\n\n1. Platform\nOS: ${platform}\n`);
   const projectRoot = resolveProjectRoot(cwd);
   const configPath = path.join(projectRoot, '.roster', 'config.yml');
+  const fleetPath = path.join(projectRoot, '.roster', 'fleet.yml');
   await ensureLocalPath(configPath, projectRoot);
   let previous = null;
   try {
@@ -177,6 +139,8 @@ export async function runOnboard({
     }
   }
   const base = parseConfig(source);
+  const previousFleet = await readPrivateFile(projectRoot, 'fleet.yml');
+  const fleet = previousFleet === null ? validateFleet({ profiles: [] }) : parseFleet(previousFleet);
   const apiKeyEnv = base.profiles['vllm-local'].api_key_env;
   const controller = new AbortController();
   const terminal = question ? null : createInterface({ input, output, terminal: true });
@@ -197,14 +161,16 @@ export async function runOnboard({
       output.write('Please answer yes or no.\n');
     }
   };
-  const integer = async (prompt, fallback, maximum = Number.MAX_SAFE_INTEGER) => {
+  const integer = async (prompt, fallback, maximum = Number.MAX_SAFE_INTEGER, minimum = 1) => {
     for (;;) {
       const value = await answer(`${prompt} [${fallback}]: `) || String(fallback);
-      if (/^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) <= maximum) {
+      if (/^(?:0|[1-9]\d*)$/.test(value) && Number.isSafeInteger(Number(value)) &&
+          Number(value) >= minimum && Number(value) <= maximum) {
         return Number(value);
       }
       output.write(maximum === Number.MAX_SAFE_INTEGER
-        ? 'Enter a positive safe integer.\n' : `Enter an integer from 1 to ${maximum}.\n`);
+        ? `Enter a ${minimum === 0 ? 'nonnegative' : 'positive'} safe integer.\n`
+        : `Enter an integer from ${minimum} to ${maximum}.\n`);
     }
   };
   let confirmed = false;
@@ -219,7 +185,7 @@ export async function runOnboard({
     for (;;) {
       const value = await answer(`vLLM base URL [${defaultBaseUrl}]: `) || defaultBaseUrl;
       try {
-        baseUrl = validateBaseUrl(publicSetting(value, env, apiKeyEnv));
+        baseUrl = normalizeFleetBaseUrl(publicSetting(value, env, apiKeyEnv));
         if (/\/(?:models|chat\/completions)\/?$/.test(new URL(baseUrl).pathname)) {
           throw new TypeError('Use a base URL, not a complete models or chat endpoint');
         }
@@ -259,6 +225,12 @@ export async function runOnboard({
         }
       }
     }
+    const contextMax = await integer('Model context tokens (0 = unknown)', base.llm.context_max,
+      Number.MAX_SAFE_INTEGER, 0);
+    if (!await yesNo('Add more endpoints later with roster fleet add. Continue', true)) {
+      output.write('Private config and fleet were not changed.\n');
+      return { exitCode: 0, saved: false };
+    }
     output.write('\n3. Permissions (local preferences, not GitHub policy grants)\n');
     output.write('These flags do not grant contracts policy.\n');
     const publish = await yesNo('Allow publish through GitHub App', true);
@@ -274,12 +246,17 @@ export async function runOnboard({
       turns = await integer('Max tool turns', 12, 64);
       budget = await integer('Context char budget', 8000);
     }
-    const next = renderConfig(base, { baseUrl, model, publish, internet, runTest, reviewer, turns, budget });
-    parseConfig(next);
+    const next = renderConfig(base, { baseUrl, model, contextMax, publish, internet, runTest, reviewer, turns, budget });
+    const config = parseConfig(next);
+    const seeded = validateFleet({ profiles: [{
+      id: 'default', base_url: baseUrl, model, provider: 'vllm', context_max: contextMax,
+      concurrency: 1, hardware: 'unspecified', notes: 'Default endpoint selected during onboarding.',
+    }, ...fleet.profiles.filter(({ id }) => id !== 'default')] });
     const appStatus = publish ? await checkAppIdentity({ cwd: projectRoot, env }) : null;
     if (appStatus) output.write(`\nApp identity (environment only)\n${formatAppIdentity(appStatus)}`);
-    output.write(`\n4. Review\nConfig: ${configPath}\n` +
+    output.write(`\n4. Review\nConfig: ${configPath}\nFleet: ${fleetPath} (default profile; other profiles kept)\n` +
       `Endpoint: ${baseUrl}\nModel: ${model}\nModels probe: ${models ? 'succeeded' : 'failed; model supplied manually'}\n` +
+      `Model context tokens: ${contextMax || 'unknown'}\n` +
       `Publish enabled: ${publish}\nrun_test allowed: ${runTest}\nReviewer required: ${reviewer}\n` +
       `Internet preference: ${internet === undefined ? 'not set' : internet} (stored only; no live internet tool)\n` +
       `Max tool turns: ${turns}\nContext char budget: ${budget}\n` +
@@ -289,13 +266,17 @@ export async function runOnboard({
       return { exitCode: 0, saved: false };
     }
     confirmed = true;
-    await ensureIgnored(projectRoot);
-    const config = await writePrivateConfig(next, { repoRoot: projectRoot, expectedSource: previous });
-    output.write(`\nSaved private config: ${configPath}\n\n5. Doctor\n`);
+    await ensurePrivateFilesIgnored(projectRoot, ['config.yml', 'fleet.yml']);
+    await writePrivateDocuments([
+      { name: 'fleet.yml', source: formatFleet(seeded), expectedSource: previousFleet },
+      { name: 'config.yml', source: next, expectedSource: previous },
+    ], { repoRoot: projectRoot });
+    output.write(`\nSaved private config: ${configPath}\nSaved fleet: ${fleetPath}\n\n5. Doctor\n`);
     const checked = doctor({ cwd: projectRoot, installationRoot, env });
     output.write(formatDoctor(checked));
     if (!checked.ok) output.write('Doctor found missing prerequisites; config is saved, not a grant to publish.\n');
-    return { exitCode: checked.ok ? 0 : 1, saved: true, configPath, config, doctor: checked, appStatus,
+    return { exitCode: checked.ok ? 0 : 1, saved: true, configPath, fleetPath, config, fleet: seeded,
+      doctor: checked, appStatus,
       modelsProbed: Boolean(models) };
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {

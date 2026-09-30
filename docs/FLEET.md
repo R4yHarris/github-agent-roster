@@ -42,3 +42,17 @@ Use `profiles: []` for an explicitly empty catalog.
 No endpoint is contacted by parsing or loading the catalog. Test the schema
 with `node --test tests/fleet.test.mjs`. Catalog registration does not change
 App identity, human-owned policy, publication rights, or the default model.
+
+## Onboarding default
+
+After selecting a real model, onboarding asks for the model's context limit
+in **tokens**, then `Add more endpoints later with roster fleet add. Continue? [yes]`.
+This is separate from the context-pack character budget. Confirmed setup
+saves the chosen endpoint/model to both private config and the first fleet
+profile, `id: default`, with concurrency 1. Other profiles are retained.
+
+Only this seeded default may use `context_max: 0`, explicitly meaning
+unknown capacity; other catalog profiles require a positive context limit.
+No capacity is guessed from a model name. Config and fleet are prepared
+before replacement and saved together with rollback on write failure.
+Declining Continue or final confirmation writes neither file.

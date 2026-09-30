@@ -140,6 +140,12 @@ the chosen `llm.base_url` and `llm.model`, `llm.provider: vllm`, and
 `llm.api_key_optional: true`. A custom vLLM host is not replaced with
 loopback when the config is read. Discovery is not a chat or internet-tool
 probe; no network tool is added to the coder.
+The wizard also seeds ignored `.roster/fleet.yml` with that single
+`default` endpoint/model, concurrency 1, and a supplied token context limit
+or `0` for unknown. Other registered endpoints are kept. It asks
+`Add more endpoints later with roster fleet add. Continue? [yes]`;
+the [fleet catalog guide](FLEET.md) describes the schema. This does not turn
+onboarding into a multi-endpoint setup or invent model capacity.
 
 ## Permissions and Advanced
 
