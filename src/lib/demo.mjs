@@ -33,7 +33,7 @@ export async function runDemo({
   cwd = process.cwd(),
   repoRoot = rosterRoot,
   tempRoot = tmpdir(),
-  config = loadConfig({ repoRoot }),
+  config = loadConfig({ repoRoot, cwd }),
 } = {}) {
   if (typeof askFile !== 'string' || !askFile.trim()) {
     throw new TypeError('Use roster run --ask-file PATH --runtime builtin');

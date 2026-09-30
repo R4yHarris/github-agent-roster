@@ -21,6 +21,9 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   if (typeof verify !== 'function') {
     throw new TypeError('Configured coder requires an excellence verifier');
   }
+  if (config.tools?.run_test === false && !taskSkipsTests(context.task)) {
+    throw new Error('run_test is disabled by tools.run_test; enable it or explicitly declare TASK.md tests: none');
+  }
 
   const messages = [
     { role: 'system', content: context.pack },
@@ -29,7 +32,8 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       'Do not claim acceptance checks passed without evidence. ' +
       'Finish with a concise summary of changes, test results, and blockers.' },
   ];
-  const definitions = toolDefinitions.filter((tool) => config.seat.tools.includes(tool.function.name));
+  const definitions = toolDefinitions.filter((tool) => config.seat.tools.includes(tool.function.name) &&
+    (tool.function.name !== 'run_test' || config.tools?.run_test !== false));
   const offeredTools = new Set(definitions.map((tool) => tool.function.name));
   const chat = createBuiltinChat(config, { fetchImpl, env, vault });
   const usages = [];

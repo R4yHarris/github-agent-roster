@@ -7,7 +7,7 @@ import { prepareBuiltinPublication, runBuiltinIssue } from './lib/builtin.mjs';
 import {
   commentMergedIssue, mergedPullNumber, mergedPullNumberFromFailure,
 } from './lib/issue-board.mjs';
-import { loadConfig, setConfigValue } from './lib/config.mjs';
+import { loadConfig, requirePublicationEnabled, setConfigValue } from './lib/config.mjs';
 import { parseEvaluationArgs, recordEvaluation } from './lib/eval.mjs';
 import { formatRecommendation, parseRecommendationArgs, recommend, repositoryRoot } from './lib/learn.mjs';
 import { formatMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
@@ -94,7 +94,7 @@ function conventionalSubject(value) {
 export function createDispatcher({
   cwd = process.cwd(),
   repoRoot = rosterRoot,
-  config = loadConfig({ repoRoot }),
+  config = loadConfig({ repoRoot, cwd }),
   env = process.env,
   output = process.stdout,
   errorOutput = process.stderr,
@@ -142,7 +142,7 @@ export function createDispatcher({
           output.write(`Model: ${state.config.llm.model || '(unset)'}\n`);
           return true;
         }
-        state.config = await api.setConfigValue('model', args === 'clear' ? '' : args, { repoRoot });
+        state.config = await api.setConfigValue('model', args === 'clear' ? '' : args, { repoRoot, cwd });
         output.write(`Model: ${state.config.llm.model || '(unset)'}\n`);
         return true;
       }
@@ -151,7 +151,7 @@ export function createDispatcher({
           output.write(`Effort: ${state.config.llm.effort}\n`);
           return true;
         }
-        state.config = await api.setConfigValue('effort', args, { repoRoot });
+        state.config = await api.setConfigValue('effort', args, { repoRoot, cwd });
         output.write(`Effort: ${state.config.llm.effort}\n`);
         return true;
       }
@@ -196,10 +196,14 @@ export function createDispatcher({
         return true;
       }
       case 'publish': {
+        requirePublicationEnabled(state.config);
         if (state.lastRun && state.published) {
           throw new Error('This run was already published; start another /run before publishing again.');
         }
         const skipReview = args === '--skip-review' || args.endsWith(' --skip-review');
+        const reviewBypass = skipReview || state.config.reviewer?.required === false;
+        const reviewLabel = skipReview ? 'gate bypassed with --skip-review'
+          : state.config.reviewer?.required === false ? 'gate not required by configuration' : 'pass';
         const requestedSubject = skipReview ? args.slice(0, -'--skip-review'.length).trim() : args;
         const subject = requestedSubject || (state.lastRun ? `feat: issue ${state.lastRun.issue.number}` : null);
         if (subject !== null) conventionalSubject(subject);
@@ -208,7 +212,7 @@ export function createDispatcher({
         if (appId !== keyPath) {
           throw new Error('Set both GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH to publish.');
         }
-        await requirePassingReview(state.lastRun, skipReview);
+        await requirePassingReview(state.lastRun, reviewBypass);
         if (!appId) {
           const publishEnv = buildPublishEnv({
             config: state.config, env, run: state.lastRun?.runs?.coder,
@@ -221,7 +225,7 @@ export function createDispatcher({
             testsSkipped: state.lastRun?.result?.testsSkipped,
             issueNumber: state.lastRun?.issue?.number,
             seats: state.lastRun
-              ? `planner, coder, reviewer (${skipReview ? 'gate bypassed with --skip-review' : 'pass'})`
+              ? `planner, coder, reviewer (${reviewLabel})`
               : undefined,
           });
           api.resolveContractsPath({ repoRoot, cwd, env });
@@ -253,7 +257,7 @@ export function createDispatcher({
           }),
           testsSkipped: state.lastRun?.result?.testsSkipped,
           seats: state.lastRun
-            ? `planner, coder, reviewer (${skipReview ? 'gate bypassed with --skip-review' : 'pass'})`
+            ? `planner, coder, reviewer (${reviewLabel})`
             : undefined,
         });
         const commentOnIssue = async (pullNumber) => {

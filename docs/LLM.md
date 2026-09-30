@@ -22,11 +22,15 @@ const config = {
 
 For the builtin YAML config, copy [`roster.config.example.yml`](../roster.config.example.yml),
 set `llm.profile: vllm-local` and `llm.model` to the HF handle served by
-vLLM, and leave `llm.base_url: ""`. The profile sets the URL above and
+vLLM, and leave `llm.base_url: ""` for its default (or set a custom vLLM
+host URL). The profile sets the URL above and
 `api_key_optional: true`; a configured key is still sent. The tracked
 example selects no endpoint until you set a profile or custom URL. Hosted
 APIs are a later opt-in profile using the same HTTP shape. See
 [endpoint profiles](ENDPOINTS.md).
+The terminal-only [onboarding wizard](ONBOARDING.md) probes `/models` with
+a five-second deadline and asks for a real model ID if discovery fails.
+It never probes chat or adds an internet tool.
 
 To check the local server without an API key, replace the model below with
 the handle vLLM is serving:

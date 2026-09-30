@@ -53,7 +53,7 @@ export async function writeAsk(ask, {
 export async function submitAsk(ask, {
   cwd = process.cwd(),
   repoRoot = rosterRoot,
-  config = loadConfig({ repoRoot }),
+  config = loadConfig({ repoRoot, cwd }),
   env = process.env,
   id = randomUUID(),
   runCommand = execute,

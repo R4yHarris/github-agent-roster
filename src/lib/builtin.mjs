@@ -11,7 +11,7 @@ import { runPlanner } from '../seats/planner.mjs';
 import { requirePassingReview, runReviewer } from '../seats/reviewer.mjs';
 import { isAllowedFile, isForbiddenWrite, isManagedFile } from '../runtime/tools.mjs';
 import { checkExcellence, redactEvidence } from '../runtime/excellence.mjs';
-import { loadConfig } from './config.mjs';
+import { loadConfig, requirePublicationEnabled } from './config.mjs';
 import { runIssue } from './issue.mjs';
 import {
   commentMergedIssue, mergedPullNumber, mergedPullNumberFromFailure,
@@ -75,10 +75,11 @@ export async function stageReviewedFiles(worktree, allowedFiles, { env = process
 
 export async function prepareBuiltinPublication(run, {
   cwd = process.cwd(),
-  config = loadConfig({ repoRoot: rosterRoot }),
+  config = loadConfig({ repoRoot: rosterRoot, cwd }),
   env = process.env,
   skipReview = false,
 } = {}) {
+  requirePublicationEnabled(config);
   if (typeof run?.worktreePath !== 'string' || typeof run.planner?.recipe !== 'string' ||
       typeof run.planner?.task !== 'string' || !run.runs?.coder?.env) {
     throw new TypeError('Publishing requires a completed builtin run');
@@ -91,7 +92,7 @@ export async function prepareBuiltinPublication(run, {
     throw new Error('Publishing requires GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH');
   }
   const publishEnv = buildPublishEnv({ config, env, run: run.runs.coder });
-  await requirePassingReview(run, skipReview);
+  await requirePassingReview(run, skipReview || config.reviewer?.required === false);
   await ensureUnchanged(run.recipePath, run.planner.recipe);
   await ensureUnchanged(run.taskPath, run.planner.task);
   await ensureUnchanged(run.planner.estimatePath, run.planner.estimate);
@@ -123,7 +124,7 @@ export async function prepareBuiltinPublication(run, {
 }
 
 export async function runBuiltinTask({
-  cwd = process.cwd(), repoRoot = rosterRoot, config = loadConfig({ repoRoot }), env = process.env,
+  cwd = process.cwd(), repoRoot = rosterRoot, config = loadConfig({ repoRoot, cwd }), env = process.env,
   task = env.AI_TASK || `local-${randomBytes(8).toString('hex')}`,
   session = env.AI_SESSION || `roster-${randomBytes(8).toString('hex')}-coder`,
   log = console.log, fetchImpl, vault, runTestCommand,
@@ -186,7 +187,7 @@ export async function runBuiltinTask({
 export async function runBuiltinIssue(issueNumber, {
   cwd = process.cwd(),
   repoRoot = rosterRoot,
-  config = loadConfig({ repoRoot }),
+  config = loadConfig({ repoRoot, cwd }),
   env = process.env,
   publish = false,
   seats = 'planner,coder,reviewer',
@@ -210,6 +211,8 @@ export async function runBuiltinIssue(issueNumber, {
   }
   if (typeof autoModel !== 'boolean') throw new TypeError('--auto-model must be a boolean');
   if (typeof skipReview !== 'boolean') throw new TypeError('--skip-review must be a boolean');
+  if (publish) requirePublicationEnabled(config);
+  const reviewBypass = skipReview || config.reviewer?.required === false;
   if (autoModel && config.llm.model) {
     throw new Error('--auto-model requires an empty config.llm.model');
   }
@@ -326,9 +329,10 @@ export async function runBuiltinIssue(issueNumber, {
     subject: `feat: issue ${prepared.issue.number}`, model, issueNumber: prepared.issue.number,
     summary: redactEvidence(result.summary, { env, apiKeyEnv: config.llm.api_key_env }),
     testsSkipped: result.testsSkipped,
-    seats: `planner, coder, reviewer (${skipReview ? 'gate bypassed with --skip-review' : review.verdict})`,
+    seats: `planner, coder, reviewer (${skipReview ? 'gate bypassed with --skip-review'
+      : config.reviewer?.required === false ? 'gate not required by configuration' : review.verdict})`,
   }) : null;
-  const command = model && (review.verdict === 'pass' || skipReview)
+  const command = model && config.publish?.enabled !== false && (review.verdict === 'pass' || reviewBypass)
     ? formatPublishCommand({ message: publishMessage, model }) : null;
   log(`Worktree: ${worktreePath}\nAssignment: ${prepared.assignmentPath}\n` +
     `RECIPE: ${planner.recipePath}\nTASK: ${planner.taskPath}\nESTIMATE: ${planner.estimatePath}\n` +
@@ -343,7 +347,9 @@ export async function runBuiltinIssue(issueNumber, {
     `Reviewer session: ${sessions.reviewer}\n` +
     (reviewerRun ? `AI-Run: ${reviewerRun.line}\n` : '') +
     (command ? `From the worktree root, publish only after reviewing changes:\n${command}`
-      : model
+      : config.publish?.enabled === false
+        ? 'Publication unavailable: publishing is disabled by publish.enabled.'
+        : model
         ? 'Publication unavailable: REVIEW.md failed; rerun the reviewer or explicitly use --skip-review.'
         : 'Publication unavailable: set model and complete a configured coder run with passing checks.'));
 

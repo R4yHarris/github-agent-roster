@@ -64,8 +64,8 @@ It prints the worktree location and, when a model is configured, a command
 for the worker **after editing inside the worktree and loading `.env` into
 its environment**:
 
-```sh
-node "$GITHUB_AGENT_CONTRACTS/scripts/agent-pr.mjs" --message "<subject plus Model, Summary, how-to-test, and Refs #N>" --model "$AI_MODEL" --merge-when-green
+```powershell
+node vendor\github-agent-contracts\scripts\agent-pr.mjs --message "<subject plus Model, Summary, how-to-test, and Refs #N>" --model GPT-6.1-Sol --merge-when-green
 ```
 
 Set `GITHUB_AGENT_CONTRACTS` to the resolved contracts pack's absolute path in
@@ -77,6 +77,8 @@ When none is set, preparation still succeeds but returns `nextCommand: null`
 and reports `set model`; it does not print a runnable model-free command.
 Printed commands use the caller platform's shell quoting and environment
 variable syntax, including PowerShell on Windows.
+The explicit agent example above is for this Copilot session; generated
+commands use the configured worker's actual model.
 `roster prepare --issue N` only prepares a coder handoff and
 prints the manual publishing command: it does not
 start a worker, merge, or open additional issues. A later explicit publish

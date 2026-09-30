@@ -20,7 +20,7 @@ later configuration changes. Every publication resolves a real model from
 config, then `AI_MODEL`, then `ROSTER_MODEL`, and passes `--model` explicitly.
 Missing or invalid IDs fail with `set model` before the SDK; its required
 `AI-Model` trailer has no unknown fallback. Stub runs still omit AI-Run and
-cannot publish. GHCP sessions set `AI_MODEL=GPT-6-Sol`.
+cannot publish. This GHCP agent sets `AI_MODEL=GPT-6.1-Sol`.
 
 The pinned contracts `v0.2.1` schema does **not** accept `AI_PROVIDER=vllm`.
 Roster encodes vLLM as its supported `local` provider (`openai` for the explicit
@@ -32,6 +32,8 @@ AI-Run and published trailer use `local`. With no selected profile,
 and AI-Run; a named profile takes precedence over an inherited
 provider environment value. Model IDs and reported usage counts
 come from the completed planner/coder turns, never an estimate.
+An explicit `llm.provider` has precedence over profile and inherited
+`AI_PROVIDER`; onboarding sets it to `vllm` for the chosen vLLM endpoint.
 `AI_MODEL_VERSION` is the
 known environment value or `-`; `AI_EFFORT` comes from config. Builtin sessions
 are `roster-N-planner` and `roster-N-coder`, with `AI_TASK=issue-N`.

@@ -76,8 +76,8 @@ Publish only through the pinned fail-closed `v0.2.1`
 [vendor publisher](../vendor/github-agent-contracts/scripts/agent-pr.mjs), from
 the current worktree's repository root:
 
-```sh
-node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "<subject plus Model, Summary, and how-to-test sections>" --model "$AI_MODEL" --merge-when-green
+```powershell
+node vendor\github-agent-contracts\scripts\agent-pr.mjs --message "<subject plus Model, Summary, and how-to-test sections>" --model GPT-6.1-Sol --merge-when-green
 ```
 
 The operator provisions `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_PATH` outside

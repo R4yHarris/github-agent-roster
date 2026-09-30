@@ -41,6 +41,9 @@ evaluations exist. Without that flag, an empty model with a configured
 endpoint is an explicit error.
 Running `/model` or `/effort` without a value shows the current setting.
 Do not put API key values in the config; it remains ignored by Git.
+When [onboarding](ONBOARDING.md) saved a project private config, the shell
+loads it and `/model`/`/effort` update that file rather than the installed
+package's settings.
 
 The CLI equivalent is `roster status --issue N [--offline]`. Without an
 explicit number, status uses the current `issue-N` branch or a single issue
@@ -62,19 +65,22 @@ evidence it reviewed remain unchanged. Without an in-session run, no trusted
 report is available: `/publish` fails unless `--skip-review` is explicit.
 The flag bypasses only the reviewer verdict, not tests, excellence, or App
 policy. A failed review never deletes coder changes.
+Private `publish.enabled: false` blocks `/publish` entirely.
+`reviewer.required: false` makes the review verdict optional without
+disabling the reviewer, tests, excellence, or human-owned policy.
 
 Without App credentials, `/publish` prints the command instead of executing
 it:
 
-```sh
-node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "<subject plus Model, Summary, and how-to-test sections>" --model "$AI_MODEL" --merge-when-green
+```powershell
+node vendor\github-agent-contracts\scripts\agent-pr.mjs --message "<subject plus Model, Summary, and how-to-test sections>" --model GPT-6.1-Sol --merge-when-green
 ```
 
 Publication resolves `config.llm.model`, then `AI_MODEL`, then `ROSTER_MODEL`.
 An absent or invalid ID reports `set model` without invoking the publisher
 or printing a model-free command. A completed run keeps the actual coder
 model rather than a later `/model` setting. GHCP sessions use
-`AI_MODEL=GPT-6-Sol`; see the [full SDK example](GHCP.md).
+`AI_MODEL=GPT-6.1-Sol`; see the [full SDK example](GHCP.md).
 Generated PR bodies include `## Model`, `## Summary`, and `node --test`
 instructions (or an explicit task test waiver). After a run, the summary
 comes from the reviewed result; without a run, the conventional subject

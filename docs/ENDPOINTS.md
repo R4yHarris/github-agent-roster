@@ -4,6 +4,9 @@ Start with the vLLM OpenAI API on DGX Spark. The
 [schema 1 config example](../roster.config.example.yml) supplies defaults for
 the builtin planner and coder. Copy it to ignored `.roster/config.yml` to
 configure a model-backed `roster run --issue N`.
+The [onboarding wizard](ONBOARDING.md) probes `/models` and writes these
+settings in the caller's ignored project config without changing the
+installed package.
 An empty endpoint keeps the deterministic stub; `roster prepare --issue N`
 is the manual handoff path. See [SDLC](SDLC.md) for execution and publishing.
 
@@ -20,15 +23,21 @@ is the manual handoff path. See [SDLC](SDLC.md) for execution and publishing.
   `http://127.0.0.1:8000/v1` and `api_key_optional: true`.
   `profiles.ollama`, `profiles.lmstudio`, and `profiles.openai` are
   alternatives. Selecting `llm.profile` uses that endpoint and key name;
-  `llm.base_url` must then remain empty. An explicit base URL requires an
-  empty profile. Older configs without `vllm-local` can still select its
+  `llm.base_url` normally remains empty. For `vllm-local`, a nonempty
+  `llm.base_url` overrides the profile default, including a Windows host
+  URL entered from WSL. Other profiles still require an empty base URL.
+  Older configs without `vllm-local` can still select its
   built-in default.
 - `llm.api_key_env: ROSTER_API_KEY` names an environment variable, not a key.
-  Both seats use the [OpenAI-compatible client](LLM.md): a non-empty environment
+  Model-backed seats use the [OpenAI-compatible client](LLM.md): a non-empty environment
   value wins over the same-named vault entry, and authorization is sent only
   for a resolved key. Leave both unset for a keyless local server.
 - `llm.effort: m` records medium effort and `llm.context_max: 0` means an unknown
   context limit. These are run metadata, not provider-specific request options.
+- Optional `llm.api_key_optional` overrides the profile's key requirement.
+  Optional `llm.provider` records the actual backend (`vllm`,
+  `github-copilot`, `anthropic`, `openai`, `local`, or `other`). vLLM is
+  retained in the local journal and encoded as `local` in contracts AI-Run.
 - `planner.turn_budget` bounds the planner's JSON responses; it has no file
   tools. `seat.id: coder` and `seat.principal: coder` select the coder and
   contracts role. `seat.turn_budget` bounds the coder loop and `seat.tools`
@@ -37,13 +46,20 @@ is the manual handoff path. See [SDLC](SDLC.md) for execution and publishing.
   `paths.skills`, `paths.asks`, and `paths.worktrees` name repository-relative
   directories (`skills`, `.roster/asks`, and `.worktrees`). GitHub issues and PRs
   remain the work queue.
+- Optional `publish.enabled` permits or disables explicit Roster-managed
+  publication; it does not grant GitHub policy capability. Optional
+  `tools.run_test` controls model and automatic test execution, while
+  `reviewer.required` controls the publication review gate. Their legacy
+  defaults are true. `tools.internet` defaults false in older configs
+  and the tracked example; onboarding saves the requested default true.
+  It is a stored preference only, not a network tool.
 
 Keep every field in the example when overriding configuration. Older private
 configs without `planner` or `profiles` remain valid; the planner gets one
 turn and the named profiles retain their documented defaults. The underlying
-[chat factory and vault](LLM.md) accept an in-memory API with
-`llm.api_key_optional` and `llm.api_key_name`; these are not top-level builtin
-YAML fields. Use `profiles.vllm-local.api_key_optional` in the YAML example.
+[chat factory and vault](LLM.md) also accept an in-memory
+`llm.api_key_name`. The builtin YAML uses `llm.api_key_env`, and supports
+`llm.api_key_optional` both directly and in a profile.
 
 Use the OpenAI-compatible `/v1` base URL, not a full `/chat/completions` URL.
 With the server running, `GET <base_url>/models` lists model IDs; use an

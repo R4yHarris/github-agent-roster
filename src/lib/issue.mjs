@@ -86,7 +86,7 @@ export async function runIssue(issueNumber, {
   runCommand = execute,
   fileSystem = fs,
   env = process.env,
-  config = loadConfig(),
+  config = loadConfig({ cwd }),
   now = () => new Date(),
   log = console.log,
   worktrees = '.worktrees',
@@ -152,7 +152,7 @@ export async function runIssue(issueNumber, {
   const assignmentPath = path.join(worktreePath, 'ASSIGNMENT.md');
   const envPath = path.join(worktreePath, '.env');
   const session = sessionId ?? `roster-${now().toISOString().replace(/[-:.]/g, '')}`;
-  const model = config.llm.model || env.AI_MODEL || env.ROSTER_MODEL
+  const model = config.publish?.enabled !== false && (config.llm.model || env.AI_MODEL || env.ROSTER_MODEL)
     ? resolvePublishModel({ config, env }) : null;
   const nextCommand = model ? formatPublishCommand({
     model,
@@ -194,7 +194,9 @@ export async function runIssue(issueNumber, {
 Assignment: ${assignmentPath}
 Environment: ${envPath}
 After editing inside the worktree, load .env into the worker environment and run:
-${nextCommand ?? 'Publication unavailable: set model in llm.model, AI_MODEL, or ROSTER_MODEL before publishing.'}`);
+${nextCommand ?? (config.publish?.enabled === false
+  ? 'Publication unavailable: publishing is disabled by publish.enabled.'
+  : 'Publication unavailable: set model in llm.model, AI_MODEL, or ROSTER_MODEL before publishing.')}`);
 
   return { issue, ask, metadata, repoRoot, worktreePath, assignmentPath, envPath, task, session, nextCommand };
 }

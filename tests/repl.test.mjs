@@ -295,6 +295,24 @@ test('/publish blocks a failed in-session review until --skip-review is explicit
   assert.match(shell.output.text, /--model review-model --merge-when-green/);
 });
 
+test('onboarding publication permissions are enforced by the REPL, not just recorded', async () => {
+  const disabled = dispatcher({
+    config: { ...config, publish: { enabled: false }, reviewer: { required: false } },
+    env: { AI_MODEL: 'served-model', GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'key.pem' },
+    services: { publisher: () => assert.fail('Disabled publication must not invoke the SDK') },
+  });
+  await assert.rejects(disabled.dispatch('/publish fix: metadata --skip-review'),
+    /Publishing is disabled by publish\.enabled/);
+  assert.equal(disabled.output.text, '');
+  const optional = dispatcher({
+    config: { ...config, reviewer: { required: false } },
+    env: { AI_MODEL: 'served-model' },
+    services: { resolveContractsPath: () => 'contracts' },
+  });
+  await optional.dispatch('/publish fix: metadata');
+  assert.match(optional.output.text, /--model served-model --merge-when-green/);
+});
+
 test('an issue publish without a confirmed merge leaves the issue untouched', async () => {
   const shell = dispatcher({
     env: { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'key.pem' },

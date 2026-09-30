@@ -1,3 +1,5 @@
+import { requirePublicationEnabled } from '../lib/config.mjs';
+
 const countFields = ['prompt_tokens', 'completion_tokens'];
 export const RUN_ENV_NAMES = [
   'AI_PROVIDER', 'AI_MODEL', 'AI_MODEL_VERSION', 'AI_EFFORT', 'AI_CONTEXT_USED',
@@ -39,6 +41,12 @@ export function mergeUsage(...samples) {
 }
 
 function runProvider(config, env) {
+  if (config.llm.provider) {
+    if (!['vllm', 'github-copilot', 'anthropic', 'openai', 'local', 'other'].includes(config.llm.provider)) {
+      throw new TypeError('Invalid llm.provider for AI-Run');
+    }
+    return config.llm.provider;
+  }
   if (config.llm.profile === 'vllm-local') return 'vllm';
   if (config.llm.profile === 'openai') return 'openai';
   if (config.llm.profile === 'ollama' || config.llm.profile === 'lmstudio') return 'local';
@@ -90,6 +98,7 @@ export function buildRun({ config, usage = {}, session, task, env = process.env 
 }
 
 export function buildPublishEnv({ config, env = process.env, run }) {
+  requirePublicationEnabled(config);
   const activeConfig = run?.env?.AI_MODEL
     ? { ...config, llm: { ...config.llm, model: run.env.AI_MODEL } } : config;
   const model = resolvePublishModel({ config: activeConfig, env });
@@ -102,7 +111,7 @@ export function buildPublishEnv({ config, env = process.env, run }) {
       env, session: env.AI_SESSION, task: env.AI_TASK,
     }) : run;
   Object.assign(publishEnv, metadata?.env);
-  if (run === undefined && !config.llm.model && env.AI_MODEL && env.AI_PROVIDER) {
+  if (run === undefined && !config.llm.provider && !config.llm.model && env.AI_MODEL && env.AI_PROVIDER) {
     publishEnv.AI_PROVIDER = env.AI_PROVIDER === 'vllm' ? 'local' : env.AI_PROVIDER;
   }
   publishEnv.AI_MODEL = model;

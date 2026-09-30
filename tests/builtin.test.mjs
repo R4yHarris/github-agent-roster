@@ -187,6 +187,19 @@ test('--publish requires an LLM and App environment before any GitHub or worktre
   assert.deepEqual(options.calls, []);
 });
 
+test('publish.enabled false blocks publication before GitHub, worktree creation, or the SDK', async (context) => {
+  const options = fixture(context);
+  const config = { ...llmConfig, publish: { enabled: false } };
+  await assert.rejects(runBuiltinIssue(42, {
+    ...options, config, publish: true, skipReview: true,
+    env: { ...options.env, GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'app.pem' },
+    publisher: () => assert.fail('Disabled publication must not invoke the SDK'),
+  }), /Publishing is disabled by publish\.enabled/);
+  assert.deepEqual(options.calls, []);
+  assert.equal(existsSync(path.join(options.target, '.worktrees')), false);
+  await assert.rejects(prepareBuiltinPublication({}, { config }), /Publishing is disabled/);
+});
+
 test('--publish refuses an absent model before invoking GitHub, the SDK, or worktree preparation', async (context) => {
   const options = fixture(context);
   await assert.rejects(runBuiltinIssue(42, {
@@ -498,7 +511,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
 });
 
 test('a failed reviewer keeps coder changes but blocks publication unless explicitly bypassed', async (context) => {
-  for (const skipReview of [false, true]) {
+  for (const [skipReview, reviewRequired] of [[false, true], [true, true], [false, false]]) {
     const options = fixture(context);
     let coderTurns = 0;
     let published = 0;
@@ -542,31 +555,33 @@ test('a failed reviewer keeps coder changes but blocks publication unless explic
       }) };
     };
     const args = {
-      ...options, config: llmConfig, publish: true, skipReview, fetchImpl, log: () => {},
+      ...options, config: { ...llmConfig, reviewer: { required: reviewRequired } },
+      publish: true, skipReview, fetchImpl, log: () => {},
       env: { ...options.env, GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'app.pem' },
       runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
       publisher: async (_program, params, publication) => {
         published += 1;
-        assert.match(params[2], /## Seats\n\nplanner, coder, reviewer \(gate bypassed with --skip-review\)/);
+        assert.ok(params[2].includes(`## Seats\n\nplanner, coder, reviewer (${skipReview
+          ? 'gate bypassed with --skip-review' : 'gate not required by configuration'})`));
         assert.equal(git(publication.cwd, 'diff', '--cached', '--name-only'), 'README.md');
         return { stdout: 'Merged PR #7 with a merge commit, removed its branch.\n' };
       },
       issueCommenter: async ({ model }) => { assert.equal(model, 'local-model'); },
     };
-    if (skipReview) {
+    if (skipReview || !reviewRequired) {
       const run = await runIssueWithSeats(42, args);
       assert.equal(run.review.verdict, 'fail');
       assert.match(run.command, /--model local-model --merge-when-green/);
     } else {
       await assert.rejects(runIssueWithSeats(42, args), /passing REVIEW\.md/);
     }
-    assert.equal(published, skipReview ? 1 : 0);
+    assert.equal(published, skipReview || !reviewRequired ? 1 : 0);
     const worktree = path.join(options.target, '.worktrees', 'issue-42');
     assert.match(readFileSync(path.join(worktree, 'README.md'), 'utf8'), /## Status/);
     assert.match(readFileSync(path.join(worktree, 'RESULT.md'), 'utf8'), /Checks: PASS/);
     assert.match(readFileSync(path.join(worktree, 'REVIEW.md'), 'utf8'),
       /Verdict: fail[\s\S]*## Security notes/);
-    if (!skipReview) assert.equal(git(worktree, 'diff', '--cached', '--name-only'), '');
+    if (!skipReview && reviewRequired) assert.equal(git(worktree, 'diff', '--cached', '--name-only'), '');
   }
 });
 

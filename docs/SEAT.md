@@ -20,6 +20,8 @@ The coder awaits these stages in order:
 5. **Tool loop:** deterministic stub or bounded configured LLM, using only the
    five offered worktree tools. Configured final tests run unless task
    frontmatter explicitly says `tests: none`.
+   When `tools.run_test` is false, required-test tasks fail before inference;
+   the permission does not silently waive acceptance checks.
 6. **Memory:** append factual, compact, credential-redacted notebook evidence.
 7. **Excellence:** inspect the actual diff, tests, secrets, model, and turns.
 8. **Result:** write RESULT.md with checks passed or the first failure, recorded
@@ -51,7 +53,8 @@ roster run --seat coder --runtime builtin
 
 This command does not contact GitHub for an issue, invoke a planner, create
 a worktree, rewrite TASK.md, or create RECIPE.yml. It uses the roster
-installation's config, principal, skills, and memory. The pinned
+project private config when available, then installation settings; principal,
+skills, and memory still come from the roster installation. The pinned
 [contracts dependency](DEPENDENCY.md) must resolve. Do not read an `.env`
 through coder tools: a trusted launcher may provide `AI_TASK`/`AI_SESSION`;
 otherwise local opaque IDs are generated. Opt-in `.roster/runs` recording
