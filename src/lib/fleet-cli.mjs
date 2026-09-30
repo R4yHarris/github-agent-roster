@@ -5,7 +5,7 @@ import { formatFleet, getFleetProfile, normalizeFleetBaseUrl, parseFleet, valida
   validateFleetId, validateFleetProfile, withFleetProfile, writeFleet } from './fleet.mjs';
 import { resolveProjectRoot } from './paths.mjs';
 import { ensurePrivateFilesIgnored, readPrivateFile, writePrivateDocuments } from './private-files.mjs';
-import { probeModels } from '../onboard/wizard.mjs';
+import { probeModelDetails } from '../onboard/wizard.mjs';
 import { runFleetAssist } from '../onboard/fleet-assist.mjs';
 
 const installation = fileURLToPath(new URL('../../', import.meta.url));
@@ -70,8 +70,8 @@ export async function runFleet(args, {
     return runFleetAssist({ cwd, installationRoot, env, input, output, errorOutput, fetchImpl, vault, question });
   }
   const tty = Boolean(input.isTTY && output.isTTY);
-  if (options.command === 'add' && !tty && (!options.model || !options.context)) {
-    throw new TypeError('Non-TTY fleet add requires --id, --base-url, --model, and --context');
+  if (options.command === 'add' && !tty && !options.model) {
+    throw new TypeError('Non-TTY fleet add requires --id, --base-url, and --model');
   }
   if (options.command === 'probe' && options.setModel && !options.model && !tty) {
     throw new TypeError('Non-TTY fleet probe --set-model requires a model ID');
@@ -116,12 +116,20 @@ export async function runFleet(args, {
     if (options.command === 'add') {
       if (fleet.profiles.some(({ id }) => id === options.id)) throw new Error('Fleet profile ID already exists');
       const { config } = await currentConfig(repoRoot, cwd, installationRoot);
-      const ids = await probeModels(options.baseUrl, { fetchImpl, env, apiKeyEnv: config.llm.api_key_env });
+      const models = await probeModelDetails(options.baseUrl, { fetchImpl, env, apiKeyEnv: config.llm.api_key_env });
+      const ids = models.map(({ id }) => id);
       const model = await selectModel(ids, options.model);
-      let context = options.context;
+      const reportedContext = models.find(({ id }) => id === model)?.context_max;
+      let context = options.context ?? (reportedContext === undefined ? undefined : String(reportedContext));
+      if (!context && !tty) {
+        throw new TypeError('Non-TTY fleet add requires --context when /v1/models does not report a context limit');
+      }
       while (!context) {
         context = await ask('Model context limit in tokens [required]: ');
         if (!context) output.write('Supply a positive context limit; capacity is not guessed.\n');
+      }
+      if (options.context === undefined && reportedContext !== undefined) {
+        output.write(`Using context_max=${reportedContext} reported by /v1/models for ${model}.\n`);
       }
       const profile = validateFleetProfile({
         id: options.id, base_url: options.baseUrl, model, provider: 'vllm',
@@ -137,25 +145,33 @@ export async function runFleet(args, {
     const profile = getFleetProfile(fleet, options.id);
     if (options.command === 'probe') {
       const { config, source: previousConfig } = await currentConfig(repoRoot, cwd, installationRoot);
-      const ids = await probeModels(profile.base_url, { fetchImpl, env, apiKeyEnv: config.llm.api_key_env });
+      const models = await probeModelDetails(profile.base_url, { fetchImpl, env, apiKeyEnv: config.llm.api_key_env });
+      const ids = models.map(({ id }) => id);
       if (!options.setModel) {
-        output.write('Available models:\n' + ids.map((id) => `  ${id}\n`).join(''));
+        output.write('Available models:\n' + models.map(({ id, context_max: contextMax }) =>
+          `  ${id}${contextMax === undefined ? '' : ` (context_max=${contextMax})`}\n`).join(''));
         output.write(`Saved model unchanged: ${profile.model}\n`);
-        return { command: options.command, models: ids, profile };
+        const contextMax = models.find(({ id }) => id === profile.model)?.context_max;
+        return { command: options.command, models: ids, modelDetails: models, profile,
+          ...(contextMax === undefined ? {} : { context_max: contextMax }) };
       }
       const model = await selectModel(ids, options.model);
+      const contextMax = models.find(({ id }) => id === model)?.context_max;
+      const selected = { ...profile, model, ...(contextMax === undefined ? {} : { context_max: contextMax }) };
       const updated = validateFleet({ profiles: fleet.profiles.map((item) =>
-        item.id === profile.id ? { ...item, model } : item) });
+        item.id === profile.id ? selected : item) });
       const documents = [{ name: 'fleet.yml', source: formatFleet(updated), expectedSource: previousFleet }];
       const names = ['fleet.yml'];
       if (matchesDefault(config, profile)) {
-        documents.push({ name: 'config.yml', source: formatConfig(withFleetProfile(config, { ...profile, model })),
+        documents.push({ name: 'config.yml', source: formatConfig(withFleetProfile(config, selected)),
           expectedSource: previousConfig });
         names.push('config.yml');
       }
       await ensurePrivateFilesIgnored(repoRoot, names);
       await writePrivateDocuments(documents, { repoRoot });
-      output.write(`Updated saved model for ${profile.id}. Recheck its declared context limit for the new model.\n`);
+      output.write(`Updated saved model for ${profile.id}. ` + (contextMax === undefined
+        ? 'Recheck its declared context limit for the new model.\n'
+        : `Using context_max=${contextMax} reported by /v1/models.\n`));
       return { command: options.command, fleet: updated, profile: getFleetProfile(updated, options.id) };
     }
     const { config, source: previousConfig } = await currentConfig(repoRoot, cwd, installationRoot);

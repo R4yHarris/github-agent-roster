@@ -13,6 +13,8 @@ import { checkAppIdentity, formatAppIdentity } from './app.mjs';
 const installation = fileURLToPath(new URL('../../', import.meta.url));
 const defaultBaseUrl = 'http://127.0.0.1:8000/v1';
 const probeTimeoutMs = 5_000;
+const contextFields = ['max_model_len', 'max_context_length', 'max_context_len',
+  'context_length', 'context_window', 'context_max'];
 
 class ModelProbeError extends Error {}
 
@@ -32,7 +34,7 @@ function modelId(value, env, apiKeyEnv) {
   return model;
 }
 
-export async function probeModels(baseUrl, {
+export async function probeModelDetails(baseUrl, {
   fetchImpl = globalThis.fetch, env = process.env, schedule = setTimeout, cancel = clearTimeout,
   apiKeyEnv = 'ROSTER_API_KEY',
 } = {}) {
@@ -66,7 +68,16 @@ export async function probeModels(baseUrl, {
       throw new ModelProbeError('invalid response');
     }
     try {
-      return [...new Set(payload.data.map((entry) => modelId(entry?.id, env, apiKeyEnv)))];
+      const models = new Map();
+      for (const entry of payload.data) {
+        const id = modelId(entry?.id, env, apiKeyEnv);
+        const contextMax = contextFields.map((field) => entry?.[field])
+          .find((value) => Number.isSafeInteger(value) && value > 0);
+        if (!models.has(id) || models.get(id).context_max === undefined && contextMax !== undefined) {
+          models.set(id, Object.freeze({ id, ...(contextMax === undefined ? {} : { context_max: contextMax }) }));
+        }
+      }
+      return [...models.values()];
     } catch (error) {
       if (!(error instanceof Error)) throw error;
       throw new ModelProbeError('invalid response');
@@ -83,6 +94,10 @@ export async function probeModels(baseUrl, {
     cancel(timer);
     controller.abort();
   }
+}
+
+export async function probeModels(baseUrl, options) {
+  return (await probeModelDetails(baseUrl, options)).map(({ id }) => id);
 }
 
 function renderConfig(base, { baseUrl, model, contextMax, publish, internet, runTest, reviewer, turns, budget }) {
@@ -190,8 +205,10 @@ export async function runOnboard({
       }
     }
     let models;
+    let modelDetails;
     try {
-      models = await probeModels(baseUrl, { fetchImpl, env, apiKeyEnv });
+      modelDetails = await probeModelDetails(baseUrl, { fetchImpl, env, apiKeyEnv });
+      models = modelDetails.map(({ id }) => id);
     } catch (error) {
       if (!(error instanceof ModelProbeError)) throw error;
       output.write(`Model probe failed: ${error.message}\n`);
@@ -219,8 +236,12 @@ export async function runOnboard({
         }
       }
     }
-    const contextMax = await integer('Model context tokens (0 = unknown)', base.llm.context_max,
+    const reportedContext = modelDetails?.find(({ id }) => id === model)?.context_max;
+    const contextMax = reportedContext ?? await integer('Model context tokens (0 = unknown)', base.llm.context_max,
       Number.MAX_SAFE_INTEGER, 0);
+    if (reportedContext !== undefined) {
+      output.write(`Using context_max=${contextMax} reported by /v1/models for ${model}.\n`);
+    }
     if (!await yesNo('Add more endpoints later with roster fleet add. Continue', true)) {
       output.write('Private config and fleet were not changed.\n');
       return { exitCode: 0, saved: false };

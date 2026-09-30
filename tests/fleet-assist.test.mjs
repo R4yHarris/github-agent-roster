@@ -47,14 +47,15 @@ function fixture(t, replies) {
     } };
 }
 
-function chatMock(profile = proposed, { fail = false, toolCall = false } = {}) {
+function chatMock(profile = proposed, { fail = false, toolCall = false, contextMax } = {}) {
   const calls = [];
   const fetchImpl = async (url, request) => {
     calls.push({ url, request });
     if (url.endsWith('/models')) {
       assert.equal(url, 'https://new.example.invalid/v1/models');
       assert.equal(request.method, 'GET');
-      return Response.json({ data: [{ id: 'served-model' }, { id: 'other-model' }] });
+      return Response.json({ data: [{ id: 'served-model',
+        ...(contextMax === undefined ? {} : { max_model_len: contextMax }) }, { id: 'other-model' }] });
     }
     assert.equal(url, 'https://interview.example.invalid/v1/chat/completions');
     const body = JSON.parse(request.body);
@@ -95,6 +96,23 @@ test('onboarded model interviews one field at a time and no/blank never saves a 
       ['id', 'base_url', 'model', 'hardware', 'context_max', 'concurrency', 'task_class', 'notes']);
     assert.equal(payloads[8].stage, 'proposal');
   }
+});
+
+test('fleet assist records discovered model context and skips that interview question', async (t) => {
+  const replies = answers();
+  replies.splice(4, 1);
+  const options = fixture(t, [...replies, 'yes', 'done']);
+  const expected = { ...proposed, context_max: 1048576 };
+  const mock = chatMock(expected, { contextMax: 1048576 });
+  await runFleetAssist({ ...options, fetchImpl: mock.fetchImpl });
+  assert.deepEqual((await loadFleet({ cwd: options.cwd })).profiles, [baseline, expected]);
+  assert.equal(readFileSync(options.configPath, 'utf8'), configSource);
+  assert.equal(options.prompts.includes('What is context_max? '), false);
+  const payloads = mock.calls.filter(({ url }) => url.endsWith('/chat/completions'))
+    .map(({ request }) => JSON.parse(JSON.parse(request.body).messages[1].content));
+  assert.equal(payloads.some(({ stage, field }) => stage === 'question' && field === 'context_max'), false);
+  assert.equal(payloads.find(({ stage }) => stage === 'proposal').facts.context_max, 1048576);
+  assert.match(options.output.text, /Using context_max=1048576 reported by \/v1\/models/);
 });
 
 test('only explicit user yes appends a validated profile and leaves the default config unchanged', async (t) => {

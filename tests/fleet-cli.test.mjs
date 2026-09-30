@@ -11,6 +11,7 @@ import { formatFleet, loadFleet } from '../src/lib/fleet.mjs';
 
 const installation = fileURLToPath(new URL('../', import.meta.url));
 const example = readFileSync(join(installation, 'roster.config.example.yml'), 'utf8');
+const sglangModels = JSON.parse(readFileSync(new URL('./fixtures/models-sglang.json', import.meta.url), 'utf8'));
 const first = { id: 'first', base_url: 'https://first.example.invalid/v1', model: 'owner/first',
   provider: 'vllm', context_max: 32768, concurrency: 1, hardware: 'test-gpu', notes: '' };
 const second = { ...first, id: 'second', base_url: 'https://second.example.invalid/v1', model: 'owner/second' };
@@ -84,6 +85,59 @@ test('interactive add selects a served ID and requires a supplied context limit'
   assert.equal(result.profile.context_max, 32768);
   assert.equal(result.profile.concurrency, 1);
   assert.deepEqual(prompts, ['Select a model [1]: ', 'Model context limit in tokens [required]: ']);
+});
+
+test('fleet add uses reported context without prompting in TTY and non-TTY modes', async (t) => {
+  for (const tty of [true, false]) {
+    const options = fixture(t);
+    const prompts = [];
+    let requests = 0;
+    const result = await runFleet(['add', '--id', 'sglang', '--base-url', 'https://sglang.example.invalid',
+      ...(tty ? [] : ['--model', 'chosen-model'])], {
+      ...options, input: { isTTY: tty }, output: { ...options.output, isTTY: tty },
+      fetchImpl: async () => { requests += 1; return Response.json(sglangModels); },
+      question: async (prompt) => { prompts.push(prompt); return '2'; },
+    });
+    assert.equal(requests, 1);
+    assert.equal(result.profile.model, 'chosen-model');
+    assert.equal(result.profile.context_max, 1048576);
+    assert.equal((await loadFleet({ cwd: options.cwd })).profiles[0].context_max, 1048576);
+    assert.deepEqual(prompts, tty ? ['Select a model [1]: '] : []);
+  }
+});
+
+test('fleet add without discovered context retains explicit limits and refuses unknown non-TTY capacity', async (t) => {
+  const options = fixture(t);
+  await assert.rejects(runFleet(['add', '--id', 'missing', '--base-url', 'https://x.example.invalid',
+    '--model', 'chosen-model'], { ...options, fetchImpl: models('chosen-model') }),
+  /requires --context when \/v1\/models does not report/);
+  const result = await runFleet(['add', '--id', 'explicit', '--base-url', 'https://x.example.invalid',
+    '--model', 'chosen-model', '--context', '32768'], {
+    ...options, fetchImpl: async () => Response.json(sglangModels),
+  });
+  assert.equal(result.profile.context_max, 32768);
+});
+
+test('fleet probe reports discovered context read-only and explicit refresh synchronizes the active default', async (t) => {
+  const options = fixture(t, [first]);
+  await runFleet(['default', 'first'], options);
+  const before = readFileSync(options.file, 'utf8');
+  const beforeConfig = readFileSync(join(options.cwd, '.roster', 'config.yml'), 'utf8');
+  const fetchImpl = async () => Response.json({
+    data: [{ id: first.model, max_model_len: 1048576 }, { id: 'new-model', max_context_length: 65536 }],
+  });
+  const probe = await runFleet(['probe', 'first'], { ...options, fetchImpl });
+  assert.equal(probe.context_max, 1048576);
+  assert.equal(probe.profile.context_max, first.context_max);
+  assert.deepEqual(probe.models, [first.model, 'new-model']);
+  assert.match(options.text, /context_max=1048576/);
+  assert.equal(readFileSync(options.file, 'utf8'), before);
+  assert.equal(readFileSync(join(options.cwd, '.roster', 'config.yml'), 'utf8'), beforeConfig);
+  await runFleet(['probe', 'first', '--set-model', 'new-model'], { ...options, fetchImpl });
+  assert.equal((await loadFleet({ cwd: options.cwd })).profiles[0].context_max, 65536);
+  const config = loadConfig({ repoRoot: options.cwd, cwd: options.cwd });
+  assert.equal(config.llm.model, 'new-model');
+  assert.equal(config.llm.context_max, 65536);
 });
 
 test('probe prints model inventory without changing files unless set-model is explicit', async (t) => {
