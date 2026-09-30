@@ -1,0 +1,25 @@
+# Fictional schema examples, not configured endpoints or capacity benchmarks.
+# Replace the .example.invalid hosts and model IDs in your private catalog.
+# Shape: id: local-3090-qwen
+#        hardware: rtx-3090
+#        context_max: 32768
+#        concurrency: 2
+profiles:
+  - id: example-single-gpu
+    base_url: https://gpu.example.invalid/v1
+    model: fictional/compact-coder
+    provider: vllm
+    context_max: 32768
+    concurrency: 2
+    hardware: fictional-single-gpu
+    task_class: [fix, docs, test]
+    notes: "Fictional starting example; replace with your measured limits."
+  - id: example-large-context
+    base_url: https://cluster.example.invalid
+    model: fictional/large-coder
+    provider: vllm
+    context_max: 65536
+    concurrency: 1
+    hardware: fictional-multi-gpu
+    task_class: [feat, fix]
+    notes: "Fictional example, not an installed model or a benchmark claim."

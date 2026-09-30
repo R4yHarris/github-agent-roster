@@ -9,6 +9,7 @@
     "src/",
     "templates/",
     "fixtures/demo-task/",
+    "examples/",
     "skills/",
     "principals/",
     "docs/",

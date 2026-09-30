@@ -5,6 +5,8 @@ node_modules/
 .roster/evals.jsonl
 .roster/config.yml
 .roster/config.yml.*
+.roster/fleet.yml
+.roster/fleet.yml.*
 .roster/memory/
 .roster/asks/
 /evals.jsonl
