@@ -1,10 +1,10 @@
-import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { parseRecipe } from '../lib/recipe.mjs';
 import { planAsk } from '../planner/stub.mjs';
 import { appendMemory, readMemory, seatMemoryPath } from '../runtime/memory.mjs';
 import { writeEstimate } from '../runtime/estimate.mjs';
 import { buildRun } from '../metrics/run.mjs';
+import { createTools } from '../runtime/tools.mjs';
 
 export async function runPlanner({
   worktree, repoRoot, issue, ask = issue?.body, title = issue?.title,
@@ -31,8 +31,10 @@ export async function runPlanner({
   const recipePath = path.join(worktree, 'RECIPE.yml');
   const taskPath = path.join(worktree, 'TASK.md');
   try {
+    const tools = await createTools({ worktree, seat: 'planner', env, apiKeyEnv: config.llm.api_key_env });
     plan = await planAsk(ask, {
       config, reference, title, fetchImpl, env, vault, memory, learningRoot, metadata, lockedModel,
+      tools,
       onResponse: (response) => { lastResponse = response; },
     });
     const recipe = parseRecipe(plan.recipe);
@@ -44,9 +46,10 @@ export async function runPlanner({
     }
     plan = { ...plan, ...await writeEstimate(plan.task, {
       worktree, learningRoot, config, env, recommendation: plan.feedback?.recommendation,
+      writeArtifact: tools.write_file,
     }) };
-    await fs.writeFile(recipePath, plan.recipe, { encoding: 'utf8', flag: 'wx' });
-    await fs.writeFile(taskPath, plan.task, { encoding: 'utf8', flag: 'wx' });
+    await tools.write_file({ path: 'RECIPE.yml', content: plan.recipe });
+    await tools.write_file({ path: 'TASK.md', content: plan.task });
   } catch (error) {
     if (!(error instanceof Error)) throw error;
     if (config.llm.base_url && lastResponse) {

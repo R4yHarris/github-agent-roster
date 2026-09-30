@@ -76,8 +76,10 @@ reference must agree before any comment; API failures are reported explicitly.
 
 The contracts publisher checks coder grants against reviewed policy and refuses
 policy and workflow changes. Those publication checks are not a filesystem
-write sandbox. The planner has no model-invokable tools and writes only
-validated recipe/task files. The [builtin coder tools](../src/runtime/tools.mjs) enforce task
+write sandbox. The planner's only model tool is `write_file`, limited to root
+recipe/task/estimate drafts; it cannot access app-code paths. The harness
+validates and finalizes those artifacts through the same scoped writer.
+The [builtin coder tools](../src/runtime/tools.mjs) enforce task
 allowlists, reject path and symlink escapes, and deny writes to Git metadata,
 recognized environment files, PEMs, policy, workflows, the pinned contracts
 submodule, and generated task files. Directory listing also omits protected

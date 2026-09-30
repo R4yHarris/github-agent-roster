@@ -3,9 +3,11 @@ import { constants } from 'node:fs';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { redactSecrets } from './memory.mjs';
 
 const execute = promisify(execFile);
 const managedFiles = new Set(['assignment.md', 'task.md', 'recipe.yml', 'context.md', 'research.md', 'result.md', 'review.md', 'estimate.md']);
+export const plannerArtifactFiles = Object.freeze(['RECIPE.yml', 'TASK.md', 'ESTIMATE.md']);
 
 function partsOf(file) {
   return file.replaceAll('\\', '/').toLowerCase().split('/');
@@ -124,15 +126,34 @@ export const toolDefinitions = [
   },
 ];
 
+const writeDefinition = toolDefinitions.find(({ function: tool }) => tool.name === 'write_file');
+export const plannerToolDefinitions = [{
+  ...writeDefinition,
+  function: {
+    ...writeDefinition.function,
+    description: 'Write a planning draft at RECIPE.yml, TASK.md, or ESTIMATE.md only. ' +
+      'The harness validates the final task and finalizes these managed artifacts; no app-code writes.',
+    parameters: {
+      ...writeDefinition.function.parameters,
+      properties: {
+        path: { type: 'string', enum: [...plannerArtifactFiles] },
+        content: { type: 'string', maxLength: 65_536 },
+      },
+    },
+  },
+}];
+
 export async function createTools({
   worktree,
   allowedFiles,
+  seat = 'coder',
   env = process.env,
   apiKeyEnv = 'ROSTER_API_KEY',
   memoryPath,
   allowRunTest = true,
   runCommand = execute,
 } = {}) {
+  if (!['planner', 'coder'].includes(seat)) throw new TypeError('Only planner and coder seats have file tools');
   if (typeof allowRunTest !== 'boolean') throw new TypeError('run_test permission must be a boolean');
   const root = path.resolve(worktree);
   const status = await fs.lstat(root);
@@ -140,7 +161,7 @@ export async function createTools({
     throw new Error('Worktree must be a real directory, not a symlink');
   }
   const canonicalRoot = await fs.realpath(root);
-  if (!Array.isArray(allowedFiles) || !allowedFiles.length) {
+  if (seat === 'coder' && (!Array.isArray(allowedFiles) || !allowedFiles.length)) {
     throw new TypeError('TASK.md must list files allowed for writing');
   }
 
@@ -159,9 +180,12 @@ export async function createTools({
       throw new Error('Tool path must stay inside the worktree');
     }
     const normalized = relative.split(path.sep).join('/');
-    if (write && (!isAllowedFile(normalized, allowedFiles) ||
+    const allowed = seat === 'planner' ? plannerArtifactFiles.includes(input) : isAllowedFile(normalized, allowedFiles);
+    if (write && (!allowed ||
         (memoryPath && path.relative(file, path.resolve(memoryPath)) === ''))) {
-      throw new Error(`Writing ${normalized} is not allowed by TASK.md or worktree policy`);
+      throw new Error(seat === 'planner'
+        ? 'Planner write_file allows only root RECIPE.yml, TASK.md, and ESTIMATE.md'
+        : `Writing ${normalized} is not allowed by TASK.md or worktree policy`);
     }
     if (isForbiddenRead(normalized)) {
       throw new Error('Tool access to secrets, Git metadata, policy, workflows, or contracts is refused');
@@ -196,6 +220,7 @@ export async function createTools({
     }
   }
 
+  const plannerWrites = new Map();
   const tools = {
     async read_file(args) {
       argumentsFor(args, ['path'], ['max_lines']);
@@ -215,6 +240,12 @@ export async function createTools({
     async write_file(args) {
       argumentsFor(args, ['path', 'content']);
       if (typeof args.content !== 'string') throw new TypeError('write_file content must be text');
+      if (seat === 'planner' && Buffer.byteLength(args.content, 'utf8') > 65_536) {
+        throw new TypeError('Planner artifact content must be at most 64 KiB');
+      }
+      if (seat === 'planner' && redactSecrets(args.content, { env, apiKeyEnv }) !== args.content) {
+        throw new Error('Planner artifacts must not contain credentials or private keys');
+      }
       const { file, relative, normalized } = locate(args.path, { write: true });
       await checkComponents(relative);
       await checkComponents(relative);
@@ -226,10 +257,39 @@ export async function createTools({
         throw error;
       });
       if (existing && !existing.isFile()) throw new Error('write_file requires a regular file');
-      const handle = await fs.open(file, constants.O_WRONLY | constants.O_CREAT |
-        constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0), 0o600);
+      const previous = plannerWrites.get(normalized);
+      if (seat === 'planner' && (existing && !previous || !existing && previous)) {
+        throw new Error('Planner cannot overwrite pre-existing or externally replaced artifacts');
+      }
+      const flags = seat === 'planner'
+        ? constants.O_RDWR | (previous ? 0 : constants.O_CREAT | constants.O_EXCL)
+        : constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC;
+      const handle = await fs.open(file, flags | (constants.O_NOFOLLOW ?? 0), 0o600);
       try {
+        if (seat === 'planner') {
+          const current = await handle.stat();
+          if (!current.isFile() || current.nlink !== 1 || previous &&
+              (current.dev !== previous.dev || current.ino !== previous.ino || current.size !== previous.content.length)) {
+            throw new Error('Planner artifact changed outside the planner writer');
+          }
+          if (previous) {
+            const content = Buffer.alloc(previous.content.length);
+            let offset = 0;
+            while (offset < content.length) {
+              const { bytesRead } = await handle.read(content, offset, content.length - offset, offset);
+              if (!bytesRead) break;
+              offset += bytesRead;
+            }
+            if (offset !== content.length || !content.equals(previous.content)) {
+              throw new Error('Planner artifact changed outside the planner writer');
+            }
+            await handle.truncate(0);
+          }
+          await handle.writeFile(args.content, 'utf8');
+          plannerWrites.set(normalized, { dev: current.dev, ino: current.ino, content: Buffer.from(args.content) });
+        } else {
         await handle.writeFile(args.content, 'utf8');
+        }
       } finally {
         await handle.close();
       }
@@ -308,5 +368,5 @@ export async function createTools({
       return { matches: matches.slice(0, 50), truncated: matches.length > 50 };
     },
   };
-  return tools;
+  return seat === 'planner' ? { write_file: tools.write_file } : tools;
 }

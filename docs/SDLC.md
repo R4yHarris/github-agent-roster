@@ -48,7 +48,9 @@ without editing the tracked example or storing credentials.
   provenance for AI-Run. They are not guessed from the endpoint or sent as a
   model-specific reasoning parameter.
 - `planner.turn_budget` bounds planning chat responses to 1-64 (example: 2).
-  The planner has no file tools and writes only validated plan artifacts.
+  The issue-worktree planner has only artifact-scoped `write_file` for root
+  `RECIPE.yml`, `TASK.md`, and `ESTIMATE.md`; no app-code tools. The harness
+  validates and finalizes those files. Tool replies and repairs consume turns.
   Private schema 1 configs predating the planner section use a one-turn planner.
 - `seat.id` and `seat.principal` are both `coder`. The principal does not confer
   merge or deploy rights. `seat.turn_budget` limits coder responses to 1-64
