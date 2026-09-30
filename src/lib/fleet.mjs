@@ -2,6 +2,7 @@ import path from 'node:path';
 import { parseCatalogYaml, formatCatalogYaml } from './catalog-yaml.mjs';
 import { readConfigFile, validateBaseUrl } from './config.mjs';
 import { ensureLocalPath, resolveProjectRoot } from './paths.mjs';
+import { ensurePrivateFilesIgnored, writePrivateDocuments } from './private-files.mjs';
 import { resolvePublishModel } from '../metrics/run.mjs';
 
 const fields = ['id', 'base_url', 'model', 'provider', 'context_max', 'concurrency',
@@ -41,8 +42,9 @@ export function validateFleetProfile(profile) {
   const model = resolvePublishModel({ env: { AI_MODEL: profile.model } });
   if (model === 'builtin-stub') throw new TypeError('Fleet model must be an actual served model');
   if (profile.provider !== 'vllm') throw new TypeError('Fleet provider must be vllm');
-  if (!Number.isSafeInteger(profile.context_max) || profile.context_max <= 0) {
-    throw new TypeError('Fleet context_max must be a positive safe integer');
+  if (!Number.isSafeInteger(profile.context_max) || profile.context_max < 0 ||
+      (profile.context_max === 0 && id !== 'default')) {
+    throw new TypeError('Fleet context_max must be positive; only the onboard default may use 0 for unknown');
   }
   if (!Number.isSafeInteger(profile.concurrency) || profile.concurrency < 1) {
     throw new TypeError('Fleet concurrency must be a positive safe integer');
@@ -97,4 +99,13 @@ export async function loadFleet({ cwd = process.cwd(), repoRoot = resolveProject
     throw error;
   }
   return parseFleet(source);
+}
+
+export async function writeFleet(catalog, {
+  cwd = process.cwd(), repoRoot = resolveProjectRoot(cwd), expectedSource,
+} = {}) {
+  const fleet = validateFleet(catalog);
+  await ensurePrivateFilesIgnored(repoRoot, ['fleet.yml']);
+  await writePrivateDocuments([{ name: 'fleet.yml', source: formatFleet(fleet), expectedSource }], { repoRoot });
+  return fleet;
 }

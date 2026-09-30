@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { loadConfig, parseConfig } from '../src/lib/config.mjs';
 import { checkDoctor } from '../src/lib/doctor.mjs';
+import { formatFleet, loadFleet } from '../src/lib/fleet.mjs';
 import { probeModels, runOnboard } from '../src/onboard/wizard.mjs';
 
 const installation = fileURLToPath(new URL('../', import.meta.url));
@@ -19,7 +20,7 @@ function capture() {
   return { isTTY: true, write(value) { text += String(value); }, get text() { return text; } };
 }
 
-function fixture(t, answers = []) {
+function fixture(t, answers = [], contextMax = 0, continueSetup = true) {
   const root = mkdtempSync(join(tmpdir(), 'roster-onboard-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const cwd = join(root, 'project');
@@ -37,6 +38,10 @@ function fixture(t, answers = []) {
     input: { isTTY: true }, env: {},
     question: async (prompt) => {
       prompts.push(prompt);
+      if (prompt.startsWith('Model context tokens')) return String(contextMax);
+      if (prompt === 'Add more endpoints later with roster fleet add. Continue? [yes] ') {
+        return continueSetup ? '' : 'no';
+      }
       assert.ok(answers.length, `Unexpected onboarding question: ${prompt}`);
       return answers.shift();
     },
@@ -100,7 +105,14 @@ for (const platform of ['win32', 'linux', 'darwin']) {
       assert.ok(!readFileSync(result.configPath, 'utf8').includes(secret));
     }
     assert.match(readFileSync(join(options.cwd, '.gitignore'), 'utf8'), /\.roster\/config\.yml/);
-    assert.deepEqual(readdirSync(join(options.cwd, '.roster')), ['config.yml']);
+    assert.deepEqual(readdirSync(join(options.cwd, '.roster')).sort(), ['config.yml', 'fleet.yml']);
+    const fleet = await loadFleet({ cwd: options.cwd });
+    assert.equal(fleet.profiles[0].id, 'default');
+    assert.equal(fleet.profiles[0].base_url, config.llm.base_url);
+    assert.equal(fleet.profiles[0].model, config.llm.model);
+    assert.equal(fleet.profiles[0].context_max, 0);
+    assert.equal(fleet.profiles[0].concurrency, 1);
+    assert.match(options.output.text, /Saved fleet:/);
     assert.equal(options.errorOutput.text, '');
   });
 }
@@ -114,7 +126,7 @@ test('WSL can use a Windows host URL and choose no permissions plus Advanced int
       return Response.json({ data: [{ id: 'served-model' }] });
     },
   });
-  assert.equal(result.config.llm.base_url, 'http://172.30.96.1:8000/v1/');
+  assert.equal(result.config.llm.base_url, 'http://172.30.96.1:8000/v1');
   assert.deepEqual(result.config.publish, { enabled: false });
   assert.deepEqual(result.config.tools, { internet: false, run_test: false });
   assert.deepEqual(result.config.reviewer, { required: false });
@@ -273,7 +285,33 @@ test('declining the final review writes neither config nor ignore rules', async 
   assert.equal(result.saved, false);
   assert.match(options.output.text, /4\. Review[\s\S]*Model: served-model/);
   assert.equal(existsSync(join(options.cwd, '.roster', 'config.yml')), false);
+  assert.equal(existsSync(join(options.cwd, '.roster', 'fleet.yml')), false);
   assert.equal(existsSync(join(options.cwd, '.gitignore')), false);
+});
+
+test('onboarding seeds known context and preserves other registered endpoints', async (t) => {
+  const options = fixture(t, ['', '1', 'no', '', '', '', ''], 65536);
+  mkdirSync(join(options.cwd, '.roster'));
+  const other = { id: 'other-endpoint', base_url: 'https://other.example.invalid/v1',
+    model: 'owner/other-model', provider: 'vllm', context_max: 32768, concurrency: 2,
+    hardware: 'example-gpu', notes: '' };
+  writeFileSync(join(options.cwd, '.roster', 'fleet.yml'), formatFleet({ profiles: [other] }));
+  const result = await runOnboard({ ...options, fetchImpl: models('served-model') });
+  assert.equal(result.config.llm.context_max, 65536);
+  assert.equal(result.fleet.profiles[0].context_max, 65536);
+  assert.equal(result.fleet.profiles[0].id, 'default');
+  assert.deepEqual(result.fleet.profiles[1], other);
+  assert.deepEqual(await loadFleet({ cwd: options.cwd }), result.fleet);
+});
+
+test('declining the fleet Continue question writes no private settings or ignore rules', async (t) => {
+  const options = fixture(t, ['', '1'], 0, false);
+  const result = await runOnboard({ ...options, fetchImpl: models('served-model') });
+  assert.equal(result.saved, false);
+  assert.equal(result.exitCode, 0);
+  assert.equal(existsSync(join(options.cwd, '.roster')), false);
+  assert.equal(existsSync(join(options.cwd, '.gitignore')), false);
+  assert.equal(options.prompts.at(-1), 'Add more endpoints later with roster fleet add. Continue? [yes] ');
 });
 
 test('confirmed onboarding runs doctor in-process after saving and reports required failures', async (t) => {
@@ -376,10 +414,12 @@ test('real readline TTY handles answers and Ctrl+C without an injected question 
         input.write('\x03');
         assert.equal((await done).exitCode, 0);
         assert.equal(existsSync(join(options.cwd, '.roster', 'config.yml')), false);
+        assert.equal(existsSync(join(options.cwd, '.roster', 'fleet.yml')), false);
         assert.equal(existsSync(join(options.cwd, '.gitignore')), false);
         assert.match(text, /Onboarding cancelled/);
       } else {
-        for (const prompt of ['vLLM base URL [', 'Select a model [', 'Allow publish through GitHub App?',
+        for (const prompt of ['vLLM base URL [', 'Select a model [', 'Model context tokens',
+          'Add more endpoints later with roster fleet add. Continue?', 'Allow publish through GitHub App?',
           'Require reviewer before publish?', 'Allow run_test?', 'Show advanced settings?', 'Confirm write .roster/config.yml?']) {
           await waitFor(prompt);
           input.write(prompt === 'Allow publish through GitHub App?' ? 'no\n' : '\n');

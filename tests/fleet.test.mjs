@@ -51,6 +51,8 @@ test('unique IDs, real models, positive capacity, and optional task hints are va
   assert.throws(() => validateFleet({ profiles: [profile, profile] }), /unique/);
   assert.equal(getFleetProfile({ profiles: [profile] }, 'test-coder'), profile);
   assert.throws(() => getFleetProfile({ profiles: [profile] }, 'missing'), /not found/);
+  assert.equal(validateFleetProfile({ ...profile, id: 'default', context_max: 0 }).context_max, 0);
+  assert.throws(() => validateFleetProfile({ ...profile, id: 'default', context_max: -1 }), /context_max/);
 });
 
 test('unsupported YAML and duplicate catalog keys fail instead of being silently ignored', () => {
