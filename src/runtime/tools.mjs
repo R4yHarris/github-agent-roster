@@ -130,8 +130,10 @@ export async function createTools({
   env = process.env,
   apiKeyEnv = 'ROSTER_API_KEY',
   memoryPath,
+  allowRunTest = true,
   runCommand = execute,
 } = {}) {
+  if (typeof allowRunTest !== 'boolean') throw new TypeError('run_test permission must be a boolean');
   const root = path.resolve(worktree);
   const status = await fs.lstat(root);
   if (!status.isDirectory() || status.isSymbolicLink()) {
@@ -252,6 +254,7 @@ export async function createTools({
 
     async run_test(args = {}) {
       argumentsFor(args, []);
+      if (!allowRunTest) throw new Error('run_test is disabled by tools.run_test');
       const testEnv = { ...env, ROSTER_SEAT: 'coder' };
       for (const name of [apiKeyEnv, 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH',
         'GH_TOKEN', 'GITHUB_TOKEN', 'NODE_TEST_CONTEXT']) delete testEnv[name];

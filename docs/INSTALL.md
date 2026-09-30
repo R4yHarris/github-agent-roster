@@ -9,6 +9,7 @@ git clone --recurse-submodules https://github.com/R4yHarris/github-agent-roster.
 cd github-agent-roster
 npm install -g .
 roster --help
+roster onboard
 ```
 
 Run `roster` in an interactive terminal to open the human shell; `/quit` or
@@ -46,8 +47,12 @@ review, not a policy file. A transient `npx` installation does not provide
 a stable location for private runtime settings; use a persistent roster
 checkout for the configured coder loop.
 
-In a persistent roster checkout, copy the reviewed example into its
-ignored private config before changing model settings:
+Run `roster onboard` in a terminal from your target project to choose a
+vLLM endpoint, probe model IDs, and save ignored private settings there.
+See [onboarding on Windows, WSL, Linux, and macOS](ONBOARDING.md).
+CLI commands prefer that project's private config over installation
+settings; the package itself is not modified. Non-interactive setup can
+still copy the reviewed example into an ignored private config:
 
 ```powershell
 New-Item -ItemType Directory -Force .roster
@@ -71,11 +76,11 @@ check exits nonzero; it does not repair human-owned policy or workflows.
 After tests and review, publish only from the current feature worktree's
 repository root with the GitHub App:
 
-```sh
-node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "<subject plus Model, Summary, and how-to-test sections>" --model "$AI_MODEL" --merge-when-green
+```powershell
+node vendor\github-agent-contracts\scripts\agent-pr.mjs --message "<subject plus Model, Summary, and how-to-test sections>" --model GPT-6.1-Sol --merge-when-green
 ```
 
-Set the real model first; GHCP sessions use `AI_MODEL=GPT-6-Sol`.
+Set the real model first; this GHCP agent uses `AI_MODEL=GPT-6.1-Sol`.
 See the complete [GHCP publication example](GHCP.md). Missing or unknown
 models cannot publish. Never commit or push as the signed-in human when App credentials are set.
 The SDK enforces reviewed policy and required checks; do not edit

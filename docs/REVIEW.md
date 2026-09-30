@@ -37,6 +37,11 @@ rechecks the coder's original worktree snapshot before staging task-allowed
 changes. A failed or changed report blocks publication without deleting
 the coder's work. A failed review also suppresses the run's printed
 publisher command.
+`reviewer.required: false`, explicitly saved through
+[onboarding](ONBOARDING.md) or private config, makes only that verdict
+optional. The reviewer still runs, and issue PR bodies disclose the
+configuration bypass. `publish.enabled: false` blocks publication regardless
+of a passing review or `--skip-review`.
 
 Use `--skip-review` only for an **explicit bypass**:
 
@@ -50,7 +55,8 @@ still runs and writes its verdict; the flag bypasses only that verdict,
 not passing coder tests, excellence, model identity, App credentials,
 human-owned policy, CI, or repository protections. The generated issue PR
 body discloses the bypass. Without an in-session Roster run, `/publish`
-has no trusted review to verify and requires the flag.
+has no trusted review to verify and requires the flag while
+`reviewer.required` remains true.
 
 A **direct** `agent-pr.mjs` invocation is outside Roster's gate: the
 contracts SDK cannot infer an in-process reviewer report and is not

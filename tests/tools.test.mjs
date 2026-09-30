@@ -150,6 +150,18 @@ test('run_test uses node --test with a 60s timeout and strips API and GitHub cre
   await assert.rejects(timedOut.run_test(), /timed out after 60 seconds/);
 });
 
+test('a disabled run_test permission refuses execution even for direct harness calls', async (context) => {
+  const worktree = fixture(context);
+  const tools = await createTools({
+    worktree, allowedFiles: ['README.md'], allowRunTest: false,
+    runCommand: () => assert.fail('A denied test must not start a child process'),
+  });
+  await assert.rejects(tools.run_test({}), /run_test is disabled by tools\.run_test/);
+  assert.equal(await tools.read_file({ path: 'README.md' }), '# Example\n');
+  await assert.rejects(createTools({ worktree, allowedFiles: ['README.md'], allowRunTest: 'no' }),
+    /permission must be a boolean/);
+});
+
 test('run_test actually executes Node tests from the worktree', async (context) => {
   const worktree = fixture(context);
   writeFileSync(path.join(worktree, 'example.test.mjs'),

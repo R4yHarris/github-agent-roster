@@ -11,6 +11,7 @@ import { loadConfig } from './lib/config.mjs';
 import { runDemo } from './lib/demo.mjs';
 import { checkDoctor, formatDoctor } from './lib/doctor.mjs';
 import { formatInit, initializeRoster } from './lib/init.mjs';
+import { runOnboard } from './lib/onboard.mjs';
 import { formatMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
 import { resolveContractsPath } from './lib/paths.mjs';
 import { formatStatus, readStatus } from './lib/status.mjs';
@@ -24,6 +25,7 @@ const help = `Usage:
   roster --help
   roster doctor
   roster init
+  roster onboard
   roster ask "..."
   roster run --issue N [--runtime builtin] [--seats planner,coder,reviewer] [--auto-model] [--publish] [--skip-review]
   roster run --seat coder --runtime builtin
@@ -41,6 +43,7 @@ const help = `Usage:
 Ask creates a GitHub issue when gh is available; otherwise it saves a local draft.
 Doctor checks local prerequisites without contacting GitHub or printing App env values.
 Init copies review-only examples; it never overwrites agent-policy.yml.
+Onboard configures a real vLLM model and local permissions in an interactive terminal.
 Run executes planner, coder, then reviewer in one worktree by default.
 Run --seat coder without --issue executes an existing TASK.md in the current worktree.
 Prepare creates a manual handoff without executing seats. Publishing is opt-in.
@@ -105,6 +108,8 @@ async function main(args) {
     if (!result.ok) process.exitCode = 1;
   } else if (args.length === 1 && args[0] === 'init') {
     process.stdout.write(formatInit(await initializeRoster()));
+  } else if (args.length === 1 && args[0] === 'onboard') {
+    process.exitCode = (await runOnboard({ installationRoot: rosterRoot })).exitCode;
   } else if (args[0] === 'prepare') {
     if (args.length !== 3 || args[1] !== '--issue') {
       throw new TypeError('Use roster prepare --issue N.');
@@ -150,7 +155,7 @@ async function main(args) {
       }
     }
     process.stdout.write(formatStatus(await readStatus({ issue, offline,
-      config: loadConfig({ repoRoot: rosterRoot }) })));
+      config: loadConfig({ repoRoot: rosterRoot, cwd: process.cwd() }) })));
   } else if (args.length === 3 && args[0] === 'recipe' && args[1] === 'validate') {
     validateRecipe(args[2]);
     process.stdout.write(`Valid recipe: ${args[2]}\n`);
@@ -177,7 +182,8 @@ async function main(args) {
   } else if (args[0] === 'recommend') {
     const { taskClass, difficulty } = parseRecommendationArgs(args.slice(1));
     const records = loadMetrics({ contractsPath: resolveContractsPath(), cwd: repositoryRoot() });
-    process.stdout.write(formatRecommendation(recommend(records, taskClass, difficulty), taskClass, loadConfig()));
+    process.stdout.write(formatRecommendation(recommend(records, taskClass, difficulty), taskClass,
+      loadConfig({ cwd: process.cwd() })));
   } else {
     throw new TypeError('Unknown arguments. Run roster --help for usage.');
   }

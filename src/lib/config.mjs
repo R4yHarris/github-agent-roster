@@ -3,7 +3,7 @@ import { promises as fs, lstatSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TextDecoder } from 'node:util';
-import { ensureLocalPath } from './paths.mjs';
+import { ensureLocalPath, resolveProjectRoot } from './paths.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
 const profileNames = ['vllm-local', 'ollama', 'lmstudio', 'openai'];
@@ -16,10 +16,13 @@ const defaultProfiles = {
   openai: { base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY' },
 };
 const fields = {
-  llm: ['base_url', 'model', 'api_key_env', 'effort', 'context_max', 'profile'],
+  llm: ['base_url', 'model', 'api_key_env', 'effort', 'context_max', 'profile', 'api_key_optional', 'provider'],
   planner: ['turn_budget'],
   seat: ['id', 'principal', 'turn_budget', 'tools', 'context_chars'],
   paths: ['memory', 'skills', 'asks', 'worktrees'],
+  publish: ['enabled'],
+  tools: ['internet', 'run_test'],
+  reviewer: ['required'],
 };
 const availableTools = ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text'];
 
@@ -91,7 +94,7 @@ function apiKeyName(value, name) {
   return value;
 }
 
-function baseUrl(value, name) {
+export function validateBaseUrl(value, name = 'llm.base_url') {
   let url;
   try {
     url = new URL(value);
@@ -109,7 +112,8 @@ export function parseConfig(source) {
   if (typeof source !== 'string' || Buffer.byteLength(source, 'utf8') > 65_536) {
     invalid('expected UTF-8 text of at most 64 KiB');
   }
-  const config = { llm: {}, profiles: {}, planner: {}, seat: {}, paths: {} };
+  const config = { llm: {}, profiles: {}, planner: {}, seat: {}, paths: {},
+    publish: {}, tools: {}, reviewer: {} };
   const roots = new Set();
   let section;
   let profile;
@@ -160,7 +164,7 @@ export function parseConfig(source) {
   if (!roots.has('schema') ||
       ['llm', 'seat', 'paths'].some((name) =>
         !roots.has(name) || fields[name].some((field) =>
-          !(name === 'llm' && field === 'profile') &&
+          !(name === 'llm' && ['profile', 'api_key_optional', 'provider'].includes(field)) &&
           !(name === 'seat' && field === 'context_chars') && !Object.hasOwn(config[name], field))) ||
       (roots.has('planner') && !Object.hasOwn(config.planner, 'turn_budget'))) {
     invalid('schema, llm, seat, paths, and optional planner must contain every documented field');
@@ -173,6 +177,15 @@ export function parseConfig(source) {
   llm.effort = stringValue(llm.effort, 'llm.effort');
   llm.context_max = integerValue(llm.context_max, 'llm.context_max');
   llm.profile = Object.hasOwn(llm, 'profile') ? stringValue(llm.profile, 'llm.profile') : '';
+  if (Object.hasOwn(llm, 'api_key_optional')) {
+    llm.api_key_optional = booleanValue(llm.api_key_optional, 'llm.api_key_optional');
+  }
+  if (Object.hasOwn(llm, 'provider')) {
+    llm.provider = stringValue(llm.provider, 'llm.provider');
+    if (!['vllm', 'github-copilot', 'anthropic', 'openai', 'local', 'other'].includes(llm.provider)) {
+      invalid('llm.provider must name a supported model backend');
+    }
+  }
   if (llm.profile && !profileNames.includes(llm.profile)) {
     invalid('llm.profile must be vllm-local, ollama, lmstudio, openai, or empty');
   }
@@ -187,7 +200,7 @@ export function parseConfig(source) {
     invalid('profiles need base_url and api_key_env for every named profile, plus api_key_optional for vllm-local');
   }
   for (const name of profileNames) {
-    profiles[name].base_url = baseUrl(stringValue(profiles[name].base_url, `profiles.${name}.base_url`),
+    profiles[name].base_url = validateBaseUrl(stringValue(profiles[name].base_url, `profiles.${name}.base_url`),
       `profiles.${name}.base_url`);
     profiles[name].api_key_env = apiKeyName(
       stringValue(profiles[name].api_key_env, `profiles.${name}.api_key_env`),
@@ -199,17 +212,18 @@ export function parseConfig(source) {
     Object.freeze(profiles[name]);
   }
   if (llm.profile) {
-    if (llm.base_url) invalid('choose either llm.profile or llm.base_url');
-    llm.base_url = profiles[llm.profile].base_url;
+    if (llm.base_url && llm.profile !== 'vllm-local') invalid('choose either llm.profile or llm.base_url');
+    llm.base_url ||= profiles[llm.profile].base_url;
     llm.api_key_env = profiles[llm.profile].api_key_env;
-    if (Object.hasOwn(profiles[llm.profile], 'api_key_optional')) {
+    if (!Object.hasOwn(llm, 'api_key_optional') &&
+        Object.hasOwn(profiles[llm.profile], 'api_key_optional')) {
       llm.api_key_optional = profiles[llm.profile].api_key_optional;
     }
   }
   if (!['l', 'm', 'h', 'x'].includes(llm.effort)) invalid('llm.effort must be l, m, h, or x');
   if (llm.model && !/^[A-Za-z0-9._:/-]+$/.test(llm.model)) invalid('llm.model must be a model name without whitespace');
   if (llm.base_url) {
-    baseUrl(llm.base_url, 'llm.base_url');
+    validateBaseUrl(llm.base_url, 'llm.base_url');
   }
 
   const seat = config.seat;
@@ -242,6 +256,14 @@ export function parseConfig(source) {
     config.paths[name] = relativePath(stringValue(config.paths[name], `paths.${name}`), `paths.${name}`);
   }
   if (!config.paths.memory.endsWith('.jsonl')) invalid('paths.memory must be a .jsonl file');
+  for (const [section, defaults] of Object.entries({
+    publish: { enabled: true }, tools: { internet: false, run_test: true }, reviewer: { required: true },
+  })) {
+    for (const [field, fallback] of Object.entries(defaults)) {
+      config[section][field] = Object.hasOwn(config[section], field)
+        ? booleanValue(config[section][field], `${section}.${field}`) : fallback;
+    }
+  }
   return Object.freeze({
     schema: 1,
     llm: Object.freeze(llm),
@@ -249,10 +271,17 @@ export function parseConfig(source) {
     planner: Object.freeze(planner),
     seat: Object.freeze(seat),
     paths: Object.freeze(config.paths),
+    publish: Object.freeze(config.publish),
+    tools: Object.freeze(config.tools),
+    reviewer: Object.freeze(config.reviewer),
   });
 }
 
-function readConfigFile(file) {
+export function readConfigFile(file) {
+  const directory = lstatSync(path.dirname(file));
+  if (!directory.isDirectory() || directory.isSymbolicLink()) {
+    invalid('expected a non-symlink config directory');
+  }
   const stat = lstatSync(file);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65_536) {
     invalid('expected a regular, non-symlink file of at most 64 KiB');
@@ -265,8 +294,18 @@ function readConfigFile(file) {
   }
 }
 
-export function loadConfig({ repoRoot = rosterRoot } = {}) {
-  const local = path.join(repoRoot, '.roster', 'config.yml');
+export function resolveConfigRoot({ repoRoot = rosterRoot, cwd } = {}) {
+  if (cwd !== undefined) {
+    const project = resolveProjectRoot(cwd);
+    const local = path.join(project, '.roster', 'config.yml');
+    if (lstatSync(local, { throwIfNoEntry: false })) return project;
+  }
+  return path.resolve(repoRoot);
+}
+
+export function loadConfig({ repoRoot = rosterRoot, cwd } = {}) {
+  const configRoot = resolveConfigRoot({ repoRoot, cwd });
+  const local = path.join(configRoot, '.roster', 'config.yml');
   let source;
   try {
     source = readConfigFile(local);
@@ -277,13 +316,20 @@ export function loadConfig({ repoRoot = rosterRoot } = {}) {
   return parseConfig(source);
 }
 
-export async function setConfigValue(field, value, { repoRoot = rosterRoot } = {}) {
+export function requirePublicationEnabled(config) {
+  if (config.publish?.enabled === false) {
+    throw new Error('Publishing is disabled by publish.enabled; update the private config or rerun roster onboard');
+  }
+}
+
+export async function setConfigValue(field, value, { repoRoot = rosterRoot, cwd } = {}) {
   if (!['model', 'effort'].includes(field) || typeof value !== 'string' ||
       (field === 'effort' && !value) || /[\r\n\0]/.test(value)) {
     throw new TypeError('Set a single-line llm.model or llm.effort value');
   }
-  const file = path.join(repoRoot, '.roster', 'config.yml');
-  await ensureLocalPath(file, repoRoot);
+  const configRoot = resolveConfigRoot({ repoRoot, cwd });
+  const file = path.join(configRoot, '.roster', 'config.yml');
+  await ensureLocalPath(file, configRoot);
   let source;
   try {
     source = readConfigFile(file);
@@ -295,13 +341,28 @@ export async function setConfigValue(field, value, { repoRoot = rosterRoot } = {
   const line = new RegExp(`^  ${field}: [^\\n]*$`, 'm');
   if (!line.test(text)) invalid(`llm.${field} is missing`);
   const next = text.replace(line, `  ${field}: ${field === 'model' ? JSON.stringify(value) : value}`);
-  const config = parseConfig(next);
+  return writePrivateConfig(next, { repoRoot: configRoot });
+}
+
+export async function writePrivateConfig(source, { repoRoot = rosterRoot, expectedSource } = {}) {
+  const config = parseConfig(source);
+  const file = path.join(repoRoot, '.roster', 'config.yml');
+  await ensureLocalPath(file, repoRoot);
+  let previous = null;
+  try {
+    previous = readConfigFile(file);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  if (expectedSource !== undefined && previous !== expectedSource) {
+    throw new Error('Private config changed during onboarding; refusing to overwrite it');
+  }
   const directory = path.dirname(file);
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   await ensureLocalPath(file, repoRoot);
   const temporary = path.join(directory, `config.yml.${randomBytes(8).toString('hex')}.tmp`);
   try {
-    await fs.writeFile(temporary, next, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    await fs.writeFile(temporary, source, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
     await fs.rename(temporary, file);
   } finally {
     await fs.rm(temporary, { force: true });

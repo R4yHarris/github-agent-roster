@@ -153,8 +153,8 @@ zero, and **does not edit code or run tests**. It cannot deliver a software
 change; configure an LLM to do that. The command prints, but does not execute,
 the publishing command only for a configured, completed coder run:
 
-```sh
-node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "<subject plus Model, Summary, how-to-test, and Refs #42>" --model "$AI_MODEL" --merge-when-green
+```powershell
+node vendor\github-agent-contracts\scripts\agent-pr.mjs --message "<subject plus Model, Summary, how-to-test, and Refs #42>" --model GPT-6.1-Sol --merge-when-green
 ```
 
 Run it from the **issue worktree root** after reviewing code and initializing
@@ -344,8 +344,8 @@ neither the recipe nor the skills grant permissions.
 With `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_PATH` set, publish from the
 assigned worktree's repository root:
 
-```sh
-node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "<type>: issue N plus Model, Summary, and how-to-test sections" --model "$AI_MODEL" --merge-when-green
+```powershell
+node vendor\github-agent-contracts\scripts\agent-pr.mjs --message "<type>: issue N plus Model, Summary, and how-to-test sections" --model GPT-6.1-Sol --merge-when-green
 ```
 
 Use a message matching the actual change. Never fall back to committing as the

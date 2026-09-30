@@ -53,7 +53,7 @@ review and AI-Eval remain separate. Review the delivered evidence yourself
 before a direct SDK invocation, which does not enforce this in-process gate.
 Every publish path supplies the real `--model` from config,
 then `AI_MODEL`, then `ROSTER_MODEL`; no candidate means `set model`, not
-`AI-Model: unknown`. GHCP sessions set `AI_MODEL=GPT-6-Sol`.
+`AI-Model: unknown`. This GHCP agent sets `AI_MODEL=GPT-6.1-Sol`.
 The PR body includes `## Model`, `## Summary`, and how to test the change.
 See the [reviewed publication example](GHCP.md).
 Issue-run PR bodies link `Refs #N` rather than a closing keyword. The App

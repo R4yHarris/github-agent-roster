@@ -67,6 +67,11 @@ error. Final verification must pass before a configured run reports
 success or publishes. The [excellence gate](EXCELLENCE.md) verifies actual
 diff paths and secret checks before RESULT.md and again before publication;
 a test process cannot bypass those checks by editing outside task scope.
+`tools.run_test: false`, selectable in [onboarding](ONBOARDING.md), removes
+the model tool and denies automatic execution. A test-required task fails
+before a model request; only an explicit TASK.md `tests: none` waiver can
+run without tests. The `tools.internet` preference is stored only and adds
+no internet or search tool.
 After a final summary, the configured coder runs final tests and checks
 excellence before ending its loop. Failed final tests return redacted,
 bounded diagnostics for another tool turn while the configured turn

@@ -40,13 +40,13 @@ GHCP sessions set the real model explicitly before publication. In PowerShell:
 
 ```powershell
 $env:AI_PROVIDER = "github-copilot"
-$env:AI_MODEL = "GPT-6-Sol"
+$env:AI_MODEL = "GPT-6.1-Sol"
 $message = @'
 fix: refuse publish without a model id
 
 ## Model
 
-GPT-6-Sol
+GPT-6.1-Sol
 
 ## Summary
 
@@ -56,7 +56,7 @@ Require a real model on every publish path and retain reviewed change and test i
 
 Run `node --test` from the feature worktree root.
 '@
-node vendor\github-agent-contracts\scripts\agent-pr.mjs --message $message --model GPT-6-Sol --merge-when-green
+node vendor\github-agent-contracts\scripts\agent-pr.mjs --message $message --model GPT-6.1-Sol --merge-when-green
 ```
 
 Use a summary of the actual reviewed changes, not just the conventional
@@ -66,6 +66,9 @@ paths add these sections automatically. They pass `--model` from
 `config.llm.model`, otherwise `AI_MODEL`, otherwise `ROSTER_MODEL`; missing
 or invalid IDs fail with `set model` before the SDK. The pinned publisher
 also exits nonzero for missing or unknown model input.
+When ready to PR from this Copilot session, the canonical command is
+`node vendor\github-agent-contracts\scripts\agent-pr.mjs --message "..." --model GPT-6.1-Sol --merge-when-green`.
+Other configured workers retain their actual served model ID.
 
 The same flag applies to explicit builtin publication. It does not add a
 merger or deploy seat or bypass human-owned policy, reviews, or required checks.

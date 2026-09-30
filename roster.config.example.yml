@@ -36,3 +36,10 @@ paths:
   skills: skills
   asks: .roster/asks
   worktrees: .worktrees
+publish:
+  enabled: true          # permits explicit App publication, not a policy grant
+tools:
+  internet: false        # stored preference only; no internet tool exists
+  run_test: true         # disables both model and automatic tests when false
+reviewer:
+  required: true         # gate publication on REVIEW.md unless explicitly skipped

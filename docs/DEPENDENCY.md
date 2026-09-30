@@ -52,8 +52,8 @@ Unset the variable rather than setting it to an empty value.
 With `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_PATH` set, publish from the
 current feature worktree's repository root using the initialized submodule:
 
-```sh
-node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "<subject plus Model, Summary, and how-to-test sections>" --model "$AI_MODEL" --merge-when-green
+```powershell
+node vendor\github-agent-contracts\scripts\agent-pr.mjs --message "<subject plus Model, Summary, and how-to-test sections>" --model GPT-6.1-Sol --merge-when-green
 ```
 
 The publisher also requires a feature branch and a human-owned root
@@ -75,9 +75,9 @@ Model-free preparation and stub runs report that publication is unavailable
 rather than printing a runnable model-free command.
 
 Roster-generated messages include `## Model`, `## Summary`, and how to test,
-plus an issue closing reference when applicable. For direct SDK publication,
+plus a non-closing issue reference when applicable. For direct SDK publication,
 include those sections in `--message`; do not send a subject-only PR body.
-GHCP sessions set `AI_MODEL=GPT-6-Sol` and `AI_PROVIDER=github-copilot`;
+This GHCP agent sets `AI_MODEL=GPT-6.1-Sol` and `AI_PROVIDER=github-copilot`;
 see the complete [GHCP example](GHCP.md).
 
 Do not commit as the signed-in human when App environment variables are set.

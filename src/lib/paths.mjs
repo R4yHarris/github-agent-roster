@@ -1,8 +1,25 @@
-import { promises as fs, statSync } from 'node:fs';
+import { promises as fs, lstatSync, statSync } from 'node:fs';
 import { join, relative, resolve, sep, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
+
+export function resolveProjectRoot(cwd = process.cwd()) {
+  const start = resolve(cwd);
+  let current = start;
+  for (;;) {
+    const marker = lstatSync(join(current, '.git'), { throwIfNoEntry: false });
+    if (marker) {
+      if (marker.isSymbolicLink() || (!marker.isFile() && !marker.isDirectory())) {
+        throw new Error('Git worktree marker must be a regular file or directory');
+      }
+      return current;
+    }
+    const parent = resolve(current, '..');
+    if (parent === current) return start;
+    current = parent;
+  }
+}
 
 export function resolveContractsPath({
   env = process.env,

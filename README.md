@@ -57,6 +57,7 @@ roster
 roster --help
 roster doctor
 roster init
+roster onboard
 roster ask "Add a Status section to README.md"
 roster run --ask-file templates/sdlc/ASK.md --runtime builtin
 roster run --issue 42
@@ -90,6 +91,10 @@ evaluations or keeps the stub. `roster status --issue N` queries GitHub;
 `--offline` uses cached worktree data only. The [offline demo](docs/DEMO.md)
 needs neither GitHub nor a model. See the [shell guide](docs/REPL.md) for
 `/model`, `/effort`, and `/publish`.
+Use [the onboarding wizard](docs/ONBOARDING.md) from the target project's
+terminal to choose a real vLLM model and local permissions. It saves an
+ignored project config and performs only a bounded `/models` probe;
+no internet tool or policy grant is added. `roster init` stays non-interactive.
 
 `roster stats` combines contracts `AI-Run` history with recorded seat runs and
 local `roster eval` decisions. `roster recommend` does not route automatically
@@ -176,8 +181,8 @@ task-allowed changes (never policy, workflows, secrets, or generated task
 files), then invokes the SDK from the **issue worktree root**. Without
 `--publish`, review the diff and publish manually from that same root:
 
-```sh
-node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "..." --merge-when-green
+```powershell
+node vendor\github-agent-contracts\scripts\agent-pr.mjs --message "..." --model GPT-6.1-Sol --merge-when-green
 ```
 
 Initialize the submodule in the worktree first if needed.

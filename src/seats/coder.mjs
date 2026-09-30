@@ -35,7 +35,10 @@ export async function runCoder({
     stages.push('principal');
     context = await loadContext({ worktree, memoryPath, repoRoot, config, principal, env, priorFeedback });
     stages.push('context');
-    taskSkipsTests(context.task);
+    const skipsTests = taskSkipsTests(context.task);
+    if (config.llm.base_url && !skipsTests && config.tools?.run_test === false) {
+      throw new Error('run_test is disabled by tools.run_test; enable it or explicitly declare TASK.md tests: none');
+    }
     metadata = estimateTask(readTaskMetadata(context.task), [], config.llm.model || env?.ROSTER_MODEL || '');
     if (config.llm.base_url && !metadata.model) throw new Error('Set config.llm.model or TASK.md model for the coder seat');
     config = { ...config, llm: { ...config.llm, model: metadata.model } };
@@ -43,6 +46,7 @@ export async function runCoder({
     const tools = await createTools({
       worktree, allowedFiles: taskFilesAllowed(context.task), memoryPath,
       apiKeyEnv: config.llm.api_key_env, env, runCommand: runTestCommand,
+      allowRunTest: config.tools?.run_test !== false,
     });
     research = await runResearch({
       worktree, tools, expectedTask: context.task, config, fetchImpl, env, vault,

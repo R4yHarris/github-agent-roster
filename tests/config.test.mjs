@@ -43,6 +43,9 @@ test('loads the tracked example when private config is absent', (context) => {
       memory: join('.roster', 'memory', 'coder.jsonl'),
       skills: 'skills', asks: join('.roster', 'asks'), worktrees: '.worktrees',
     },
+    publish: { enabled: true },
+    tools: { internet: false, run_test: true },
+    reviewer: { required: true },
   });
   assert.equal(Object.isFrozen(config.seat.tools), true);
   assert.equal(Object.isFrozen(config.llm), true);
@@ -52,6 +55,57 @@ test('loads the tracked example when private config is absent', (context) => {
   assert.equal(Object.isFrozen(config.profiles.openai), true);
 });
 
+test('onboarding vLLM fields accept a custom host without changing the named profile defaults', () => {
+  const source = example.replace('base_url: ""', 'base_url: http://172.30.96.1:8000/v1')
+    .replace('profile: ""', 'profile: vllm-local')
+    .replace('model: ""', 'model: owner/served-model')
+    .replace('  effort: m', '  api_key_optional: true\n  provider: vllm\n  effort: m');
+  const selected = parseConfig(source);
+  assert.equal(selected.llm.base_url, 'http://172.30.96.1:8000/v1');
+  assert.equal(selected.llm.provider, 'vllm');
+  assert.equal(selected.llm.api_key_optional, true);
+  assert.equal(selected.profiles['vllm-local'].base_url, 'http://127.0.0.1:8000/v1');
+  const required = parseConfig(source.replace('  api_key_optional: true', '  api_key_optional: false'));
+  assert.equal(required.llm.api_key_optional, false);
+  assert.throws(() => parseConfig(source.replace('provider: vllm', 'provider: unknown')), ConfigError);
+  assert.throws(() => parseConfig(source.replace('  api_key_optional: true', '  api_key_optional: yes')), ConfigError);
+});
+
+test('permission fields are validated and legacy configs preserve publishing, tests, and review defaults', () => {
+  const selected = parseConfig(example.replace('enabled: true', 'enabled: false')
+    .replace('internet: false', 'internet: true').replace('run_test: true', 'run_test: false')
+    .replace('required: true', 'required: false'));
+  assert.deepEqual(selected.publish, { enabled: false });
+  assert.deepEqual(selected.tools, { internet: true, run_test: false });
+  assert.deepEqual(selected.reviewer, { required: false });
+  const legacy = parseConfig(example.replace(/publish:[\s\S]*$/, ''));
+  assert.deepEqual(legacy.publish, { enabled: true });
+  assert.deepEqual(legacy.tools, { internet: false, run_test: true });
+  assert.deepEqual(legacy.reviewer, { required: true });
+  for (const source of [example.replace('enabled: true', 'enabled: yes'),
+    example.replace('run_test: true', 'run_test: 0'),
+    example.replace('required: true', 'required: maybe')]) {
+    assert.throws(() => parseConfig(source), ConfigError);
+  }
+});
+
+test('project private settings are loaded and updated without modifying the installation config', async (t) => {
+  const repoRoot = fixture(t);
+  const project = join(repoRoot, 'project');
+  const cwd = join(project, 'nested');
+  mkdirSync(cwd, { recursive: true });
+  mkdirSync(join(project, '.roster'));
+  execFileSync('git', ['init', '--quiet'], { cwd: project, stdio: 'pipe' });
+  const file = join(project, '.roster', 'config.yml');
+  writeFileSync(file, example.replace('model: ""', 'model: project-model'));
+  assert.equal(loadConfig({ repoRoot, cwd }).llm.model, 'project-model');
+  await setConfigValue('model', 'updated-model', { repoRoot, cwd });
+  assert.equal(loadConfig({ repoRoot, cwd }).llm.model, 'updated-model');
+  assert.equal(loadConfig({ repoRoot }).llm.model, '');
+  assert.equal(readFileSync(join(repoRoot, 'roster.config.example.yml'), 'utf8'), example);
+  writeFileSync(file, 'invalid: config\n');
+  assert.throws(() => loadConfig({ repoRoot, cwd }), ConfigError);
+});
 test('named profiles select endpoints and optional-key settings without secrets', () => {
   for (const [name, url, key, optional] of [
     ['vllm-local', 'http://127.0.0.1:8000/v1', 'ROSTER_API_KEY', true],

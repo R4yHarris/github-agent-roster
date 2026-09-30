@@ -18,7 +18,7 @@ subagent name, nor `AI_*` metadata grants policy capabilities.
 - Do not commit PEMs, tokens, or `.env`.
 - Do not edit `agent-policy.yml` in a consumer repo; humans own policy.
 - Publish reviewed code changes only from the current feature worktree's
-  repository root using `node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "..." --merge-when-green`
+  repository root, when ready to PR, using `node vendor\github-agent-contracts\scripts\agent-pr.mjs --message "..." --model GPT-6.1-Sol --merge-when-green`
   with both App credentials set. Never leave a draft PR for the human.
 - Never `git commit` as the signed-in human when `GITHUB_APP_ID` is set, even
   if the App private-key path is missing. Stop instead of using human credentials.

@@ -125,6 +125,39 @@ test('stub coder writes a deterministic result without contacting an LLM or runn
   }))[0]).status, 'stub');
 });
 
+test('disabling run_test prevents required-test tasks from contacting the model or running tests', async (context) => {
+  const config = { ...llmConfig, tools: { ...llmConfig.tools, run_test: false } };
+  const options = fixture(context, config);
+  await assert.rejects(runCoder({
+    ...options, env: {},
+    fetchImpl: () => assert.fail('Required-test task must stop before a model request'),
+    runTestCommand: () => assert.fail('Denied tests must not execute'),
+  }), /run_test is disabled by tools\.run_test/);
+  assert.equal(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), '# Example\n');
+  assert.match(readFileSync(path.join(options.worktree, 'RESULT.md'), 'utf8'), /Checks: FAIL/);
+});
+
+test('an explicit task waiver runs without offering or automatically invoking disabled tests', async (context) => {
+  const config = { ...llmConfig, tools: { internet: true, run_test: false } };
+  const options = fixture(context, config);
+  const taskPath = path.join(options.worktree, 'TASK.md');
+  writeFileSync(taskPath, readFileSync(taskPath, 'utf8').replace('---\n', '---\ntests: none\n'));
+  const result = await runCoder({
+    ...options, env: {},
+    fetchImpl: async (_url, request) => {
+      assert.deepEqual(JSON.parse(request.body).tools.map(({ function: tool }) => tool.name),
+        ['read_file', 'write_file', 'list_dir', 'search_text']);
+      return { status: 200, json: async () => ({
+        choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Inspected README.' } }],
+      }) };
+    },
+    runTestCommand: () => assert.fail('Disabled tests cannot be run automatically'),
+  });
+  assert.equal(result.testsSkipped, true);
+  assert.equal(result.tests, undefined);
+  assert.equal(result.excellence.pass, true);
+});
+
 test('LLM coder uses only offered tools within the turn budget, then verifies tests', async (context) => {
   const options = fixture(context, llmConfig);
   let calls = 0;

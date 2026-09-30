@@ -143,6 +143,15 @@ test('manual preparation omits a runnable publication command until a model is s
   assert.doesNotMatch(messages[0], /agent-pr\.mjs --message/);
 });
 
+test('manual handoff does not print a publisher command when publication is disabled', async () => {
+  const { options, messages } = harness();
+  const run = await runIssue(42, {
+    ...options, config: { ...options.config, publish: { enabled: false } },
+  });
+  assert.equal(run.nextCommand, null);
+  assert.match(messages[0], /publishing is disabled by publish\.enabled/);
+  assert.doesNotMatch(messages[0], /agent-pr\.mjs --message/);
+});
 test('manual handoff forwards config, then AI_MODEL, then ROSTER_MODEL as --model', async () => {
   for (const [configured, supplied, expected] of [
     ['configured', 'session', 'configured'], ['', 'session', 'session'], ['', '', 'served'],

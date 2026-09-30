@@ -52,6 +52,24 @@ test('records backend provenance while packing only contracts-supported AI-Run p
   }).AI_PROVIDER, 'local');
 });
 
+test('configured provider wins over inherited Copilot metadata while vLLM remains contracts-compatible', () => {
+  const configured = { ...config, llm: { ...config.llm, provider: 'vllm' } };
+  const run = buildRun({ config: configured, env: { AI_PROVIDER: 'github-copilot' } });
+  assert.equal(run.provider, 'vllm');
+  assert.equal(run.env.AI_PROVIDER, 'local');
+  assert.equal(parseAgentRun(run.line).provider, 'local');
+  const copilot = buildRun({
+    config: { ...config, llm: { ...config.llm, provider: 'github-copilot' } }, env: {},
+  });
+  assert.equal(copilot.env.AI_PROVIDER, 'github-copilot');
+  assert.throws(() => buildRun({
+    config: { ...config, llm: { ...config.llm, provider: 'invalid' } }, env: {},
+  }), /llm\.provider/);
+  assert.throws(() => buildPublishEnv({
+    config: { ...config, publish: { enabled: false } }, env: {},
+  }), /Publishing is disabled by publish\.enabled/);
+});
+
 test('does not invent an unknown model, version, context, or token counts', () => {
   assert.equal(buildRun({ config: parseConfig(example), usage: {}, env: {} }), null);
   const partial = mergeUsage({ prompt_tokens: 7 }, { prompt_tokens: 5, completion_tokens: 2 });
