@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { parseConfig } from '../src/lib/config.mjs';
 import { submitAsk } from '../src/lib/ask.mjs';
+import { renderIssueBody } from '../src/lib/issue.mjs';
 
 const example = readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8');
 const config = parseConfig(example);
@@ -36,8 +37,10 @@ test('available gh creates an issue in the current GitHub repository without a l
     ['gh', ['--version']],
     ['git', ['remote', 'get-url', 'origin']],
     ['gh', ['issue', 'create', '--repo', 'example/project',
-      '--title', 'Add status to README.md.', '--body', ask]],
+      '--title', 'Add status to README.md.', '--body', renderIssueBody(ask)]],
   ]);
+  assert.match(calls[2].args.at(-1),
+    /^# Ask\n\nAdd status to README\.md\.[\s\S]*task_class: feat\ndifficulty: 2\nestimate_min: 15\n$/);
   assert.ok(calls.every(({ cwd, promptDisabled }) => cwd === repoRoot && promptDisabled === '1'));
   assert.equal(existsSync(join(repoRoot, '.roster', 'asks')), false);
 });
@@ -54,12 +57,29 @@ test('missing gh writes a deterministic draft and prints a body-file create comm
     },
   });
   assert.equal(result.mode, 'draft');
-  assert.equal(readFileSync(result.askPath, 'utf8'), '# Ask\n\nFix README.md.\n');
+  assert.equal(readFileSync(result.askPath, 'utf8'), renderIssueBody('Fix README.md.'));
   assert.match(readFileSync(result.recipePath, 'utf8'), /ask: local:draft-1/);
   assert.match(readFileSync(result.taskPath, 'utf8'), /Fix README\.md/);
   assert.match(result.command, /^gh issue create --title .+ --body-file .+$/);
   assert.ok(result.command.includes(result.askPath));
   assert.deepEqual(calls, [['gh', ['--version']]]);
+});
+
+test('conventional task class is in the issue body before gh creates the issue', async (t) => {
+  const repoRoot = fixture(t);
+  const calls = [];
+  await submitAsk('fix(cli): Correct README.md.', {
+    repoRoot, cwd: repoRoot, config, env: {},
+    runCommand: async (program, args) => {
+      calls.push([program, args]);
+      if (program === 'gh' && args[0] === '--version') return 'gh version test';
+      if (program === 'git') return 'https://github.com/example/project.git';
+      return 'https://github.com/example/project/issues/43';
+    },
+  });
+  assert.match(calls[2][1].at(-1),
+    /task_class: fix\ndifficulty: 2\nestimate_min: 15\n$/);
+  assert.equal(existsSync(join(repoRoot, '.roster', 'asks')), false);
 });
 
 test('gh creation errors and unexpected URLs are not disguised as offline drafts', async (t) => {
@@ -84,7 +104,8 @@ test('gh creation errors and unexpected URLs are not disguised as offline drafts
 test('invalid asks fail before checking gh', async (t) => {
   const repoRoot = fixture(t);
   const runCommand = () => assert.fail('Invalid Ask must not invoke gh');
-  for (const ask of ['', 'x'.repeat(241), 'bad\0ask']) {
+  for (const ask of ['', 'x'.repeat(241), 'bad\0ask',
+    'Fix README.md.\n\n## Task metadata\n\nreserved']) {
     await assert.rejects(submitAsk(ask, { repoRoot, config, env: {}, runCommand }),
       /Ask must|Issue title/);
   }

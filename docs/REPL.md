@@ -16,7 +16,7 @@ agents and CI.
 | `/run N [--auto-model]` or `/run --issue N [--auto-model]` | Run builtin planner, coder, then read-only reviewer in one issue worktree. The optional flag routes an empty configured model only with enough human evaluations; otherwise the stub writes an unverified result and failing review without editing code or testing. |
 | `/status [N] [--offline]` | Show an issue, its open branch PR, and worktree path. Defaults to the last run or created issue; offline reads only the cached assignment and reports PR state as unknown. |
 | `/eval TARGET accept\|reject\|rework 1-5 y\|n [--minutes N] [--comment "TEXT"]` | Record the [human retrospective](RETRO.md), including actual minutes and local feedback. |
-| `/publish [SUBJECT] [--skip-review]` | Publish with an unchanged passing REVIEW.md, or explicitly bypass that verdict. After `/run N`, the default subject is `feat: issue N`; a confirmed merge comments on and closes that issue. Otherwise supply a conventional subject. |
+| `/publish [SUBJECT] [--skip-review]` | Publish with an unchanged passing REVIEW.md, or explicitly bypass that verdict. After `/run N`, the default subject is `feat: issue N`; a confirmed merge comments on the still-open issue with PR URL and model ID. The human closes it after AI-Eval. Otherwise supply a conventional subject. |
 | `/stats [REF]` | Summarize contracts and local AI-Run records, optionally at a Git ref. |
 | `/recommend feat\|fix\|docs\|test [--difficulty 1-5]` | Recommend model/effort with enough evidence at the requested difficulty, or show insufficient data and the config default. |
 | `/vault` or `/vault list` | List vault entry names, never values. |
@@ -87,9 +87,10 @@ not accepted on the installation; there is no human-credential fallback.
 The SDK may report that a PR merged but local cleanup failed when the default
 branch is checked out in another worktree. Inspect the PR and worktrees in
 that case; do not blindly retry publication or create a second commit.
-For an issue run, the PR body includes `Closes #N`. Only after the SDK reports
-a merge does Roster verify the PR, comment with the coder AI-Run if present,
-and close the issue if GitHub has not already done so. This requires App
+For an issue run, the PR body includes non-closing `Refs #N`. Only after the
+SDK reports a merge does Roster verify the PR and open issue, comment with
+its URL and real model ID (plus the coder AI-Run if present), and leave the
+issue open for the human to close after AI-Eval. This requires App
 Issues write and Pull requests read permissions; a failed issue operation
 is reported rather than retried with human credentials.
 The separate agent/CI `--publish` flag also requests merge-when-green; unlike

@@ -250,7 +250,7 @@ test('/publish prints the SDK command without App env and uses the reviewed work
         calls.push(['publisher', options]);
         return { mergedPullRequest: 7 };
       },
-      issueCloser: async (options) => { calls.push(['close', options]); },
+      issueCommenter: async (options) => { calls.push(['comment', options]); },
     },
   });
   await withApp.dispatch('/run 42');
@@ -265,9 +265,11 @@ test('/publish prints the SDK command without App env and uses the reviewed work
     seats: 'planner, coder, reviewer (gate bypassed with --skip-review)',
   }));
   assert.equal(calls[1][1].env.AI_SESSION, 'roster-42-coder');
-  assert.equal(calls[2][0], 'close');
+  assert.equal(calls[2][0], 'comment');
   assert.equal(calls[2][1].pullNumber, 7);
+  assert.equal(calls[2][1].model, 'local-model');
   assert.match(calls[2][1].runLine, /\|roster-42-coder\|issue-42$/);
+  assert.match(withApp.output.text, /left it open for human AI-Eval/);
   await assert.rejects(withApp.dispatch('/publish'), /already published/);
 });
 
@@ -306,7 +308,7 @@ test('an issue publish without a confirmed merge leaves the issue untouched', as
         contractsPath: 'contracts', worktreePath: run.worktreePath, publishEnv: { AI_MODEL: 'local-model' },
       }),
       publisher: async () => ({ mergedPullRequest: null }),
-      issueCloser: () => assert.fail('Unmerged PR must not close its issue'),
+      issueCommenter: () => assert.fail('Unmerged PR must not comment on its issue'),
     },
   });
 
@@ -343,8 +345,8 @@ test('/publish without a run forwards config, then AI_MODEL, then ROSTER_MODEL e
   }
 });
 
-test('a merged PR with local cleanup failure still finishes its issue without a duplicate publish', async () => {
-  let closed = 0;
+test('a merged PR with local cleanup failure comments without a duplicate publish', async () => {
+  let commented = 0;
   const shell = dispatcher({
     env: { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'key.pem' },
     services: {
@@ -361,15 +363,16 @@ test('a merged PR with local cleanup failure still finishes its issue without a 
         error.mergedPullRequest = 7;
         throw error;
       },
-      issueCloser: async ({ pullNumber }) => {
+      issueCommenter: async ({ pullNumber, model }) => {
         assert.equal(pullNumber, 7);
-        closed += 1;
+        assert.equal(model, 'local-model');
+        commented += 1;
       },
     },
   });
   await shell.dispatch('/run 42');
   await assert.rejects(shell.dispatch('/publish --skip-review'), /Local cleanup failed/);
-  assert.equal(closed, 1);
+  assert.equal(commented, 1);
   assert.equal(shell.state.published, true);
   await assert.rejects(shell.dispatch('/publish'), /already published/);
 });

@@ -35,7 +35,7 @@ test('resolves publication model in config, AI_MODEL, ROSTER_MODEL order', () =>
   }), /set model/);
 });
 
-test('publish message includes a real model, reviewed change summary, test command, and closing reference', () => {
+test('publish message includes a real model, test command, and non-closing issue reference', () => {
   const message = buildPublishMessage({
     subject: 'fix: refuse publish without a model id', model: 'GPT-6-Sol',
     summary: 'Abort before the SDK when model configuration is missing.', issueNumber: 42,
@@ -43,7 +43,10 @@ test('publish message includes a real model, reviewed change summary, test comma
   assert.equal(message, 'fix: refuse publish without a model id\n\n## Model\n\nGPT-6-Sol\n\n' +
     '## Summary\n\nAbort before the SDK when model configuration is missing.\n\n' +
     '### How to test\n\nRun `node --test` from the feature worktree root and review the task acceptance checks.\n\n' +
-    'Closes #42');
+    'Refs #42');
+  assert.throws(() => buildPublishMessage({
+    subject: 'fix: model', model: 'real', summary: 'Fixes #42.', issueNumber: 42,
+  }), /must remain open/);
   assert.throws(() => buildPublishMessage({ subject: 'fix: model', model: '', summary: 'Guard.' }), /set model/);
   assert.throws(() => buildPublishMessage({ subject: 'fix: model', model: 'real', summary: '' }), /summary/);
   assert.throws(() => buildPublishMessage({ subject: 'fix: model\ninjected', model: 'real', summary: 'Guard.' }),

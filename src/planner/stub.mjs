@@ -121,7 +121,7 @@ export function planStub(ask, { reference = 'local:draft', title, metadata } = {
 }
 
 export async function planAsk(ask, {
-  config, reference = 'local:draft', title, fetchImpl, env, vault, memory = [], learningRoot,
+  config, reference = 'local:draft', title, fetchImpl, env, vault, memory = [], learningRoot, metadata,
 } = {}) {
   const cleanAsk = cleanAskText(ask);
   if (!Array.isArray(memory) || memory.some((line) => typeof line !== 'string')) {
@@ -129,7 +129,9 @@ export async function planAsk(ask, {
   }
   const finish = (plan) => learningRoot
     ? { ...plan, ...applyFeedback(plan.task, { learningRoot, config, env }) } : plan;
-  if (!config.llm.base_url) return finish({ ...planStub(cleanAsk, { reference, title }), usage: null, turns: 0 });
+  if (!config.llm.base_url) return finish({
+    ...planStub(cleanAsk, { reference, title, metadata }), usage: null, turns: 0,
+  });
   const budget = config.planner?.turn_budget;
   if (!Number.isSafeInteger(budget) || budget < 1 || budget > 64) {
     throw new TypeError('Planner turn budget must be between 1 and 64');
@@ -177,7 +179,7 @@ export async function planAsk(ask, {
         built = buildPlan(cleanAsk, {
           reference, title: fixedTitle ?? plan.title,
           acceptanceChecks: plan.acceptance_checks, filesAllowed: plan.files_allowed,
-          metadata: plan,
+          metadata: { ...metadata, ...plan },
         });
       } catch (error) {
         if (!(error instanceof TypeError)) throw error;

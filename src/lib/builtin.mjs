@@ -14,7 +14,7 @@ import { checkExcellence, redactEvidence } from '../runtime/excellence.mjs';
 import { loadConfig } from './config.mjs';
 import { runIssue } from './issue.mjs';
 import {
-  closeMergedIssue, mergedPullNumber, mergedPullNumberFromFailure,
+  commentMergedIssue, mergedPullNumber, mergedPullNumberFromFailure,
 } from './issue-board.mjs';
 import { IDENTIFIER, inferTaskClass, recommend, recordRun } from './learn.mjs';
 import { loadMetrics } from './metrics.mjs';
@@ -198,7 +198,7 @@ export async function runBuiltinIssue(issueNumber, {
   vault,
   runTestCommand,
   publisher = execFileAsync,
-  issueCloser = closeMergedIssue,
+  issueCommenter = commentMergedIssue,
   metricsLoader = loadMetrics,
   now,
 } = {}) {
@@ -263,7 +263,8 @@ export async function runBuiltinIssue(issueNumber, {
   };
   const planner = await runPlanner({
     worktree: worktreePath, repoRoot, issue: prepared.issue, config: activeConfig,
-    task: prepared.task, session: sessions.planner, fetchImpl, env, vault, learningRoot: prepared.repoRoot,
+    ask: prepared.ask, metadata: prepared.metadata ?? undefined, task: prepared.task,
+    session: sessions.planner, fetchImpl, env, vault, learningRoot: prepared.repoRoot,
   });
   const metricEnv = { ...commandEnv };
   for (const name of [...RUN_ENV_NAMES, 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH',
@@ -367,23 +368,25 @@ export async function runBuiltinIssue(issueNumber, {
       const merged = mergedPullNumberFromFailure(error.stderr ?? error.message);
       if (merged === null) throw error;
       try {
-        await issueCloser({
-          issue: prepared.issue, pullNumber: merged, runLine: coderRun.line,
+        await issueCommenter({
+          issue: prepared.issue, pullNumber: merged, model: coderRun.env.AI_MODEL,
+          runLine: coderRun.line,
           repoRoot: prepared.repoRoot, cwd, env,
         });
-      } catch (closeError) {
-        throw new Error(`PR #${merged} merged, but issue closure and local cleanup failed: ${closeError.message}`, {
-          cause: closeError,
+      } catch (commentError) {
+        throw new Error(`PR #${merged} merged, but issue comment and local cleanup failed: ${commentError.message}`, {
+          cause: commentError,
         });
       }
-      throw new Error(`PR #${merged} merged and issue closed, but local publisher cleanup failed; inspect the worktree`, {
+      throw new Error(`PR #${merged} merged and issue commented, but local publisher cleanup failed; inspect the worktree`, {
         cause: error,
       });
     }
     if (stdout?.trim()) log(stdout.trim());
     const pullNumber = mergedPullNumber(stdout);
-    await issueCloser({
-      issue: prepared.issue, pullNumber, runLine: coderRun.line,
+    await issueCommenter({
+      issue: prepared.issue, pullNumber, model: coderRun.env.AI_MODEL,
+      runLine: coderRun.line,
       repoRoot: prepared.repoRoot, cwd, env,
     });
   }

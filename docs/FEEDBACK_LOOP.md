@@ -56,6 +56,10 @@ then `AI_MODEL`, then `ROSTER_MODEL`; no candidate means `set model`, not
 `AI-Model: unknown`. GHCP sessions set `AI_MODEL=GPT-6-Sol`.
 The PR body includes `## Model`, `## Summary`, and how to test the change.
 See the [reviewed publication example](GHCP.md).
+Issue-run PR bodies link `Refs #N` rather than a closing keyword. The App
+comments the verified PR URL and real coder model ID on the open issue;
+only the human closes it after AI-Eval. GitHub Issues and PRs remain the
+sole queue and forge, not a local Kanban database.
 
 ## AI-Run is machine evidence, not authority
 

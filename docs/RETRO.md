@@ -50,6 +50,9 @@ timing, the legacy comment contains only the AI-Eval line. Missing `gh`, origin,
 or a PR leaves a local-only evaluation; GitHub failures and ambiguous PR matches
 are reported explicitly **after** the local record is saved. Do not blindly
 repeat the evaluation to retry a failed comment.
+The issue remains open after a PR merges; a human closes it after reviewing
+the delivery and posting AI-Eval. Neither the App publisher nor `roster eval`
+closes issues automatically.
 
 There is no eval tool in the coder seat. Its file tools cannot write
 `.roster/evals.jsonl`, and child commands carry `ROSTER_SEAT=coder`; the human

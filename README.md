@@ -26,7 +26,8 @@ it does not replace Git.
    GitHub App identity, human-owned policy, and `AI-Run` trailers.
 7. **Evaluate:** a human reviews the PR and posts `AI-Eval:`. Locally recorded
    decisions inform `roster stats` and opt-in `roster recommend` for later
-   assignments; PR comments are not automatically imported.
+   assignments; PR comments are not automatically imported. The human closes
+   the issue after evaluating; Roster leaves it open after publication.
 
 This is a single-process, sequential loop, not a multi-node DGX deployment
 or GUI. No Hermes, Claude Code, or Copilot worker is required.
@@ -184,9 +185,11 @@ The publisher requires a feature branch and a human-owned root
 `agent-policy.yml` authorizing coder publication and explicit SDK merging.
 It waits for required checks and repository review rules before merging; neither
 a recipe nor this CLI grants policy capabilities or deploy rights.
-For an issue run, the PR links `Closes #N`. The builtin `--publish` and REPL
-`/publish` paths also post an App-authored issue comment after a confirmed
-merge (with the coder AI-Run when present) and close the issue if needed.
+For an issue run, the PR links `Refs #N`, so merging does not automatically
+close the issue. The builtin `--publish` and REPL `/publish` paths verify the
+merged PR and post an App-authored issue comment with its URL, the model ID,
+and the coder AI-Run when present. They do **not** close the issue; a human
+does that after AI-Eval.
 
 Never commit credentials or `.env`, or publish as the signed-in human when App
 env is set.

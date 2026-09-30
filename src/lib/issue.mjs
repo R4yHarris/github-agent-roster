@@ -6,9 +6,11 @@ import { IDENTIFIER, inferTaskClass, recordRun } from './learn.mjs';
 import { loadConfig } from './config.mjs';
 import { buildPublishMessage, formatPublishCommand } from './publication.mjs';
 import { resolvePublishModel } from '../metrics/run.mjs';
-import { renderAssignment } from '../planner/stub.mjs';
+import { cleanAskText, renderAssignment } from '../planner/stub.mjs';
+import { estimateTask } from '../runtime/estimate.mjs';
 
 const execFileAsync = promisify(execFile);
+const metadataMarker = '\n\n## Task metadata\n\n';
 
 async function execute(program, args, cwd) {
   const { stdout } = await execFileAsync(program, args, { cwd, encoding: 'utf8' });
@@ -32,6 +34,51 @@ export function githubRepository(origin) {
     throw new Error('origin must be a GitHub HTTPS or SSH repository URL');
   }
   return `${match[1]}/${match[2]}`;
+}
+
+export function renderIssueBody(ask, metadata = {}) {
+  const text = cleanAskText(ask);
+  if (/^## Task metadata\s*$/im.test(text)) {
+    throw new TypeError('Ask must not contain the reserved Task metadata heading');
+  }
+  const estimate = estimateTask({
+    task_class: inferTaskClass(text.split('\n')[0]) ?? 'feat', ...metadata,
+  });
+  return `# Ask\n\n${text}${metadataMarker}` +
+    `task_class: ${estimate.task_class}\n` +
+    `difficulty: ${estimate.difficulty}\n` +
+    `estimate_min: ${estimate.estimate_min}\n`;
+}
+
+export function parseIssueBody(body) {
+  if (typeof body !== 'string' || !body.trim()) {
+    throw new TypeError('Issue body must contain an Ask');
+  }
+  const text = body.replace(/\r\n/g, '\n');
+  const parts = text.split(metadataMarker);
+  if (parts.length === 1) {
+    if (/^## Task metadata\s*$/im.test(text)) {
+      throw new TypeError('Issue Task metadata must contain task_class, difficulty, and estimate_min');
+    }
+    return { ask: cleanAskText(text.startsWith('# Ask\n\n') ? text.slice(7) : text),
+      metadata: null };
+  }
+  const match = parts.length === 2 &&
+    /^task_class: (feat|fix|docs|test)\ndifficulty: ([1-5])\nestimate_min: (0|[1-9]\d*)\n?$/.exec(parts[1]);
+  if (!match || /^## Task metadata\s*$/im.test(parts[0])) {
+    throw new TypeError('Issue Task metadata must contain task_class, difficulty, and estimate_min');
+  }
+  const ask = parts[0].startsWith('# Ask\n\n') ? parts[0].slice(7) : parts[0];
+  const validated = estimateTask({
+    task_class: match[1], difficulty: Number(match[2]), estimate_min: Number(match[3]),
+  });
+  return {
+    ask: cleanAskText(ask),
+    metadata: {
+      task_class: validated.task_class, difficulty: validated.difficulty,
+      estimate_min: validated.estimate_min,
+    },
+  };
 }
 
 export async function runIssue(issueNumber, {
@@ -98,6 +145,7 @@ export async function runIssue(issueNumber, {
   if (typeof issue.body !== 'string' || !issue.body.trim()) {
     throw new Error(`Issue #${number} has no body to use as the Ask`);
   }
+  const { ask, metadata } = parseIssueBody(issue.body);
 
   const task = `issue-${number}`;
   const worktreePath = path.join(repoRoot, worktrees, task);
@@ -134,7 +182,7 @@ export async function runIssue(issueNumber, {
 
   if (recordPreparation) {
     try {
-      await recordRun({ session, task, task_class: inferTaskClass(issue.title) }, {
+      await recordRun({ session, task, task_class: metadata?.task_class ?? inferTaskClass(issue.title) }, {
         cwd: repoRoot, env, fileSystem,
       });
     } catch (error) {
@@ -148,5 +196,5 @@ Environment: ${envPath}
 After editing inside the worktree, load .env into the worker environment and run:
 ${nextCommand ?? 'Publication unavailable: set model in llm.model, AI_MODEL, or ROSTER_MODEL before publishing.'}`);
 
-  return { issue, repoRoot, worktreePath, assignmentPath, envPath, task, session, nextCommand };
+  return { issue, ask, metadata, repoRoot, worktreePath, assignmentPath, envPath, task, session, nextCommand };
 }

@@ -154,7 +154,7 @@ change; configure an LLM to do that. The command prints, but does not execute,
 the publishing command only for a configured, completed coder run:
 
 ```sh
-node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "<subject plus Model, Summary, how-to-test, and Closes #42>" --model "$AI_MODEL" --merge-when-green
+node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "<subject plus Model, Summary, how-to-test, and Refs #42>" --model "$AI_MODEL" --merge-when-green
 ```
 
 Run it from the **issue worktree root** after reviewing code and initializing
@@ -173,10 +173,12 @@ and merges only when reviewed policy and repository rules permit it. No
 deploy is requested. A passing, unchanged REVIEW.md is required unless
 `--skip-review` explicitly bypasses **only** the reviewer verdict; tests
 and coder excellence must still pass. For an issue run, the PR body lists
-the seats, notes any bypass, and links `Closes #N`. With
+the seats, notes any bypass, and links `Refs #N` without automatically
+closing the issue. With
 builtin `--publish` or REPL `/publish`, once the SDK confirms a merge,
-Roster verifies the PR, comments on the issue
-with the coder's AI-Run line, and closes it through an issue-scoped App token.
+Roster verifies the PR, then comments on the still-open issue with its URL,
+the real coder model ID, and AI-Run line through an issue-scoped App token.
+It never closes the issue: the human does so after posting AI-Eval.
 If post-merge issue operations fail, the merged PR remains merged and the
 error is reported; do not publish a duplicate commit to retry. The runner
 prints one AI-Run for each model-backed planner, coder, and reviewer seat with its own
