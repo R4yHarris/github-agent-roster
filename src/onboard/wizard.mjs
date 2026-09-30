@@ -156,15 +156,15 @@ export async function runOnboard({
   terminal?.on('SIGINT', () => controller.abort());
   terminal?.on('close', () => controller.abort());
   const ask = question ?? ((prompt) => terminal.question(prompt, { signal: controller.signal }));
-  const answer = async (prompt) => {
+  const answer = async (prompt, fallback = '') => {
     const value = await ask(prompt);
     if (typeof value !== 'string') throw new Error('Onboarding ended before all questions were answered');
-    return value.trim();
+    return value.trim() || fallback;
   };
   const yesNo = async (prompt, fallback) => {
+    const defaultAnswer = fallback ? 'yes' : 'no';
     for (;;) {
-      const value = (await answer(`${prompt}? [${fallback ? 'yes' : 'no'}] `)).toLowerCase();
-      if (!value) return fallback;
+      const value = (await answer(`${prompt}? [${defaultAnswer}] `, defaultAnswer)).toLowerCase();
       if (['yes', 'y'].includes(value)) return true;
       if (['no', 'n'].includes(value)) return false;
       output.write('Please answer yes or no.\n');
@@ -172,7 +172,7 @@ export async function runOnboard({
   };
   const integer = async (prompt, fallback, maximum = Number.MAX_SAFE_INTEGER, minimum = 1) => {
     for (;;) {
-      const value = await answer(`${prompt} [${fallback}]: `) || String(fallback);
+      const value = await answer(`${prompt} [${fallback}]: `, String(fallback));
       if (/^(?:0|[1-9]\d*)$/.test(value) && Number.isSafeInteger(Number(value)) &&
           Number(value) >= minimum && Number(value) <= maximum) {
         return Number(value);
@@ -192,7 +192,7 @@ export async function runOnboard({
     output.write('WSL talking to a Windows-hosted server may need the Windows host IP, not localhost.\n');
     let baseUrl;
     for (;;) {
-      const value = await answer(`vLLM base URL [${defaultBaseUrl}]: `) || defaultBaseUrl;
+      const value = await answer(`vLLM base URL [${defaultBaseUrl}]: `, defaultBaseUrl);
       try {
         baseUrl = normalizeFleetBaseUrl(publicSetting(value, env, apiKeyEnv));
         if (/\/(?:models|chat\/completions)\/?$/.test(new URL(baseUrl).pathname)) {
@@ -218,7 +218,7 @@ export async function runOnboard({
       output.write('Available models:\n' +
         models.map((id, index) => `  ${index + 1}. ${id}\n`).join(''));
       for (;;) {
-        const choice = await answer('Select a model [1]: ') || '1';
+        const choice = await answer('Select a model [1]: ', '1');
         if (/^[1-9]\d*$/.test(choice) && Number.isSafeInteger(Number(choice)) && Number(choice) <= models.length) {
           model = models[Number(choice) - 1];
           break;

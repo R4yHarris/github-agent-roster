@@ -96,7 +96,9 @@ Do not run onboarding with `sudo` to work around global-bin PATH setup.
    Non-TTY input or output prints `roster onboard needs a terminal` and
    exits 2 without writing files.
 2. Choose the LLM endpoint and an actual model. Prompts show defaults in
-   brackets; blank accepts a default. A required model has no invented
+   brackets; Enter (including whitespace-only input) accepts that displayed
+   value without asking you to retype it. This also applies to `[yes]` and
+   `[no]` choices. A required model has no invented
    default and must be supplied when discovery is unavailable.
 3. Answer local permission questions. Advanced settings are hidden unless
    requested. These preferences are not GitHub policy grants.
@@ -106,6 +108,12 @@ Do not run onboarding with `sudo` to work around global-bin PATH setup.
    consent; declining either confirmation preserves it.
 5. After a confirmed atomic write, read the doctor result. Ctrl+C before
    write confirmation exits 0 without a half-finished config.
+
+Pressing Enter at `Continue? [yes]` proceeds with the default profile.
+The profile and config are written only after the final write confirmation;
+Enter at `Confirm write .roster/config.yml? [yes]` accepts that confirmation.
+`Show advanced settings? [no]` stays off on Enter. Invalid nonempty yes/no
+answers still ask again; `[required]` marks missing input, not a default value.
 
 For installation commands, see [INSTALL.md](INSTALL.md). The implementation
 is [src/onboard/wizard.mjs](../src/onboard/wizard.mjs); neither the wizard nor
