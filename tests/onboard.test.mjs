@@ -8,6 +8,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { loadConfig, parseConfig } from '../src/lib/config.mjs';
+import { checkDoctor } from '../src/lib/doctor.mjs';
 import { probeModels, runOnboard } from '../src/onboard/wizard.mjs';
 
 const installation = fileURLToPath(new URL('../', import.meta.url));
@@ -64,7 +65,7 @@ for (const platform of ['win32', 'linux', 'darwin']) {
         return Response.json({ data: [{ id: 'owner/first-model' }, { id: 'owner/chosen-model' }] });
       },
     });
-    assert.equal(result.exitCode, 0);
+    assert.equal(result.exitCode, 1, 'Opted-in publish prerequisites are missing in this fixture');
     assert.equal(result.saved, true);
     assert.equal(result.modelsProbed, true);
     assert.equal(calls, 1);
@@ -117,6 +118,7 @@ test('WSL can use a Windows host URL and choose no permissions plus Advanced int
   assert.deepEqual(result.config.publish, { enabled: false });
   assert.deepEqual(result.config.tools, { internet: false, run_test: false });
   assert.deepEqual(result.config.reviewer, { required: false });
+  assert.equal(result.exitCode, 0, 'Run-only setup does not need publishing policy or App credentials');
   assert.match(options.output.text, /\nAdvanced\n/);
   assert.ok(options.prompts.some((prompt) => prompt.startsWith('Internet search')));
   assert.match(options.output.text, /no live internet tool/);
@@ -263,12 +265,35 @@ test('existing config needs confirmation and keeps unrelated settings on a confi
 
 test('declining the final review writes neither config nor ignore rules', async (t) => {
   const options = fixture(t, ['', '1', '', '', '', '', 'no']);
-  const result = await runOnboard({ ...options, fetchImpl: models('served-model') });
+  const result = await runOnboard({
+    ...options, fetchImpl: models('served-model'),
+    doctor: () => assert.fail('Doctor must not run before confirmation'),
+  });
   assert.equal(result.exitCode, 0);
   assert.equal(result.saved, false);
   assert.match(options.output.text, /4\. Review[\s\S]*Model: served-model/);
   assert.equal(existsSync(join(options.cwd, '.roster', 'config.yml')), false);
   assert.equal(existsSync(join(options.cwd, '.gitignore')), false);
+});
+
+test('confirmed onboarding runs doctor in-process after saving and reports required failures', async (t) => {
+  const options = fixture(t, ['', '1', '', '', '', '', '']);
+  let calls = 0;
+  const result = await runOnboard({
+    ...options, fetchImpl: models('served-model'),
+    doctor(args) {
+      calls += 1;
+      assert.equal(existsSync(join(options.cwd, '.roster', 'config.yml')), true);
+      assert.equal(args.cwd, options.cwd);
+      return checkDoctor(args);
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.saved, true);
+  assert.equal(result.exitCode, 1);
+  assert.equal(result.doctor.ok, false);
+  assert.match(options.output.text, /FAIL GITHUB_APP_ID/);
+  assert.equal(loadConfig({ repoRoot: options.installationRoot, cwd: options.cwd }).llm.model, 'served-model');
 });
 
 test('onboard from a nested Git directory writes ignored config at that worktree root', async (t) => {
@@ -357,7 +382,7 @@ test('real readline TTY handles answers and Ctrl+C without an injected question 
         for (const prompt of ['vLLM base URL [', 'Select a model [', 'Allow publish through GitHub App?',
           'Require reviewer before publish?', 'Allow run_test?', 'Show advanced settings?', 'Confirm write .roster/config.yml?']) {
           await waitFor(prompt);
-          input.write('\n');
+          input.write(prompt === 'Allow publish through GitHub App?' ? 'no\n' : '\n');
         }
         assert.equal((await done).exitCode, 0);
         assert.match(text, /Saved private config/);

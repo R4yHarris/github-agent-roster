@@ -48,16 +48,26 @@ test("the package exposes the roster bin", () => {
   assert.deepEqual(packageJson.bin, { roster: "src/cli.mjs" });
 });
 
-test("doctor checks prerequisites without network calls or leaking App env values", () => {
+test("doctor checks prerequisites without network calls or leaking App env values", (t) => {
+  const cwd = mkdtempSync(join(tmpdir(), 'roster-cli-doctor-'));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  mkdirSync(join(cwd, '.roster'));
+  mkdirSync(join(cwd, '.github', 'workflows'), { recursive: true });
+  writeFileSync(join(cwd, '.roster', 'config.yml'),
+    readFileSync(join(root, 'roster.config.example.yml'), 'utf8').replace('model: ""', 'model: served-model'));
+  writeFileSync(join(cwd, 'agent-policy.yml'), 'fixture policy marker\n');
+  writeFileSync(join(cwd, '.github', 'workflows', 'check-agent-trailers.yml'), 'fixture workflow marker\n');
+  const keyPath = join(cwd, 'test-only-path-marker.pem');
+  writeFileSync(keyPath, 'fixture-only key marker\n');
   const ready = run(["doctor"], { ...process.env,
-    GITHUB_APP_ID: 'test-only-app-marker', GITHUB_APP_PRIVATE_KEY_PATH: 'test-only-path-marker' });
+    GITHUB_APP_ID: 'test-only-app-marker', GITHUB_APP_PRIVATE_KEY_PATH: keyPath }, cli, undefined, cwd);
   assert.ifError(ready.error);
   assert.equal(ready.status, 0, ready.stderr);
-  assert.equal((ready.stdout.match(/^OK /gm) ?? []).length, 5);
+  assert.equal((ready.stdout.match(/^OK /gm) ?? []).length, 6);
   assert.ok(!ready.stdout.includes('test-only-app-marker'));
   assert.ok(!ready.stdout.includes('test-only-path-marker'));
   const missing = run(["doctor"], { ...process.env,
-    GITHUB_APP_ID: '', GITHUB_APP_PRIVATE_KEY_PATH: '' });
+    GITHUB_APP_ID: '', GITHUB_APP_PRIVATE_KEY_PATH: '' }, cli, undefined, cwd);
   assert.equal(missing.status, 1);
   assert.match(missing.stdout, /^FAIL GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH present$/m);
 });
