@@ -305,7 +305,7 @@ test('onboarding publication permissions are enforced by the REPL, not just reco
     /Publishing is disabled by publish\.enabled/);
   assert.equal(disabled.output.text, '');
   const optional = dispatcher({
-    config: { ...config, reviewer: { required: false } },
+    config: { ...config, review: { required: false } },
     env: { AI_MODEL: 'served-model' },
     services: { resolveContractsPath: () => 'contracts' },
   });

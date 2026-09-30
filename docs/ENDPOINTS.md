@@ -49,9 +49,13 @@ is the manual handoff path. See [SDLC](SDLC.md) for execution and publishing.
 - Optional `publish.enabled` permits or disables explicit Roster-managed
   publication; it does not grant GitHub policy capability. Optional
   `tools.run_test` controls model and automatic test execution, while
-  `reviewer.required` controls the publication review gate. Their legacy
+  `review.required` controls the publication review gate. Legacy
+  `reviewer.required` remains an alias. `loop.turns` and `context.budget`
+  control coder turns and context size, normalized to the existing seat
+  limits; absent canonical limits retain legacy settings. Their legacy
   defaults are true. `tools.internet` defaults false in older configs
-  and the tracked example; onboarding saves the requested default true.
+  and the tracked example; onboarding omits it when Advanced is skipped
+  and defaults it true only when Advanced is entered.
   It is a stored preference only, not a network tool.
 
 Keep every field in the example when overriding configuration. Older private

@@ -86,13 +86,16 @@ export async function probeModels(baseUrl, {
   }
 }
 
-function renderConfig(base, { baseUrl, model, publish, internet, runTest, reviewer }) {
+function renderConfig(base, { baseUrl, model, publish, internet, runTest, reviewer, turns, budget }) {
+  const { reviewer: _legacyReview, ...preserved } = base;
   const config = {
-    ...base,
+    ...preserved,
     llm: { ...base.llm, profile: 'vllm-local', base_url: baseUrl, model,
       api_key_env: base.profiles['vllm-local'].api_key_env, api_key_optional: true, provider: 'vllm' },
-    publish: { enabled: publish }, tools: { internet, run_test: runTest },
-    reviewer: { required: reviewer },
+    seat: { ...base.seat, turn_budget: turns, context_chars: budget },
+    publish: { enabled: publish },
+    tools: { ...(internet === undefined ? {} : { internet }), run_test: runTest },
+    review: { required: reviewer }, loop: { turns }, context: { budget },
   };
   const scalar = (value) => Array.isArray(value) ? `[${value.join(', ')}]`
     : typeof value === 'string' ? JSON.stringify(value) : String(value);
@@ -193,6 +196,16 @@ export async function runOnboard({
       output.write('Please answer yes or no.\n');
     }
   };
+  const integer = async (prompt, fallback, maximum = Number.MAX_SAFE_INTEGER) => {
+    for (;;) {
+      const value = await answer(`${prompt} [${fallback}]: `) || String(fallback);
+      if (/^[1-9]\d*$/.test(value) && Number.isSafeInteger(Number(value)) && Number(value) <= maximum) {
+        return Number(value);
+      }
+      output.write(maximum === Number.MAX_SAFE_INTEGER
+        ? 'Enter a positive safe integer.\n' : `Enter an integer from 1 to ${maximum}.\n`);
+    }
+  };
   let confirmed = false;
   try {
     if (previous !== null && !await yesNo('Replace onboarding settings in the existing private config', false)) {
@@ -246,21 +259,27 @@ export async function runOnboard({
       }
     }
     output.write('\n3. Permissions (local preferences, not GitHub policy grants)\n');
-    const publish = await yesNo('Publish via GitHub App', true);
+    output.write('These flags do not grant contracts policy.\n');
+    const publish = await yesNo('Allow publish through GitHub App', true);
+    const reviewer = await yesNo('Require reviewer before publish', true);
     const runTest = await yesNo('Allow run_test', true);
-    const reviewer = await yesNo('Reviewer required before publish', true);
-    const advanced = await yesNo('Show advanced', false);
-    let internet = true;
+    const advanced = await yesNo('Show advanced settings', false);
+    let internet;
+    let turns = base.loop?.turns ?? 12;
+    let budget = base.context?.budget ?? base.seat.context_chars;
     if (advanced) {
       output.write('\nAdvanced\n');
-      internet = await yesNo('Allow internet search / research beyond the worktree (stored only)', true);
+      internet = await yesNo('Internet search and research outside the worktree (stored only)', true);
+      turns = await integer('Max tool turns', 12, 64);
+      budget = await integer('Context char budget', 8000);
     }
-    const next = renderConfig(base, { baseUrl, model, publish, internet, runTest, reviewer });
+    const next = renderConfig(base, { baseUrl, model, publish, internet, runTest, reviewer, turns, budget });
     parseConfig(next);
     output.write(`\n4. Review\nConfig: ${configPath}\n` +
       `Endpoint: ${baseUrl}\nModel: ${model}\nModels probe: ${models ? 'succeeded' : 'failed; model supplied manually'}\n` +
       `Publish enabled: ${publish}\nrun_test allowed: ${runTest}\nReviewer required: ${reviewer}\n` +
-      `Internet preference: ${internet} (stored only; no live internet tool)\n` +
+      `Internet preference: ${internet === undefined ? 'not set' : internet} (stored only; no live internet tool)\n` +
+      `Max tool turns: ${turns}\nContext char budget: ${budget}\n` +
       'GitHub App publication still requires GITHUB_APP_ID, a private key, and human-owned policy.\n');
     if (!await yesNo('Confirm write .roster/config.yml', true)) {
       output.write('Private config was not changed.\n');

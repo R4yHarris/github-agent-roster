@@ -11,7 +11,7 @@ import { runPlanner } from '../seats/planner.mjs';
 import { requirePassingReview, runReviewer } from '../seats/reviewer.mjs';
 import { isAllowedFile, isForbiddenWrite, isManagedFile } from '../runtime/tools.mjs';
 import { checkExcellence, redactEvidence } from '../runtime/excellence.mjs';
-import { loadConfig, requirePublicationEnabled } from './config.mjs';
+import { isReviewRequired, loadConfig, requirePublicationEnabled } from './config.mjs';
 import { runIssue } from './issue.mjs';
 import {
   commentMergedIssue, mergedPullNumber, mergedPullNumberFromFailure,
@@ -92,7 +92,7 @@ export async function prepareBuiltinPublication(run, {
     throw new Error('Publishing requires GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH');
   }
   const publishEnv = buildPublishEnv({ config, env, run: run.runs.coder });
-  await requirePassingReview(run, skipReview || config.reviewer?.required === false);
+  await requirePassingReview(run, skipReview || !isReviewRequired(config));
   await ensureUnchanged(run.recipePath, run.planner.recipe);
   await ensureUnchanged(run.taskPath, run.planner.task);
   await ensureUnchanged(run.planner.estimatePath, run.planner.estimate);
@@ -212,7 +212,7 @@ export async function runBuiltinIssue(issueNumber, {
   if (typeof autoModel !== 'boolean') throw new TypeError('--auto-model must be a boolean');
   if (typeof skipReview !== 'boolean') throw new TypeError('--skip-review must be a boolean');
   if (publish) requirePublicationEnabled(config);
-  const reviewBypass = skipReview || config.reviewer?.required === false;
+  const reviewBypass = skipReview || !isReviewRequired(config);
   if (autoModel && config.llm.model) {
     throw new Error('--auto-model requires an empty config.llm.model');
   }
@@ -330,7 +330,7 @@ export async function runBuiltinIssue(issueNumber, {
     summary: redactEvidence(result.summary, { env, apiKeyEnv: config.llm.api_key_env }),
     testsSkipped: result.testsSkipped,
     seats: `planner, coder, reviewer (${skipReview ? 'gate bypassed with --skip-review'
-      : config.reviewer?.required === false ? 'gate not required by configuration' : review.verdict})`,
+      : !isReviewRequired(config) ? 'gate not required by configuration' : review.verdict})`,
   }) : null;
   const command = model && config.publish?.enabled !== false && (review.verdict === 'pass' || reviewBypass)
     ? formatPublishCommand({ message: publishMessage, model }) : null;

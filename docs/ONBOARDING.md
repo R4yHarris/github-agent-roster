@@ -38,3 +38,31 @@ the chosen `llm.base_url` and `llm.model`, `llm.provider: vllm`, and
 `llm.api_key_optional: true`. A custom vLLM host is not replaced with
 loopback when the config is read. Discovery is not a chat or internet-tool
 probe; no network tool is added to the coder.
+
+## Permissions and Advanced
+
+After the model step, the wizard asks in order:
+
+- `Allow publish through GitHub App? [yes]`
+- `Require reviewer before publish? [yes]`
+- `Allow run_test? [yes]`
+- `Show advanced settings? [no]`
+
+These flags do not grant contracts policy. Publishing still needs the App
+and reviewed human-owned policy. The saved keys are `publish.enabled`,
+`review.required`, and `tools.run_test`. Disabling tests does not silently
+waive task acceptance checks, and making review optional does not remove
+the reviewer or permit merging by a model.
+
+Only Advanced displays internet/search preference, `Max tool turns [12]`,
+and `Context char budget [8000]`. When entered, internet defaults yes but
+only stores a flag; no network tool is implemented. When skipped,
+`tools.internet` is **omitted** from the written YAML. The parser's existing
+fallback remains false; there is no implicit permission to access the web.
+
+`loop.turns` controls the coder turn limit (1-64), and `context.budget`
+controls the positive context-character budget. New onboarding starts with
+12 turns and 8000 characters; skipping Advanced preserves an existing
+saved loop/context budget. Legacy `reviewer.required`, `seat.turn_budget`,
+and `seat.context_chars` configs remain supported, while the wizard writes
+the canonical keys. Conflicting review aliases are errors, not silent defaults.

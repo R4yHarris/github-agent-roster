@@ -555,7 +555,7 @@ test('a failed reviewer keeps coder changes but blocks publication unless explic
       }) };
     };
     const args = {
-      ...options, config: { ...llmConfig, reviewer: { required: reviewRequired } },
+      ...options, config: { ...llmConfig, review: { required: reviewRequired } },
       publish: true, skipReview, fetchImpl, log: () => {},
       env: { ...options.env, GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'app.pem' },
       runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),

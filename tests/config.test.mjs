@@ -89,6 +89,27 @@ test('permission fields are validated and legacy configs preserve publishing, te
   }
 });
 
+test('canonical review/loop/context fields normalize to existing runtime limits and retain legacy review support', () => {
+  const canonical = example.replace(/reviewer:\r?\n  required:[^\r\n]*\r?\n/, '') +
+    'review:\n  required: false\nloop:\n  turns: 12\ncontext:\n  budget: 16000\n';
+  const config = parseConfig(canonical);
+  assert.deepEqual(config.review, { required: false });
+  assert.deepEqual(config.reviewer, { required: false });
+  assert.equal(config.loop.turns, 12);
+  assert.equal(config.seat.turn_budget, 12);
+  assert.equal(config.context.budget, 16000);
+  assert.equal(config.seat.context_chars, 16000);
+  for (const source of [
+    canonical.replace('turns: 12', 'turns: 65'),
+    canonical.replace('budget: 16000', 'budget: 0'),
+    canonical + 'reviewer:\n  required: true\n',
+  ]) {
+    assert.throws(() => parseConfig(source), ConfigError);
+  }
+  assert.equal(parseConfig(example).reviewer.required, true);
+  assert.equal(parseConfig(example).seat.turn_budget, 8);
+});
+
 test('project private settings are loaded and updated without modifying the installation config', async (t) => {
   const repoRoot = fixture(t);
   const project = join(repoRoot, 'project');

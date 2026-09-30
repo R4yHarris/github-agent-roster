@@ -23,6 +23,9 @@ const fields = {
   publish: ['enabled'],
   tools: ['internet', 'run_test'],
   reviewer: ['required'],
+  review: ['required'],
+  loop: ['turns'],
+  context: ['budget'],
 };
 const availableTools = ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text'];
 
@@ -113,7 +116,7 @@ export function parseConfig(source) {
     invalid('expected UTF-8 text of at most 64 KiB');
   }
   const config = { llm: {}, profiles: {}, planner: {}, seat: {}, paths: {},
-    publish: {}, tools: {}, reviewer: {} };
+    publish: {}, tools: {}, reviewer: {}, review: {}, loop: {}, context: {} };
   const roots = new Set();
   let section;
   let profile;
@@ -251,6 +254,16 @@ export function parseConfig(source) {
   if (planner.turn_budget < 1 || planner.turn_budget > 64) {
     invalid('planner.turn_budget must be between 1 and 64');
   }
+  if (roots.has('loop')) {
+    config.loop.turns = integerValue(config.loop.turns, 'loop.turns');
+    if (config.loop.turns < 1 || config.loop.turns > 64) invalid('loop.turns must be between 1 and 64');
+    seat.turn_budget = config.loop.turns;
+  }
+  if (roots.has('context')) {
+    config.context.budget = integerValue(config.context.budget, 'context.budget');
+    if (config.context.budget < 1) invalid('context.budget must be positive');
+    seat.context_chars = config.context.budget;
+  }
 
   for (const name of fields.paths) {
     config.paths[name] = relativePath(stringValue(config.paths[name], `paths.${name}`), `paths.${name}`);
@@ -264,6 +277,13 @@ export function parseConfig(source) {
         ? booleanValue(config[section][field], `${section}.${field}`) : fallback;
     }
   }
+  if (roots.has('review')) {
+    config.review.required = booleanValue(config.review.required, 'review.required');
+    if (roots.has('reviewer') && config.review.required !== config.reviewer.required) {
+      invalid('review.required and legacy reviewer.required disagree');
+    }
+    config.reviewer.required = config.review.required;
+  }
   return Object.freeze({
     schema: 1,
     llm: Object.freeze(llm),
@@ -274,6 +294,9 @@ export function parseConfig(source) {
     publish: Object.freeze(config.publish),
     tools: Object.freeze(config.tools),
     reviewer: Object.freeze(config.reviewer),
+    ...(roots.has('review') ? { review: Object.freeze(config.review) } : {}),
+    ...(roots.has('loop') ? { loop: Object.freeze(config.loop) } : {}),
+    ...(roots.has('context') ? { context: Object.freeze(config.context) } : {}),
   });
 }
 
@@ -320,6 +343,10 @@ export function requirePublicationEnabled(config) {
   if (config.publish?.enabled === false) {
     throw new Error('Publishing is disabled by publish.enabled; update the private config or rerun roster onboard');
   }
+}
+
+export function isReviewRequired(config) {
+  return (config.review?.required ?? config.reviewer?.required) !== false;
 }
 
 export async function setConfigValue(field, value, { repoRoot = rosterRoot, cwd } = {}) {
