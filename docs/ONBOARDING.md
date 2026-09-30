@@ -113,6 +113,11 @@ its local preferences changes App policy, vendor sources, or workflows.
 `roster init` remains non-interactive: it copies examples without
 overwriting existing files. It is not a substitute for confirming the
 private config in the wizard.
+After onboarding, `roster fleet assist` uses that configured default vLLM
+model to interview additional endpoints one at a time. It previews
+validated YAML and appends only after explicit yes at
+`Write this profile? [no]`; failure of the model leaves template questions
+available. See [Assisted setup](FLEET.md#assisted-setup).
 
 The saved `.roster/config.yml` is at the current Git worktree root
 (even when launched from a nested directory), or the current directory

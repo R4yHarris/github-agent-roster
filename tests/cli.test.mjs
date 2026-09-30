@@ -30,6 +30,7 @@ test("help lists every prompt's command", () => {
   assert.match(result.stdout, /roster\s+init/);
   assert.match(result.stdout, /roster\s+onboard/);
   assert.match(result.stdout, /roster fleet list/);
+  assert.match(result.stdout, /roster fleet assist/);
   assert.match(result.stdout, /roster fleet add/);
   assert.match(result.stdout, /roster fleet probe/);
   assert.match(result.stdout, /roster fleet default/);

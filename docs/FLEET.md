@@ -131,3 +131,32 @@ available without the model.
 The [two-profile template](../templates/fleet/FLEET.example.yml) contains
 fictional examples with comments for every field. It is not automatically
 loaded as a fleet or treated as evidence of measured model capacity.
+
+Assistance requires the **project's** onboarded private config with a real
+vLLM base URL and model. It does not take `AI_MODEL` or an installation
+default as a substitute. Piped input or redirected output prints
+`roster fleet assist needs a terminal` and exits 2 before loading settings
+or contacting a server. It uses the configured OpenAI-compatible chat
+client and selected key name, with no model-invokable tools.
+
+The harness validates each answer, GETs `/models` only for an operator-
+supplied safe URL, and accepts an inventory ID (or explicitly supplied
+actual model when that probe failed). Limits, hardware, hints, and notes
+come from the operator, not guesses in a model response. A final model
+proposal must exactly match those recorded facts after normalization.
+An invented value, malformed JSON, or tool request is reported and
+switches to the local template interview; its rejected values are never
+shown as a trusted preview or written.
+
+`Write this profile? [no]` is always a separate user question, never a model
+decision. Blank/no skips the profile; yes appends the validated row without
+changing the saved default config. Duplicate IDs and concurrent catalog
+changes are refused rather than overwriting another profile. `done`,
+`/quit`, or Ctrl+C stops without writing an unconfirmed entry; already
+confirmed entries remain. The known credential values are neither sent as
+interview facts nor stored in the catalog. This setup has no publication,
+merge, network-scan, or internet-search tool.
+
+Run `node --test tests/fleet-assist.test.mjs tests/fleet-cli.test.mjs` for
+model/probe mocks, yes-only writes, invalid URLs, invented proposals,
+template fallback, cancellation, and stale-catalog regressions.
