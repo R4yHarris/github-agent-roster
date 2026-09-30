@@ -38,6 +38,17 @@ export function mergeUsage(...samples) {
   return totals;
 }
 
+function runProvider(config, env) {
+  if (config.llm.profile === 'vllm-local') return 'vllm';
+  if (config.llm.profile === 'openai') return 'openai';
+  if (config.llm.profile === 'ollama' || config.llm.profile === 'lmstudio') return 'local';
+  const provider = env.AI_PROVIDER || 'local';
+  if (!['vllm', 'github-copilot', 'anthropic', 'openai', 'local', 'other'].includes(provider)) {
+    throw new TypeError('Invalid AI_PROVIDER for AI-Run');
+  }
+  return provider;
+}
+
 export function buildRun({ config, usage = {}, session, task, env = process.env }) {
   const model = config.llm.model || env.ROSTER_MODEL;
   if (!model) return null;
@@ -51,9 +62,9 @@ export function buildRun({ config, usage = {}, session, task, env = process.env 
     throw new TypeError('Invalid LLM model, version, effort, or context_max for AI-Run; unknown is not a model');
   }
   const counts = mergeUsage(usage);
-  // Contracts schema 1 represents vLLM with "local"; "vllm" is not a provider.
+  const provider = runProvider(config, env);
   const runEnv = {
-    AI_PROVIDER: config.llm.profile === 'openai' ? 'openai' : 'local',
+    AI_PROVIDER: provider === 'vllm' ? 'local' : provider,
     AI_MODEL: model, AI_MODEL_VERSION: version, AI_EFFORT: effort,
   };
   if (contextMax > 0) runEnv.AI_CONTEXT_MAX = String(contextMax);
@@ -68,6 +79,7 @@ export function buildRun({ config, usage = {}, session, task, env = process.env 
     }
   }
   return {
+    provider,
     line: [
       '1', runEnv.AI_PROVIDER, `${model}@${version}`, effort,
       `${runEnv.AI_CONTEXT_USED ?? '-'}/${runEnv.AI_CONTEXT_MAX ?? '-'}`,
@@ -91,7 +103,7 @@ export function buildPublishEnv({ config, env = process.env, run }) {
     }) : run;
   Object.assign(publishEnv, metadata?.env);
   if (run === undefined && !config.llm.model && env.AI_MODEL && env.AI_PROVIDER) {
-    publishEnv.AI_PROVIDER = env.AI_PROVIDER;
+    publishEnv.AI_PROVIDER = env.AI_PROVIDER === 'vllm' ? 'local' : env.AI_PROVIDER;
   }
   publishEnv.AI_MODEL = model;
   return publishEnv;

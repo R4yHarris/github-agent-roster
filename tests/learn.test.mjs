@@ -350,6 +350,40 @@ test('records effort and context even when the model is not reported', async (t)
   assert.deepEqual(record, { session: 'partial', task: 'fix-one', effort: 'x', context_out: 7 });
 });
 
+test('vLLM and GitHub Copilot journals keep provider, model, and real usage without inventing a stub run', async (t) => {
+  const cwd = fixture(t, { learning: false });
+  const vllm = await recordRun({ session: 'vllm-session', task: 'fix-one', provider: 'vllm' }, {
+    cwd, createDirectory: true,
+    env: { AI_PROVIDER: 'local', AI_MODEL: 'served-model',
+      AI_EFFORT: 'm', AI_CONTEXT_USED: '7', AI_CONTEXT_OUT: '0' },
+  });
+  const copilot = await recordRun({ session: 'copilot-session', task: 'fix-two' }, {
+    cwd, env: { AI_PROVIDER: 'github-copilot', AI_MODEL: 'GPT-6-Sol',
+      AI_EFFORT: 'h', AI_CONTEXT_USED: '9', AI_CONTEXT_OUT: '3' },
+  });
+  const rawVllm = await recordRun({ session: 'raw-vllm', task: 'fix-three' }, {
+    cwd, env: { AI_PROVIDER: 'vllm', AI_MODEL: 'served-model', AI_CONTEXT_USED: '0' },
+  });
+  const stub = await recordRun({ session: 'stub', task: 'fix-four' }, {
+    cwd, env: { AI_PROVIDER: 'github-copilot' },
+  });
+  assert.deepEqual(vllm, { session: 'vllm-session', task: 'fix-one', provider: 'vllm',
+    model: 'served-model', effort: 'm', context_used: 7, context_out: 0 });
+  assert.deepEqual(copilot, { session: 'copilot-session', task: 'fix-two', provider: 'github-copilot',
+    model: 'GPT-6-Sol', effort: 'h', context_used: 9, context_out: 3 });
+  assert.deepEqual(rawVllm, { session: 'raw-vllm', task: 'fix-three', provider: 'vllm',
+    model: 'served-model', context_used: 0 });
+  assert.deepEqual(stub, { session: 'stub', task: 'fix-four' });
+  assert.deepEqual(loadLearning({ cwd }).runs, [vllm, copilot, rawVllm, stub]);
+  const exported = [{ sha: 'a'.repeat(40), session: 'vllm-session', task: 'fix-one',
+    provider: 'local', model: 'served-model' }];
+  assert.equal(joinLearning(exported, [vllm], [])[0].provider, 'vllm');
+  await assert.rejects(recordRun({ session: 'invalid-provider', provider: 'unauthenticated' }, {
+    cwd, env: { AI_MODEL: 'served-model' },
+  }), /provider must name a supported model backend/);
+  assert.equal(loadLearning({ cwd }).runs.length, 4);
+});
+
 test('model-free journal normalization preserves large counts and rejects invalid partial evidence', async (t) => {
   const cwd = fixture(t);
   const record = await recordRun({ session: 'model-free' }, {

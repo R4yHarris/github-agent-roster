@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -91,9 +91,11 @@ test('refuses symlink paths rather than following them out of the worktree', asy
   context.after(() => rmSync(outsideDirectory, { recursive: true, force: true }));
   const outside = path.join(outsideDirectory, 'outside-file.txt');
   const link = path.join(worktree, 'src', 'link.mjs');
+  const directoryLink = path.join(worktree, 'src', 'outside');
   writeFileSync(outside, 'outside');
   try {
     symlinkSync(outside, link);
+    symlinkSync(outsideDirectory, directoryLink, process.platform === 'win32' ? 'junction' : 'dir');
   } catch (error) {
     if (['EPERM', 'EACCES', 'ENOTSUP'].includes(error.code)) {
       context.skip('Creating symlinks is unavailable on this system.');
@@ -104,6 +106,8 @@ test('refuses symlink paths rather than following them out of the worktree', asy
   const tools = await createTools({ worktree, allowedFiles: ['src/**'] });
   await assert.rejects(tools.read_file({ path: 'src/link.mjs' }), /symlinks/);
   await assert.rejects(tools.write_file({ path: 'src/link.mjs', content: 'bad' }), /symlinks/);
+  await assert.rejects(tools.write_file({ path: 'src/outside/created/new.mjs', content: 'bad' }), /symlinks/);
+  assert.equal(existsSync(path.join(outsideDirectory, 'created')), false);
   assert.equal(readFileSync(outside, 'utf8'), 'outside');
 });
 

@@ -1,7 +1,7 @@
 import { createBuiltinChat } from '../lib/llm.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
 import { toolDefinitions } from './tools.mjs';
-import { taskSkipsTests } from './excellence.mjs';
+import { redactEvidence, taskSkipsTests } from './excellence.mjs';
 
 function stubSummary(task) {
   const title = /^# Task: (.+)$/m.exec(task)?.[1];
@@ -11,12 +11,15 @@ function stubSummary(task) {
     'Deterministic stub only: no implementation or tests were run. Configure llm.base_url to run a coder.';
 }
 
-async function executeLoop({ config, context, tools, fetchImpl, env, vault }, progress) {
+async function executeLoop({ config, context, tools, fetchImpl, env, vault, verify }, progress) {
   if (!config.llm.base_url) {
     const summary = stubSummary(context.task);
     return {
       mode: 'stub', summary, usage: null, turns: 0,
     };
+  }
+  if (typeof verify !== 'function') {
+    throw new TypeError('Configured coder requires an excellence verifier');
   }
 
   const messages = [
@@ -85,14 +88,34 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault }, pr
     const testsSkipped = taskSkipsTests(context.task);
     const tests = testsSkipped ? undefined : await tools.run_test({});
     progress.tests = tests;
-    if (tests && tests.exit_code !== 0) {
-      throw new Error(`Final node --test failed (exit ${tests.exit_code}):\n` +
-        `${tests.stderr || tests.stdout}`.slice(0, 4096));
-    }
     const summary = message.content.trim();
-    return {
-      mode: 'llm', summary, usage, turns: turn, tests, testsSkipped,
+    const result = {
+      mode: 'llm', model: config.llm.model, summary, usage, turns: turn, tests, testsSkipped,
     };
+    const excellence = await verify(result);
+    if (typeof excellence?.pass !== 'boolean' || !Array.isArray(excellence.reasons)) {
+      throw new TypeError('Coder excellence verifier returned an invalid report');
+    }
+    if (excellence.pass && (!tests || tests.exit_code === 0)) return result;
+
+    const reasons = excellence.reasons.map((reason) => redactEvidence(reason, {
+      env, apiKeyEnv: config.llm.api_key_env,
+    }));
+    const unsafe = reasons.find((reason) => !reason.startsWith('node --test failed (exit '));
+    if (unsafe) throw new Error(`Coder excellence gate failed: ${unsafe}`);
+    if (!tests || tests.exit_code === 0) {
+      throw new Error('Coder excellence verifier did not confirm passing final tests');
+    }
+    const output = redactEvidence([tests.stdout, tests.stderr].filter(Boolean).join('\n'), {
+      env, apiKeyEnv: config.llm.api_key_env,
+    }).slice(0, 4096);
+    const failure = `Final node --test failed (exit ${tests.exit_code}):\n${output}`;
+    if (turn === config.seat.turn_budget) {
+      throw new Error(`${failure}\nCoder turn budget (${config.seat.turn_budget}) exhausted`);
+    }
+    messages.push({ role: 'assistant', content: summary });
+    messages.push({ role: 'user', content: `${failure}\nFix the failing tests using only the offered tools, ` +
+      'then provide a new summary. No change is verified yet.' });
   }
 
   throw new Error(`Coder turn budget (${config.seat.turn_budget}) exhausted`);

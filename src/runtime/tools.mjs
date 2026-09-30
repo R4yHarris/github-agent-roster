@@ -215,6 +215,7 @@ export async function createTools({
       if (typeof args.content !== 'string') throw new TypeError('write_file content must be text');
       const { file, relative, normalized } = locate(args.path, { write: true });
       await checkComponents(relative);
+      await checkComponents(relative);
       await fs.mkdir(path.dirname(file), { recursive: true });
       await checkComponents(relative);
       await checkParent(file);

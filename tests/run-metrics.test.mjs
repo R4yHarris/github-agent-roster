@@ -14,6 +14,7 @@ test('builds a contracts-compatible compact AI-Run line from known token counts'
     { prompt_tokens: 33, completion_tokens: 11 });
   const run = buildRun({ config, usage, session: 'roster-session', task: 'issue-42', env: {} });
   assert.equal(run.line, '1|local|owner/model@-|m|45/8192|16|roster-session|issue-42');
+  assert.equal(run.provider, 'local');
   assert.deepEqual(run.env, {
     AI_PROVIDER: 'local', AI_MODEL: 'owner/model', AI_MODEL_VERSION: '-',
     AI_EFFORT: 'm', AI_CONTEXT_MAX: '8192',
@@ -22,6 +23,33 @@ test('builds a contracts-compatible compact AI-Run line from known token counts'
   });
   assert.equal(packAgentRun(run.env), run.line);
   assert.equal(parseAgentRun(run.line, config.llm.model).context_used, 45);
+});
+
+test('records backend provenance while packing only contracts-supported AI-Run providers', () => {
+  const vllm = parseConfig(example.replace('profile: ""', 'profile: vllm-local')
+    .replace('model: ""', 'model: served-model'));
+  const vllmRun = buildRun({
+    config: vllm, env: { AI_PROVIDER: 'github-copilot' },
+    usage: { prompt_tokens: 13, completion_tokens: 4 }, session: 'coder-42', task: 'issue-42',
+  });
+  assert.equal(vllmRun.provider, 'vllm');
+  assert.equal(vllmRun.env.AI_PROVIDER, 'local');
+  assert.equal(parseAgentRun(vllmRun.line).provider, 'local');
+  assert.equal(vllmRun.env.AI_CONTEXT_USED, '13');
+  assert.equal(vllmRun.env.AI_CONTEXT_OUT, '4');
+
+  const copilot = buildRun({ config, env: { AI_PROVIDER: 'github-copilot' } });
+  assert.equal(copilot.provider, 'github-copilot');
+  assert.equal(copilot.env.AI_PROVIDER, 'github-copilot');
+  assert.equal(parseAgentRun(copilot.line).provider, 'github-copilot');
+  assert.equal(buildRun({ config, env: { AI_PROVIDER: 'vllm' } }).env.AI_PROVIDER, 'local');
+  const openai = parseConfig(example.replace('profile: ""', 'profile: openai')
+    .replace('model: ""', 'model: remote-model'));
+  assert.equal(buildRun({ config: openai, env: { AI_PROVIDER: 'github-copilot' } }).provider, 'openai');
+  assert.throws(() => buildRun({ config, env: { AI_PROVIDER: 'invalid' } }), /AI_PROVIDER/);
+  assert.equal(buildPublishEnv({
+    config: parseConfig(example), env: { AI_MODEL: 'served-model', AI_PROVIDER: 'vllm' },
+  }).AI_PROVIDER, 'local');
 });
 
 test('does not invent an unknown model, version, context, or token counts', () => {
@@ -56,7 +84,7 @@ test('publication uses config, AI_MODEL, then ROSTER_MODEL without forwarding st
     });
     assert.equal(env.AI_MODEL, configured ? 'owner/model' : sessionModel || 'served-model');
     assert.equal(env.AI_MODEL_VERSION, 'v2');
-    assert.equal(env.AI_PROVIDER, !configured && sessionModel ? 'github-copilot' : 'local');
+    assert.equal(env.AI_PROVIDER, 'github-copilot');
     assert.equal(env.AI_EFFORT, 'm');
     assert.equal(env.AI_CONTEXT_OUT, undefined);
     assert.equal(env.ROSTER_API_KEY, undefined);

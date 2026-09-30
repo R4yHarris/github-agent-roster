@@ -233,7 +233,41 @@ test('ROSTER_MODEL selects the same served model for both seats and their metada
   assert.equal(requests, 2);
   assert.equal(result.runs.planner.env.AI_MODEL, 'served-model');
   assert.equal(result.runs.coder.env.AI_MODEL, 'served-model');
+  assert.deepEqual(loadLearning({ cwd: options.target }).runs.map(({ provider }) => provider),
+    ['local', 'local']);
   assert.equal(config.llm.model, '');
+});
+
+test('GitHub Copilot provider and reported usage reach both seat journals and AI-Run', async (context) => {
+  const options = fixture(context);
+  let requests = 0;
+  const result = await runBuiltinIssue(42, {
+    ...options, config: llmConfig, log: () => {},
+    env: { ...options.env, AI_PROVIDER: 'github-copilot', ROSTER_API_KEY: 'test-only-key' },
+    fetchImpl: async () => {
+      requests += 1;
+      return { status: 200, json: async () => ({
+        choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+          content: requests === 1 ? JSON.stringify({
+            title: 'Add status', acceptance_checks: ['node --test exits 0'],
+            files_allowed: ['README.md'],
+          }) : 'Reviewed README.',
+        } }],
+        usage: { prompt_tokens: requests, completion_tokens: 2 },
+      }) };
+    },
+    runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+  });
+  assert.equal(requests, 2);
+  assert.equal(result.runs.coder.provider, 'github-copilot');
+  assert.match(result.runs.coder.line, /^1\|github-copilot\|local-model@-\|/);
+  const records = loadLearning({ cwd: options.target }).runs;
+  assert.deepEqual(records.map(({ provider, model, context_used, context_out }) =>
+    ({ provider, model, context_used, context_out })), [
+    { provider: 'github-copilot', model: 'local-model', context_used: 1, context_out: 2 },
+    { provider: 'github-copilot', model: 'local-model', context_used: 2, context_out: 2 },
+  ]);
+  assert.equal(existsSync(path.join(options.target, '.roster', 'evals.jsonl')), false);
 });
 
 for (const selection of ['explicit', 'feedback']) {
@@ -412,9 +446,11 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
   assert.match(readFileSync(path.join(result.worktreePath, 'README.md'), 'utf8'), /## Status\nReady/);
   assert.equal(result.result.tests.exit_code, 0);
   assert.equal(result.run.line, packAgentRun(result.run.env));
+  assert.equal(result.run.provider, 'vllm');
   assert.match(result.runs.planner.line, /\|5\/-\|2\|roster-42-planner\|issue-42$/);
   assert.match(result.runs.coder.line, /\|17\/-\|7\|roster-42-coder\|issue-42$/);
   const seatRecords = loadLearning({ cwd: options.target }).runs;
+  assert.deepEqual(seatRecords.map(({ provider }) => provider), ['vllm', 'vllm']);
   assert.deepEqual(seatRecords.map(({ model, effort, context_used, context_out }) =>
     ({ model, effort, context_used, context_out })), [
     { model: 'local-model', effort: 'm', context_used: 5, context_out: 2 },

@@ -48,6 +48,7 @@ Only reported fields are written:
 | --- | --- |
 | `sha` | Full commit SHA, when known in a local run record or Git export |
 | `session`, `task` | Generated worker assignment; contracts `AI_SESSION`, `AI_TASK` |
+| `provider` | Actual configured or supplied backend: `vllm` for the named vLLM profile, `github-copilot` for an explicitly identified Copilot endpoint. The pinned contracts AI-Run uses `local` for vLLM. |
 | `model` | `AI_MODEL` |
 | `effort` | Contracts-normalized `AI_EFFORT`: `l`, `m`, `h`, or `x` |
 | `context_used`, `context_max`, `context_out` | Corresponding `AI_CONTEXT_*` environment variables |

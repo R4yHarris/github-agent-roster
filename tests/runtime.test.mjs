@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -195,6 +195,165 @@ test('LLM coder uses only offered tools within the turn budget, then verifies te
   assert.equal(record.next_gap, 'None reported.');
 });
 
+test('named vLLM profile performs one worktree tool call then stops on a passing excellence gate', async (context) => {
+  const config = parseConfig(example.replace('profile: ""', 'profile: vllm-local')
+    .replace('model: ""', 'model: served-model'));
+  const options = fixture(context, config);
+  let turns = 0;
+  let tests = 0;
+  const result = await runCoder({
+    ...options, env: { AI_PROVIDER: 'github-copilot' },
+    fetchImpl: async (url, request) => {
+      turns += 1;
+      assert.equal(String(url), 'http://127.0.0.1:8000/v1/chat/completions');
+      assert.equal(request.method, 'POST');
+      const sent = JSON.parse(request.body);
+      assert.equal(sent.model, 'served-model');
+      assert.deepEqual(sent.tools.map(({ function: tool }) => tool.name),
+        ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text']);
+      assert.match(sent.messages[0].content, /Principal coder:[\s\S]*## TASK\.md[\s\S]*Task skills/);
+      if (turns === 1) return { status: 200, json: async () => ({
+        choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant', tool_calls: [{ id: 'edit', type: 'function', function: {
+            name: 'write_file', arguments: JSON.stringify({
+              path: 'README.md', content: '# Example\n\n## Status\nReady.\n',
+            }),
+          } }],
+        } }],
+        usage: { prompt_tokens: 7, completion_tokens: 2 },
+      }) };
+      assert.equal(turns, 2, 'The coder must stop after verified completion');
+      assert.deepEqual(JSON.parse(sent.messages.at(-1).content), { path: 'README.md', bytes: 28 });
+      return { status: 200, json: async () => ({
+        choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant', content: 'Added a Status section; tests pass.',
+        } }],
+        usage: { prompt_tokens: 5, completion_tokens: 3 },
+      }) };
+    },
+    runTestCommand: async () => {
+      tests += 1;
+      return { stdout: 'pass', stderr: '' };
+    },
+  });
+  assert.equal(turns, 2);
+  assert.equal(tests, 1);
+  assert.equal(result.excellence.pass, true);
+  assert.equal(result.run.provider, 'vllm');
+  assert.equal(result.run.env.AI_PROVIDER, 'local');
+  assert.equal(result.run.env.AI_MODEL, 'served-model');
+  assert.equal(result.run.env.AI_CONTEXT_USED, '12');
+  assert.equal(result.run.env.AI_CONTEXT_OUT, '5');
+  assert.match(result.run.line, /^1\|local\|served-model@-\|/);
+});
+
+test('model-requested path escape is denied and returned as a tool error, not a file write', async (context) => {
+  const options = fixture(context, llmConfig);
+  const outside = path.join(options.repoRoot, 'escape.md');
+  let turns = 0;
+  const result = await runCoder({
+    ...options, env: {},
+    fetchImpl: async (_url, request) => {
+      turns += 1;
+      const sent = JSON.parse(request.body);
+      if (turns === 2) {
+        assert.match(JSON.parse(sent.messages.at(-1).content).error, /inside the worktree/);
+      }
+      if (turns < 3) {
+        return { status: 200, json: async () => ({
+          choices: [{ finish_reason: 'tool_calls', message: {
+            role: 'assistant', tool_calls: [{ id: `edit-${turns}`, type: 'function', function: {
+              name: 'write_file', arguments: JSON.stringify({
+                path: turns === 1 ? '../escape.md' : 'README.md',
+                content: '# Example\n\n## Status\nReady.\n',
+              }),
+            } }],
+          } }],
+        }) };
+      }
+      return { status: 200, json: async () => ({
+        choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Updated README.' } }],
+      }) };
+    },
+    runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+  });
+  assert.equal(turns, 3);
+  assert.equal(existsSync(outside), false);
+  assert.equal(result.excellence.pass, true);
+  assert.match(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), /## Status/);
+});
+
+test('failed final tests receive another turn before acceptance while usage and errors stay truthful', async (context) => {
+  const options = fixture(context, llmConfig);
+  let turns = 0;
+  let tests = 0;
+  const result = await runCoder({
+    ...options, env: { ROSTER_API_KEY: 'private-value' },
+    fetchImpl: async (_url, request) => {
+      turns += 1;
+      const sent = JSON.parse(request.body);
+      if (turns === 2) {
+        const feedback = sent.messages.at(-1);
+        assert.equal(feedback.role, 'user');
+        assert.match(feedback.content, /Final node --test failed \(exit 1\)/);
+        assert.match(feedback.content, /not ok \[redacted\]/);
+        assert.match(feedback.content, /test output also captured/);
+        assert.match(feedback.content, /\[redacted\]/);
+        assert.doesNotMatch(feedback.content, /private-value/);
+        assert.match(feedback.content, /No change is verified yet/);
+        return { status: 200, json: async () => ({
+          choices: [{ finish_reason: 'tool_calls', message: {
+            role: 'assistant', tool_calls: [{ id: 'repair', type: 'function', function: {
+              name: 'write_file', arguments: JSON.stringify({
+                path: 'README.md', content: '# Example\n\n## Status\nReady.\n',
+              }),
+            } }],
+          } }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        }) };
+      }
+      return { status: 200, json: async () => ({
+        choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant', content: turns === 1 ? 'Premature summary.' : 'Fixed the tests.',
+        } }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      }) };
+    },
+    runTestCommand: async () => {
+      tests += 1;
+      if (tests === 1) throw Object.assign(new Error('tests failed'), {
+        code: 1, stdout: 'not ok private-value', stderr: 'warning: test output also captured',
+      });
+      return { stdout: 'pass', stderr: '' };
+    },
+  });
+  assert.equal(turns, 3);
+  assert.equal(tests, 2);
+  assert.equal(result.excellence.pass, true);
+  assert.deepEqual(result.usage, { prompt_tokens: 3, completion_tokens: 3 });
+  assert.match(readFileSync(result.resultPath, 'utf8'), /Checks: PASS/);
+});
+
+test('an unsafe final-test side effect stops the loop without asking the model to hide it', async (context) => {
+  const options = fixture(context, llmConfig);
+  let turns = 0;
+  await assert.rejects(runCoder({
+    ...options, env: {},
+    fetchImpl: async () => {
+      turns += 1;
+      return { status: 200, json: async () => ({
+        choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Done.' } }],
+      }) };
+    },
+    runTestCommand: async () => {
+      writeFileSync(path.join(options.worktree, '.env'), 'SECRET=do-not-publish\n');
+      return { stdout: 'pass', stderr: '' };
+    },
+  }), /Diff path is protected or outside TASK\.md allowed paths: \.env/);
+  assert.equal(turns, 1);
+  assert.match(readFileSync(path.join(options.worktree, 'RESULT.md'), 'utf8'), /Checks: FAIL/);
+});
+
 test('a nonzero run_test returns captured output for the coder to fix in the next turn', async (context) => {
   const options = fixture(context, llmConfig);
   let turns = 0;
@@ -269,15 +428,26 @@ test('budget exhaustion and a failed final test stop without claiming success', 
   assert.match(readFileSync(path.join(options.worktree, 'RESULT.md'), 'utf8'), /First failure: Coder turn budget/);
 
   const failing = fixture(context, llmConfig);
+  let finalTurns = 0;
+  let finalTests = 0;
   await assert.rejects(runCoder({
     ...failing, vault: { get: async () => undefined },
-    fetchImpl: async () => ({ status: 200, json: async () => ({
-      choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Done' } }],
-    }) }),
-    runTestCommand: async () => { throw Object.assign(new Error('failed'), {
-      code: 1, stdout: 'not ok', stderr: 'one test failed',
-    }); },
+    fetchImpl: async () => {
+      finalTurns += 1;
+      return { status: 200, json: async () => ({
+        choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Done' } }],
+      }) };
+    },
+    runTestCommand: async () => {
+      finalTests += 1;
+      throw Object.assign(new Error('failed'), {
+        code: 1, stdout: 'not ok', stderr: 'one test failed',
+      });
+    },
   }), /Final node --test failed [\s\S]*one test failed/);
+  assert.equal(finalTurns, llmConfig.seat.turn_budget);
+  assert.equal(finalTests, llmConfig.seat.turn_budget);
   assert.equal(JSON.parse(readFileSync(failing.memoryPath, 'utf8')).status, 'failed');
-  assert.match(readFileSync(path.join(failing.worktree, 'RESULT.md'), 'utf8'), /Checks: FAIL[\s\S]*one test failed/);
+  assert.match(readFileSync(path.join(failing.worktree, 'RESULT.md'), 'utf8'),
+    /Checks: FAIL[\s\S]*one test failed[\s\S]*Coder turn budget \(3\) exhausted/);
 });
