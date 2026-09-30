@@ -1,5 +1,97 @@
 # Onboarding wizard
 
+Roster is a Node 20+ ESM executable with no runtime npm dependencies.
+Install from a persistent clone with its contracts submodule, then run
+the wizard in the project you want to configure. Git and `gh` are needed
+for the issue and PR workflow; the wizard never installs App credentials,
+policy, or workflows.
+
+## Windows PowerShell
+
+Install Node 20+, Git, and GitHub CLI for Windows, then in PowerShell:
+
+```powershell
+git clone --recurse-submodules https://github.com/R4yHarris/github-agent-roster.git
+cd github-agent-roster
+npm install -g .
+```
+
+For a first run in this clone:
+
+```powershell
+roster --help
+roster onboard
+roster doctor
+roster
+```
+
+To configure another repository, change to that worktree before
+`roster onboard`. Keep Node and npm's global bin directory on PATH;
+restart PowerShell after changing User environment variables.
+
+## WSL
+
+Install Node 20+, Git, and GitHub CLI **inside WSL**. Windows and WSL have
+separate Node installations, global bins, filesystem paths, and shell
+environment. Do not reuse a Windows Node executable as the WSL runtime or
+forward a human's GitHub credentials to an agent worker.
+
+```sh
+git clone --recurse-submodules https://github.com/R4yHarris/github-agent-roster.git
+cd github-agent-roster
+npm install -g .
+roster --help
+roster onboard
+roster doctor
+roster
+```
+
+vLLM may run inside WSL, on Windows, or on a DGX host. Its default API port
+is **8000**, with base URL `http://127.0.0.1:8000/v1` when loopback reaches
+the server. Depending on WSL networking mode, `localhost` in WSL may not
+reach a Windows-hosted server. Paste the reachable Windows host IP
+(`http://<windows-host>:8000/v1`) or DGX address into the endpoint prompt.
+Roster does not guess that address, modify the network, or open firewall
+ports. Use a secured endpoint or tunnel for access beyond loopback.
+
+## Linux
+
+Use a user-managed Node 20+ installation, Git, and GitHub CLI:
+
+```sh
+git clone --recurse-submodules https://github.com/R4yHarris/github-agent-roster.git
+cd github-agent-roster
+npm install -g .
+roster --help
+roster onboard
+roster doctor
+roster
+```
+
+Run onboarding from the target project if it differs from this clone.
+A local or DGX vLLM endpoint uses the same prompts and `/v1/models`
+discovery; configure a reachable secured host if it is not on loopback.
+
+## macOS
+
+Use a user-managed Node 20+ installation, Git, and GitHub CLI:
+
+```sh
+git clone --recurse-submodules https://github.com/R4yHarris/github-agent-roster.git
+cd github-agent-roster
+npm install -g .
+roster --help
+roster onboard
+roster doctor
+roster
+```
+
+The same numbered prompts work in the macOS terminal. The server can be
+on another secured host; use its actual reachable vLLM URL and model.
+Do not run onboarding with `sudo` to work around global-bin PATH setup.
+
+## Wizard steps
+
 1. Run `roster onboard` in a terminal. The wizard displays the platform.
    Non-TTY input or output prints `roster onboard needs a terminal` and
    exits 2 without writing files.
@@ -18,6 +110,16 @@
 For installation commands, see [INSTALL.md](INSTALL.md). The implementation
 is [src/onboard/wizard.mjs](../src/onboard/wizard.mjs); neither the wizard nor
 its local preferences changes App policy, vendor sources, or workflows.
+`roster init` remains non-interactive: it copies examples without
+overwriting existing files. It is not a substitute for confirming the
+private config in the wizard.
+
+The saved `.roster/config.yml` is at the current Git worktree root
+(even when launched from a nested directory), or the current directory
+outside Git. Roster ensures private config is ignored and refuses a
+tracked config. Commands prefer the project's saved settings, then
+installation settings. Nothing changes the installed package's config
+when onboarding a different project.
 
 ## Probing /v1/models
 
@@ -122,3 +224,32 @@ exits 1 **after retaining the confirmed config**; fix the listed blocker:
 
 Then run `roster doctor` again from the project. These are local preflight
 checks, not GitHub policy grants, authentication, chat, or internet-tool probes.
+
+## The vLLM model is not the GHCP publication model
+
+The model selected in onboarding is saved as `llm.model`. It is the real
+model served by the chosen vLLM endpoint and used for `roster run` by the
+planner, coder, and reviewer. Keep that served ID: do not replace it with
+a Copilot model name merely to publish a PR.
+
+User environment `AI_MODEL` describes the model used for a GHCP agent's
+publication. For this Copilot session, set the publisher's current-session
+attribution in PowerShell when the reviewed feature worktree is ready:
+
+```powershell
+$env:AI_MODEL = "GPT-6.1-Sol"
+$env:AI_PROVIDER = "github-copilot"
+node vendor\github-agent-contracts\scripts\agent-pr.mjs --message "<conventional subject plus Model, Summary, and test instructions>" --model GPT-6.1-Sol --merge-when-green
+```
+
+If using Windows User environment via `setx`, restart the shell before
+publication. This environment metadata does not grant App or policy
+capabilities. Roster-managed publication uses the completed coder's
+actual model, provider, and reported usage instead; an onboarding config
+with `llm.model` keeps that model ahead of inherited `AI_MODEL`.
+
+No wizard step probes chat completions, App authentication, GitHub merge
+permissions, or a live internet/search tool. The models request is the
+only endpoint probe; doctor is offline. Internet true stores a future
+preference only. Tests and review still occur during the configured task
+run, and the human records AI-Eval and closes the issue afterwards.
