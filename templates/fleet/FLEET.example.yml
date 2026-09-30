@@ -1,0 +1,21 @@
+# Two fictional profiles. Replace values in private .roster/fleet.yml only.
+# No endpoint or capability here is a live service or a benchmark claim.
+profiles:
+  - id: demo-small-coder                 # Unique opaque profile identifier.
+    base_url: https://small.example.invalid/v1  # Operator-supplied API base.
+    model: fictional/small-coder         # Use an actual ID returned by /models.
+    provider: vllm                      # OpenAI-compatible vLLM backend.
+    context_max: 32768                   # User-declared positive token limit.
+    concurrency: 2                      # User-declared limit, not a worker count.
+    hardware: fictional-single-gpu       # User-supplied platform description.
+    task_class: [fix, docs, test]         # Optional class hints, not quality evidence.
+    notes: "Fictional small-profile illustration."  # Short operator notes.
+  - id: demo-large-coder                 # A second distinct profile identifier.
+    base_url: https://large.example.invalid/v1  # Fictional cluster API base.
+    model: fictional/large-coder         # Not an automatically installed model.
+    provider: vllm                      # Does not grant tools or publishing rights.
+    context_max: 65536                   # Illustration only; verify real capacity.
+    concurrency: 1                      # Positive declaration, not a throughput score.
+    hardware: fictional-multi-gpu        # No private hostnames or addresses.
+    task_class: [feat, fix]               # Optional operator-supplied hints.
+    notes: "Fictional large-profile illustration."  # No secrets or policy grants.
