@@ -13,6 +13,7 @@ import { loadLearning } from '../src/lib/learn.mjs';
 import { resolveContractsPath } from '../src/lib/paths.mjs';
 import { buildPublishMessage } from '../src/lib/publication.mjs';
 import { parseRecipe } from '../src/lib/recipe.mjs';
+import { renderIssueBody } from '../src/lib/issue.mjs';
 import { packAgentRun } from '../vendor/github-agent-contracts/scripts/parse-agent-run.mjs';
 import { withResearchSummary } from './helpers/research.mjs';
 
@@ -88,7 +89,7 @@ test('roster ask writes a local draft ask, recipe, and executable task without n
   });
   assert.equal(result.askPath, path.join(repoRoot, '.roster', 'asks', 'draft-1.md'));
   assert.equal(readFileSync(result.askPath, 'utf8'),
-    '# Ask\n\nAdd a Status section to README.md.\n');
+    renderIssueBody('Add a Status section to README.md.'));
   assert.equal(parseRecipe(readFileSync(result.recipePath, 'utf8')).ask, 'local:draft-1');
   assert.match(readFileSync(result.taskPath, 'utf8'), /Files allowed\n- `README\.md`/);
   await assert.rejects(writeAsk('Another ask', { repoRoot, config: stubConfig, id: 'draft-1' }), /EEXIST/);
@@ -152,6 +153,24 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
     '.roster/runs/runs.jsonl'));
   await assert.rejects(stageReviewedFiles(result.worktreePath, ['README.md']),
     /No reviewed task files changed/);
+});
+
+test('issue body task metadata reaches TASK.md and ESTIMATE.md before coder/reviewer', async (context) => {
+  const options = fixture(context);
+  options.issue.title = 'fix(cli): Update status';
+  options.issue.body = renderIssueBody(options.issue.body, {
+    task_class: 'fix', difficulty: 4, estimate_min: 35,
+  });
+  const result = await runBuiltinIssue(42, {
+    ...options, config: stubConfig, log: () => {},
+    fetchImpl: () => assert.fail('Stub must not call an LLM'),
+  });
+  assert.equal(result.ask, 'Add a Status section to README.md.\n\n## Acceptance checks\n' +
+    '- node --test exits 0\n- README has a Status section\n\n## Files allowed\n- `README.md`');
+  assert.deepEqual(result.metadata, { task_class: 'fix', difficulty: 4, estimate_min: 35 });
+  assert.match(result.planner.task, /difficulty: 4\nestimate_min: 35\ntask_class: fix\n/);
+  assert.match(result.planner.estimate, /difficulty: 4\nestimate_min: 35\ntask_class: fix\n/);
+  assert.equal(result.review.verdict, 'fail');
 });
 
 test('--publish requires an LLM and App environment before any GitHub or worktree action', async (context) => {
@@ -368,7 +387,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
   const logs = [];
   let completion = 0;
   let published = 0;
-  let closed = 0;
+  let commented = 0;
   const fetchImpl = async (url, request) => {
     assert.equal(url, 'http://127.0.0.1:8000/v1/chat/completions');
     completion += 1;
@@ -440,10 +459,11 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
       assert.equal(git(publication.cwd, 'diff', '--cached', '--name-only'), 'README.md');
       return { stdout: 'Merged PR #7 with a merge commit, removed its branch.\n' };
     },
-    issueCloser: async ({ issue, pullNumber, runLine }) => {
-      closed += 1;
+    issueCommenter: async ({ issue, pullNumber, model, runLine }) => {
+      commented += 1;
       assert.equal(issue.number, 42);
       assert.equal(pullNumber, 7);
+      assert.equal(model, 'local-model');
       assert.equal(runLine, packAgentRun({ AI_PROVIDER: 'local', AI_MODEL: 'local-model',
         AI_MODEL_VERSION: '-', AI_EFFORT: 'm',
         AI_CONTEXT_USED: '17', AI_CONTEXT_OUT: '7',
@@ -451,7 +471,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
     },
   });
   assert.equal(published, 1);
-  assert.equal(closed, 1);
+  assert.equal(commented, 1);
   assert.equal(completion, 3);
   assert.match(readFileSync(path.join(result.worktreePath, 'README.md'), 'utf8'), /## Status\nReady/);
   assert.equal(result.result.tests.exit_code, 0);
@@ -531,7 +551,7 @@ test('a failed reviewer keeps coder changes but blocks publication unless explic
         assert.equal(git(publication.cwd, 'diff', '--cached', '--name-only'), 'README.md');
         return { stdout: 'Merged PR #7 with a merge commit, removed its branch.\n' };
       },
-      issueCloser: async () => {},
+      issueCommenter: async ({ model }) => { assert.equal(model, 'local-model'); },
     };
     if (skipReview) {
       const run = await runIssueWithSeats(42, args);
@@ -586,7 +606,7 @@ test('publication refuses a REVIEW.md changed after a passing reviewer without s
 test('a merged PR still receives an issue comment when publisher local cleanup fails', async (context) => {
   const options = fixture(context);
   let turns = 0;
-  let closed = false;
+  let commented = false;
   await assert.rejects(runBuiltinIssue(42, {
     ...options, config: llmConfig, publish: true, log: () => {},
     env: { ...options.env, ROSTER_API_KEY: 'test-only-key',
@@ -613,15 +633,16 @@ test('a merged PR still receives an issue comment when publisher local cleanup f
     publisher: async () => { throw Object.assign(new Error('publisher failed'), {
       stderr: 'PR #7 was merged; local cleanup is incomplete.',
     }); },
-    issueCloser: async ({ issue, pullNumber, runLine }) => {
+    issueCommenter: async ({ issue, pullNumber, model, runLine }) => {
       assert.equal(issue.number, 42);
       assert.equal(pullNumber, 7);
+      assert.equal(model, 'local-model');
       assert.match(runLine, /\|roster-42-coder\|issue-42$/);
-      closed = true;
+      commented = true;
     },
-  }), /PR #7 merged and issue closed, but local publisher cleanup failed/);
+  }), /PR #7 merged and issue commented, but local publisher cleanup failed/);
   assert.equal(turns, 3);
-  assert.equal(closed, true);
+  assert.equal(commented, true);
 });
 
 test('default planner/coder run preserves the task handoff while the coder edits only allowed code', async (context) => {

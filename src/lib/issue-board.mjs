@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { resolvePublishModel } from '../metrics/run.mjs';
 import { resolveContractsPath } from './paths.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -45,7 +46,14 @@ export function issueMergeMessage(subject, issueNumber) {
   if (typeof subject !== 'string' || !subject.trim() || subject.includes('\0')) {
     throw new TypeError('Publish subject must be nonempty text');
   }
-  return `${subject.trimEnd()}\n\nCloses #${number}`;
+  const closing = new RegExp(
+    `\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+(?:[A-Za-z0-9-]+/[A-Za-z0-9_.-]+)?#${number}(?!\\d)`,
+    'i',
+  );
+  if (closing.test(subject)) {
+    throw new Error(`Issue #${number} must remain open until human AI-Eval; use Refs #${number}, not a closing keyword`);
+  }
+  return `${subject.trimEnd()}\n\nRefs #${number}`;
 }
 
 export function mergedPullNumber(output) {
@@ -60,13 +68,14 @@ export function mergedPullNumberFromFailure(output) {
   return match ? positiveNumber(match[1], 'Merged PR number') : null;
 }
 
-export async function closeMergedIssue({
-  issue, pullNumber, runLine, repoRoot, cwd = process.cwd(),
+export async function commentMergedIssue({
+  issue, pullNumber, model, runLine, repoRoot, cwd = process.cwd(),
   env = process.env, fetchImpl = globalThis.fetch,
   git = execFileSync, readKey = readFileSync,
 } = {}) {
   const number = positiveNumber(issue?.number, 'Issue number');
   const pull = positiveNumber(pullNumber, 'Merged PR number');
+  const actualModel = resolvePublishModel({ env: { AI_MODEL: model } });
   if (typeof runLine !== 'undefined' &&
       (typeof runLine !== 'string' || !runLine || /[\r\n]/.test(runLine))) {
     throw new TypeError('AI-Run must be one nonempty line');
@@ -74,6 +83,10 @@ export async function closeMergedIssue({
   const contractsPath = resolveContractsPath({ repoRoot: rosterRoot, cwd, env });
   const sdk = await import(pathToFileURL(path.join(contractsPath, 'scripts', 'agent-pr.mjs')).href);
   const policyPack = await import(pathToFileURL(path.join(contractsPath, 'scripts', 'load-agent-policy.mjs')).href);
+  if (runLine) {
+    const { parseAgentRun } = await import(pathToFileURL(path.join(contractsPath, 'scripts', 'parse-agent-run.mjs')).href);
+    if (!parseAgentRun(runLine, actualModel)) throw new Error('Coder AI-Run must match the published model');
+  }
   const policy = policyPack.loadAgentPolicy({ cwd: repoRoot });
   policyPack.requireCapability(policy, 'coder', 'comment');
   policyPack.requireCapability(policy, 'merger', 'merge');
@@ -87,13 +100,13 @@ export async function closeMergedIssue({
     throw new Error('The issue does not belong to the publishing repository');
   }
   if (!env.GITHUB_APP_ID || !env.GITHUB_APP_PRIVATE_KEY_PATH) {
-    throw new Error('Issue closure requires GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH');
+    throw new Error('Issue comment requires GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH');
   }
   let key;
   try {
     key = readKey(path.resolve(cwd, env.GITHUB_APP_PRIVATE_KEY_PATH));
   } catch {
-    throw new Error('Could not load the App key for issue closure');
+    throw new Error('Could not load the App key for issue comment');
   }
   let jwt;
   try {
@@ -125,37 +138,32 @@ export async function closeMergedIssue({
         pr.head?.repo?.full_name?.toLowerCase() !== slug.toLowerCase() ||
         pr.base?.repo?.full_name?.toLowerCase() !== slug.toLowerCase() ||
         typeof pr.html_url !== 'string' ||
-        typeof pr.body !== 'string' || !pr.body.includes(`Closes #${number}`)) {
+        pr.html_url.toLowerCase() !== `https://github.com/${slug}/pull/${pull}`.toLowerCase() ||
+        typeof pr.body !== 'string' ||
+        !new RegExp(`(?:^|\\n)Refs #${number}(?:\\r?\\n|$)`).test(pr.body)) {
       throw new Error('PR was not confirmed merged for this issue; leaving the issue unchanged');
     }
-    const body = `Merged ${pr.html_url} for issue #${number}.` +
-      (runLine ? `\n\nAI-Run: ${runLine}` : '');
+    const current = await request(`${repoPath}/issues/${number}`, token, { fetchImpl });
+    if (current?.number !== number || current.state !== 'open') {
+      throw new Error('Issue must remain open for human AI-Eval; no comment was posted');
+    }
+    const body = `Merged ${pr.html_url} for issue #${number}.\n\nModel: ${actualModel}` +
+      (runLine ? `\nAI-Run: ${runLine}` : '') +
+      '\n\nIssue remains open for human AI-Eval.';
     const comment = await request(`${repoPath}/issues/${number}/comments`, token, {
       method: 'POST', body: { body }, fetchImpl,
     });
     if (!Number.isSafeInteger(comment?.id) || comment.id <= 0) {
       throw new Error('GitHub did not confirm the issue comment');
     }
-    const current = await request(`${repoPath}/issues/${number}`, token, { fetchImpl });
-    if (current?.number !== number || !['open', 'closed'].includes(current.state)) {
-      throw new Error('GitHub did not return the issue state after the merged PR');
-    }
-    if (current.state === 'open') {
-      const closed = await request(`${repoPath}/issues/${number}`, token, {
-        method: 'PATCH', body: { state: 'closed' }, fetchImpl,
-      });
-      if (closed?.number !== number || closed.state !== 'closed') {
-        throw new Error('GitHub did not confirm issue closure');
-      }
-    }
-    result = { issueNumber: number, pullNumber: pull, commentId: comment.id };
+    result = { issueNumber: number, pullNumber: pull, commentId: comment.id, issueState: 'open' };
   } catch (error) {
     failure = error;
   } finally {
     try {
       await request('/installation/token', token, { method: 'DELETE', fetchImpl });
     } catch (error) {
-      failure = new Error(`${failure?.message ?? 'Issue closure completed.'} App token revocation failed`, {
+      failure = new Error(`${failure?.message ?? 'Issue comment posted.'} App token revocation failed`, {
         cause: failure ?? error,
       });
     }

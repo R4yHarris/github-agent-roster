@@ -56,6 +56,22 @@ test('stub uses explicit acceptance checks and allowed paths, or a broad local d
   assert.throws(() => planStub(' '), /Ask must be nonempty/);
 });
 
+test('board metadata seeds the stub task and supplies defaults to an LLM plan', async () => {
+  const metadata = { task_class: 'fix', difficulty: 4, estimate_min: 35 };
+  const stub = planStub('Fix `README.md`.', { reference: 'issue:42', title: 'Fix README', metadata });
+  assert.match(stub.task, /difficulty: 4\nestimate_min: 35\ntask_class: fix\n/);
+  const planned = await planAsk('Fix `README.md`.', {
+    config: llmConfig, reference: 'issue:42', title: 'Fix README', metadata,
+    fetchImpl: async () => ({ status: 200, json: async () => ({
+      choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
+        title: 'Fix README', acceptance_checks: ['node --test exits 0'], files_allowed: ['README.md'],
+      }) } }],
+    }) }),
+    env: {},
+  });
+  assert.match(planned.task, /difficulty: 4\nestimate_min: 35\ntask_class: fix\n/);
+});
+
 test('planner accepts CRLF Ask templates while rejecting lone control characters', () => {
   const plan = planStub('Update README.md.\r\n\r\n## Acceptance checks\r\n- node --test exits 0\r\n');
   assert.match(plan.task, /## Ask\nUpdate README\.md\.\n\n## Acceptance checks/);

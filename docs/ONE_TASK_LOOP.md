@@ -12,7 +12,7 @@ is configured, the deterministic stub writes only the result summary and
 does **not** implement the ask or run tests. With an endpoint, the coder uses
 five guarded tools and must pass a final `node --test` run. A failed review
 keeps the work but suppresses the publish command. It prints an
-`agent-pr.mjs` command with an explicit `--model` and a `Closes #N` message for the issue worktree
+`agent-pr.mjs` command with an explicit `--model` and a `Refs #N` message for the issue worktree
 root; `--publish` opts into staging task-allowed
 changes and invoking the App SDK. Policy, workflows, and credentials are
 never staged by the coder seat.
@@ -65,13 +65,13 @@ for the worker **after editing inside the worktree and loading `.env` into
 its environment**:
 
 ```sh
-node "$GITHUB_AGENT_CONTRACTS/scripts/agent-pr.mjs" --message "<subject plus Model, Summary, how-to-test, and Closes #N>" --model "$AI_MODEL" --merge-when-green
+node "$GITHUB_AGENT_CONTRACTS/scripts/agent-pr.mjs" --message "<subject plus Model, Summary, how-to-test, and Refs #N>" --model "$AI_MODEL" --merge-when-green
 ```
 
 Set `GITHUB_AGENT_CONTRACTS` to the resolved contracts pack's absolute path in
 the worker environment, normally the initialized `vendor/github-agent-contracts`
 submodule; see [dependency resolution](DEPENDENCY.md). The generated message includes `## Model`, `## Summary`, test instructions,
-and `Closes #N`; update its summary to describe the changes actually reviewed.
+and `Refs #N`; update its summary to describe the changes actually reviewed.
 Model resolution is `config.llm.model`, then `AI_MODEL`, then `ROSTER_MODEL`.
 When none is set, preparation still succeeds but returns `nextCommand: null`
 and reports `set model`; it does not print a runnable model-free command.
@@ -82,9 +82,10 @@ prints the manual publishing command: it does not
 start a worker, merge, or open additional issues. A later explicit publish
 links the issue and requests merge only after the SDK verifies reviewed policy
 and required checks. The builtin publish path posts an App-authored comment
-with its coder AI-Run and closes the issue only after verifying the merged PR.
-The raw handoff command supplies the closing reference but does not run
-Roster's post-merge comment hook.
+with the verified PR URL, real model ID, and coder AI-Run while leaving the
+issue open for the human to close after AI-Eval. The raw handoff command
+supplies a non-closing reference but does not run Roster's post-merge
+comment hook.
 The builtin path reuses this issue lookup and assignment
 preparation, rendering `ASSIGNMENT.md` from the SDLC template, but sets the
 ignored `.env` session to `roster-N-coder` and records separate planner/coder

@@ -5,9 +5,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { loadConfig } from './config.mjs';
-import { githubRepository } from './issue.mjs';
+import { githubRepository, renderIssueBody } from './issue.mjs';
 import { ensureLocalPath } from './paths.mjs';
-import { cleanAskText, planAsk, renderAsk } from '../planner/stub.mjs';
+import { cleanAskText, planAsk } from '../planner/stub.mjs';
+import { readTaskMetadata } from '../runtime/estimate.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
 const execFileAsync = promisify(execFile);
@@ -41,7 +42,9 @@ export async function writeAsk(ask, {
   await fs.mkdir(directory, { recursive: true });
   await fs.mkdir(draft);
   await ensureLocalPath(draft, repoRoot);
-  await fs.writeFile(askPath, renderAsk(ask), { encoding: 'utf8', flag: 'wx' });
+  await fs.writeFile(askPath, renderIssueBody(ask, readTaskMetadata(plan.task)), {
+    encoding: 'utf8', flag: 'wx',
+  });
   await fs.writeFile(recipePath, plan.recipe, { encoding: 'utf8', flag: 'wx' });
   await fs.writeFile(taskPath, plan.task, { encoding: 'utf8', flag: 'wx' });
   return { id, askPath, recipePath, taskPath, usage: plan.usage };
@@ -60,6 +63,7 @@ export async function submitAsk(ask, {
   const text = cleanAskText(ask);
   const title = text.split('\n')[0];
   if (title.length > 240) throw new TypeError('Issue title must be at most 240 characters');
+  const body = renderIssueBody(text);
   const commandEnv = { ...env, GH_PROMPT_DISABLED: '1' };
   try {
     await runCommand('gh', ['--version'], cwd, commandEnv);
@@ -82,7 +86,7 @@ export async function submitAsk(ask, {
   let response;
   try {
     response = await runCommand('gh', [
-      'issue', 'create', '--repo', repository, '--title', title, '--body', text,
+      'issue', 'create', '--repo', repository, '--title', title, '--body', body,
     ], cwd, commandEnv);
   } catch (error) {
     throw new Error(`gh issue create failed: ${error.message}`, { cause: error });

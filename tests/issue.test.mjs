@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import test from 'node:test';
-import { runIssue } from '../src/lib/issue.mjs';
+import { parseIssueBody, renderIssueBody, runIssue } from '../src/lib/issue.mjs';
 import { buildPublishMessage, formatPublishCommand } from '../src/lib/publication.mjs';
 
 const repoRoot = path.resolve('example-repository');
@@ -86,6 +86,8 @@ ${issue.body}
   ]);
   assert.deepEqual(result, {
     issue,
+    ask: issue.body,
+    metadata: null,
     repoRoot,
     worktreePath,
     assignmentPath: path.join(worktreePath, 'ASSIGNMENT.md'),
@@ -97,6 +99,40 @@ ${issue.body}
   assert.equal(messages.length, 1);
   assert.match(messages[0], /After editing inside the worktree, load \.env/);
   assert.ok(messages[0].endsWith(nextCommand));
+});
+
+test('issue metadata round-trips without leaking the metadata section into the planner Ask', async () => {
+  const ask = 'fix(cli): Update README.md.\n\n## Acceptance checks\n- node --test exits 0\n';
+  const body = renderIssueBody(ask, { task_class: 'fix', difficulty: 5, estimate_min: 30 });
+  assert.equal(body, '# Ask\n\nfix(cli): Update README.md.\n\n## Acceptance checks\n' +
+    '- node --test exits 0\n\n## Task metadata\n\ntask_class: fix\ndifficulty: 5\nestimate_min: 30\n');
+  assert.deepEqual(parseIssueBody(body), {
+    ask: ask.trim(), metadata: { task_class: 'fix', difficulty: 5, estimate_min: 30 },
+  });
+  const structured = { ...issue, body };
+  const { options, writes } = harness(structured);
+  const result = await runIssue(42, options);
+  assert.deepEqual({ ask: result.ask, metadata: result.metadata }, parseIssueBody(body));
+  assert.match(writes.find(({ file }) => file?.endsWith('ASSIGNMENT.md')).content, /## Task metadata/);
+});
+
+test('invalid or ambiguous issue metadata fails before creating a worktree', async () => {
+  const valid = renderIssueBody('Fix README.md.', {
+    task_class: 'fix', difficulty: 4, estimate_min: 15,
+  });
+  for (const body of [
+    valid.replace('difficulty: 4', 'difficulty: 6'),
+    valid.replace('estimate_min: 15', 'estimate_min: 9007199254740993'),
+    `${valid}## Task metadata\n\ntask_class: fix\n`,
+    valid.replace('task_class: fix', 'task_class: unknown'),
+  ]) {
+    const { options, calls, writes } = harness({ ...issue, body });
+    await assert.rejects(runIssue(42, options), /Task metadata|estimate_min/);
+    assert.deepEqual(calls.map(({ program }) => program), ['git', 'git', 'gh']);
+    assert.deepEqual(writes, []);
+  }
+  assert.throws(() => renderIssueBody('Fix README.\n\n## Task metadata\n\nfake'),
+    /reserved Task metadata/);
 });
 
 test('manual preparation omits a runnable publication command until a model is set', async () => {

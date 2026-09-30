@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { submitAsk } from './lib/ask.mjs';
 import { prepareBuiltinPublication, runBuiltinIssue } from './lib/builtin.mjs';
 import {
-  closeMergedIssue, mergedPullNumber, mergedPullNumberFromFailure,
+  commentMergedIssue, mergedPullNumber, mergedPullNumberFromFailure,
 } from './lib/issue-board.mjs';
 import { loadConfig, setConfigValue } from './lib/config.mjs';
 import { parseEvaluationArgs, recordEvaluation } from './lib/eval.mjs';
@@ -79,7 +79,7 @@ const defaultServices = {
   summarizeMetrics, formatMetrics, recommend, formatRecommendation,
   resolveContractsPath, prepareBuiltinPublication, createFileVault,
   validateSecretName, readStatus, formatStatus, setConfigValue,
-  issueCloser: closeMergedIssue,
+  issueCommenter: commentMergedIssue,
   publisher: publishWithContracts,
 };
 
@@ -256,14 +256,14 @@ export function createDispatcher({
             ? `planner, coder, reviewer (${skipReview ? 'gate bypassed with --skip-review' : 'pass'})`
             : undefined,
         });
-        const finishIssue = async (pullNumber) => {
+        const commentOnIssue = async (pullNumber) => {
           state.published = true;
-          await api.issueCloser({
-            issue: state.lastRun.issue, pullNumber,
+          await api.issueCommenter({
+            issue: state.lastRun.issue, pullNumber, model,
             runLine: state.lastRun.runs?.coder?.line,
             repoRoot: state.lastRun.repoRoot, cwd, env,
           });
-          output.write(`Commented on and closed issue #${state.lastRun.issue.number}.\n`);
+          output.write(`Commented on issue #${state.lastRun.issue.number}; left it open for human AI-Eval.\n`);
         };
         let publication;
         try {
@@ -274,7 +274,7 @@ export function createDispatcher({
         } catch (error) {
           if (state.lastRun && Number.isSafeInteger(error.mergedPullRequest) &&
               error.mergedPullRequest > 0) {
-            await finishIssue(error.mergedPullRequest);
+            await commentOnIssue(error.mergedPullRequest);
           }
           throw error;
         }
@@ -282,7 +282,7 @@ export function createDispatcher({
           if (!Number.isSafeInteger(publication?.mergedPullRequest) || publication.mergedPullRequest <= 0) {
             throw new Error('Publisher did not confirm a merged PR; issue remains open');
           }
-          await finishIssue(publication.mergedPullRequest);
+          await commentOnIssue(publication.mergedPullRequest);
         } else state.published = true;
         return true;
       }
