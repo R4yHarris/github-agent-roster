@@ -49,7 +49,7 @@ test('records backend provenance while packing only contracts-supported AI-Run p
   assert.throws(() => buildRun({ config, env: { AI_PROVIDER: 'invalid' } }), /AI_PROVIDER/);
   assert.equal(buildPublishEnv({
     config: parseConfig(example), env: { AI_MODEL: 'served-model', AI_PROVIDER: 'vllm' },
-  }).AI_PROVIDER, 'local');
+  }).AI_PROVIDER, 'github-copilot');
 });
 
 test('configured provider wins over inherited Copilot metadata while vLLM remains contracts-compatible', () => {
@@ -92,22 +92,25 @@ test('publication refuses absent and unknown models instead of clearing metadata
   }
 });
 
-test('publication uses config, AI_MODEL, then ROSTER_MODEL without forwarding stale usage or API keys', () => {
-  for (const [configured, sessionModel] of [[true, 'GPT-6-Sol'], [false, 'GPT-6-Sol'], [false, '']]) {
+test('GHCP publication uses AI_MODEL rather than configured or environment served models', () => {
+  for (const configured of [true, false]) {
     const env = buildPublishEnv({
       config: configured ? config : parseConfig(example),
-      env: { ROSTER_MODEL: 'served-model', AI_MODEL: sessionModel, AI_PROVIDER: 'github-copilot',
+      env: { ROSTER_MODEL: 'served-model', AI_MODEL: 'GPT-6-Sol', AI_PROVIDER: 'local',
         AI_MODEL_VERSION: 'v2', AI_EFFORT: 'x', AI_CONTEXT_OUT: '999',
         AI_SESSION: 'roster-42-coder', AI_TASK: 'issue-42', ROSTER_API_KEY: 'private-value' },
     });
-    assert.equal(env.AI_MODEL, configured ? 'owner/model' : sessionModel || 'served-model');
-    assert.equal(env.AI_MODEL_VERSION, 'v2');
+    assert.equal(env.AI_MODEL, 'GPT-6-Sol');
+    assert.equal(env.AI_MODEL_VERSION, '-');
     assert.equal(env.AI_PROVIDER, 'github-copilot');
-    assert.equal(env.AI_EFFORT, 'm');
+    assert.equal(env.AI_EFFORT, 'x');
     assert.equal(env.AI_CONTEXT_OUT, undefined);
     assert.equal(env.ROSTER_API_KEY, undefined);
-    assert.equal(parseAgentRun(packAgentRun(env)).session, 'roster-42-coder');
+    assert.match(parseAgentRun(packAgentRun(env)).session, /^ghcp-\d+$/);
   }
+  assert.throws(() => buildPublishEnv({
+    config, env: { ROSTER_MODEL: 'served-model' },
+  }), /GHCP publication requires --model or AI_MODEL/);
 });
 
 test('publication keeps the completed coder model even if config changes later', () => {
@@ -117,12 +120,12 @@ test('publication keeps the completed coder model even if config changes later',
   });
   assert.equal(env.AI_MODEL, 'owner/model');
   assert.equal(env.AI_CONTEXT_OUT, '3');
-  assert.deepEqual(buildPublishEnv({ config, env: {}, run: null }), { AI_MODEL: 'owner/model' });
+  assert.throws(() => buildPublishEnv({ config, env: {}, run: null }), /set model/);
 });
 
 test('publication excludes API keys for other configured profiles when a fleet route changes endpoints', () => {
   const env = buildPublishEnv({
-    config, env: { ROSTER_API_KEY: 'local-test-key', OPENAI_API_KEY: 'unused-hosted-test-key',
+    config, env: { AI_MODEL: 'GPT-6.1-Sol', ROSTER_API_KEY: 'local-test-key', OPENAI_API_KEY: 'unused-hosted-test-key',
       GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'external-key.pem' },
   });
   assert.equal(env.ROSTER_API_KEY, undefined);
@@ -205,7 +208,8 @@ test('only GHCP publication with no completed run may retain declared session ca
   assert.equal(publication.AI_CONTEXT_USED, undefined);
   assert.equal(publication.AI_CONTEXT_OUT, undefined);
   const local = buildPublishEnv({ config: parseConfig(example), env: { ...env, AI_PROVIDER: 'local' } });
-  assert.equal(local.AI_CONTEXT_MAX, undefined);
+  assert.equal(local.AI_PROVIDER, 'github-copilot');
+  assert.equal(local.AI_CONTEXT_MAX, '1000000');
   assert.throws(() => buildPublishEnv({
     config: parseConfig(example), env: { ...env, AI_CONTEXT_MAX: 'unknown' },
   }), /GHCP-only AI_CONTEXT_MAX/);

@@ -13,12 +13,14 @@ import { parseRecommendationArgs, repositoryRoot } from './lib/learn.mjs';
 import { formatMetrics, loadAvailableMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
 import { resolveContractsPath, resolveProjectRoot } from './lib/paths.mjs';
 import { formatRoute, routeTask } from './lib/route.mjs';
-import { buildPublishMessage, formatPublishCommand } from './lib/publication.mjs';
+import {
+  buildPublishMessage, formatPublishCommand, formatPublishEnvironment, parsePublishArgs, publicationTask,
+} from './lib/publication.mjs';
 import { redactEvidence } from './runtime/excellence.mjs';
 import { requirePassingReview } from './seats/reviewer.mjs';
 import { formatStatus, readStatus } from './lib/status.mjs';
 import { createFileVault, validateSecretName } from './vault/file.mjs';
-import { buildPublishEnv } from './metrics/run.mjs';
+import { buildPublishEnv, resolvePublishModel } from './metrics/run.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const help = `Commands:
@@ -28,7 +30,7 @@ const help = `Commands:
   /run N [--auto-model]     Run builtin seats, optionally routing from human evaluations
   /status [N] [--offline]   Show an issue, open PR, and local worktree
   /eval TARGET VERDICT 1-5 y|n [--minutes N] [--comment "TEXT"]
-  /publish [SUBJECT] [--skip-review]  Publish passing REVIEW.md or explicitly bypass
+  /publish [SUBJECT] [--model MODEL] [--skip-review]  Publish reviewed seat or GHCP changes
   /stats [REF]              Show AI-Run metrics
   /recommend feat|fix|docs|test [--difficulty 1-5]
   /vault [list]             List secret names
@@ -80,6 +82,7 @@ const defaultServices = {
   summarizeMetrics, formatMetrics, loadAvailableMetrics, routeTask, formatRoute,
   resolveContractsPath, prepareBuiltinPublication, createFileVault,
   validateSecretName, readStatus, formatStatus, setConfigValue,
+  publicationTask,
   issueCommenter: commentMergedIssue,
   publisher: publishWithContracts,
 };
@@ -201,11 +204,10 @@ export function createDispatcher({
         if (state.lastRun && state.published) {
           throw new Error('This run was already published; start another /run before publishing again.');
         }
-        const skipReview = args === '--skip-review' || args.endsWith(' --skip-review');
+        const { skipReview, subject: requestedSubject, model: requestedModel } = parsePublishArgs(args);
         const reviewBypass = skipReview || !isReviewRequired(state.config);
         const reviewLabel = skipReview ? 'gate bypassed with --skip-review'
           : !isReviewRequired(state.config) ? 'gate not required by configuration' : 'pass';
-        const requestedSubject = skipReview ? args.slice(0, -'--skip-review'.length).trim() : args;
         const subject = requestedSubject || (state.lastRun ? `feat: issue ${state.lastRun.issue.number}` : null);
         if (subject !== null) conventionalSubject(subject);
         const appId = Boolean(env.GITHUB_APP_ID);
@@ -215,8 +217,12 @@ export function createDispatcher({
         }
         await requirePassingReview(state.lastRun, reviewBypass);
         if (!appId) {
+          const ghcp = !state.lastRun?.runs?.coder;
+          if (ghcp) resolvePublishModel({ env, model: requestedModel, ghcp: true });
           const publishEnv = buildPublishEnv({
             config: state.config, env, run: state.lastRun?.runs?.coder,
+            model: requestedModel, task: ghcp
+              ? api.publicationTask({ cwd: currentRoot(), env, task: state.lastRun?.task }) : undefined,
           });
           const message = buildPublishMessage({
             subject: subject ?? '<conventional subject>', model: publishEnv.AI_MODEL,
@@ -228,9 +234,11 @@ export function createDispatcher({
             seats: state.lastRun
               ? `planner, coder, reviewer (${reviewLabel})`
               : undefined,
+            ghcp,
           });
           api.resolveContractsPath({ repoRoot, cwd, env });
           output.write(`From ${state.lastRun?.worktreePath ?? currentRoot()}, publish reviewed changes:\n` +
+            `Set these metadata values (empty values clear inherited fields):\n${formatPublishEnvironment(publishEnv)}` +
             `${formatPublishCommand({ message, model: publishEnv.AI_MODEL })}\n`);
           return true;
         }
@@ -244,9 +252,11 @@ export function createDispatcher({
               cwd, config: state.config, env, skipReview,
             }));
         } else {
+          resolvePublishModel({ env, model: requestedModel, ghcp: true });
           publishRoot = currentRoot();
           contractsPath = api.resolveContractsPath({ repoRoot: publishRoot, cwd, env });
-          publishEnv = buildPublishEnv({ config: state.config, env });
+          publishEnv = buildPublishEnv({ config: state.config, env, model: requestedModel,
+            task: api.publicationTask({ cwd: publishRoot, env }) });
           publishEnv.GITHUB_APP_PRIVATE_KEY_PATH = resolve(cwd, env.GITHUB_APP_PRIVATE_KEY_PATH);
         }
         const model = publishEnv.AI_MODEL;
@@ -260,6 +270,7 @@ export function createDispatcher({
           seats: state.lastRun
             ? `planner, coder, reviewer (${reviewLabel})`
             : undefined,
+          ghcp: !state.lastRun,
         });
         const commentOnIssue = async (pullNumber) => {
           state.published = true;

@@ -513,6 +513,23 @@ test('successful roster run appends one record after assignment setup, never a h
     `AI_TASK=issue-42\nAI_SESSION=${result.session}\n`);
 });
 
+test('manual GHCP preparation journals declared attribution without stale used/output counts', async (t) => {
+  const cwd = fixture(t, { learning: false });
+  mkdirSync(join(cwd, '.roster', 'runs'), { recursive: true });
+  const { options } = issueHarness(cwd, {
+    config: parseConfig(readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8')
+      .replace('model: ""', 'model: unrelated-served-model')),
+    env: { AI_MODEL: 'GPT-6.1-Sol', AI_PROVIDER: 'local', AI_EFFORT: 'max',
+      AI_CONTEXT_MAX: '1000000', AI_CONTEXT_USED: '1000000', AI_CONTEXT_OUT: '999' },
+  });
+  const result = await runIssue('42', options);
+  assert.deepEqual(loadLearning({ cwd }).runs, [{
+    session: result.session, task: 'issue-42', task_class: 'fix',
+    model: 'GPT-6.1-Sol', provider: 'github-copilot', effort: 'x', context_max: 1000000,
+  }]);
+  assert.match(result.nextCommand, /--model GPT-6\.1-Sol --merge-when-green/);
+});
+
 test('failed roster setup does not append a run or evaluation', async (t) => {
   const cwd = fixture(t, { learning: false });
   mkdirSync(join(cwd, '.roster', 'runs'), { recursive: true });

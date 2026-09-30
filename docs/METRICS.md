@@ -40,13 +40,38 @@ fallback. The empty-URL stub emits no AI-Run and cannot publish code.
 ### GHCP-only attribution
 
 Hardcoded Copilot session settings apply only to GHCP-authored commits with
-no Roster seat run and no vLLM call. For those publications, model selection
-remains config, then `AI_MODEL`, then `ROSTER_MODEL`; for example, this GHCP
-agent declares `AI_MODEL=GPT-6.1-Sol` and `AI_PROVIDER=github-copilot`.
+no completed Roster seat run in this process. [`buildGhcpRun`](../src/metrics/run.mjs)
+requires `AI_MODEL` or an explicit publication `--model`; it never substitutes
+the configured served model or `ROSTER_MODEL`. It always sets
+`AI_PROVIDER=github-copilot` and version `-`, even if a vLLM or cloud profile
+is configured for a later run. Effort comes only from `AI_EFFORT` (including
+`max` -> `x`); unknown effort stays `-`. This Max session declares
+`AI_MODEL=GPT-6.1-Sol` and `AI_EFFORT=x`.
 An explicitly declared positive `AI_CONTEXT_MAX` can describe that session's
 capacity only when there is no completed run object. It is never a measured
 used-token count. Inherited `AI_CONTEXT_USED` and `AI_CONTEXT_OUT` are cleared.
-These declarations must not be applied to vLLM seat runs.
+Thus GHCP input/output are always `-`: `-/1000000` when that capacity is
+declared, otherwise `-/-`; output stays `-`. Wrappers generate a `ghcp-<pid>`
+session unless a GHCP session is explicitly declared, and use the issue ID,
+explicit `AI_TASK`, or current branch slug as task.
+REPL `/publish ... --model MODEL` can declare the Copilot model without changing
+the served model. A completed seat object takes precedence over even that flag.
+Manual handoffs print every metadata variable, including empty values that
+clear inherited fields. See both blocks in [`.env.example`](../.env.example).
+
+| Field | GHCP (no completed seat) | vLLM seat | Cloud OpenAI-profile seat |
+| --- | --- | --- | --- |
+| Provider in AI-Run | `github-copilot` | `local` (`vllm` in journal) | `openai` |
+| Model | Explicit `--model` or `AI_MODEL` | Last response model, otherwise request model | Last response model, otherwise API request model |
+| Version | `-` | `-` when unknown | `-` when unknown |
+| Effort | `AI_EFFORT`; `x` for declared Max | Seat configuration | Seat configuration |
+| Input / output | `-` / `-`, never inherited counts | Last `usage.prompt_tokens` / `usage.completion_tokens` | Last `usage.prompt_tokens` / `usage.completion_tokens` |
+| Maximum context | Declared `AI_CONTEXT_MAX`, otherwise `-` | Fleet/config `context_max`, otherwise `-` | Fleet/config `context_max`, otherwise `-` |
+| Session | `ghcp-<date-or-pid>` | `roster-<issue>-<seat>` | `roster-<issue>-<seat>` |
+| Task | Branch slug or issue ID | Issue ID | Issue ID |
+
+Missing seat usage is omitted, not replaced with the GHCP path. Publication
+uses the same compact schema for all three sources; identity remains the App.
 
 The pinned contracts `v0.2.1` schema does **not** accept `AI_PROVIDER=vllm`.
 Roster encodes vLLM as its supported `local` provider (`openai` for the explicit

@@ -72,13 +72,17 @@ Set `GITHUB_AGENT_CONTRACTS` to the resolved contracts pack's absolute path in
 the worker environment, normally the initialized `vendor/github-agent-contracts`
 submodule; see [dependency resolution](DEPENDENCY.md). The generated message includes `## Model`, `## Summary`, test instructions,
 and `Refs #N`; update its summary to describe the changes actually reviewed.
-Model resolution is `config.llm.model`, then `AI_MODEL`, then `ROSTER_MODEL`.
-When none is set, preparation still succeeds but returns `nextCommand: null`
+Without a completed seat, manual GHCP publication requires `AI_MODEL`, uses
+`github-copilot`, and leaves used/out unknown. A completed builtin seat instead
+supplies its own actual model and reported usage.
+When the GHCP model is not set, preparation still succeeds but returns `nextCommand: null`
 and reports `set model`; it does not print a runnable model-free command.
 Printed commands use the caller platform's shell quoting and environment
 variable syntax, including PowerShell on Windows.
 The explicit agent example above is for this Copilot session; generated
-commands use the configured worker's actual model.
+manual handoffs use the declared GHCP model; completed builtin handoffs use
+the response-backed worker model. Apply the printed metadata assignments after
+loading `.env` so unknown GHCP counts clear stale worker fields.
 `roster prepare --issue N` only prepares a coder handoff and
 prints the manual publishing command: it does not
 start a worker, merge, or open additional issues. A later explicit publish

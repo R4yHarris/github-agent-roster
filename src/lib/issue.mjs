@@ -4,8 +4,8 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { IDENTIFIER, inferTaskClass, recordRun } from './learn.mjs';
 import { loadConfig } from './config.mjs';
-import { buildPublishMessage, formatPublishCommand } from './publication.mjs';
-import { resolvePublishModel } from '../metrics/run.mjs';
+import { buildPublishMessage, formatPublishCommand, formatPublishEnvironment } from './publication.mjs';
+import { buildPublishEnv } from '../metrics/run.mjs';
 import { cleanAskText, renderAssignment } from '../planner/stub.mjs';
 import { estimateTask } from '../runtime/estimate.mjs';
 
@@ -156,12 +156,13 @@ export async function runIssue(issueNumber, {
   const assignmentPath = path.join(worktreePath, 'ASSIGNMENT.md');
   const envPath = path.join(worktreePath, '.env');
   const session = sessionId ?? `roster-${now().toISOString().replace(/[-:.]/g, '')}`;
-  const model = config.publish?.enabled !== false && (config.llm.model || env.AI_MODEL || env.ROSTER_MODEL)
-    ? resolvePublishModel({ config, env }) : null;
+  const publishEnv = recordPreparation && config.publish?.enabled !== false && env.AI_MODEL
+    ? buildPublishEnv({ config, env, task }) : null;
+  const model = publishEnv?.AI_MODEL;
   const nextCommand = model ? formatPublishCommand({
     model,
     message: buildPublishMessage({
-      subject: `feat: issue ${number}`, model, summary: issue.title, issueNumber: number,
+      subject: `feat: issue ${number}`, model, summary: issue.title, issueNumber: number, ghcp: true,
     }),
     script: process.platform === 'win32'
       ? '"$env:GITHUB_AGENT_CONTRACTS\\scripts\\agent-pr.mjs"'
@@ -187,7 +188,7 @@ export async function runIssue(issueNumber, {
   if (recordPreparation) {
     try {
       await recordRun({ session, task, task_class: metadata?.task_class ?? inferTaskClass(issue.title) }, {
-        cwd: repoRoot, env, fileSystem,
+        cwd: repoRoot, env: publishEnv ?? env, fileSystem,
       });
     } catch (error) {
       throw new Error(`Worktree ${worktreePath} was prepared but run recording failed: ${error.message}`, { cause: error });
@@ -198,9 +199,11 @@ export async function runIssue(issueNumber, {
 Assignment: ${assignmentPath}
 Environment: ${envPath}
 After editing inside the worktree, load .env into the worker environment and run:
+${publishEnv ? `For GHCP publication, apply these values after loading .env (empty clears inherited fields):\n` +
+  formatPublishEnvironment(publishEnv) : ''}
 ${nextCommand ?? (config.publish?.enabled === false
   ? 'Publication unavailable: publishing is disabled by publish.enabled.'
-  : 'Publication unavailable: set model in llm.model, AI_MODEL, or ROSTER_MODEL before publishing.')}`);
+  : 'Publication unavailable: set model in AI_MODEL for GHCP, or complete a measured roster run.')}`);
 
   return { issue, ask, metadata, repoRoot, worktreePath, assignmentPath, envPath, task, session, nextCommand };
 }

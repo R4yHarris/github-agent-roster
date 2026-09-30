@@ -20,7 +20,7 @@ import {
 import { IDENTIFIER, inferTaskClass, recordRun } from './learn.mjs';
 import { loadMetrics } from './metrics.mjs';
 import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
-import { buildPublishMessage, formatPublishCommand } from './publication.mjs';
+import { buildPublishMessage, formatPublishCommand, formatPublishEnvironment } from './publication.mjs';
 import { formatRoute, routeTask } from './route.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -350,7 +350,7 @@ export async function runBuiltinIssue(issueNumber, {
     `Coder session: ${sessions.coder}\n` +
     (coderRun ? `AI-Run: ${coderRun.line}\n` +
       `For manual publication, set these variables (empty values clear inherited fields):\n` +
-      RUN_ENV_NAMES.map((name) => `${name}=${coderRun.env[name] ?? ''}\n`).join('')
+      formatPublishEnvironment(coderRun.env)
       : 'Stub run: no AI-Run metadata and no code to publish.\n') +
     `Reviewer session: ${sessions.reviewer}\n` +
     (reviewerRun ? `AI-Run: ${reviewerRun.line}\n` : '') +

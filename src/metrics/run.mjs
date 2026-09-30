@@ -11,12 +11,23 @@ function isModelId(model) {
     !/^(unknown|none|n\/a|unspecified)$/i.test(model);
 }
 
-export function resolvePublishModel({ config, env = process.env } = {}) {
-  const model = config?.llm?.model || env.AI_MODEL || env.ROSTER_MODEL;
-  if (!isModelId(model)) {
-    throw new TypeError('set model: configure llm.model, AI_MODEL, or ROSTER_MODEL with the actual model id (not unknown)');
+export function resolvePublishModel({ config, env = process.env, model, ghcp = false } = {}) {
+  const selected = ghcp ? model ?? env.AI_MODEL : config?.llm?.model || env.AI_MODEL || env.ROSTER_MODEL;
+  if (!isModelId(selected)) {
+    throw new TypeError(ghcp
+      ? 'set model: GHCP publication requires --model or AI_MODEL with the actual model id (not unknown)'
+      : 'set model: configure llm.model, AI_MODEL, or ROSTER_MODEL with the actual model id (not unknown)');
   }
-  return model;
+  return selected;
+}
+
+export function normalizeRunEffort(value) {
+  if (value === undefined || value === '') return '-';
+  const aliases = { low: 'l', medium: 'm', high: 'h', max: 'x', l: 'l', m: 'm', h: 'h', x: 'x', '-': '-' };
+  if (typeof value !== 'string' || !Object.hasOwn(aliases, value)) {
+    throw new TypeError('AI_EFFORT must be l, m, h, x, low, medium, high, or max');
+  }
+  return aliases[value];
 }
 
 export function mergeUsage(...samples) {
@@ -64,7 +75,8 @@ export function materializeRun(metrics, version = '-') {
       typeof version !== 'string' || !/^[A-Za-z0-9._-]+$/.test(version) ||
       !['l', 'm', 'h', 'x', '-'].includes(metrics.effort) ||
       (metrics.context_max !== undefined &&
-        (!Number.isSafeInteger(metrics.context_max) || metrics.context_max <= 0))) {
+        !(Number.isSafeInteger(metrics.context_max) && metrics.context_max > 0 ||
+          typeof metrics.context_max === 'string' && /^[1-9]\d*$/.test(metrics.context_max)))) {
     throw new TypeError('Invalid LLM model, version, effort, or context_max for AI-Run; unknown is not a model');
   }
   const counts = mergeUsage(metrics);
@@ -127,30 +139,38 @@ export function buildRun({ config, usage = {}, response, session, task, env = pr
   }, live ? '-' : env.AI_MODEL_VERSION || '-');
 }
 
-export function buildPublishEnv({ config, env = process.env, run }) {
-  requirePublicationEnabled(config);
-  const measured = run?.metrics ? materializeRun(run.metrics, run.version) : run;
-  const activeConfig = measured?.env?.AI_MODEL
-    ? { ...config, llm: { ...config.llm, model: measured.env.AI_MODEL } } : config;
-  const model = resolvePublishModel({ config: activeConfig, env });
-  const publishEnv = withoutLlmKeys(env, config);
-  for (const name of RUN_ENV_NAMES) delete publishEnv[name];
-  const metadata = run === undefined
-    ? buildRun({
-      config: { ...activeConfig, llm: { ...activeConfig.llm, model } },
-      env, session: env.AI_SESSION, task: env.AI_TASK,
-    }) : measured;
-  Object.assign(publishEnv, metadata?.env);
-  if (run === undefined && !config.llm.provider && !config.llm.model && env.AI_MODEL && env.AI_PROVIDER) {
-    publishEnv.AI_PROVIDER = env.AI_PROVIDER === 'vllm' ? 'local' : env.AI_PROVIDER;
+export function buildGhcpRun({ env = process.env, model, session, task } = {}) {
+  const actualModel = resolvePublishModel({ env, model, ghcp: true });
+  const effort = normalizeRunEffort(env.AI_EFFORT);
+  const identity = session ?? (typeof env.AI_SESSION === 'string' && env.AI_SESSION.startsWith('ghcp-')
+    ? env.AI_SESSION : `ghcp-${process.pid}`);
+  if (typeof identity !== 'string' || !/^ghcp-[A-Za-z0-9._-]+$/.test(identity)) {
+    throw new TypeError('GHCP AI_SESSION must use a ghcp- date or process identifier');
   }
-  publishEnv.AI_MODEL = model;
-  if (run === undefined && publishEnv.AI_PROVIDER === 'github-copilot' &&
-      env.AI_CONTEXT_MAX !== undefined && env.AI_CONTEXT_MAX !== '') {
+  let capacity;
+  if (env.AI_CONTEXT_MAX !== undefined && env.AI_CONTEXT_MAX !== '' && env.AI_CONTEXT_MAX !== '-') {
     if (typeof env.AI_CONTEXT_MAX !== 'string' || !/^[1-9]\d*$/.test(env.AI_CONTEXT_MAX)) {
       throw new TypeError('GHCP-only AI_CONTEXT_MAX must be a positive decimal integer');
     }
-    publishEnv.AI_CONTEXT_MAX = env.AI_CONTEXT_MAX;
+    const count = Number(env.AI_CONTEXT_MAX);
+    capacity = Number.isSafeInteger(count) ? count : env.AI_CONTEXT_MAX;
   }
+  const taskId = task ?? env.AI_TASK;
+  return materializeRun({
+    provider: 'github-copilot', model: actualModel, effort, session: identity,
+    ...(capacity === undefined ? {} : { context_max: capacity }),
+    ...(taskId === undefined || taskId === '' ? {} : { task: taskId }),
+  });
+}
+
+export function buildPublishEnv({ config, env = process.env, run, model, session, task }) {
+  requirePublicationEnabled(config);
+  const metadata = run?.metrics ? materializeRun(run.metrics, run.version)
+    : run ?? buildGhcpRun({ env, model, session, task });
+  const actualModel = resolvePublishModel({ env: { AI_MODEL: metadata.env?.AI_MODEL } });
+  const publishEnv = withoutLlmKeys(env, config);
+  for (const name of RUN_ENV_NAMES) delete publishEnv[name];
+  Object.assign(publishEnv, metadata.env);
+  publishEnv.AI_MODEL = actualModel;
   return publishEnv;
 }

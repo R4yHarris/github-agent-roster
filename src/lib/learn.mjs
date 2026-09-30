@@ -3,7 +3,7 @@ import { promises as fs, readFileSync, readdirSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
-import { materializeRun } from '../metrics/run.mjs';
+import { materializeRun, normalizeRunEffort } from '../metrics/run.mjs';
 
 export const EFFORTS = ['l', 'm', 'h', 'x'];
 export const TASK_CLASSES = ['feat', 'fix', 'docs', 'test'];
@@ -181,14 +181,8 @@ export async function appendJsonl(file, record, validate, fileSystem = fs) {
 
 function partialRunMetadata(env) {
   const metadata = {};
-  const effort = env.AI_EFFORT;
-  if (effort !== undefined && effort !== '' && effort !== '-') {
-    const aliases = { low: 'l', medium: 'm', high: 'h', max: 'x' };
-    if (typeof effort !== 'string' || (!EFFORTS.includes(effort) && !Object.hasOwn(aliases, effort))) {
-      throw new TypeError('AI_EFFORT must be l, m, h, x, low, medium, high, or max');
-    }
-    metadata.effort = Object.hasOwn(aliases, effort) ? aliases[effort] : effort;
-  }
+  const effort = normalizeRunEffort(env.AI_EFFORT);
+  if (effort !== '-') metadata.effort = effort;
   for (const [name, field] of [
     ['AI_CONTEXT_USED', 'context_used'], ['AI_CONTEXT_MAX', 'context_max'], ['AI_CONTEXT_OUT', 'context_out'],
   ]) {
