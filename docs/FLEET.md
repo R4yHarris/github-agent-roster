@@ -56,3 +56,37 @@ unknown capacity; other catalog profiles require a positive context limit.
 No capacity is guessed from a model name. Config and fleet are prepared
 before replacement and saved together with rollback on write failure.
 Declining Continue or final confirmation writes neither file.
+
+## Fleet CLI
+
+```sh
+roster fleet list
+roster fleet add --id sample --base-url https://gpu.example.invalid/v1 --model fictional/coder --context 32768 --concurrency 2 --hardware fictional-gpu --task-class feat,fix
+roster fleet probe sample
+roster fleet probe sample --set-model fictional/new-coder
+roster fleet default sample
+roster fleet remove sample
+```
+
+Replace fictional endpoints and models with actual reachable values.
+`add` GETs `/models`, prints the served IDs, and requires a model in that
+inventory. In a TTY, omitting `--model` asks for a selection (first served
+ID by default); omitting `--context` asks for a positive token limit.
+Non-TTY add requires `--id`, `--base-url`, `--model`, and `--context`, so
+there is no prompt or capacity guess. Concurrency defaults 1, hardware
+defaults `unspecified`, and task-class hints are optional. Duplicate IDs
+and invalid inputs are refused without overwriting registered profiles.
+
+`probe ID` prints the current inventory but leaves the saved model and
+files unchanged. Only explicit `--set-model MODEL` (or a TTY selection
+with bare `--set-model`) updates the catalog. If that endpoint/model is
+the current default, its private config is updated in the same paired
+write. Recheck the declared context limit when changing models; discovery
+returns IDs, not a capacity benchmark.
+
+`default ID` explicitly updates the project's configured endpoint/model,
+provider and context limit without modifying permission choices. `remove`
+refuses the last profile and the currently configured endpoint; choose
+another default first. Missing IDs are errors, never a model fallback.
+Read-only list/probe operations do not silently alter the default config.
+No command invokes an App publisher, adds a queue, or launches a worker.
