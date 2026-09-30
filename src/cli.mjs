@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runIssue } from './lib/issue.mjs';
 import { parseEvaluationArgs, recordEvaluation } from './lib/eval.mjs';
-import { formatRecommendation, parseRecommendationArgs, recommend, repositoryRoot } from './lib/learn.mjs';
+import { parseRecommendationArgs, repositoryRoot } from './lib/learn.mjs';
 import { submitAsk } from './lib/ask.mjs';
 import { runBuiltinIssue, runBuiltinTask } from './lib/builtin.mjs';
 import { loadConfig } from './lib/config.mjs';
@@ -13,8 +13,9 @@ import { checkDoctor, formatDoctor } from './lib/doctor.mjs';
 import { formatInit, initializeRoster } from './lib/init.mjs';
 import { runOnboard } from './onboard/wizard.mjs';
 import { runFleet } from './lib/fleet-cli.mjs';
-import { formatMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
-import { resolveContractsPath } from './lib/paths.mjs';
+import { formatMetrics, loadAvailableMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
+import { resolveContractsPath, resolveProjectRoot } from './lib/paths.mjs';
+import { formatRoute, routeTask } from './lib/route.mjs';
 import { formatStatus, readStatus } from './lib/status.mjs';
 import { validateRecipe } from './lib/recipe.mjs';
 import { startRepl } from './repl.mjs';
@@ -54,7 +55,7 @@ Run executes planner, coder, then reviewer in one worktree by default.
 Run --seat coder without --issue executes an existing TASK.md in the current worktree.
 Prepare creates a manual handoff without executing seats. Publishing is opt-in.
 Recipe validates strict v0 seat YAML. Stats joins contracts AI-Run history with local runs and human evals.
-Eval records a human decision locally. Recommend needs at least 3 evaluated runs.
+Eval records a human decision locally. Recommend uses fleet priors, then qualifying human evidence.
 Vault set reads a secret from stdin; vault list prints names, never values.
 `;
 
@@ -189,9 +190,10 @@ async function main(args) {
     process.stdout.write(`Recorded AI-Eval for ${evaluation.sha ?? evaluation.session}.\n`);
   } else if (args[0] === 'recommend') {
     const { taskClass, difficulty } = parseRecommendationArgs(args.slice(1));
-    const records = loadMetrics({ contractsPath: resolveContractsPath(), cwd: repositoryRoot() });
-    process.stdout.write(formatRecommendation(recommend(records, taskClass, difficulty), taskClass,
-      loadConfig({ cwd: process.cwd() })));
+    const cwd = resolveProjectRoot();
+    const route = await routeTask({ cwd, installationRoot: rosterRoot, taskClass,
+      difficulty: difficulty ?? 2, records: loadAvailableMetrics({ cwd }) });
+    process.stdout.write(formatRoute(route, taskClass, loadConfig({ cwd })));
   } else {
     throw new TypeError('Unknown arguments. Run roster --help for usage.');
   }

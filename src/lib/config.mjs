@@ -357,6 +357,15 @@ export function requirePublicationEnabled(config) {
   }
 }
 
+export function withoutLlmKeys(env, config) {
+  const clean = { ...env };
+  for (const name of [config.llm.api_key_env,
+    ...Object.values(config.profiles ?? {}).map((profile) => profile.api_key_env)]) {
+    if (typeof name === 'string' && name) delete clean[name];
+  }
+  return clean;
+}
+
 export function isReviewRequired(config) {
   return (config.review?.required ?? config.reviewer?.required) !== false;
 }

@@ -14,6 +14,7 @@ import { resolveContractsPath } from '../src/lib/paths.mjs';
 import { buildPublishMessage } from '../src/lib/publication.mjs';
 import { parseRecipe } from '../src/lib/recipe.mjs';
 import { renderIssueBody } from '../src/lib/issue.mjs';
+import { formatFleet } from '../src/lib/fleet.mjs';
 import { packAgentRun } from '../vendor/github-agent-contracts/scripts/parse-agent-run.mjs';
 import { withResearchSummary } from './helpers/research.mjs';
 
@@ -46,11 +47,12 @@ function fixture(context) {
     readFileSync(new URL('../principals/reviewer.md', import.meta.url), 'utf8'));
   mkdirSync(target);
   cpSync(new URL('../skills/', import.meta.url), path.join(repoRoot, 'skills'), { recursive: true });
+  cpSync(new URL('../examples/', import.meta.url), path.join(repoRoot, 'examples'), { recursive: true });
   mkdirSync(path.join(contracts, 'scripts'), { recursive: true });
   writeFileSync(path.join(repoRoot, 'roster.config.example.yml'), example);
   writeFileSync(path.join(repoRoot, 'skills', 'implement-task', 'SKILL.md'), '# Code and test\n');
   writeFileSync(path.join(contracts, 'scripts', 'agent-pr.mjs'), 'export {};\n');
-  writeFileSync(path.join(target, '.gitignore'), '.env\n.worktrees/\n.roster/runs/\n');
+  writeFileSync(path.join(target, '.gitignore'), '.env\n.worktrees/\n.roster/runs/\n.roster/fleet.yml\n.roster/config.yml\n');
   writeFileSync(path.join(target, 'AGENTS.md'), '# Agent instructions\nStay in the worktree.\n');
   writeFileSync(path.join(target, 'README.md'), '# Example\n');
   writeFileSync(path.join(target, 'smoke.test.mjs'),
@@ -211,24 +213,29 @@ test('--publish refuses an absent model before invoking GitHub, the SDK, or work
   assert.equal(existsSync(path.join(options.target, '.worktrees')), false);
 });
 
-test('--auto-model is required when a configured endpoint has no model and cannot override a chosen model', async (context) => {
+test('--auto-model needs a registered fleet rather than nominating a model outside the catalog', async (context) => {
   const options = fixture(context);
   const emptyModel = parseConfig(example.replace('profile: ""', 'profile: ollama'));
   await assert.rejects(runBuiltinIssue(42, { ...options, config: emptyModel }),
     /set model/);
   await assert.rejects(runBuiltinIssue(42, {
     ...options, config: llmConfig, autoModel: true,
-  }), /--auto-model requires an empty config\.llm\.model/);
+  }), /--auto-model requires at least one registered fleet profile/);
   assert.deepEqual(options.calls, []);
 });
 
-test('auto-model with fewer than three evaluated runs stays a network-free stub', async (context) => {
+test('auto-model without qualifying evaluations, priors or matching hints stays a network-free stub', async (context) => {
   const options = fixture(context);
   options.issue.title = 'feat: Add status';
   const config = parseConfig(example.replace('profile: ""', 'profile: ollama'));
+  mkdirSync(path.join(options.target, '.roster'));
+  writeFileSync(path.join(options.target, '.roster', 'fleet.yml'), formatFleet({ profiles: [{
+    id: 'candidate', base_url: 'https://candidate.example.invalid/v1', model: 'candidate-model',
+    provider: 'vllm', context_max: 32768, concurrency: 1, hardware: 'test-gpu', notes: '',
+  }] }));
   const evaluated = Array.from({ length: 2 }, (_, index) => ({
     task_class: 'feat', model: 'candidate-model', effort: 'h',
-    evaluation: { session: `sample-${index}`, verdict: 'accept' },
+    evaluation: { session: `sample-${index}`, verdict: 'accept', difficulty: 3 },
   }));
   const logs = [];
   const result = await runBuiltinIssue(42, {
@@ -245,7 +252,7 @@ test('auto-model with fewer than three evaluated runs stays a network-free stub'
   assert.equal(result.result.mode, 'stub');
   assert.equal(result.runs.coder, null);
   assert.equal(config.llm.model, '');
-  assert.ok(logs.some((line) => line.includes('insufficient evaluated data')));
+  assert.ok(logs.some((line) => line.includes('no eligible fleet profile or evidence')));
 });
 
 test('ROSTER_MODEL selects the same served model for both seats and their metadata', async (context) => {
@@ -356,9 +363,14 @@ test('auto-model uses a three-evaluation recommendation for both seats without e
   const options = fixture(context);
   options.issue.title = 'feat: Add status';
   const config = parseConfig(example.replace('profile: ""', 'profile: ollama'));
+  mkdirSync(path.join(options.target, '.roster'));
+  writeFileSync(path.join(options.target, '.roster', 'fleet.yml'), formatFleet({ profiles: [{
+    id: 'candidate', base_url: 'https://candidate.example.invalid/v1', model: 'candidate-model',
+    provider: 'vllm', context_max: 32768, concurrency: 1, hardware: 'test-gpu', notes: '',
+  }] }));
   const evaluated = Array.from({ length: 3 }, (_, index) => ({
     task_class: 'feat', model: 'candidate-model', effort: 'h',
-    evaluation: { session: `sample-${index}`, verdict: 'accept' },
+    evaluation: { session: `sample-${index}`, verdict: 'accept', difficulty: 3 },
   }));
   let requests = 0;
   const result = await runBuiltinIssue(42, {
@@ -367,7 +379,7 @@ test('auto-model uses a three-evaluation recommendation for both seats without e
     log: () => {},
     fetchImpl: async (url, request) => {
       requests += 1;
-      assert.equal(String(url), 'http://127.0.0.1:11434/v1/chat/completions');
+      assert.equal(String(url), 'https://candidate.example.invalid/v1/chat/completions');
       assert.equal(JSON.parse(request.body).model, 'candidate-model');
       if (requests === 1) return { status: 200, json: async () => ({
         choices: [{ message: { role: 'assistant', content: JSON.stringify({
@@ -386,6 +398,8 @@ test('auto-model uses a three-evaluation recommendation for both seats without e
   assert.equal(requests, 2);
   assert.equal(result.autoRecommendation.n, 3);
   assert.equal(result.autoRecommendation.model, 'candidate-model');
+  assert.equal(result.route.profile.id, 'candidate');
+  assert.equal(result.route.source, 'evals');
   assert.equal(result.result.mode, 'llm');
   assert.equal(result.runs.planner.env.AI_MODEL, 'candidate-model');
   assert.equal(result.runs.coder.env.AI_MODEL, 'candidate-model');
@@ -393,6 +407,70 @@ test('auto-model uses a three-evaluation recommendation for both seats without e
   assert.equal(result.runs.coder.env.AI_CONTEXT_USED, '3');
   assert.equal(config.llm.model, '');
   assert.equal(existsSync(path.join(options.repoRoot, '.roster', 'config.yml')), false);
+});
+
+test('fleet priors change endpoint/model only for explicit auto-model and never rewrite the saved default', async (context) => {
+  for (const autoModel of [false, true]) {
+    const options = fixture(context);
+    options.issue.title = 'feat: Add status';
+    mkdirSync(path.join(options.target, '.roster'));
+    const configSource = example.replace('base_url: ""', 'base_url: http://localhost:1234/v1')
+      .replace('model: ""', 'model: local-model');
+    const configPath = path.join(options.target, '.roster', 'config.yml');
+    writeFileSync(configPath, configSource);
+    writeFileSync(path.join(options.target, '.roster', 'fleet.yml'), formatFleet({ profiles: [
+      { id: 'default', base_url: llmConfig.llm.base_url, model: 'local-model',
+        provider: 'vllm', context_max: 0, concurrency: 1, hardware: 'test-gpu', notes: '' },
+      { id: 'burst', base_url: 'https://burst.example.invalid/v1', model: 'routed-model',
+        provider: 'vllm', context_max: 32768, concurrency: 4,
+        hardware: 'test-gpu', task_class: ['feat'], notes: '' },
+    ] }));
+    const logs = [];
+    let requests = 0;
+    const result = await runBuiltinIssue(42, {
+      ...options, config: llmConfig, autoModel, metricsLoader: () => [],
+      env: { ...options.env, ROSTER_API_KEY: 'test-only-key', OPENAI_API_KEY: 'unused-test-key' },
+      log: (text) => logs.push(text),
+      fetchImpl: async (url, request) => {
+        requests += 1;
+        const body = JSON.parse(request.body);
+        assert.equal(url, autoModel ? 'https://burst.example.invalid/v1/chat/completions'
+          : 'http://localhost:1234/v1/chat/completions');
+        assert.equal(body.model, autoModel ? 'routed-model' : 'local-model');
+        if (requests === 1) return { status: 200, json: async () => ({
+          choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
+            title: 'Add status', acceptance_checks: ['node --test exits 0'], files_allowed: ['README.md'],
+          }) } }],
+        }) };
+        if (requests === 2) return { status: 200, json: async () => ({
+          choices: [{ finish_reason: 'tool_calls', message: {
+            role: 'assistant', tool_calls: [{ id: 'edit', type: 'function', function: {
+              name: 'write_file', arguments: JSON.stringify({
+                path: 'README.md', content: '# Example\n\n## Status\nReady.\n',
+              }),
+            } }],
+          } }],
+        }) };
+        return { status: 200, json: async () => ({
+          choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Added status; tests pass.' } }],
+        }) };
+      },
+      runTestCommand: async (_program, _args, { env }) => {
+        assert.equal(env.ROSTER_API_KEY, undefined);
+        assert.equal(env.OPENAI_API_KEY, undefined);
+        return { stdout: 'pass', stderr: '' };
+      },
+    });
+    assert.equal(requests, 3);
+    assert.equal(readFileSync(configPath, 'utf8'), configSource);
+    assert.equal(llmConfig.llm.model, 'local-model');
+    assert.equal(result.runs.coder.env.AI_MODEL, autoModel ? 'routed-model' : 'local-model');
+    if (autoModel) {
+      assert.equal(result.route.source, 'prior');
+      assert.equal(result.route.profile.id, 'burst');
+      assert.match(logs[0], /profile=burst source=prior/);
+    } else assert.equal(result.route, null);
+  }
 });
 
 test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the SDK only with --publish', async (context) => {

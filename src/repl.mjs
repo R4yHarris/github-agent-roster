@@ -9,9 +9,10 @@ import {
 } from './lib/issue-board.mjs';
 import { isReviewRequired, loadConfig, requirePublicationEnabled, setConfigValue } from './lib/config.mjs';
 import { parseEvaluationArgs, recordEvaluation } from './lib/eval.mjs';
-import { formatRecommendation, parseRecommendationArgs, recommend, repositoryRoot } from './lib/learn.mjs';
-import { formatMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
-import { resolveContractsPath } from './lib/paths.mjs';
+import { parseRecommendationArgs, repositoryRoot } from './lib/learn.mjs';
+import { formatMetrics, loadAvailableMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
+import { resolveContractsPath, resolveProjectRoot } from './lib/paths.mjs';
+import { formatRoute, routeTask } from './lib/route.mjs';
 import { buildPublishMessage, formatPublishCommand } from './lib/publication.mjs';
 import { redactEvidence } from './runtime/excellence.mjs';
 import { requirePassingReview } from './seats/reviewer.mjs';
@@ -76,7 +77,7 @@ async function publishWithContracts({ contractsPath, cwd, env, message, model, o
 
 const defaultServices = {
   submitAsk, runBuiltinIssue, recordEvaluation, repositoryRoot, loadMetrics,
-  summarizeMetrics, formatMetrics, recommend, formatRecommendation,
+  summarizeMetrics, formatMetrics, loadAvailableMetrics, routeTask, formatRoute,
   resolveContractsPath, prepareBuiltinPublication, createFileVault,
   validateSecretName, readStatus, formatStatus, setConfigValue,
   issueCommenter: commentMergedIssue,
@@ -297,7 +298,10 @@ export function createDispatcher({
       }
       case 'recommend': {
         const { taskClass, difficulty } = parseRecommendationArgs(['--task-class', ...args.split(/\s+/)]);
-        output.write(api.formatRecommendation(api.recommend(metrics(), taskClass, difficulty), taskClass, state.config, env));
+        const root = state.lastRun?.repoRoot ?? resolveProjectRoot(cwd);
+        const route = await api.routeTask({ cwd: root, installationRoot: repoRoot, taskClass,
+          difficulty: difficulty ?? 2, records: api.loadAvailableMetrics({ cwd: root }) });
+        output.write(api.formatRoute(route, taskClass, state.config, env));
         return true;
       }
       case 'vault': {

@@ -158,7 +158,8 @@ additional legacy SHA-keyed evaluation file, resolved relative to the caller's
 directory. Its SHA evaluations override matching local SHA evaluations. See
 [metrics](METRICS.md) for the legacy schema and duplicate validation.
 
-Recommendations group by **task class, model, and effort**. Classification uses
+Evidence statistics and the internal learning helper group by
+**task class, model, and effort**. Classification uses
 `task_class` when present, otherwise a conventional task prefix such as
 `feat-auth`, `fix.cli`, `docs-guide`, or `test-unit`. Issue titles such as
 `feat(cli): add a flag` supply the class when roster records the assignment.
@@ -178,8 +179,8 @@ For each configuration:
 `--difficulty 1-5` requires median human-rated difficulty at least that high,
 in addition to `n >= 3`. Missing difficulty cannot satisfy that request.
 Eligible configurations rank by accept-rate, then sample count, then stable
-model/effort ordering. Omitting difficulty preserves the previous read-only
-recommendation behavior. Output includes the supporting medians; a candidate
+model/effort ordering. The internal helper retains its existing optional
+difficulty filter. Output includes the supporting medians; a candidate
 also carries the rounded median **accepted** minutes for the next task estimate.
 Missing timing remains unknown. If no candidate qualifies, the command prints
 `insufficient data` and the actual config model/effort default (`ROSTER_MODEL`
@@ -195,23 +196,26 @@ duration. Legacy free-form verdicts remain visible in `EVALS` but do not enter
 the normalized `N` or recommendations. `again` and token context are evidence,
 not extra ranking weights; difficulty is an explicit eligibility gate.
 
-Two evaluations still print `insufficient data`, even if a third run exists
-without a human evaluation or recorded excellence failure. A third distinct
-evaluated sample for the same task class, model, and effort satisfies the count
-threshold, but any requested difficulty must also be supported.
+Fleet routing requires **three distinct human evaluations**, not three
+automatic failure/pass records. Two evaluations do not qualify for that
+tier, though a labeled [starting prior](CAPABILITIES.md) can still select a
+registered fleet model. A third distinct human sample for the same class,
+model, and effort meets the count threshold, but requested difficulty and
+declared context must also be supported. The default routing difficulty is 2.
 
 Example output:
 
 ```text
-feat: careful-model effort=h accept-rate=66.7% n=3 median-min=20 median-difficulty=4
+feat: careful-model effort=h accept-rate=66.7% n=3 median-min=20 median-difficulty=4 profile=careful source=evals context_max=32768 concurrency=1 reason=3 distinct human evaluations; declared context is sufficient
 ```
 
 If no configuration qualifies, output includes `insufficient data` and the
-configured fallback. `roster recommend` is read-only.
-`roster run --issue N --runtime builtin --auto-model` with an empty configured
-model applies a qualifying suggestion to that run's planner and coder without
-editing private config or policy. Fewer than three samples keep that opt-in run
-on the deterministic stub. An explicit task model can select the coder as
+configured fallback as information, not an automatic fleet choice.
+`roster recommend` is read-only and shares the registered-profile selector
+with `roster run --issue N --runtime builtin --auto-model`. The flag permits
+a run-scoped endpoint/model choice without clearing or editing the saved
+default. Qualified human data outranks priors; absent both, the run stays a
+deterministic stub. An explicit task model outside fleet routing can select the coder as
 described in [estimation](ESTIMATION.md). The [next planner task](NEXT.md) also
 uses qualifying capacity evidence and carries forward redacted human feedback.
 One acceptance can seed an otherwise unconfigured baseline, not a recommendation.

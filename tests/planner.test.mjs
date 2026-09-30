@@ -72,6 +72,28 @@ test('board metadata seeds the stub task and supplies defaults to an LLM plan', 
   assert.match(planned.task, /difficulty: 4\nestimate_min: 35\ntask_class: fix\n/);
 });
 
+test('a routed planner cannot silently switch to a model outside the selected fleet profile', async () => {
+  const config = { ...llmConfig, planner: { turn_budget: 1 } };
+  await assert.rejects(planAsk('Update README.md.', {
+    config, env: {}, lockedModel: 'selected-model',
+    fetchImpl: async () => ({ status: 200, json: async () => ({
+      choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
+        title: 'Update README', acceptance_checks: ['node --test exits 0'],
+        files_allowed: ['README.md'], model: 'unregistered-model',
+      }) } }],
+    }) }),
+  }), /routed planner must keep the selected fleet model/);
+  const plan = await planAsk('Update README.md.', {
+    config, env: {}, lockedModel: 'selected-model',
+    fetchImpl: async () => ({ status: 200, json: async () => ({
+      choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
+        title: 'Update README', acceptance_checks: ['node --test exits 0'],
+        files_allowed: ['README.md'], model: '',
+      }) } }],
+    }) }),
+  });
+  assert.match(plan.task, /model: selected-model/);
+});
 test('planner accepts CRLF Ask templates while rejecting lone control characters', () => {
   const plan = planStub('Update README.md.\r\n\r\n## Acceptance checks\r\n- node --test exits 0\r\n');
   assert.match(plan.task, /## Ask\nUpdate README\.md\.\n\n## Acceptance checks/);

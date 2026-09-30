@@ -16,6 +16,7 @@ import {
 } from '../src/lib/learn.mjs';
 import { formatMetrics, loadMetrics, summarizeMetrics } from '../src/lib/metrics.mjs';
 import { resolveContractsPath } from '../src/lib/paths.mjs';
+import { formatFleet } from '../src/lib/fleet.mjs';
 
 const exported = readFileSync(new URL('./fixtures/learn-metrics.jsonl', import.meta.url), 'utf8');
 const runs = readFileSync(new URL('./fixtures/learn-runs.jsonl', import.meta.url), 'utf8');
@@ -508,6 +509,7 @@ test('CLI stats and recommend use the repository root, retain flags, and report 
   execFileSync('git', ['init', '--quiet'], { cwd, stdio: 'pipe' });
   const roster = join(cwd, 'roster');
   cpSync(source, join(roster, 'src'), { recursive: true });
+  cpSync(new URL('../examples/', import.meta.url), join(roster, 'examples'), { recursive: true });
   writeFileSync(join(roster, 'roster.config.example.yml'),
     readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8')
       .replace('model: ""', 'model: fallback-model'));
@@ -518,6 +520,16 @@ test('CLI stats and recommend use the repository root, retain flags, and report 
 if (process.argv[2] !== '--ref' || !['HEAD', 'main..HEAD'].includes(process.argv[3])) process.exit(9);
 process.stdout.write(${JSON.stringify(exported)});
 `);
+  writeFileSync(join(cwd, 'fixture.txt'), 'fixture\n');
+  execFileSync('git', ['add', '--', 'fixture.txt'], { cwd, stdio: 'pipe' });
+  execFileSync('git', ['-c', 'user.name=Test Fixture', '-c', 'user.email=fixture@example.invalid',
+    'commit', '-m', 'Fixture setup'], { cwd, stdio: 'pipe' });
+  writeFileSync(join(cwd, '.roster', 'fleet.yml'), formatFleet({ profiles: [
+    { id: 'careful', base_url: 'https://careful.example.invalid/v1', model: 'careful-model',
+      provider: 'vllm', context_max: 32768, concurrency: 1, hardware: 'test-gpu', notes: '' },
+    { id: 'capacity', base_url: 'https://capacity.example.invalid/v1', model: 'cli-capacity',
+      provider: 'vllm', context_max: 32768, concurrency: 1, hardware: 'test-gpu', notes: '' },
+  ] }));
   const nested = join(cwd, 'nested');
   mkdirSync(nested);
   writeFileSync(join(nested, 'extra.jsonl'),
@@ -535,7 +547,8 @@ process.stdout.write(${JSON.stringify(exported)});
   assert.doesNotMatch(stats.stdout, /writer/);
   const suggestion = invoke(['recommend', '--task-class', 'feat']);
   assert.equal(suggestion.status, 0, suggestion.stderr);
-  assert.equal(suggestion.stdout, 'feat: careful-model effort=h accept-rate=66.7% n=3 median-min=- median-difficulty=3\n');
+  assert.match(suggestion.stdout,
+    /^feat: careful-model effort=h accept-rate=66\.7% n=3 median-min=- median-difficulty=3 profile=careful source=evals /);
   const insufficient = invoke(['recommend', '--task-class', 'docs']);
   assert.equal(insufficient.status, 0, insufficient.stderr);
   const fallback = 'insufficient data; config default: fallback-model effort=m\n';
@@ -559,7 +572,7 @@ process.stdout.write(${JSON.stringify(exported)});
     '{"sha":"3333333333333333333333333333333333333333","verdict":"accept","difficulty":3,"again":true}\n');
   const atThreshold = invoke(['recommend', '--task-class', 'feat']);
   assert.equal(atThreshold.status, 0, atThreshold.stderr);
-  assert.equal(atThreshold.stdout, 'feat: careful-model effort=h accept-rate=100.0% n=3 median-min=- median-difficulty=3\n');
+  assert.match(atThreshold.stdout, /^feat: careful-model effort=h accept-rate=100\.0% n=3 .*profile=careful source=evals /);
   const timed = capacitySamples('cli-capacity', [{ minutes: 10 }, { minutes: 20 }, { minutes: 30 }])
     .map(({ model, effort, task_class, evaluation }) => ({ ...evaluation, model, effort, task_class }));
   writeFileSync(evalsFile, timed.map((record) => JSON.stringify(record)).join('\n') + '\n');
@@ -568,7 +581,8 @@ process.stdout.write(${JSON.stringify(exported)});
   assert.match(capacityTable.stdout, /cli-capacity\s+h\s+3\s+3\s+fix\s+3\s+100\.0%\s+20\s+4/);
   const capacity = invoke(['recommend', '--task-class', 'fix', '--difficulty', '4']);
   assert.equal(capacity.status, 0, capacity.stderr);
-  assert.equal(capacity.stdout, 'fix: cli-capacity effort=h accept-rate=100.0% n=3 median-min=20 median-difficulty=4\n');
+  assert.match(capacity.stdout,
+    /^fix: cli-capacity effort=h accept-rate=100\.0% n=3 median-min=20 median-difficulty=4 profile=capacity source=evals /);
   writeFileSync(evalsFile, originalEvals);
 
   for (const args of [

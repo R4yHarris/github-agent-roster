@@ -120,6 +120,16 @@ test('publication keeps the completed coder model even if config changes later',
   assert.deepEqual(buildPublishEnv({ config, env: {}, run: null }), { AI_MODEL: 'owner/model' });
 });
 
+test('publication excludes API keys for other configured profiles when a fleet route changes endpoints', () => {
+  const env = buildPublishEnv({
+    config, env: { ROSTER_API_KEY: 'local-test-key', OPENAI_API_KEY: 'unused-hosted-test-key',
+      GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'external-key.pem' },
+  });
+  assert.equal(env.ROSTER_API_KEY, undefined);
+  assert.equal(env.OPENAI_API_KEY, undefined);
+  assert.equal(env.GITHUB_APP_ID, '123');
+  assert.equal(env.GITHUB_APP_PRIVATE_KEY_PATH, 'external-key.pem');
+});
 test('rejects invalid or overflowing returned counts and unsafe identifiers', () => {
   assert.throws(() => mergeUsage({ prompt_tokens: -1 }), /nonnegative safe integer/);
   assert.throws(() => mergeUsage({ completion_tokens: '12' }), /nonnegative safe integer/);

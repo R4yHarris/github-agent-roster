@@ -121,7 +121,7 @@ export function planStub(ask, { reference = 'local:draft', title, metadata } = {
 }
 
 export async function planAsk(ask, {
-  config, reference = 'local:draft', title, fetchImpl, env, vault, memory = [], learningRoot, metadata,
+  config, reference = 'local:draft', title, fetchImpl, env, vault, memory = [], learningRoot, metadata, lockedModel,
 } = {}) {
   const cleanAsk = cleanAskText(ask);
   if (!Array.isArray(memory) || memory.some((line) => typeof line !== 'string')) {
@@ -173,13 +173,16 @@ export async function planAsk(ask, {
           'difficulty', 'estimate_min', 'task_class', 'model'].includes(field)))) {
       failure = 'LLM planner returned an unsupported task plan';
     }
+    if (!failure && lockedModel && plan.model && plan.model !== lockedModel) {
+      failure = 'The routed planner must keep the selected fleet model';
+    }
     if (!failure) {
       let built;
       try {
         built = buildPlan(cleanAsk, {
           reference, title: fixedTitle ?? plan.title,
           acceptanceChecks: plan.acceptance_checks, filesAllowed: plan.files_allowed,
-          metadata: { ...metadata, ...plan },
+          metadata: { ...metadata, ...plan, ...(lockedModel ? { model: lockedModel } : {}) },
         });
       } catch (error) {
         if (!(error instanceof TypeError)) throw error;

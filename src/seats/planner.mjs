@@ -7,7 +7,7 @@ import { writeEstimate } from '../runtime/estimate.mjs';
 
 export async function runPlanner({
   worktree, repoRoot, issue, ask = issue?.body, title = issue?.title,
-  reference = issue ? `issue:${issue.number}` : undefined, config, metadata,
+  reference = issue ? `issue:${issue.number}` : undefined, config, metadata, lockedModel,
   task = issue ? `issue-${issue.number}` : undefined,
   session = issue ? `roster-${issue.number}-planner` : undefined,
   fetchImpl, env, vault, learningRoot = repoRoot,
@@ -30,7 +30,7 @@ export async function runPlanner({
   const taskPath = path.join(worktree, 'TASK.md');
   try {
     plan = await planAsk(ask, {
-      config, reference, title, fetchImpl, env, vault, memory, learningRoot, metadata,
+      config, reference, title, fetchImpl, env, vault, memory, learningRoot, metadata, lockedModel,
     });
     const recipe = parseRecipe(plan.recipe);
     if (recipe.ask !== reference || recipe.seats.length !== 3 ||

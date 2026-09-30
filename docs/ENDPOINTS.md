@@ -15,8 +15,9 @@ is the manual handoff path. See [SDLC](SDLC.md) for execution and publishing.
 - `schema: 1` identifies the config shape.
 - `llm.base_url`, `llm.model`, and `llm.profile` are deliberately empty
   strings. Choose a profile and model, or set a custom base URL and model.
-  With an empty model, only an explicit `run --auto-model` may choose from
-  human-evaluated runs; without it, a configured endpoint fails before
+  An explicit `run --auto-model` may choose a registered fleet profile
+  from qualifying human evidence or starting priors; without it, an
+  empty model with a configured endpoint fails before
   creating a worktree. The example does not select a provider or contact
   an endpoint.
 - `profiles.vllm-local` is the first named profile, with URL
@@ -72,9 +73,10 @@ remote access is deliberately secured.
 
 In the interactive [Roster shell](REPL.md), `/model MODEL` and `/effort h`
 persist those two fields to ignored `.roster/config.yml` without editing the
-tracked example. `/model clear` leaves the model empty for opt-in
-`/run N --auto-model`. Select the endpoint profile in that private config.
-See [model routing](ROUTING.md) for the three-evaluation threshold.
+tracked example. `/model clear` leaves the model empty; opt-in
+`/run N --auto-model` can also choose a fleet model while retaining a
+nonempty saved default. Select manual endpoint settings in private config
+or use `roster fleet default ID`. See [model routing](ROUTING.md).
 
 ## Local profiles
 
