@@ -28,6 +28,12 @@ Known credentials and private-key material cannot be persisted in drafts.
 
 The bounded planner loop returns tool results and denials to the model,
 redacting known credentials from error messages and replayed tool-call history.
+It accepts OpenAI JSON-string function arguments and one JSON tool payload
+embedded in text (including SGLang/DeepSeek-style fenced output). Arguments
+must still be an object with string `path` and `content`; parsing never grants
+an additional tool or path. Malformed calls are retried once with a short
+tool-only instruction. Another failure produces a visible error and unverified
+planning stubs, not an exception that ends `/run` in the shell.
 It accepts the existing JSON plan format or a complete written TASK followed
 by confirmation. Written tasks must retain the original Ask and pass the
 same title, metadata, acceptance-check, allowed-path, and routed-model checks.

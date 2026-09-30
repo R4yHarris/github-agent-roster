@@ -61,8 +61,10 @@ export async function runPlanner({
     throw error;
   }
   await appendMemory({ file: memoryPath, repoRoot, env, apiKeyEnv: config.llm.api_key_env, record: {
-    task, session, status: config.llm.base_url ? 'llm' : 'stub',
-    summary: 'Prepared RECIPE.yml and TASK.md',
+    task, session, status: plan.error ? 'failed' : config.llm.base_url ? 'llm' : 'stub',
+    summary: plan.error ? 'Prepared unverified RECIPE.yml and TASK.md stubs after planning failure'
+      : 'Prepared RECIPE.yml and TASK.md',
+    ...(plan.error ? { error: plan.error } : {}),
   } });
   const run = config.llm.base_url ? buildRun({ config, response: lastResponse, task, session, env }) : null;
   return { ...plan, recipePath, taskPath, run };

@@ -169,14 +169,57 @@ export async function runIssue(issueNumber, {
       : '"$GITHUB_AGENT_CONTRACTS/scripts/agent-pr.mjs"',
   }) : null;
 
+  const inventory = await command('git', ['worktree', 'list', '--porcelain', '-z'], repoRoot);
+  const registered = inventory.split('\0\0').filter(Boolean).map((record) => {
+    const fields = record.split('\0');
+    return {
+      worktree: fields.find((field) => field.startsWith('worktree '))?.slice(9),
+      branch: fields.find((field) => field.startsWith('branch '))?.slice(7),
+    };
+  });
+  const samePath = (value) => typeof value === 'string' &&
+    (process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value)) ===
+    (process.platform === 'win32' ? worktreePath.toLowerCase() : worktreePath);
+  const existing = registered.find(({ worktree }) => samePath(worktree));
+  const branch = `refs/heads/${task}`;
+  const reused = Boolean(existing);
+  if (existing && existing.branch !== branch) throw new Error('Existing issue worktree is on a different branch');
+  if (registered.some((entry) => entry.branch === branch && !samePath(entry.worktree))) {
+    throw new Error('Issue branch is already checked out in another worktree; refusing to move it');
+  }
+  const entry = await (fileSystem.lstat ? fileSystem.lstat(worktreePath) : fileSystem.stat(worktreePath))
+    .catch((error) => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+  if (entry && (!entry.isDirectory() || entry.isSymbolicLink?.())) {
+    throw new Error('Issue worktree must be a real directory, not a symlink');
+  }
+  if (reused && !entry) throw new Error('Registered issue worktree is missing; repair its Git registration before running');
+  if (!reused && entry) throw new Error('Issue worktree path exists without matching Git registration; refusing to overwrite it');
   await beforeWorktree(repoRoot, worktreePath);
-  await fileSystem.mkdir(path.dirname(worktreePath), { recursive: true });
-  await command('git', ['worktree', 'add', '-b', task, worktreePath], repoRoot);
+  if (!reused) {
+    const knownBranch = await command('git', ['for-each-ref', '--format=%(refname)', branch], repoRoot);
+    await fileSystem.mkdir(path.dirname(worktreePath), { recursive: true });
+    await command('git', knownBranch.split('\n').includes(branch)
+      ? ['worktree', 'add', worktreePath, task] : ['worktree', 'add', '-b', task, worktreePath], repoRoot);
+  }
 
   const assignment = renderAssignment(issue);
+  const writeAssignment = async (file, content, options) => {
+    try {
+      await fileSystem.writeFile(file, content, options);
+    } catch (error) {
+      if (!reused || error.code !== 'EEXIST') throw error;
+      const status = await (fileSystem.lstat ? fileSystem.lstat(file) : fileSystem.stat(file));
+      if (!status.isFile() || status.isSymbolicLink?.()) {
+        throw new Error('Existing assignment/environment must be a regular file');
+      }
+    }
+  };
   try {
-    await fileSystem.writeFile(assignmentPath, assignment, { encoding: 'utf8', flag: 'wx' });
-    await fileSystem.writeFile(envPath, `AI_TASK=${task}\nAI_SESSION=${session}\n`, {
+    await writeAssignment(assignmentPath, assignment, { encoding: 'utf8', flag: 'wx' });
+    await writeAssignment(envPath, `AI_TASK=${task}\nAI_SESSION=${session}\n`, {
       encoding: 'utf8',
       flag: 'wx',
       mode: 0o600,
@@ -195,7 +238,7 @@ export async function runIssue(issueNumber, {
     }
   }
 
-  log(`Worktree: ${worktreePath}
+  log(`Worktree: ${worktreePath}${reused ? ' (reused)' : ''}
 Assignment: ${assignmentPath}
 Environment: ${envPath}
 After editing inside the worktree, load .env into the worker environment and run:
@@ -205,5 +248,5 @@ ${nextCommand ?? (config.publish?.enabled === false
   ? 'Publication unavailable: publishing is disabled by publish.enabled.'
   : 'Publication unavailable: set model in AI_MODEL for GHCP, or complete a measured roster run.')}`);
 
-  return { issue, ask, metadata, repoRoot, worktreePath, assignmentPath, envPath, task, session, nextCommand };
+  return { issue, ask, metadata, repoRoot, worktreePath, assignmentPath, envPath, task, session, nextCommand, reused };
 }

@@ -31,6 +31,13 @@ library functions in the same Node process; those libraries may still invoke
 Git, GitHub CLI, tests, or the metrics exporter. It does not spawn another
 Roster CLI process or add a queue.
 
+`/run N` reuses an existing registered `issue-N` branch/worktree. Prior
+generated outputs are archived locally in Git metadata, while app changes and
+the assignment/environment are preserved. An existing branch is never passed
+to `git worktree add -b`. Malformed planner tool output is repaired once; if it
+still cannot be decoded, RECIPE/TASK stubs and a clear error are written, coding
+and publication stay disabled, and `/help`, `/quit`, or a later `/run` still work.
+
 `/model MODEL` and `/effort h` validate and atomically replace only those
 fields in the private config, keeping the other fields and comments. The
 updated values apply to the next `/run` in this shell. With no selected

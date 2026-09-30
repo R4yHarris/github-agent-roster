@@ -176,7 +176,9 @@ export function createDispatcher({
             ? message.replace(command, `${command} --merge-when-green`)
             : message}\n`);
         }
-        output.write('Use /publish to publish reviewed changes with --merge-when-green.\n');
+        output.write(state.lastRun.failed
+          ? 'Planning failed; stubs are unverified and publication is disabled. Fix the endpoint output, then retry /run.\n'
+          : 'Use /publish to publish reviewed changes with --merge-when-green.\n');
         return true;
       }
       case 'status': {

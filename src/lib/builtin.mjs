@@ -21,6 +21,7 @@ import { IDENTIFIER, inferTaskClass, recordRun } from './learn.mjs';
 import { loadMetrics } from './metrics.mjs';
 import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
 import { buildPublishMessage, formatPublishCommand, formatPublishEnvironment } from './publication.mjs';
+import { archiveRunArtifacts } from './run-artifacts.mjs';
 import { formatRoute, routeTask } from './route.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -237,6 +238,10 @@ export async function runBuiltinIssue(issueNumber, {
     sessionId: `roster-${issueNumber}-coder`, recordPreparation: false,
   });
   const { worktreePath } = prepared;
+  const archivePath = prepared.reused ? await archiveRunArtifacts(worktreePath, {
+    task: prepared.task, git: (args) => git(worktreePath, args, commandEnv),
+  }) : null;
+  if (archivePath) log(`Previous generated run artifacts preserved: ${archivePath}`);
   let activeConfig = config;
   let autoRecommendation = null;
   let route = null;
@@ -293,8 +298,10 @@ export async function runBuiltinIssue(issueNumber, {
   }, { cwd: prepared.repoRoot, env: { ...metricEnv, ...run?.env }, createDirectory: true, run });
   const plannerRun = planner.run;
   await recordSeat(sessions.planner, plannerRun);
+  if (planner.error) log(`Planning failed: ${planner.error}\nRECIPE/TASK stubs are unverified; no configured coder will run.`);
   const coderConfig = { ...activeConfig, llm: Object.freeze({
     ...activeConfig.llm, model: planner.metadata.model || activeConfig.llm.model,
+    ...(planner.error ? { base_url: '' } : {}),
     effort: planner.feedback?.effort ?? activeConfig.llm.effort,
   }) };
   const reviewSeat = async (coderResult) => {
@@ -363,9 +370,11 @@ export async function runBuiltinIssue(issueNumber, {
 
   const completed = {
     ...prepared, recipePath: planner.recipePath, taskPath: planner.taskPath,
-    planner, result, review, sessions, runs, run: coderRun, command, autoRecommendation, route,
+    planner, result, review, sessions, runs, run: coderRun, command, autoRecommendation, route, archivePath,
+    failed: Boolean(planner.error),
   };
-  if (publish) {
+  if (publish && planner.error) log('Publication skipped: planning failed; inspect the stub and rerun the issue.');
+  if (publish && !planner.error) {
     const { contractsPath, publishEnv, model: publishModel } = await prepareBuiltinPublication(completed, {
       cwd, config: coderConfig, env, skipReview,
     });

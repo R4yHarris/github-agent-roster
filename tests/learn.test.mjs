@@ -489,9 +489,11 @@ function issueHarness(cwd, options = {}) {
           });
         }
         if (program === 'git' && args[0] === 'worktree') {
+          if (args[1] === 'list') return '';
           await fs.mkdir(args.at(-1), { recursive: true });
           return '';
         }
+        if (program === 'git' && args[0] === 'for-each-ref') return '';
         throw new Error(`Unexpected command: ${program} ${args.join(' ')}`);
       },
       ...options,
