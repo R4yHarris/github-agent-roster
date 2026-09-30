@@ -60,12 +60,12 @@ that grant and stop using `--merge-when-green`; workers must not edit policy.
 
 ## Publication boundary
 
-Publish only through the pinned `v0.2.0`
+Publish only through the pinned fail-closed `v0.2.1`
 [vendor publisher](../vendor/github-agent-contracts/scripts/agent-pr.mjs), from
 the current worktree's repository root:
 
 ```sh
-node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "..." --merge-when-green
+node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "<subject plus Model, Summary, and how-to-test sections>" --model "$AI_MODEL" --merge-when-green
 ```
 
 The operator provisions `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_PATH` outside

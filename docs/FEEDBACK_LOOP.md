@@ -38,6 +38,19 @@ detected secrets, and truthful model/turn reporting before `RESULT.md`.
 A failed gate still produces an explicit failure report and cannot publish.
 An offline stub writes demonstration artifacts without claiming implementation
 or test execution.
+The coder's redacted excellence failure reasons append to
+`.roster/runs/runs.jsonl` as `defects`, alongside the gate outcome. A
+publication-time recheck also appends newly discovered defects; reports
+are not rewritten to erase failed verification.
+
+## Review before publication
+
+Review the delivered diff, acceptance evidence, and `RESULT.md` before invoking
+the App publisher. Every publish path supplies the real `--model` from config,
+then `AI_MODEL`, then `ROSTER_MODEL`; no candidate means `set model`, not
+`AI-Model: unknown`. GHCP sessions set `AI_MODEL=GPT-6-Sol`.
+The PR body includes `## Model`, `## Summary`, and how to test the change.
+See the [reviewed publication example](GHCP.md).
 
 ## AI-Run is machine evidence, not authority
 
@@ -55,10 +68,10 @@ the coder record on the code commit.
 
 A configured model must retain its served ID. **An unknown model is a broken
 trail, not a model value to recommend.** Model-free stub runs omit AI-Run.
-The pinned contracts `v0.2.0` provider catalog encodes vLLM as `local`, not
+The pinned contracts `v0.2.1` provider catalog encodes vLLM as `local`, not
 the unsupported literal `vllm`; no contracts source is rewritten. See
-[metrics](METRICS.md) for the exact fields and the SDK's separate legacy
-AI-Model trailer behavior.
+[metrics](METRICS.md) for the exact fields. The SDK's required AI-Model
+trailer also fails closed without a real model ID.
 
 ## AI-Eval belongs to the human
 
@@ -83,6 +96,10 @@ and difficulty. Recommendations need at least three distinct samples and
 enough observed difficulty; insufficient data explicitly reports the config
 default. There is no hidden quality score. Recorded excellence failures count
 as rejects even if tests passed, without rewriting the human evaluation.
+Defects survive duplicate run reports and later evaluations: a recorded
+secret-path or policy touch remains a reject for recommendations even if a
+human later accepts the delivery. A passing gate never substitutes for the
+human `roster eval ... accept` needed to count an acceptance.
 
 For the same task class, the [next task](NEXT.md) uses qualifying model/effort
 and timing evidence. Its context must include redacted **Prior feedback** when

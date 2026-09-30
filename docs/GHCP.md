@@ -28,12 +28,39 @@ grants.
 For an explicitly requested, reviewed GHCP change, when `GITHUB_APP_ID` and
 `GITHUB_APP_PRIVATE_KEY_PATH` are set, publish only through the contracts
 script from the **current feature worktree's repository root**. Initialize the
-pinned `v0.2.0` submodule there if needed, following the
+pinned fail-closed `v0.2.1` submodule there if needed, following the
 [dependency guide](DEPENDENCY.md):
 
-```sh
-node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "<conventional subject>" --merge-when-green
+GHCP sessions set the real model explicitly before publication. In PowerShell:
+
+```powershell
+$env:AI_PROVIDER = "github-copilot"
+$env:AI_MODEL = "GPT-6-Sol"
+$message = @'
+fix: refuse publish without a model id
+
+## Model
+
+GPT-6-Sol
+
+## Summary
+
+Require a real model on every publish path and retain reviewed change and test instructions.
+
+### How to test
+
+Run `node --test` from the feature worktree root.
+'@
+node vendor\github-agent-contracts\scripts\agent-pr.mjs --message $message --model GPT-6-Sol --merge-when-green
 ```
+
+Use a summary of the actual reviewed changes, not just the conventional
+subject. The SDK derives the PR body from the message, so direct calls must
+include `## Model`, `## Summary`, and how to test. Roster's builtin and REPL
+paths add these sections automatically. They pass `--model` from
+`config.llm.model`, otherwise `AI_MODEL`, otherwise `ROSTER_MODEL`; missing
+or invalid IDs fail with `set model` before the SDK. The pinned publisher
+also exits nonzero for missing or unknown model input.
 
 The same flag applies to explicit builtin publication. It does not add a
 merger or deploy seat or bypass human-owned policy, reviews, or required checks.

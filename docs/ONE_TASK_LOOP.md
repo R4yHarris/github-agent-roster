@@ -9,7 +9,7 @@ When no LLM endpoint
 is configured, the deterministic stub writes only the result summary and
 does **not** implement the ask or run tests. With an endpoint, the coder uses
 four guarded tools and must pass a final `node --test` run. It prints an
-`agent-pr.mjs` command with a `Closes #N` message for the issue worktree
+`agent-pr.mjs` command with an explicit `--model` and a `Closes #N` message for the issue worktree
 root; `--publish` alone opts into staging task-allowed
 changes and invoking the App SDK. Policy, workflows, and credentials are
 never staged by the coder seat.
@@ -53,20 +53,23 @@ recording is disabled. No coder path writes human `AI-Eval` decisions. See
 human evaluations, and recommendations.
 
 It returns the issue, worktree and file paths, task, session, and `nextCommand`.
-It prints the worktree location and, for the worker **after editing inside the
-worktree and loading `.env` into its environment**, exactly:
+It prints the worktree location and, when a model is configured, a command
+for the worker **after editing inside the worktree and loading `.env` into
+its environment**:
 
 ```sh
-node $GITHUB_AGENT_CONTRACTS/scripts/agent-pr.mjs --message "feat: issue N
-
-Closes #N" --merge-when-green
+node "$GITHUB_AGENT_CONTRACTS/scripts/agent-pr.mjs" --message "<subject plus Model, Summary, how-to-test, and Closes #N>" --model "$AI_MODEL" --merge-when-green
 ```
 
 Set `GITHUB_AGENT_CONTRACTS` to the resolved contracts pack's absolute path in
 the worker environment, normally the initialized `vendor/github-agent-contracts`
-submodule; see [dependency resolution](DEPENDENCY.md). The printed command uses
-POSIX shell variable syntax; PowerShell
-users must use their shell's environment-variable syntax when executing it.
+submodule; see [dependency resolution](DEPENDENCY.md). The generated message includes `## Model`, `## Summary`, test instructions,
+and `Closes #N`; update its summary to describe the changes actually reviewed.
+Model resolution is `config.llm.model`, then `AI_MODEL`, then `ROSTER_MODEL`.
+When none is set, preparation still succeeds but returns `nextCommand: null`
+and reports `set model`; it does not print a runnable model-free command.
+Printed commands use the caller platform's shell quoting and environment
+variable syntax, including PowerShell on Windows.
 `roster prepare --issue N` only prepares a coder handoff and
 prints the manual publishing command: it does not
 start a worker, merge, or open additional issues. A later explicit publish

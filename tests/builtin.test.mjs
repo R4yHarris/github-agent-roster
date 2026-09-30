@@ -6,9 +6,12 @@ import path from 'node:path';
 import test from 'node:test';
 import { parseConfig } from '../src/lib/config.mjs';
 import { writeAsk } from '../src/lib/ask.mjs';
-import { runBuiltinIssue as runIssueWithSeats, stageReviewedFiles } from '../src/lib/builtin.mjs';
+import {
+  prepareBuiltinPublication, runBuiltinIssue as runIssueWithSeats, stageReviewedFiles,
+} from '../src/lib/builtin.mjs';
 import { loadLearning } from '../src/lib/learn.mjs';
 import { resolveContractsPath } from '../src/lib/paths.mjs';
+import { buildPublishMessage } from '../src/lib/publication.mjs';
 import { parseRecipe } from '../src/lib/recipe.mjs';
 import { packAgentRun } from '../vendor/github-agent-contracts/scripts/parse-agent-run.mjs';
 import { withResearchSummary } from './helpers/research.mjs';
@@ -57,7 +60,8 @@ function fixture(context) {
   git(target, 'remote', 'add', 'origin', 'https://github.com/example/project.git');
   const cwd = path.join(target, 'nested');
   mkdirSync(cwd);
-  const env = { ...process.env, ROSTER_MODEL: '', AI_MODEL_VERSION: '',
+  const env = { ...process.env, ROSTER_MODEL: '', AI_MODEL: '', AI_MODEL_VERSION: '',
+    GITHUB_APP_ID: undefined, GITHUB_APP_PRIVATE_KEY_PATH: undefined,
     GITHUB_AGENT_CONTRACTS: contracts };
   const issue = {
     number: 42, title: 'Add Status to README',
@@ -117,7 +121,8 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
   assert.equal(readFileSync(path.join(options.target, 'README.md'), 'utf8'), '# Example\n');
   assert.equal(result.run, result.runs.coder);
   assert.equal(result.result.mode, 'stub');
-  assert.ok(logs[0].includes('node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "feat: issue 42\n\nCloses #42" --merge-when-green'));
+  assert.equal(result.command, null);
+  assert.match(logs[0], /Publication unavailable: set model/);
   assert.equal((logs[0].match(/AI-Run:/g) ?? []).length, 0);
   assert.deepEqual(result.runs, { planner: null, coder: null });
   assert.deepEqual(options.calls.map(({ program }) => program), ['git', 'git', 'gh', 'git']);
@@ -132,7 +137,8 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
   });
   assert.deepEqual(loadLearning({ cwd: options.target }).runs, [
     { session: result.sessions.planner, task: 'issue-42', task_class: 'feat' },
-    { session: result.sessions.coder, task: 'issue-42', task_class: 'feat', excellence: 'fail' },
+    { session: result.sessions.coder, task: 'issue-42', task_class: 'feat', excellence: 'fail',
+      defects: result.result.excellence.reasons },
   ]);
   assert.equal(existsSync(path.join(options.target, '.roster', 'evals.jsonl')), false);
   assert.doesNotThrow(() => git(options.target, 'check-ignore', '--quiet',
@@ -145,7 +151,8 @@ test('--publish requires an LLM and App environment before any GitHub or worktre
   const options = fixture(context);
   await assert.rejects(runBuiltinIssue(42, {
     ...options, config: stubConfig, publish: true,
-    env: { ...options.env, GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'app.pem' },
+    env: { ...options.env, AI_MODEL: 'reviewed-model',
+      GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'app.pem' },
   }), /requires an LLM endpoint/);
   await assert.rejects(runBuiltinIssue(42, {
     ...options, config: llmConfig, publish: true,
@@ -154,11 +161,22 @@ test('--publish requires an LLM and App environment before any GitHub or worktre
   assert.deepEqual(options.calls, []);
 });
 
+test('--publish refuses an absent model before invoking GitHub, the SDK, or worktree preparation', async (context) => {
+  const options = fixture(context);
+  await assert.rejects(runBuiltinIssue(42, {
+    ...options, config: stubConfig, publish: true,
+    env: { ...options.env, GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'app.pem' },
+    publisher: () => assert.fail('Missing-model publication must not invoke the SDK'),
+  }), /set model/);
+  assert.deepEqual(options.calls, []);
+  assert.equal(existsSync(path.join(options.target, '.worktrees')), false);
+});
+
 test('--auto-model is required when a configured endpoint has no model and cannot override a chosen model', async (context) => {
   const options = fixture(context);
   const emptyModel = parseConfig(example.replace('profile: ""', 'profile: ollama'));
   await assert.rejects(runBuiltinIssue(42, { ...options, config: emptyModel }),
-    /Set config\.llm\.model or use --auto-model/);
+    /set model/);
   await assert.rejects(runBuiltinIssue(42, {
     ...options, config: llmConfig, autoModel: true,
   }), /--auto-model requires an empty config\.llm\.model/);
@@ -359,7 +377,10 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
       assert.equal(program, process.execPath);
       assert.deepEqual(args, [
         path.join(options.contracts, 'scripts', 'agent-pr.mjs'),
-        '--message', 'feat: issue 42\n\nCloses #42', '--merge-when-green',
+        '--message', buildPublishMessage({
+          subject: 'feat: issue 42', model: 'local-model',
+          summary: 'Updated README; tests pass.', issueNumber: 42,
+        }), '--model', 'local-model', '--merge-when-green',
       ]);
       assert.equal(publication.cwd, path.join(options.target, '.worktrees', 'issue-42'));
       assert.equal(publication.env.ROSTER_API_KEY, undefined);
@@ -401,6 +422,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
   ]);
   assert.ok(seatRecords.every(({ context_max }) => context_max === undefined));
   assert.deepEqual(seatRecords.map(({ excellence }) => excellence), [undefined, 'pass']);
+  assert.deepEqual(seatRecords[1].defects, []);
   assert.equal((logs[0].match(/AI-Run:/g) ?? []).length, 2);
   assert.ok(logs.some((line) => line.includes('Merged PR #7')));
   assert.ok(!logs.join('\n').includes('private-key'));
@@ -605,7 +627,8 @@ test('builtin seats record runs automatically without an AI-Eval', async (contex
   });
   assert.deepEqual(loadLearning({ cwd: options.target }).runs, [
     { session: result.sessions.planner, task: 'issue-42', task_class: 'feat' },
-    { session: result.sessions.coder, task: 'issue-42', task_class: 'feat', excellence: 'fail' },
+    { session: result.sessions.coder, task: 'issue-42', task_class: 'feat', excellence: 'fail',
+      defects: result.result.excellence.reasons },
   ]);
   assert.equal(existsSync(path.join(options.target, '.roster', 'evals.jsonl')), false);
 });
@@ -643,7 +666,78 @@ test('detects a changed recipe after the coder runs tests and refuses publicatio
     { session: 'roster-42-coder', excellence: 'fail' },
   ]);
   assert.ok(records.every(({ model }) => model === 'local-model'));
+  assert.ok(records[1].defects.some((reason) => reason.includes('RECIPE.yml')));
   assert.equal(existsSync(path.join(options.target, '.roster', 'evals.jsonl')), false);
+});
+
+test('publication preparation requires a model before reading files, staging, or invoking the SDK', async () => {
+  await assert.rejects(prepareBuiltinPublication({
+    worktreePath: 'missing-worktree', planner: { recipe: '', task: '' },
+    runs: { coder: { env: {} } },
+    result: { mode: 'llm', tests: { exit_code: 0 }, excellence: { pass: true } },
+  }, {
+    config: stubConfig, env: { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'app.pem' },
+  }), /set model/);
+});
+
+test('secret-path touches by the test subprocess are retained as redacted journal defects', async (context) => {
+  const options = fixture(context);
+  let requests = 0;
+  await assert.rejects(runBuiltinIssue(42, {
+    ...options, config: llmConfig, log: () => {},
+    env: { ...options.env, ROSTER_API_KEY: 'test-only-key' },
+    fetchImpl: async () => {
+      requests += 1;
+      return { status: 200, json: async () => ({ choices: [{
+        finish_reason: 'stop',
+        message: { role: 'assistant', content: requests === 1 ? JSON.stringify({
+          title: 'Update README', acceptance_checks: ['node --test exits 0'], files_allowed: ['README.md'],
+        }) : 'Reviewed README.',
+        },
+      }] }) };
+    },
+    runTestCommand: async (_program, _args, { cwd }) => {
+      writeFileSync(path.join(cwd, '.env'), 'TEST_SECRET=test-only-key\n');
+      return { stdout: 'passed', stderr: '' };
+    },
+  }), /Diff path is protected or outside TASK\.md allowed paths: \.env/);
+  const records = loadLearning({ cwd: options.target }).runs;
+  const coder = records.find(({ session }) => session === 'roster-42-coder');
+  assert.equal(coder.excellence, 'fail');
+  assert.ok(coder.defects.some((reason) => reason.endsWith(': .env')));
+  assert.ok(!JSON.stringify(records).includes('test-only-key'));
+  assert.equal(existsSync(path.join(options.target, '.roster', 'evals.jsonl')), false);
+});
+
+test('publication rechecks append new secret-path defects after an initially passing run', async (context) => {
+  const options = fixture(context);
+  let requests = 0;
+  const run = await runBuiltinIssue(42, {
+    ...options, config: llmConfig, log: () => {},
+    env: { ...options.env, ROSTER_API_KEY: 'test-only-key' },
+    fetchImpl: async () => {
+      requests += 1;
+      return { status: 200, json: async () => ({ choices: [{
+        finish_reason: 'stop', message: { role: 'assistant', content: requests === 1 ? JSON.stringify({
+          title: 'Update README', acceptance_checks: ['node --test exits 0'], files_allowed: ['README.md'],
+        }) : 'Reviewed README.' },
+      }] }) };
+    },
+    runTestCommand: async () => ({ stdout: 'passed', stderr: '' }),
+  });
+  assert.equal(run.result.excellence.pass, true);
+  writeFileSync(path.join(run.worktreePath, '.env'), 'TEST_SECRET=test-only-key\n');
+  await assert.rejects(prepareBuiltinPublication(run, {
+    config: llmConfig, cwd: options.cwd,
+    env: { ...options.env, ROSTER_API_KEY: 'test-only-key',
+      GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'app.pem' },
+  }), /Publishing refused by excellence gate/);
+  const records = loadLearning({ cwd: options.target }).runs;
+  assert.equal(records.length, 3);
+  assert.equal(records[1].excellence, 'pass');
+  assert.equal(records[2].excellence, 'fail');
+  assert.ok(records[2].defects.some((reason) => reason.endsWith(': .env')));
+  assert.ok(!JSON.stringify(records).includes('test-only-key'));
 });
 
 test('staging refuses changes outside the task scope', async (context) => {

@@ -4,7 +4,8 @@
 provides identity, policy, trailers, and the publishing script. This repository
 requires it as the Git submodule at
 [`vendor/github-agent-contracts`](../vendor/github-agent-contracts), pinned to
-tag `v0.2.0`. Keep the submodule pointer; do not copy contracts source into this
+tag `v0.2.1`, which refuses missing or unknown model IDs. Keep the submodule
+pointer; do not copy contracts source into this
 repository or rewrite files inside the submodule.
 
 ## Checkout
@@ -52,7 +53,7 @@ With `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_PATH` set, publish from the
 current feature worktree's repository root using the initialized submodule:
 
 ```sh
-node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "..." --merge-when-green
+node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "<subject plus Model, Summary, and how-to-test sections>" --model "$AI_MODEL" --merge-when-green
 ```
 
 The publisher also requires a feature branch and a human-owned root
@@ -65,6 +66,18 @@ A new issue worktree may need `git submodule update --init --recursive` run
 from its own root before manual publication. The builtin `--publish` path
 initializes it, selects reviewed task files, and invokes the SDK from that
 root; without the flag, it prints the next command but does not invoke it.
+Every Roster publish path resolves the model from `config.llm.model`, then
+`AI_MODEL`, then `ROSTER_MODEL`, and passes it explicitly with `--model`.
+An absent or invalid ID aborts with `set model` before invoking the SDK.
+Completed runs retain the actual coder model even if configuration changes.
+Model-free preparation and stub runs report that publication is unavailable
+rather than printing a runnable model-free command.
+
+Roster-generated messages include `## Model`, `## Summary`, and how to test,
+plus an issue closing reference when applicable. For direct SDK publication,
+include those sections in `--message`; do not send a subject-only PR body.
+GHCP sessions set `AI_MODEL=GPT-6-Sol` and `AI_PROVIDER=github-copilot`;
+see the complete [GHCP example](GHCP.md).
 
 Do not commit as the signed-in human when App environment variables are set.
 Never commit tokens, private keys, or `.env`.

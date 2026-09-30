@@ -38,27 +38,25 @@ test('does not invent an unknown model, version, context, or token counts', () =
   assert.deepEqual(mergeUsage(null, { prompt_tokens: 2 }), {});
 });
 
-test('omits AI-Run and inherited metadata when no model is configured', () => {
-  const env = buildPublishEnv({
-    config: parseConfig(example),
-    env: { ...Object.fromEntries(RUN_ENV_NAMES.map((name) => [name, 'unknown'])),
-      ROSTER_API_KEY: 'private-value', GITHUB_APP_ID: '123' },
-  });
-  assert.deepEqual(env, { GITHUB_APP_ID: '123' });
-  assert.equal(packAgentRun(env), null);
+test('publication refuses absent and unknown models instead of clearing metadata and publishing', () => {
+  for (const env of [{}, Object.fromEntries(RUN_ENV_NAMES.map((name) => [name, 'unknown']))]) {
+    assert.throws(() => buildPublishEnv({
+      config: parseConfig(example), env, run: null,
+    }), /set model/);
+  }
 });
 
-test('publication uses config or ROSTER_MODEL and preserves known version without stale usage', () => {
-  for (const configured of [true, false]) {
+test('publication uses config, AI_MODEL, then ROSTER_MODEL without forwarding stale usage or API keys', () => {
+  for (const [configured, sessionModel] of [[true, 'GPT-6-Sol'], [false, 'GPT-6-Sol'], [false, '']]) {
     const env = buildPublishEnv({
       config: configured ? config : parseConfig(example),
-      env: { ROSTER_MODEL: 'served-model', AI_MODEL: 'unknown', AI_PROVIDER: 'vllm',
+      env: { ROSTER_MODEL: 'served-model', AI_MODEL: sessionModel, AI_PROVIDER: 'github-copilot',
         AI_MODEL_VERSION: 'v2', AI_EFFORT: 'x', AI_CONTEXT_OUT: '999',
         AI_SESSION: 'roster-42-coder', AI_TASK: 'issue-42', ROSTER_API_KEY: 'private-value' },
     });
-    assert.equal(env.AI_MODEL, configured ? 'owner/model' : 'served-model');
+    assert.equal(env.AI_MODEL, configured ? 'owner/model' : sessionModel || 'served-model');
     assert.equal(env.AI_MODEL_VERSION, 'v2');
-    assert.equal(env.AI_PROVIDER, 'local');
+    assert.equal(env.AI_PROVIDER, !configured && sessionModel ? 'github-copilot' : 'local');
     assert.equal(env.AI_EFFORT, 'm');
     assert.equal(env.AI_CONTEXT_OUT, undefined);
     assert.equal(env.ROSTER_API_KEY, undefined);
@@ -73,7 +71,7 @@ test('publication keeps the completed coder model even if config changes later',
   });
   assert.equal(env.AI_MODEL, 'owner/model');
   assert.equal(env.AI_CONTEXT_OUT, '3');
-  assert.equal(buildPublishEnv({ config, env: {}, run: null }).AI_MODEL, undefined);
+  assert.deepEqual(buildPublishEnv({ config, env: {}, run: null }), { AI_MODEL: 'owner/model' });
 });
 
 test('rejects invalid or overflowing returned counts and unsafe identifiers', () => {

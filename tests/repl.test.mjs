@@ -7,6 +7,7 @@ import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { parseConfig } from '../src/lib/config.mjs';
+import { buildPublishMessage } from '../src/lib/publication.mjs';
 import { createDispatcher, startRepl } from '../src/repl.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
@@ -217,11 +218,14 @@ test('banner reports the configured LLM endpoint when not using the stub', () =>
 
 test('/publish prints the SDK command without App env and uses the reviewed worktree with App env', async () => {
   const withoutApp = dispatcher({
+    env: { AI_MODEL: 'GPT-6-Sol' },
     services: { resolveContractsPath: () => 'contracts' },
   });
   await withoutApp.dispatch('/publish');
   assert.match(withoutApp.output.text,
-    /node vendor\/github-agent-contracts\/scripts\/agent-pr\.mjs --message "<conventional subject>" --merge-when-green/);
+    /--message '<conventional subject>[\s\S]+--model GPT-6-Sol --merge-when-green/);
+  assert.match(withoutApp.output.text, /## Model\n\nGPT-6-Sol\n\n## Summary/);
+  assert.match(withoutApp.output.text, /node --test/);
 
   const calls = [];
   const withApp = dispatcher({
@@ -230,12 +234,14 @@ test('/publish prints the SDK command without App env and uses the reviewed work
       runBuiltinIssue: async () => ({
         issue: { number: 42 }, repoRoot: cwd, task: 'issue-42',
         worktreePath: join(cwd, '.worktrees', 'issue-42'),
-        runs: { coder: { line: '1|-|local@unknown|m|3/-|2|roster-42-coder|issue-42' } },
+        runs: { coder: { line: '1|local|local-model@-|m|3/-|2|roster-42-coder|issue-42',
+          env: { AI_MODEL: 'local-model' } } },
+        result: { summary: 'Updated the reviewed README.' },
       }),
       prepareBuiltinPublication: async (run, options) => {
         calls.push(['prepare', run.task, options.env.GITHUB_APP_ID]);
         return { contractsPath: 'contracts', worktreePath: run.worktreePath,
-          publishEnv: { GITHUB_APP_ID: '123', AI_SESSION: 'roster-42-coder' } };
+          publishEnv: { GITHUB_APP_ID: '123', AI_MODEL: 'local-model', AI_SESSION: 'roster-42-coder' } };
       },
       publisher: async (options) => {
         calls.push(['publisher', options]);
@@ -250,7 +256,10 @@ test('/publish prints the SDK command without App env and uses the reviewed work
   assert.equal(withApp.state.published, true);
   assert.deepEqual(calls[0], ['prepare', 'issue-42', '123']);
   assert.equal(calls[1][1].cwd, join(cwd, '.worktrees', 'issue-42'));
-  assert.equal(calls[1][1].message, 'feat: issue 42\n\nCloses #42');
+  assert.equal(calls[1][1].model, 'local-model');
+  assert.equal(calls[1][1].message, buildPublishMessage({
+    subject: 'feat: issue 42', model: 'local-model', summary: 'Updated the reviewed README.', issueNumber: 42,
+  }));
   assert.equal(calls[1][1].env.AI_SESSION, 'roster-42-coder');
   assert.equal(calls[2][0], 'close');
   assert.equal(calls[2][1].pullNumber, 7);
@@ -265,9 +274,10 @@ test('an issue publish without a confirmed merge leaves the issue untouched', as
       runBuiltinIssue: async () => ({
         issue: { number: 42 }, repoRoot: cwd, task: 'issue-42',
         worktreePath: join(cwd, '.worktrees', 'issue-42'),
+        result: { summary: 'Updated reviewed code.' },
       }),
       prepareBuiltinPublication: async (run) => ({
-        contractsPath: 'contracts', worktreePath: run.worktreePath, publishEnv: {},
+        contractsPath: 'contracts', worktreePath: run.worktreePath, publishEnv: { AI_MODEL: 'local-model' },
       }),
       publisher: async () => ({ mergedPullRequest: null }),
       issueCloser: () => assert.fail('Unmerged PR must not close its issue'),
@@ -279,16 +289,22 @@ test('an issue publish without a confirmed merge leaves the issue untouched', as
   assert.equal(shell.state.published, false);
 });
 
-test('/publish without a run forwards the configured model or ROSTER_MODEL to agent-pr', async () => {
-  for (const model of ['configured-model', '']) {
+test('/publish without a run forwards config, then AI_MODEL, then ROSTER_MODEL explicitly to agent-pr', async () => {
+  for (const [model, supplied, expected] of [
+    ['configured-model', 'unknown', 'configured-model'], ['', 'GPT-6-Sol', 'GPT-6-Sol'], ['', '', 'served-model'],
+  ]) {
     const shell = dispatcher({
       config: { ...config, llm: { ...config.llm, model, effort: 'h' } },
       env: { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'key.pem',
-        AI_MODEL: 'unknown', ROSTER_MODEL: 'served-model', ROSTER_API_KEY: 'private-value' },
+        AI_MODEL: supplied, ROSTER_MODEL: 'served-model', ROSTER_API_KEY: 'private-value' },
       services: {
         resolveContractsPath: () => 'contracts',
-        publisher: async ({ env }) => {
-          assert.equal(env.AI_MODEL, model || 'served-model');
+        publisher: async ({ env, model: publishModel, message }) => {
+          assert.equal(env.AI_MODEL, expected);
+          assert.equal(publishModel, expected);
+          assert.ok(message.includes(`## Model\n\n${expected}`));
+          assert.match(message, /## Summary\n\nmetadata/);
+          assert.match(message, /node --test/);
           assert.equal(env.AI_PROVIDER, 'local');
           assert.equal(env.AI_MODEL_VERSION, '-');
           assert.equal(env.AI_EFFORT, 'h');
@@ -309,9 +325,10 @@ test('a merged PR with local cleanup failure still finishes its issue without a 
       runBuiltinIssue: async () => ({
         issue: { number: 42 }, repoRoot: cwd, task: 'issue-42',
         worktreePath: join(cwd, '.worktrees', 'issue-42'),
+        result: { summary: 'Updated reviewed code.' },
       }),
       prepareBuiltinPublication: async (run) => ({
-        contractsPath: 'contracts', worktreePath: run.worktreePath, publishEnv: {},
+        contractsPath: 'contracts', worktreePath: run.worktreePath, publishEnv: { AI_MODEL: 'local-model' },
       }),
       publisher: async () => {
         const error = new Error('Local cleanup failed');
@@ -344,7 +361,7 @@ test('imported contracts publisher receives merge-when-green and reports HTTP 42
     return 0;
   }\n`);
   const env = { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'key.pem',
-    ROSTER_API_KEY: 'not-forwarded' };
+    AI_MODEL: 'GPT-6-Sol', AI_PROVIDER: 'github-copilot', ROSTER_API_KEY: 'not-forwarded' };
   const options = {
     env,
     services: { resolveContractsPath: () => contracts },
@@ -353,7 +370,9 @@ test('imported contracts publisher receives merge-when-green and reports HTTP 42
   await success.dispatch('/publish docs: interactive roster shell');
   const result = JSON.parse(success.output.text);
   assert.deepEqual(result.argv,
-    ['--message', 'docs: interactive roster shell', '--merge-when-green']);
+    ['--message', buildPublishMessage({
+      subject: 'docs: interactive roster shell', model: 'GPT-6-Sol', summary: 'interactive roster shell',
+    }), '--model', 'GPT-6-Sol', '--merge-when-green']);
   assert.equal(result.cwd, cwd);
   assert.equal(result.keyPath, resolve(cwd, 'key.pem'));
   assert.equal(result.apiKey, null);
@@ -378,6 +397,25 @@ test('imported contracts publisher receives merge-when-green and reports HTTP 42
   const partial = dispatcher({ env: { GITHUB_APP_ID: '123' } });
   await assert.rejects(partial.dispatch('/publish docs: shell'), /Set both GITHUB_APP_ID/);
   assert.equal(partial.output.text, '');
+});
+
+test('/publish aborts with set model before calling the publisher or printing an unsafe command', async () => {
+  for (const app of [false, true]) {
+    for (const model of ['', 'unknown']) {
+      const shell = dispatcher({
+        env: { AI_MODEL: model, ...(app ? {
+          GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'key.pem',
+        } : {}) },
+        services: {
+          resolveContractsPath: () => 'unusable-contracts',
+          publisher: () => assert.fail('No publisher call is allowed without a real model'),
+        },
+      });
+      await assert.rejects(shell.dispatch('/publish fix: missing model'), /set model/);
+      assert.equal(shell.output.text, '');
+      assert.equal(shell.state.published, false);
+    }
+  }
 });
 
 test('TTY shell prints the banner and exits zero on /quit and Ctrl+C', async () => {

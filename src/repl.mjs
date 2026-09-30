@@ -5,13 +5,15 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { submitAsk } from './lib/ask.mjs';
 import { prepareBuiltinPublication, runBuiltinIssue } from './lib/builtin.mjs';
 import {
-  closeMergedIssue, issueMergeMessage, mergedPullNumber, mergedPullNumberFromFailure,
+  closeMergedIssue, mergedPullNumber, mergedPullNumberFromFailure,
 } from './lib/issue-board.mjs';
 import { loadConfig, setConfigValue } from './lib/config.mjs';
 import { parseEvaluationArgs, recordEvaluation } from './lib/eval.mjs';
 import { formatRecommendation, parseRecommendationArgs, recommend, repositoryRoot } from './lib/learn.mjs';
 import { formatMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
 import { resolveContractsPath } from './lib/paths.mjs';
+import { buildPublishMessage, formatPublishCommand } from './lib/publication.mjs';
+import { redactEvidence } from './runtime/excellence.mjs';
 import { formatStatus, readStatus } from './lib/status.mjs';
 import { createFileVault, validateSecretName } from './vault/file.mjs';
 import { buildPublishEnv } from './metrics/run.mjs';
@@ -36,7 +38,7 @@ const help = `Commands:
 
 class ChecksPermissionError extends Error {}
 
-async function publishWithContracts({ contractsPath, cwd, env, message, output, errorOutput }) {
+async function publishWithContracts({ contractsPath, cwd, env, message, model, output, errorOutput }) {
   const { main } = await import(pathToFileURL(join(contractsPath, 'scripts', 'agent-pr.mjs')).href);
   let errorText = '';
   let successText = '';
@@ -52,7 +54,7 @@ async function publishWithContracts({ contractsPath, cwd, env, message, output, 
       errorOutput.write(text);
     },
   };
-  const code = await main(['--message', message, '--merge-when-green'], {
+  const code = await main(['--message', message, '--model', model, '--merge-when-green'], {
     cwd, env, stdout, stderr,
   });
   if (code === 0) {
@@ -198,17 +200,26 @@ export function createDispatcher({
         }
         const subject = args || (state.lastRun ? `feat: issue ${state.lastRun.issue.number}` : null);
         if (subject !== null) conventionalSubject(subject);
-        const message = subject && state.lastRun
-          ? issueMergeMessage(subject, state.lastRun.issue.number) : subject;
         const appId = Boolean(env.GITHUB_APP_ID);
         const keyPath = Boolean(env.GITHUB_APP_PRIVATE_KEY_PATH);
         if (appId !== keyPath) {
           throw new Error('Set both GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH to publish.');
         }
         if (!appId) {
+          const publishEnv = buildPublishEnv({
+            config: state.config, env, run: state.lastRun?.runs?.coder,
+          });
+          const message = buildPublishMessage({
+            subject: subject ?? '<conventional subject>', model: publishEnv.AI_MODEL,
+            summary: redactEvidence(state.lastRun?.result?.summary ?? subject ?? '<describe the reviewed changes>', {
+              env, apiKeyEnv: state.config.llm.api_key_env,
+            }),
+            testsSkipped: state.lastRun?.result?.testsSkipped,
+            issueNumber: state.lastRun?.issue?.number,
+          });
           api.resolveContractsPath({ repoRoot, cwd, env });
           output.write(`From ${state.lastRun?.worktreePath ?? currentRoot()}, publish reviewed changes:\n` +
-            `node vendor/github-agent-contracts/scripts/agent-pr.mjs --message "${message ?? '<conventional subject>'}" --merge-when-green\n`);
+            `${formatPublishCommand({ message, model: publishEnv.AI_MODEL })}\n`);
           return true;
         }
         if (subject === null) throw new TypeError('Use /publish <conventional subject> or /run N first.');
@@ -224,6 +235,15 @@ export function createDispatcher({
           publishEnv = buildPublishEnv({ config: state.config, env });
           publishEnv.GITHUB_APP_PRIVATE_KEY_PATH = resolve(cwd, env.GITHUB_APP_PRIVATE_KEY_PATH);
         }
+        const model = publishEnv.AI_MODEL;
+        const message = buildPublishMessage({
+          subject, model, issueNumber: state.lastRun?.issue?.number,
+          summary: redactEvidence(state.lastRun ? state.lastRun.result.summary
+            : subject.replace(/^[a-z]+(?:\([^)]+\))?!?: /, ''), {
+            env, apiKeyEnv: state.config.llm.api_key_env,
+          }),
+          testsSkipped: state.lastRun?.result?.testsSkipped,
+        });
         const finishIssue = async (pullNumber) => {
           state.published = true;
           await api.issueCloser({
@@ -236,7 +256,7 @@ export function createDispatcher({
         let publication;
         try {
           publication = await api.publisher({
-            contractsPath, cwd: publishRoot, env: publishEnv, message,
+            contractsPath, cwd: publishRoot, env: publishEnv, message, model,
             output, errorOutput,
           });
         } catch (error) {

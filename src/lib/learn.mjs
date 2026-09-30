@@ -11,7 +11,7 @@ export const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 export const IDENTIFIER = /^(?!-$)[A-Za-z0-9._-]{1,64}$/;
 const RUN_FIELDS = [
   'sha', 'session', 'task', 'task_class', 'model', 'effort',
-  'context_used', 'context_max', 'context_out', 'excellence',
+  'context_used', 'context_max', 'context_out', 'excellence', 'defects',
 ];
 
 export function isObject(value) {
@@ -88,6 +88,11 @@ function validateLocalRun(record, source) {
       (!isObject(record.excellence) || typeof record.excellence.pass !== 'boolean')) {
     throw new Error(`${source}: excellence must be pass, fail, or a report with boolean pass`);
   }
+  if (record.defects != null && (!Array.isArray(record.defects) ||
+      record.defects.some((reason) => typeof reason !== 'string' || !reason.trim() ||
+        /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(reason)))) {
+    throw new Error(`${source}: defects must be an array of nonempty failure reasons without control characters`);
+  }
 }
 
 export function validateLocalEvaluation(record, source) {
@@ -159,6 +164,30 @@ export async function appendJsonl(file, record, validate, fileSystem = fs) {
   }
 }
 
+function partialRunMetadata(env) {
+  const metadata = {};
+  const effort = env.AI_EFFORT;
+  if (effort !== undefined && effort !== '' && effort !== '-') {
+    const aliases = { low: 'l', medium: 'm', high: 'h', max: 'x' };
+    if (typeof effort !== 'string' || (!EFFORTS.includes(effort) && !Object.hasOwn(aliases, effort))) {
+      throw new TypeError('AI_EFFORT must be l, m, h, x, low, medium, high, or max');
+    }
+    metadata.effort = Object.hasOwn(aliases, effort) ? aliases[effort] : effort;
+  }
+  for (const [name, field] of [
+    ['AI_CONTEXT_USED', 'context_used'], ['AI_CONTEXT_MAX', 'context_max'], ['AI_CONTEXT_OUT', 'context_out'],
+  ]) {
+    const value = env[name];
+    if (value === undefined || value === '' || value === '-') continue;
+    if (typeof value !== 'string' || !/^\d+$/.test(value)) {
+      throw new TypeError(`${name} must be a nonnegative decimal integer`);
+    }
+    const count = Number(value);
+    metadata[field] = Number.isSafeInteger(count) ? count : value;
+  }
+  return metadata;
+}
+
 export async function recordRun(record, {
   cwd = process.cwd(),
   env = process.env,
@@ -187,10 +216,12 @@ export async function recordRun(record, {
 
   const parser = resolve(resolveContractsPath({ env, cwd }), 'scripts', 'parse-agent-run.mjs');
   const { packAgentRun, parseAgentRun } = await import(pathToFileURL(parser).href);
-  const metadata = parseAgentRun(packAgentRun({
-    ...env, AI_SESSION: record.session ?? '', AI_TASK: record.task ?? '',
-  }, env.AI_MODEL || 'unknown'));
-  const supplied = { ...metadata, model: env.AI_MODEL ? metadata.model : undefined, ...record };
+  const model = record.model ?? env.AI_MODEL;
+  // Model-free local journals retain partial evidence without packing a fabricated AI-Run.
+  const metadata = model ? parseAgentRun(packAgentRun({
+    ...env, AI_MODEL: model, AI_SESSION: record.session ?? '', AI_TASK: record.task ?? '',
+  }, model)) : partialRunMetadata(env);
+  const supplied = { ...metadata, ...record };
   const run = Object.fromEntries(RUN_FIELDS
     .filter((field) => supplied[field] != null)
     .map((field) => [field, supplied[field]]));
@@ -238,8 +269,16 @@ function knownFields(record) {
     value != null && !(key === 'model' && value === 'unknown')));
 }
 
-export function excellenceFailed(record) {
+function reportFailed(record) {
   return record.excellence === 'fail' || record.excellence?.pass === false;
+}
+
+export function excellenceFailed(record) {
+  return reportFailed(record) || Boolean(record.defects?.length);
+}
+
+function mergeDefects(...records) {
+  return [...new Set(records.flatMap((record) => record.defects ?? []))];
 }
 
 export function matchesEvaluation(record, evaluation) {
@@ -257,10 +296,12 @@ export function joinLearning(exported, local, evaluations, includeUnpublished = 
     });
     if (matches.length) {
       for (const entry of matches) {
-        const failure = excellenceFailed(run) ? run.excellence
-          : excellenceFailed(entry.record) ? entry.record.excellence : undefined;
+        const failure = reportFailed(run) ? run.excellence
+          : reportFailed(entry.record) ? entry.record.excellence : undefined;
+        const defects = mergeDefects(entry.record, run);
         entry.record = { ...entry.record, ...knownFields(run), ...knownFields(entry.git ?? {}) };
         if (failure !== undefined) entry.record.excellence = failure;
+        if (defects.length) entry.record.defects = defects;
       }
     } else if (includeUnpublished) {
       records.push({ record: { ...run } });
@@ -276,10 +317,12 @@ export function joinLearning(exported, local, evaluations, includeUnpublished = 
       .map((field) => [field, evaluation[field]])));
     const matches = records.filter(({ record }) => matchesEvaluation(record, evaluation));
     for (const entry of matches) {
-      const failure = [metadata, entry.record].find(excellenceFailed)?.excellence;
+      const failure = [metadata, entry.record].find(reportFailed)?.excellence;
+      const defects = mergeDefects(entry.record, metadata);
       entry.record = entry.evaluationOnly ? { ...entry.record, ...metadata }
         : { ...entry.record, ...metadata, ...knownFields(entry.record) };
       if (failure !== undefined) entry.record.excellence = failure;
+      if (defects.length) entry.record.defects = defects;
     }
     if (!matches.length && includeUnpublished && metadata.model && metadata.task_class) {
       records.push({ record: metadata, evaluationOnly: true });

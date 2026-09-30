@@ -3,7 +3,9 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { IDENTIFIER, inferTaskClass, recordRun } from './learn.mjs';
-import { issueMergeMessage } from './issue-board.mjs';
+import { loadConfig } from './config.mjs';
+import { buildPublishMessage, formatPublishCommand } from './publication.mjs';
+import { resolvePublishModel } from '../metrics/run.mjs';
 import { renderAssignment } from '../planner/stub.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -37,6 +39,7 @@ export async function runIssue(issueNumber, {
   runCommand = execute,
   fileSystem = fs,
   env = process.env,
+  config = loadConfig(),
   now = () => new Date(),
   log = console.log,
   worktrees = '.worktrees',
@@ -101,9 +104,17 @@ export async function runIssue(issueNumber, {
   const assignmentPath = path.join(worktreePath, 'ASSIGNMENT.md');
   const envPath = path.join(worktreePath, '.env');
   const session = sessionId ?? `roster-${now().toISOString().replace(/[-:.]/g, '')}`;
-  const nextCommand = `node $GITHUB_AGENT_CONTRACTS/scripts/agent-pr.mjs --message "${issueMergeMessage(
-    `feat: issue ${number}`, number,
-  )}" --merge-when-green`;
+  const model = config.llm.model || env.AI_MODEL || env.ROSTER_MODEL
+    ? resolvePublishModel({ config, env }) : null;
+  const nextCommand = model ? formatPublishCommand({
+    model,
+    message: buildPublishMessage({
+      subject: `feat: issue ${number}`, model, summary: issue.title, issueNumber: number,
+    }),
+    script: process.platform === 'win32'
+      ? '"$env:GITHUB_AGENT_CONTRACTS\\scripts\\agent-pr.mjs"'
+      : '"$GITHUB_AGENT_CONTRACTS/scripts/agent-pr.mjs"',
+  }) : null;
 
   await beforeWorktree(repoRoot, worktreePath);
   await fileSystem.mkdir(path.dirname(worktreePath), { recursive: true });
@@ -135,7 +146,7 @@ export async function runIssue(issueNumber, {
 Assignment: ${assignmentPath}
 Environment: ${envPath}
 After editing inside the worktree, load .env into the worker environment and run:
-${nextCommand}`);
+${nextCommand ?? 'Publication unavailable: set model in llm.model, AI_MODEL, or ROSTER_MODEL before publishing.'}`);
 
   return { issue, repoRoot, worktreePath, assignmentPath, envPath, task, session, nextCommand };
 }

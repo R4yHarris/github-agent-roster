@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import test from 'node:test';
 import { runIssue } from '../src/lib/issue.mjs';
+import { buildPublishMessage, formatPublishCommand } from '../src/lib/publication.mjs';
 
 const repoRoot = path.resolve('example-repository');
 const originUrl = 'https://github.com/example/repository.git';
@@ -34,6 +35,7 @@ function harness(issueResponse = issue) {
     runCommand,
     fileSystem,
     env: {},
+    config: { llm: { model: 'configured-model' } },
     now: () => new Date('2026-09-28T22:25:50.149Z'),
     log: (message) => messages.push(message),
   };
@@ -44,7 +46,15 @@ test('reads the issue in the current repository and prepares one coder worktree'
   const { calls, writes, messages, options } = harness();
   const result = await runIssue('42', options);
   const worktreePath = path.join(repoRoot, '.worktrees', 'issue-42');
-  const nextCommand = 'node $GITHUB_AGENT_CONTRACTS/scripts/agent-pr.mjs --message "feat: issue 42\n\nCloses #42" --merge-when-green';
+  const nextCommand = formatPublishCommand({
+    model: 'configured-model',
+    message: buildPublishMessage({
+      subject: 'feat: issue 42', model: 'configured-model', summary: issue.title, issueNumber: 42,
+    }),
+    script: process.platform === 'win32'
+      ? '"$env:GITHUB_AGENT_CONTRACTS\\scripts\\agent-pr.mjs"'
+      : '"$GITHUB_AGENT_CONTRACTS/scripts/agent-pr.mjs"',
+  });
 
   assert.deepEqual(calls, [
     { program: 'git', args: ['rev-parse', '--show-toplevel'], cwd: options.cwd },
@@ -87,6 +97,29 @@ ${issue.body}
   assert.equal(messages.length, 1);
   assert.match(messages[0], /After editing inside the worktree, load \.env/);
   assert.ok(messages[0].endsWith(nextCommand));
+});
+
+test('manual preparation omits a runnable publication command until a model is set', async () => {
+  const { options, messages } = harness();
+  const result = await runIssue(42, { ...options, config: { llm: { model: '' } } });
+  assert.equal(result.nextCommand, null);
+  assert.match(messages[0], /set model/);
+  assert.doesNotMatch(messages[0], /agent-pr\.mjs --message/);
+});
+
+test('manual handoff forwards config, then AI_MODEL, then ROSTER_MODEL as --model', async () => {
+  for (const [configured, supplied, expected] of [
+    ['configured', 'session', 'configured'], ['', 'session', 'session'], ['', '', 'served'],
+  ]) {
+    const { options } = harness();
+    const result = await runIssue(42, {
+      ...options, config: { llm: { model: configured } }, env: { AI_MODEL: supplied, ROSTER_MODEL: 'served' },
+    });
+    assert.ok(result.nextCommand.endsWith(`--model ${expected} --merge-when-green`));
+    assert.ok(result.nextCommand.includes(`## Model\n\n${expected}`));
+    assert.ok(result.nextCommand.includes('## Summary'));
+    assert.ok(result.nextCommand.includes('node --test'));
+  }
 });
 
 test('builtin preparation can set a seat session without a third preparation run', async () => {
