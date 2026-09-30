@@ -75,14 +75,20 @@ for (const platform of ['win32', 'linux', 'darwin']) {
       profile: 'vllm-local', api_key_optional: true, provider: 'vllm',
     });
     assert.deepEqual(config.publish, { enabled: true });
-    assert.deepEqual(config.tools, { internet: true, run_test: true });
+    assert.deepEqual(config.tools, { internet: false, run_test: true });
     assert.deepEqual(config.reviewer, { required: true });
+    assert.deepEqual(config.review, { required: true });
+    assert.deepEqual(config.loop, { turns: 12 });
+    assert.deepEqual(config.context, { budget: 8000 });
+    assert.equal(config.seat.turn_budget, 12);
+    assert.doesNotMatch(readFileSync(result.configPath, 'utf8'), /^  internet:/m);
+    assert.match(options.output.text, /These flags do not grant contracts policy\./);
     assert.match(options.output.text, new RegExp(`OS: ${platform}`));
     assert.match(options.output.text, /1\. Platform[\s\S]*2\. LLM endpoint[\s\S]*3\. Permissions[\s\S]*4\. Review/);
     assert.equal(options.prompts.at(-1), 'Confirm write .roster/config.yml? [yes] ');
     assert.match(options.output.text, /Available models:\n  1\. owner\/first-model\n  2\. owner\/chosen-model/);
     assert.doesNotMatch(options.output.text, /\nAdvanced\n/);
-    assert.equal(options.prompts.some((prompt) => prompt.includes('internet search')), false);
+    assert.equal(options.prompts.some((prompt) => prompt.startsWith('Internet search')), false);
     assert.match(options.output.text, /Doctor\nOK Node\.js >=20/);
     assert.match(options.output.text, /FAIL agent-policy\.yml/);
     assert.match(options.output.text, /not a grant to publish/);
@@ -97,7 +103,7 @@ for (const platform of ['win32', 'linux', 'darwin']) {
 }
 
 test('WSL can use a Windows host URL and choose no permissions plus Advanced internet off', async (t) => {
-  const options = fixture(t, ['http://172.30.96.1:8000/v1/', '1', 'no', 'n', 'no', 'yes', 'no', '']);
+  const options = fixture(t, ['http://172.30.96.1:8000/v1/', '1', 'no', 'n', 'no', 'yes', 'no', '', '', '']);
   const result = await runOnboard({
     ...options, platform: 'linux',
     fetchImpl: async (url) => {
@@ -110,9 +116,31 @@ test('WSL can use a Windows host URL and choose no permissions plus Advanced int
   assert.deepEqual(result.config.tools, { internet: false, run_test: false });
   assert.deepEqual(result.config.reviewer, { required: false });
   assert.match(options.output.text, /\nAdvanced\n/);
-  assert.ok(options.prompts.some((prompt) => prompt.includes('internet search')));
+  assert.ok(options.prompts.some((prompt) => prompt.startsWith('Internet search')));
   assert.match(options.output.text, /no live internet tool/);
   assert.match(options.output.text, /Windows host IP, not localhost/);
+});
+
+test('Advanced defaults internet on and stores effective loop/context limits after validation', async (t) => {
+  const options = fixture(t, ['', '1', '', '', '', 'yes', '', '0', '16', '0', '12000', '']);
+  const result = await runOnboard({ ...options, fetchImpl: models('served-model') });
+  assert.equal(result.config.tools.internet, true);
+  assert.equal(result.config.loop.turns, 16);
+  assert.equal(result.config.context.budget, 12000);
+  assert.equal(result.config.seat.turn_budget, 16);
+  assert.equal(result.config.seat.context_chars, 12000);
+  assert.match(options.output.text, /Enter an integer from 1 to 64/);
+  assert.match(options.output.text, /Enter a positive safe integer/);
+  const permissionQuestions = options.prompts.filter((prompt) =>
+    /^(Allow publish|Require reviewer|Allow run_test|Show advanced)/.test(prompt));
+  assert.deepEqual(permissionQuestions, [
+    'Allow publish through GitHub App? [yes] ', 'Require reviewer before publish? [yes] ',
+    'Allow run_test? [yes] ', 'Show advanced settings? [no] ',
+  ]);
+  const raw = readFileSync(result.configPath, 'utf8');
+  assert.match(raw, /^review:\n  required: true$/m);
+  assert.doesNotMatch(raw, /^reviewer:/m);
+  assert.match(raw, /^  internet: true$/m);
 });
 
 test('model selection defaults to the first actual ID in an OpenAI models list', async (t) => {
@@ -322,8 +350,8 @@ test('real readline TTY handles answers and Ctrl+C without an injected question 
         assert.equal(existsSync(join(options.cwd, '.gitignore')), false);
         assert.match(text, /Onboarding cancelled/);
       } else {
-        for (const prompt of ['vLLM base URL [', 'Select a model [', 'Publish via GitHub App?',
-          'Allow run_test?', 'Reviewer required before publish?', 'Show advanced?', 'Confirm write .roster/config.yml?']) {
+        for (const prompt of ['vLLM base URL [', 'Select a model [', 'Allow publish through GitHub App?',
+          'Require reviewer before publish?', 'Allow run_test?', 'Show advanced settings?', 'Confirm write .roster/config.yml?']) {
           await waitFor(prompt);
           input.write('\n');
         }

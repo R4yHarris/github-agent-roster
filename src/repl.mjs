@@ -7,7 +7,7 @@ import { prepareBuiltinPublication, runBuiltinIssue } from './lib/builtin.mjs';
 import {
   commentMergedIssue, mergedPullNumber, mergedPullNumberFromFailure,
 } from './lib/issue-board.mjs';
-import { loadConfig, requirePublicationEnabled, setConfigValue } from './lib/config.mjs';
+import { isReviewRequired, loadConfig, requirePublicationEnabled, setConfigValue } from './lib/config.mjs';
 import { parseEvaluationArgs, recordEvaluation } from './lib/eval.mjs';
 import { formatRecommendation, parseRecommendationArgs, recommend, repositoryRoot } from './lib/learn.mjs';
 import { formatMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
@@ -201,9 +201,9 @@ export function createDispatcher({
           throw new Error('This run was already published; start another /run before publishing again.');
         }
         const skipReview = args === '--skip-review' || args.endsWith(' --skip-review');
-        const reviewBypass = skipReview || state.config.reviewer?.required === false;
+        const reviewBypass = skipReview || !isReviewRequired(state.config);
         const reviewLabel = skipReview ? 'gate bypassed with --skip-review'
-          : state.config.reviewer?.required === false ? 'gate not required by configuration' : 'pass';
+          : !isReviewRequired(state.config) ? 'gate not required by configuration' : 'pass';
         const requestedSubject = skipReview ? args.slice(0, -'--skip-review'.length).trim() : args;
         const subject = requestedSubject || (state.lastRun ? `feat: issue ${state.lastRun.issue.number}` : null);
         if (subject !== null) conventionalSubject(subject);

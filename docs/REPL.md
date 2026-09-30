@@ -66,7 +66,7 @@ report is available: `/publish` fails unless `--skip-review` is explicit.
 The flag bypasses only the reviewer verdict, not tests, excellence, or App
 policy. A failed review never deletes coder changes.
 Private `publish.enabled: false` blocks `/publish` entirely.
-`reviewer.required: false` makes the review verdict optional without
+`review.required: false` (legacy alias `reviewer.required`) makes the review verdict optional without
 disabling the reviewer, tests, excellence, or human-owned policy.
 
 Without App credentials, `/publish` prints the command instead of executing
