@@ -109,3 +109,25 @@ and model for one run. It does not require clearing a saved default and
 does not rewrite that default. Ordinary runs and recommendations do not
 switch or persist a fleet choice. Models outside this catalog cannot be
 automatically nominated, even if they appear in evaluation history.
+
+## Assisted setup
+
+After `roster onboard` has saved a working default endpoint/model, run
+`roster fleet assist` in a terminal. The onboarded default model asks the
+[interview questions](../templates/fleet/ASK.md) one endpoint at a time:
+ID, base URL, actual served model ID, hardware, context, concurrency,
+task-class hints, and notes. The [discovery guide](../templates/fleet/DISCOVER.md)
+covers `/v1/models`, port 8000, WSL/Windows reachability, and authorized LAN
+or DGX endpoints without private addresses in tracked files.
+
+Each proposed profile is shown as YAML. The harness appends to private
+`.roster/fleet.yml` **only after the user explicitly says yes** at
+`Write this profile? [no]`, using the existing fleet validator. No/blank
+does not write; `done` or `/quit` stops the interview. Model suggestions
+cannot invent endpoints or model IDs, overwrite existing profiles, or
+grant policy. If the model endpoint fails, local template questions remain
+available without the model.
+
+The [two-profile template](../templates/fleet/FLEET.example.yml) contains
+fictional examples with comments for every field. It is not automatically
+loaded as a fleet or treated as evidence of measured model capacity.
