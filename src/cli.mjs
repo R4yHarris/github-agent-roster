@@ -11,7 +11,7 @@ import { loadConfig } from './lib/config.mjs';
 import { runDemo } from './lib/demo.mjs';
 import { checkDoctor, formatDoctor } from './lib/doctor.mjs';
 import { formatInit, initializeRoster } from './lib/init.mjs';
-import { runOnboard } from './lib/onboard.mjs';
+import { runOnboard } from './onboard/wizard.mjs';
 import { formatMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
 import { resolveContractsPath } from './lib/paths.mjs';
 import { formatStatus, readStatus } from './lib/status.mjs';

@@ -8,7 +8,7 @@ import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { loadConfig, parseConfig } from '../src/lib/config.mjs';
-import { probeModels, runOnboard } from '../src/lib/onboard.mjs';
+import { probeModels, runOnboard } from '../src/onboard/wizard.mjs';
 
 const installation = fileURLToPath(new URL('../', import.meta.url));
 const example = readFileSync(join(installation, 'roster.config.example.yml'), 'utf8');
@@ -48,7 +48,7 @@ function models(...ids) {
 
 for (const platform of ['win32', 'linux', 'darwin']) {
   test(`${platform} wizard probes real model IDs and saves defaults without an Advanced section`, async (t) => {
-    const options = fixture(t, ['', '2', '', '', '', '']);
+    const options = fixture(t, ['', '2', '', '', '', '', '']);
     let calls = 0;
     const env = { GITHUB_APP_ID: 'hidden-app-id', GITHUB_APP_PRIVATE_KEY_PATH: 'hidden-key-path',
       ROSTER_API_KEY: 'hidden-api-key' };
@@ -78,6 +78,8 @@ for (const platform of ['win32', 'linux', 'darwin']) {
     assert.deepEqual(config.tools, { internet: true, run_test: true });
     assert.deepEqual(config.reviewer, { required: true });
     assert.match(options.output.text, new RegExp(`OS: ${platform}`));
+    assert.match(options.output.text, /1\. Platform[\s\S]*2\. LLM endpoint[\s\S]*3\. Permissions[\s\S]*4\. Review/);
+    assert.equal(options.prompts.at(-1), 'Confirm write .roster/config.yml? [yes] ');
     assert.match(options.output.text, /Available models:\n  1\. owner\/first-model\n  2\. owner\/chosen-model/);
     assert.doesNotMatch(options.output.text, /\nAdvanced\n/);
     assert.equal(options.prompts.some((prompt) => prompt.includes('internet search')), false);
@@ -95,7 +97,7 @@ for (const platform of ['win32', 'linux', 'darwin']) {
 }
 
 test('WSL can use a Windows host URL and choose no permissions plus Advanced internet off', async (t) => {
-  const options = fixture(t, ['http://172.30.96.1:8000/v1/', '1', 'no', 'n', 'no', 'yes', 'no']);
+  const options = fixture(t, ['http://172.30.96.1:8000/v1/', '1', 'no', 'n', 'no', 'yes', 'no', '']);
   const result = await runOnboard({
     ...options, platform: 'linux',
     fetchImpl: async (url) => {
@@ -113,7 +115,7 @@ test('WSL can use a Windows host URL and choose no permissions plus Advanced int
 });
 
 test('failed models probe still saves a supplied actual model and never invents one', async (t) => {
-  const options = fixture(t, ['', '', 'unknown', 'owner/manual-model', '', '', '', '']);
+  const options = fixture(t, ['', '', 'unknown', 'owner/manual-model', '', '', '', '', '']);
   const result = await runOnboard({
     ...options,
     fetchImpl: async () => { throw new Error('private-fetch-secret must not be printed'); },
@@ -124,7 +126,7 @@ test('failed models probe still saves a supplied actual model and never invents 
   assert.match(options.output.text, /Model probe failed/);
   assert.match(options.output.text, /model supplied manually/);
   assert.doesNotMatch(options.output.text, /private-fetch-secret/);
-  assert.equal(options.prompts.filter((prompt) => prompt === 'Model ID (required): ').length, 3);
+  assert.equal(options.prompts.filter((prompt) => prompt === 'Model ID [required]: ').length, 3);
 });
 
 test('models timeout is exactly 5000ms and bounds an unresponsive fetch', async () => {
@@ -169,7 +171,7 @@ test('invalid or secret-like discovery data is an explicit probe failure', async
 
 test('URL validation retries without echoing credentials and invalid selections do not choose an invented model', async (t) => {
   const options = fixture(t, ['http://user:do-not-print@host:8000/v1',
-    'http://localhost:8000/v1/chat/completions', '', '9', '1', 'maybe', 'yes', '', '', '']);
+    'http://localhost:8000/v1/chat/completions', '', '9', '1', 'maybe', 'yes', '', '', '', '']);
   const result = await runOnboard({ ...options, fetchImpl: models('served-model') });
   assert.equal(result.config.llm.base_url, 'http://127.0.0.1:8000/v1');
   assert.equal(result.config.llm.model, 'served-model');
@@ -191,7 +193,7 @@ test('existing config needs confirmation and keeps unrelated settings on a confi
   assert.equal(readFileSync(join(kept.cwd, '.roster', 'config.yml'), 'utf8'), example);
   assert.equal(existsSync(join(kept.cwd, '.gitignore')), false);
 
-  const changed = fixture(t, ['yes', '', '1', '', '', '', '']);
+  const changed = fixture(t, ['yes', '', '1', '', '', '', '', '']);
   mkdirSync(join(changed.cwd, '.roster'));
   writeFileSync(join(changed.cwd, '.roster', 'config.yml'),
     example.replace('context_chars: 8000', 'context_chars: 16000').replace('effort: m', 'effort: h'));
@@ -201,8 +203,18 @@ test('existing config needs confirmation and keeps unrelated settings on a confi
   assert.equal(parseConfig(readFileSync(result.configPath, 'utf8')).llm.model, 'selected-model');
 });
 
+test('declining the final review writes neither config nor ignore rules', async (t) => {
+  const options = fixture(t, ['', '1', '', '', '', '', 'no']);
+  const result = await runOnboard({ ...options, fetchImpl: models('served-model') });
+  assert.equal(result.exitCode, 0);
+  assert.equal(result.saved, false);
+  assert.match(options.output.text, /4\. Review[\s\S]*Model: served-model/);
+  assert.equal(existsSync(join(options.cwd, '.roster', 'config.yml')), false);
+  assert.equal(existsSync(join(options.cwd, '.gitignore')), false);
+});
+
 test('onboard from a nested Git directory writes ignored config at that worktree root', async (t) => {
-  const options = fixture(t, ['', '1', '', '', '', '']);
+  const options = fixture(t, ['', '1', '', '', '', '', '']);
   const nested = join(options.cwd, 'nested');
   mkdirSync(nested);
   copyFileSync(join(installation, '.gitignore'), join(options.cwd, '.gitignore'));
@@ -219,7 +231,7 @@ test('onboard from a nested Git directory writes ignored config at that worktree
 });
 
 test('a tracked private config is never overwritten by onboarding', async (t) => {
-  const options = fixture(t, ['yes', '', '1', '', '', '', '']);
+  const options = fixture(t, ['yes', '', '1', '', '', '', '', '']);
   mkdirSync(join(options.cwd, '.roster'));
   writeFileSync(join(options.cwd, '.roster', 'config.yml'), example);
   execFileSync('git', ['init', '--quiet'], { cwd: options.cwd, stdio: 'pipe' });
@@ -279,13 +291,13 @@ test('real readline TTY handles answers and Ctrl+C without an injected question 
       if (cancel) {
         await waitFor('vLLM base URL [');
         input.write('\x03');
-        assert.equal((await done).exitCode, 130);
+        assert.equal((await done).exitCode, 0);
         assert.equal(existsSync(join(options.cwd, '.roster', 'config.yml')), false);
         assert.equal(existsSync(join(options.cwd, '.gitignore')), false);
         assert.match(text, /Onboarding cancelled/);
       } else {
         for (const prompt of ['vLLM base URL [', 'Select a model [', 'Publish via GitHub App?',
-          'Allow run_test?', 'Reviewer required before publish?', 'Show advanced?']) {
+          'Allow run_test?', 'Reviewer required before publish?', 'Show advanced?', 'Confirm write .roster/config.yml?']) {
           await waitFor(prompt);
           input.write('\n');
         }
