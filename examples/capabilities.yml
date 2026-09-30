@@ -1,0 +1,39 @@
+# Starting guesses only, not measurements, scores, or benchmark claims.
+# Profile priors do not register endpoints. Models must exist in private fleet.yml.
+capabilities:
+  - profile_id: default
+    task_class: feat
+    suggested_difficulty: 2
+    context_max: 8192
+    concurrency: 1
+    notes: "Generic first-run starting guess; verify actual model limits."
+  - profile_id: default
+    task_class: fix
+    suggested_difficulty: 2
+    context_max: 8192
+    concurrency: 1
+    notes: "Generic first-run starting guess, not evaluated capacity."
+  - profile_id: default
+    task_class: docs
+    suggested_difficulty: 2
+    context_max: 8192
+    concurrency: 1
+    notes: "Generic documentation starting guess, not a benchmark."
+  - profile_id: default
+    task_class: test
+    suggested_difficulty: 2
+    context_max: 8192
+    concurrency: 1
+    notes: "Generic test-task starting guess; human evaluation is required."
+  - profile_id: example-single-gpu
+    task_class: fix
+    suggested_difficulty: 3
+    context_max: 32768
+    concurrency: 2
+    notes: "Fictional catalog illustration, not a measured performance claim."
+  - model_id: fictional/large-coder
+    task_class: feat
+    suggested_difficulty: 5
+    context_max: 65536
+    concurrency: 1
+    notes: "Fictional model illustration; do not treat as a benchmark."
