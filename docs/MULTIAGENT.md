@@ -30,7 +30,12 @@ See [opt-in routing](ROUTING.md) for the source and context constraints.
    branch without a worktree is added without `-b`; mismatched registrations
    are refused. App files, ASSIGNMENT.md, and `.env` are preserved. Previous
    untracked generated run artifacts are archived under the repository's Git
-   metadata before replanning, not deleted or mixed into the app diff.
+   metadata before another attempt, not deleted or mixed into the app diff.
+   If existing RECIPE.yml and TASK.md validate for this issue, planning is
+   skipped and the coder starts directly. Those two files stay unchanged;
+   estimation and coder/reviewer outputs are regenerated. Failed stubs,
+   mismatched Ask/recipe references, and invalid runtime recipes do not bypass
+   planning. The required three-seat recipe schema is unchanged.
 2. The planner session `roster-N-planner` uses the deterministic stub when
    `llm.base_url` is empty. Otherwise it requests a strict JSON plan from
    the configured model. Within `planner.turn_budget` (1-64), it may use
@@ -38,6 +43,12 @@ See [opt-in routing](ROUTING.md) for the source and context constraints.
    App-code writes, including `src/`, are denied and reported as tool errors.
    The model can return a JSON plan or finish after writing a complete
    TASK with the unchanged Ask, acceptance checks, allowed files, and metadata.
+   A complete written TASK ends planning immediately, without a second model
+   turn merely to confirm it. Headings are case-insensitive: a title heading,
+   `Original Ask` or `Ask` containing the issue text, `Acceptance Checks` or
+   `acceptance_checks`, and `Allowed Files` or `Files allowed`. Scope and other
+   sections may appear between them. Missing Allowed Files is an error; paths
+   are never inferred from the prose of a written task.
    The harness validates that task and finalizes all three managed artifacts
    through the same scoped writer, including trusted history-based estimates.
    Draft recipe/estimate text cannot add seats or replace estimation evidence.

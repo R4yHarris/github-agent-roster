@@ -5,9 +5,12 @@ import { ensureLocalPath } from './paths.mjs';
 
 const names = ['RECIPE.yml', 'TASK.md', 'ESTIMATE.md', 'CONTEXT.md', 'RESEARCH.md', 'RESULT.md', 'REVIEW.md'];
 
-export async function archiveRunArtifacts(worktree, { task, git }) {
+export async function archiveRunArtifacts(worktree, { task, git, preserve = [] }) {
   if (typeof task !== 'string' || !/^issue-[1-9]\d*$/.test(task) || typeof git !== 'function') {
     throw new TypeError('Run archive requires an issue identifier and Git helper');
+  }
+  if (!Array.isArray(preserve) || preserve.some((name) => !['RECIPE.yml', 'TASK.md'].includes(name))) {
+    throw new TypeError('Run archive may preserve only validated recipe/task artifacts');
   }
   const files = [];
   for (const name of names) {
@@ -21,6 +24,7 @@ export async function archiveRunArtifacts(worktree, { task, git }) {
     if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
       throw new Error('Previous run artifacts must be regular, single-link files');
     }
+    if (preserve.includes(name)) continue;
     files.push({ name, file });
   }
   if (!files.length) return null;

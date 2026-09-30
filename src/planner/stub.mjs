@@ -4,10 +4,13 @@ import { parseRecipe } from '../lib/recipe.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
 import { inferTaskClass } from '../lib/learn.mjs';
 import { estimateTask, readTaskMetadata } from '../runtime/estimate.mjs';
-import { isForbiddenWrite, plannerToolDefinitions } from '../runtime/tools.mjs';
+import { plannerToolDefinitions } from '../runtime/tools.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
 import { applyFeedback } from './feedback.mjs';
 import { parsePlannerToolCalls } from './tool-calls.mjs';
+import { allowedFile, checkedList, oneLine, parseTaskDocument } from './task.mjs';
+
+export { taskFilesAllowed } from './task.mjs';
 
 const templates = new Map();
 const defaultChecks = ['node --test exits 0', 'The requested behavior in the Ask is implemented'];
@@ -29,14 +32,6 @@ function render(template, values) {
   });
 }
 
-function oneLine(value, label) {
-  if (typeof value !== 'string' || !value.trim() ||
-      /[\x00-\x1f\x7f]/.test(value) || value.length > 240) {
-    throw new TypeError(`${label} must be one nonempty line (at most 240 characters)`);
-  }
-  return value.trim();
-}
-
 export function cleanAskText(ask) {
   if (typeof ask !== 'string' || !ask.trim() || Buffer.byteLength(ask, 'utf8') > 16_384) {
     throw new TypeError('Ask must be nonempty UTF-8 text of at most 16 KiB');
@@ -46,15 +41,6 @@ export function cleanAskText(ask) {
     throw new TypeError('Ask must be nonempty UTF-8 text of at most 16 KiB');
   }
   return normalized.trim();
-}
-
-function allowedFile(value) {
-  const file = oneLine(value, 'Files allowed entry');
-  if (!/^(?:\*\*\/\*|[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*(?:\/\*\*)?)$/.test(file) ||
-      file.split('/').some((part) => part === '.' || part === '..') || isForbiddenWrite(file)) {
-    throw new TypeError('Files allowed entries must stay inside the worktree and exclude protected files');
-  }
-  return file;
 }
 
 function listInAsk(ask, heading) {
@@ -67,13 +53,6 @@ function listInAsk(ask, heading) {
   });
   if (!items.length) throw new TypeError(`${heading} must contain at least one bullet point`);
   return items;
-}
-
-function checkedList(items, label, check, limit = 8) {
-  if (!Array.isArray(items) || items.length < 1 || items.length > limit) {
-    throw new TypeError(`${label} must contain 1-${limit} entries`);
-  }
-  return items.map(check);
 }
 
 function buildPlan(ask, { reference, title, acceptanceChecks, filesAllowed, metadata = {} }) {
@@ -122,17 +101,10 @@ export function planStub(ask, { reference = 'local:draft', title, metadata } = {
   });
 }
 
-function planFromTask(task, ask) {
-  const normalized = task.replace(/\r\n/g, '\n');
-  const title = /^# Task: (.+)$/m.exec(normalized)?.[1];
-  const checks = /^## Acceptance checks\n((?:- .+\n)+)\n## Files allowed/m.exec(normalized)?.[1];
-  const originalAsk = /^## Ask\n([\s\S]+)$/m.exec(normalized)?.[1];
-  if (!title || !checks || !originalAsk || cleanAskText(originalAsk) !== ask) {
-    throw new TypeError('Planner TASK.md must contain a title, acceptance checks, allowed files, and the unchanged Ask');
-  }
+export function planFromTask(task, ask) {
+  const { title, acceptance_checks, files_allowed } = parseTaskDocument(task, { expectedAsk: ask });
   const { difficulty, estimate_min, task_class, model } = readTaskMetadata(task);
-  return { title, acceptance_checks: checks.trimEnd().split('\n').map((line) => line.slice(2)),
-    files_allowed: taskFilesAllowed(normalized), difficulty, estimate_min, task_class, model };
+  return { title, acceptance_checks, files_allowed, difficulty, estimate_min, task_class, model };
 }
 
 export async function planAsk(ask, {
@@ -235,6 +207,29 @@ export async function planAsk(ask, {
         }
         messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
       }
+      if (taskDraft !== undefined) {
+        let validated;
+        try {
+          const complete = planFromTask(taskDraft, cleanAsk);
+          if (lockedModel && complete.model && complete.model !== lockedModel) {
+            throw new TypeError('The routed planner must keep the selected fleet model');
+          }
+          validated = buildPlan(cleanAsk, {
+            reference, title: fixedTitle ?? complete.title,
+            acceptanceChecks: complete.acceptance_checks, filesAllowed: complete.files_allowed,
+            metadata: { ...metadata, ...complete, ...(lockedModel ? { model: lockedModel } : {}) },
+          });
+        } catch (error) {
+          if (!(error instanceof Error)) throw error;
+          if (turn >= budget + Number(repairUsed)) {
+            if (repairUsed) return fallback(error.message, turn);
+            throw new Error(`Planner turn budget (${budget}) exhausted: ${error.message}`);
+          }
+        }
+        if (validated) {
+          return finish({ ...validated, task: taskDraft, usage: mergeUsage(...usages), turns: turn, response: lastResponse });
+        }
+      }
       if (turn < budget + Number(repairUsed)) continue;
       if (taskDraft === undefined) {
         if (!repairUsed) {
@@ -326,12 +321,4 @@ export function renderAssignment(issue) {
     TITLE: issue.title,
     ASK: issue.body,
   });
-}
-
-export function taskFilesAllowed(task) {
-  if (typeof task !== 'string') throw new TypeError('TASK.md must be text');
-  const section = /^## Files allowed\n((?:- `[^`\r\n]+`\n)+)\n## Ask(?:\n|$)/m.exec(task);
-  if (!section) throw new Error('TASK.md must contain a Files allowed list before the Ask');
-  return checkedList(section[1].trimEnd().split('\n').map((line) => line.slice(3, -1)),
-    'Files allowed', allowedFile, 32);
 }

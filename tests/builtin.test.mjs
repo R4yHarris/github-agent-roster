@@ -205,6 +205,7 @@ test('rerunning an issue reuses its worktree and preserves prior run artifacts w
   const options = fixture(context);
   const initial = await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {} });
   const oldTask = readFileSync(initial.taskPath, 'utf8');
+  const oldResult = readFileSync(initial.result.resultPath, 'utf8');
   const oldEnv = readFileSync(initial.envPath, 'utf8');
   writeFileSync(path.join(initial.worktreePath, 'README.md'), '# Operator change\n');
   const rerun = await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {},
@@ -212,10 +213,78 @@ test('rerunning an issue reuses its worktree and preserves prior run artifacts w
   assert.equal(rerun.reused, true);
   assert.equal(rerun.worktreePath, initial.worktreePath);
   assert.equal(git(rerun.worktreePath, 'branch', '--show-current'), 'issue-42');
-  assert.equal(readFileSync(path.join(rerun.archivePath, 'TASK.md'), 'utf8'), oldTask);
+  assert.equal(readFileSync(rerun.taskPath, 'utf8'), oldTask);
+  assert.equal(readFileSync(path.join(rerun.archivePath, 'RESULT.md'), 'utf8'), oldResult);
+  assert.equal(rerun.planner.reused, true);
   assert.equal(readFileSync(rerun.envPath, 'utf8'), oldEnv);
   assert.equal(readFileSync(path.join(rerun.worktreePath, 'README.md'), 'utf8'), '# Operator change\n');
   assert.equal(options.calls.filter(({ args }) => args[0] === 'worktree' && args[1] === 'add').length, 1);
+});
+
+test('a valid existing issue-92 RECIPE/TASK skips the planner and starts the scoped coder', async (context) => {
+  const options = fixture(context);
+  const ask = 'Add a one-line Status section to README.md';
+  options.issue.number = 92;
+  options.issue.title = ask;
+  options.issue.body = ask;
+  options.issue.url = 'https://github.com/example/project/issues/92';
+  const worktree = path.join(options.target, '.worktrees', 'issue-92');
+  git(options.target, 'worktree', 'add', '-b', 'issue-92', worktree);
+  const task = readFileSync(new URL('./fixtures/planner-task-92.md', import.meta.url), 'utf8');
+  const recipe = planStub(ask, { reference: 'issue:92' }).recipe;
+  writeFileSync(path.join(worktree, 'TASK.md'), task);
+  writeFileSync(path.join(worktree, 'RECIPE.yml'), recipe);
+  writeFileSync(path.join(worktree, 'ESTIMATE.md'), '# Previous estimate\n');
+  const logs = [];
+  let calls = 0;
+  const result = await runBuiltinIssue(92, {
+    ...options, config: llmConfig, log: (text) => logs.push(text),
+    fetchImpl: async (_url, request) => {
+      calls += 1;
+      const body = JSON.parse(request.body);
+      assert.doesNotMatch(body.messages[0].content, /builtin planner seat/);
+      assert.match(body.messages[0].content, /## Original Ask[\s\S]*## Scope[\s\S]*## Allowed Files/);
+      return Response.json({ choices: [calls === 1 ? { finish_reason: 'tool_calls', message: {
+        role: 'assistant', tool_calls: [{ id: 'status', type: 'function', function: {
+          name: 'write_file', arguments: JSON.stringify({ path: 'README.md', content: '# Example\n\n## Status\nActive.\n' }),
+        } }],
+      } } : { finish_reason: 'stop', message: { role: 'assistant', content: 'Added a one-line Status section.' } }] });
+    },
+    runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+  });
+  assert.equal(calls, 2, 'Only coder turns should reach this mock');
+  assert.equal(result.planner.reused, true);
+  assert.equal(result.reused, true);
+  assert.equal(result.worktreePath, worktree);
+  assert.equal(result.runs.planner, null);
+  assert.equal(result.result.excellence.pass, true);
+  assert.equal(result.review.verdict, 'pass');
+  assert.equal(readFileSync(result.taskPath, 'utf8'), task);
+  assert.equal(readFileSync(result.recipePath, 'utf8'), recipe);
+  assert.equal(readFileSync(path.join(result.archivePath, 'ESTIMATE.md'), 'utf8'), '# Previous estimate\n');
+  assert.equal(options.calls.some(({ args }) => args[0] === 'worktree' && args[1] === 'add'), false);
+  assert.deepEqual(loadLearning({ cwd: options.target }).runs.map(({ session }) => session),
+    ['roster-92-coder', 'roster-92-reviewer']);
+  assert.doesNotMatch(options.stderr, /start seat planner/);
+  assert.match(options.stderr, /start seat coder/);
+  assert.match(logs.join('\n'), /Planner skipped: existing RECIPE.yml and TASK.md validate/);
+});
+
+test('an invalid cached recipe is preserved in the archive and replanned, not blindly reused', async (context) => {
+  const options = fixture(context);
+  const worktree = path.join(options.target, '.worktrees', 'issue-42');
+  git(options.target, 'worktree', 'add', '-b', 'issue-42', worktree);
+  const task = planStub(options.issue.body, { reference: 'issue:42' }).task;
+  const wrongRecipe = planStub(options.issue.body, { reference: 'issue:99' }).recipe;
+  writeFileSync(path.join(worktree, 'TASK.md'), task);
+  writeFileSync(path.join(worktree, 'RECIPE.yml'), wrongRecipe);
+  const logs = [];
+  const result = await runBuiltinIssue(42, { ...options, config: stubConfig,
+    log: (text) => logs.push(text), fetchImpl: () => assert.fail('Stub replanning must not use a model') });
+  assert.equal(result.planner.reused, undefined);
+  assert.equal(readFileSync(path.join(result.archivePath, 'RECIPE.yml'), 'utf8'), wrongRecipe);
+  assert.equal(parseRecipe(result.planner.recipe).ask, 'issue:42');
+  assert.match(logs.join('\n'), /do not validate for this issue; replanning is required/);
 });
 
 test('an existing branch is reused when its issue worktree needs to be created', async (context) => {
@@ -304,7 +373,7 @@ test('a rerun never archives or overwrites tracked run artifacts', async (contex
   const options = fixture(context);
   const initial = await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {} });
   const before = readFileSync(initial.taskPath, 'utf8');
-  git(initial.worktreePath, 'add', '--', 'TASK.md');
+  git(initial.worktreePath, 'add', '--', 'RESULT.md');
   await assert.rejects(runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {} }),
     /Refusing to replace tracked planning\/run artifacts/);
   assert.equal(readFileSync(initial.taskPath, 'utf8'), before);
@@ -1023,7 +1092,7 @@ test('a tool-writing planner hands validated artifacts to the scoped coder and r
     },
     runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
   });
-  assert.equal(plannerTurns, 2);
+  assert.equal(plannerTurns, 1);
   assert.equal(coderTurns, 2);
   assert.equal(result.result.excellence.pass, true);
   assert.equal(result.review.verdict, 'pass');

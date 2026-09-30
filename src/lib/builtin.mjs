@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { buildPublishEnv, buildRun, resolvePublishModel, RUN_ENV_NAMES } from '../metrics/run.mjs';
 import { taskFilesAllowed } from '../planner/stub.mjs';
 import { runCoder } from '../seats/coder.mjs';
-import { runPlanner } from '../seats/planner.mjs';
+import { preparePlannerHandoff, readPlannerHandoff, runPlanner } from '../seats/planner.mjs';
 import { requirePassingReview, runReviewer } from '../seats/reviewer.mjs';
 import { isAllowedFile, isForbiddenWrite, isManagedFile } from '../runtime/tools.mjs';
 import { checkExcellence, redactEvidence } from '../runtime/excellence.mjs';
@@ -253,10 +253,6 @@ export async function runBuiltinIssue(issueNumber, {
     sessionId: `roster-${issueNumber}-coder`, recordPreparation: false,
   });
   const { worktreePath } = prepared;
-  const archivePath = prepared.reused ? await archiveRunArtifacts(worktreePath, {
-    task: prepared.task, git: (args) => git(worktreePath, args, commandEnv),
-  }) : null;
-  if (archivePath) log(`Previous generated run artifacts preserved: ${archivePath}`);
   let activeConfig = config;
   let autoRecommendation = null;
   let route = null;
@@ -281,6 +277,15 @@ export async function runBuiltinIssue(issueNumber, {
       log(`Auto-model: ${taskClass ? 'no eligible fleet profile or evidence' : 'no recognized task class'}; deterministic stub`);
     }
   }
+  const existing = prepared.reused ? await readPlannerHandoff({
+    worktree: worktreePath, reference: `issue:${prepared.issue.number}`, ask: prepared.ask, lockedModel: route?.profile.model,
+  }) : { plan: null };
+  if (existing.reason) log(existing.reason);
+  const archivePath = prepared.reused ? await archiveRunArtifacts(worktreePath, {
+    task: prepared.task, git: (args) => git(worktreePath, args, commandEnv),
+    preserve: existing.plan ? ['RECIPE.yml', 'TASK.md'] : [],
+  }) : null;
+  if (archivePath) log(`Previous generated run artifacts preserved: ${archivePath}`);
   const sessions = {
     planner: `roster-${prepared.issue.number}-planner`,
     coder: prepared.session,
@@ -295,12 +300,15 @@ export async function runBuiltinIssue(issueNumber, {
     'GH_TOKEN', 'GITHUB_TOKEN']) delete metricEnv[name];
   let planner;
   try {
-    planner = await liveLog.seat('planner', sessions.planner, activeConfig, (onEvent) => runPlanner({
+    planner = existing.plan ? await preparePlannerHandoff(existing.plan, {
+      worktree: worktreePath, learningRoot: prepared.repoRoot, config: activeConfig, env,
+    }) : await liveLog.seat('planner', sessions.planner, activeConfig, (onEvent) => runPlanner({
       worktree: worktreePath, repoRoot, issue: prepared.issue, config: activeConfig,
       ask: prepared.ask, metadata: prepared.metadata ?? undefined, task: prepared.task,
       session: sessions.planner, fetchImpl, env, vault, learningRoot: prepared.repoRoot,
       lockedModel: route?.profile.model, onEvent,
     }));
+    if (planner.reused) log('Planner skipped: existing RECIPE.yml and TASK.md validate; starting coder.');
   } catch (error) {
     if (error instanceof Error && error.run) {
       await recordRun({ session: sessions.planner, task: prepared.task,
@@ -316,7 +324,7 @@ export async function runBuiltinIssue(issueNumber, {
     ...(excellence ? excellenceFields(excellence, { config, env }) : {}),
   }, { cwd: prepared.repoRoot, env: { ...metricEnv, ...run?.env }, createDirectory: true, run });
   const plannerRun = planner.run;
-  await recordSeat(sessions.planner, plannerRun);
+  if (!planner.reused) await recordSeat(sessions.planner, plannerRun);
   if (planner.error) log(`Planning failed: ${planner.error}\nRECIPE/TASK stubs are unverified; no configured coder will run.`);
   const coderConfig = { ...activeConfig, llm: Object.freeze({
     ...activeConfig.llm, model: planner.metadata.model || activeConfig.llm.model,

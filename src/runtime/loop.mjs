@@ -2,12 +2,11 @@ import { createBuiltinChat } from '../lib/llm.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
 import { toolDefinitions } from './tools.mjs';
 import { redactEvidence, taskSkipsTests } from './excellence.mjs';
+import { parseTaskDocument } from '../planner/task.mjs';
 
 function stubSummary(task) {
-  const title = /^# Task: (.+)$/m.exec(task)?.[1];
-  const checks = /^## Acceptance checks\n((?:- .+\n)+)/m.exec(task)?.[1];
-  if (!title || !checks) throw new Error('TASK.md needs a title and acceptance checks');
-  return `Task: ${title}\n\nAcceptance checks:\n${checks.trimEnd()}\n\n` +
+  const { title, acceptance_checks: checks } = parseTaskDocument(task);
+  return `Task: ${title}\n\nAcceptance checks:\n${checks.map((check) => `- ${check}`).join('\n')}\n\n` +
     'Deterministic stub only: no implementation or tests were run. Configure llm.base_url to run a coder.';
 }
 

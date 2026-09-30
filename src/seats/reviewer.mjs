@@ -6,6 +6,7 @@ import { TextDecoder, promisify } from 'node:util';
 import { createBuiltinChat } from '../lib/llm.mjs';
 import { ensureLocalPath } from '../lib/paths.mjs';
 import { taskFilesAllowed } from '../planner/stub.mjs';
+import { parseTaskDocument } from '../planner/task.mjs';
 import { redactEvidence } from '../runtime/excellence.mjs';
 import { isAllowedFile, isForbiddenRead } from '../runtime/tools.mjs';
 import { loadPrincipal } from './principal.mjs';
@@ -124,8 +125,7 @@ export async function runReviewer({
     if (path.resolve(coderResult.resultPath) !== path.resolve(worktree, 'RESULT.md')) {
       throw new Error('Reviewer RESULT.md does not match the coder worktree');
     }
-    const checks = /^## Acceptance checks\n((?:- .+\n)+)/m.exec(task)?.[1];
-    if (!checks) throw new Error('Reviewer requires TASK.md acceptance checks');
+    const checks = parseTaskDocument(task).acceptance_checks.map((check) => `- ${check}`).join('\n') + '\n';
     if (!coderResult.excellence?.pass || coderResult.mode !== 'llm') {
       report = {
         verdict: 'fail',
