@@ -213,6 +213,10 @@ test('LLM coder uses only offered tools within the turn budget, then verifies te
   assert.equal(result.turns, 2);
   assert.equal(tests, 2);
   assert.deepEqual(result.usage, { prompt_tokens: 46, completion_tokens: 17 });
+  assert.deepEqual(result.response, { model: options.config.llm.model,
+    usage: { prompt_tokens: 26, completion_tokens: 9 } });
+  assert.equal(result.run.metrics.prompt_tokens, 26);
+  assert.equal(result.run.metrics.completion_tokens, 9);
   assert.match(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), /## Status\nReady/);
   assert.match(readFileSync(result.resultPath, 'utf8'), /node --test exited 0/);
   const memory = readFileSync(options.memoryPath, 'utf8');
@@ -275,9 +279,62 @@ test('named vLLM profile performs one worktree tool call then stops on a passing
   assert.equal(result.run.provider, 'vllm');
   assert.equal(result.run.env.AI_PROVIDER, 'local');
   assert.equal(result.run.env.AI_MODEL, 'served-model');
-  assert.equal(result.run.env.AI_CONTEXT_USED, '12');
-  assert.equal(result.run.env.AI_CONTEXT_OUT, '5');
+  assert.equal(result.run.env.AI_CONTEXT_USED, '5');
+  assert.equal(result.run.env.AI_CONTEXT_OUT, '3');
   assert.match(result.run.line, /^1\|local\|served-model@-\|/);
+});
+
+test('the final coder response replaces earlier usage instead of retaining totals or Copilot settings', async (context) => {
+  for (const usage of [{ prompt_tokens: 100, completion_tokens: 40 }, undefined]) {
+    const options = fixture(context, llmConfig);
+    let turns = 0;
+    const result = await runCoder({
+      ...options, env: { AI_MODEL: 'GPT-6.1-Sol', AI_PROVIDER: 'github-copilot',
+        AI_CONTEXT_USED: '1000000', AI_CONTEXT_MAX: '1000000', AI_CONTEXT_OUT: '999',
+        AI_MODEL_VERSION: 'stale', ROSTER_API_KEY: 'test-only-key' },
+      fetchImpl: async () => {
+        turns += 1;
+        if (turns === 1) return Response.json({
+          choices: [{ finish_reason: 'tool_calls', message: {
+            role: 'assistant', tool_calls: [{ id: 'edit', type: 'function', function: {
+              name: 'write_file', arguments: JSON.stringify({
+                path: 'README.md', content: '# Example\n\n## Status\nReady.\n',
+              }),
+            } }],
+          } }],
+          model: 'earlier-response-model', usage: { prompt_tokens: 7, completion_tokens: 2 },
+        });
+        return Response.json({
+          choices: [{ finish_reason: 'stop', message: {
+            role: 'assistant', content: 'Added Status; tests passed.',
+          } }],
+          model: 'actual-final-model', ...(usage ? { usage } : {}),
+        });
+      },
+      runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+    });
+    assert.equal(turns, 2);
+    assert.equal(result.excellence.pass, true);
+    assert.equal(result.run.metrics.model, 'actual-final-model');
+    assert.equal(result.run.metrics.provider, 'local');
+    assert.equal(Object.hasOwn(result.run.metrics, 'context_max'), false);
+    assert.equal(result.run.env.AI_CONTEXT_MAX, undefined);
+    assert.equal(result.run.env.AI_MODEL_VERSION, '-');
+    assert.match(readFileSync(result.resultPath, 'utf8'), /Model: actual-final-model/);
+    if (usage) {
+      assert.deepEqual(result.usage, { prompt_tokens: 107, completion_tokens: 42 });
+      assert.equal(result.run.metrics.prompt_tokens, 100);
+      assert.equal(result.run.metrics.completion_tokens, 40);
+    } else {
+      assert.deepEqual(result.usage, {});
+      for (const field of ['prompt_tokens', 'completion_tokens', 'context_used', 'context_out']) {
+        assert.equal(Object.hasOwn(result.run.metrics, field), false);
+      }
+      assert.equal(result.run.env.AI_CONTEXT_USED, undefined);
+      assert.equal(result.run.env.AI_CONTEXT_OUT, undefined);
+      assert.equal(result.response.usage, null);
+    }
+  }
 });
 
 test('model-requested path escape is denied and returned as a tool error, not a file write', async (context) => {

@@ -52,7 +52,8 @@ test('vLLM chat POSTs to the configured API root without Authorization or loggin
     return Response.json(completion);
   });
   const result = await chat({ messages, temperature: 0.2, max_tokens: 64 });
-  assert.deepEqual(result, { message: completion.choices[0].message, usage: completion.usage });
+  assert.deepEqual(result, { message: completion.choices[0].message, usage: completion.usage,
+    model: 'local-test-model' });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, 'http://127.0.0.1:8000/v1/chat/completions');
   assert.equal(calls[0].options.method, 'POST');
@@ -78,7 +79,7 @@ test('builtin vllm-local profile preserves usage and its optional-key setting', 
     },
   });
   assert.deepEqual(await chat({ messages }),
-    { message: completion.choices[0].message, usage: completion.usage });
+    { message: completion.choices[0].message, usage: completion.usage, model: 'owner/served-model' });
 
   const keyRequired = parseConfig(example.replace('profile: ""', 'profile: vllm-local')
     .replace('model: ""', 'model: owner/served-model')
@@ -100,7 +101,9 @@ test('hosted chat uses an environment key before the vault and supports model ov
     env: { HOSTED_KEY: secret },
     vault: { get: () => assert.fail('Environment keys must win') },
   });
-  await chat({ messages, model: 'override-model' });
+  const result = await chat({ messages, model: 'override-model' });
+  assert.equal(result.model, 'override-model');
+  assert.equal(chat.lastResponse.model, 'override-model');
 });
 
 test('a vault key is sent even when keys are optional', async () => {
@@ -129,7 +132,8 @@ test('tool-call messages survive parsing and omitted usage is null', async () =>
     tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'lookup', arguments: '{}' } }],
   };
   const chat = client(async () => Response.json({ choices: [{ message }] }));
-  assert.deepEqual(await chat({ messages }), { message, usage: null });
+  assert.deepEqual(await chat({ messages }), { message, usage: null, model: 'local-test-model' });
+  assert.deepEqual(chat.lastResponse, { model: 'local-test-model', usage: null });
 });
 
 test('passes supported finish reasons through and rejects truncated completions', async () => {
@@ -139,7 +143,7 @@ test('passes supported finish reasons through and rejects truncated completions'
     usage: { prompt_tokens: 3, completion_tokens: 2 },
   }));
   assert.deepEqual(await chat({ messages }), {
-    message, usage: { prompt_tokens: 3, completion_tokens: 2 }, finish_reason: 'stop',
+    message, usage: { prompt_tokens: 3, completion_tokens: 2 }, model: 'local-test-model', finish_reason: 'stop',
   });
   const truncated = client(async () => Response.json({
     choices: [{ message, finish_reason: 'length' }],
@@ -155,7 +159,8 @@ test('429 retries once with the same payload and key after Retry-After', async (
       ? new Response(secret, { status: 429, headers: { 'Retry-After': '0' } })
       : Response.json(completion);
   }, { env: { OPENAI_API_KEY: secret } });
-  assert.deepEqual(await chat({ messages }), { message: completion.choices[0].message, usage: completion.usage });
+  assert.deepEqual(await chat({ messages }), { message: completion.choices[0].message, usage: completion.usage,
+    model: 'local-test-model' });
   assert.equal(calls.length, 2);
   assert.equal(calls[0].url, calls[1].url);
   assert.equal(calls[0].options.body, calls[1].options.body);
@@ -285,4 +290,44 @@ test('invalid and non-serializable requests fail before resolving secrets or mak
     messages,
     extra: { toJSON() { throw new Error(secret); } },
   }), (error) => safeError(error, /JSON serializable/));
+});
+
+test('retains only the last successful response model and reported usage without prompts or secret fields', async () => {
+  let calls = 0;
+  const chat = client(async () => {
+    calls += 1;
+    if (calls === 3) return new Response(secret, { status: 500 });
+    return Response.json(calls === 1 ? {
+      ...completion, model: 'actual-served-model',
+      usage: { prompt_tokens: 100, completion_tokens: 40, total_tokens: 140, private_field: secret },
+    } : { choices: completion.choices });
+  });
+  assert.equal(chat.lastResponse, null);
+  const response = await chat({ messages });
+  const snapshot = chat.lastResponse;
+  assert.equal(response.model, 'actual-served-model');
+  assert.deepEqual(snapshot, { model: 'actual-served-model',
+    usage: { prompt_tokens: 100, completion_tokens: 40 } });
+  response.usage.prompt_tokens = 999;
+  assert.equal(snapshot.usage.prompt_tokens, 100);
+  assert.equal(Object.isFrozen(snapshot), true);
+  assert.equal(Object.isFrozen(snapshot.usage), true);
+  assert.throws(() => { chat.lastResponse = null; }, TypeError);
+  for (const sensitive of [secret, messages[0].content, completion.choices[0].message.content]) {
+    assert.ok(!JSON.stringify(snapshot).includes(sensitive));
+  }
+
+  await chat({ messages, model: 'next-request-model' });
+  assert.deepEqual(chat.lastResponse, { model: 'next-request-model', usage: null });
+  assert.equal(snapshot.model, 'actual-served-model');
+  await assert.rejects(chat({ messages }), (error) => safeError(error, /HTTP 500/));
+  assert.deepEqual(chat.lastResponse, { model: 'next-request-model', usage: null });
+});
+
+test('invalid returned models fail safely rather than falling back to the request model', async () => {
+  for (const model of ['', 7, ' padded-model ', 'line\nmodel']) {
+    const chat = client(async () => Response.json({ ...completion, model }));
+    await assert.rejects(chat({ messages }), (error) => safeError(error, /invalid model/));
+    assert.equal(chat.lastResponse, null);
+  }
 });

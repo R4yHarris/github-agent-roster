@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { resolvePublishModel } from '../metrics/run.mjs';
+import { materializeRun, resolvePublishModel } from '../metrics/run.mjs';
 import { resolveContractsPath } from './paths.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -69,13 +69,15 @@ export function mergedPullNumberFromFailure(output) {
 }
 
 export async function commentMergedIssue({
-  issue, pullNumber, model, runLine, repoRoot, cwd = process.cwd(),
+  issue, pullNumber, model, runLine, run, repoRoot, cwd = process.cwd(),
   env = process.env, fetchImpl = globalThis.fetch,
   git = execFileSync, readKey = readFileSync,
 } = {}) {
   const number = positiveNumber(issue?.number, 'Issue number');
   const pull = positiveNumber(pullNumber, 'Merged PR number');
-  const actualModel = resolvePublishModel({ env: { AI_MODEL: model } });
+  const completed = run?.metrics ? materializeRun(run.metrics, run.version) : null;
+  const actualModel = completed?.metrics.model ?? resolvePublishModel({ env: { AI_MODEL: model } });
+  if (completed) runLine = completed.line;
   if (typeof runLine !== 'undefined' &&
       (typeof runLine !== 'string' || !runLine || /[\r\n]/.test(runLine))) {
     throw new TypeError('AI-Run must be one nonempty line');
@@ -148,6 +150,12 @@ export async function commentMergedIssue({
       throw new Error('Issue must remain open for human AI-Eval; no comment was posted');
     }
     const body = `Merged ${pr.html_url} for issue #${number}.\n\nModel: ${actualModel}` +
+      (completed ? `\nProvider: ${completed.metrics.provider}` +
+        (completed.metrics.prompt_tokens === undefined ? '' : `\nPrompt tokens: ${completed.metrics.prompt_tokens}`) +
+        (completed.metrics.completion_tokens === undefined ? '' : `\nCompletion tokens: ${completed.metrics.completion_tokens}`) +
+        (completed.metrics.context_max === undefined ? '' : `\nContext max: ${completed.metrics.context_max}`) +
+        (completed.metrics.session === undefined ? '' : `\nSession: ${completed.metrics.session}`) +
+        (completed.metrics.task === undefined ? '' : `\nTask: ${completed.metrics.task}`) : '') +
       (runLine ? `\nAI-Run: ${runLine}` : '') +
       '\n\nIssue remains open for human AI-Eval.';
     const comment = await request(`${repoPath}/issues/${number}/comments`, token, {

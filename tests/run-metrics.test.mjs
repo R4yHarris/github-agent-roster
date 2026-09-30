@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { parseConfig } from '../src/lib/config.mjs';
-import { buildPublishEnv, buildRun, mergeUsage, RUN_ENV_NAMES } from '../src/metrics/run.mjs';
+import { buildPublishEnv, buildRun, materializeRun, mergeUsage, RUN_ENV_NAMES } from '../src/metrics/run.mjs';
 import { packAgentRun, parseAgentRun } from '../vendor/github-agent-contracts/scripts/parse-agent-run.mjs';
 
 const example = readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8');
@@ -140,4 +140,73 @@ test('rejects invalid or overflowing returned counts and unsafe identifiers', ()
     config: parseConfig(example), env: { ROSTER_MODEL: 'unknown' },
   }), /unknown is not a model/);
   assert.throws(() => buildRun({ config, env: { AI_MODEL_VERSION: 'bad|version' } }), /version/);
+});
+
+test('live response metrics own model, provider, counts, and capacity instead of the Copilot session environment', () => {
+  const inherited = { AI_MODEL: 'GPT-6.1-Sol', AI_PROVIDER: 'github-copilot', AI_MODEL_VERSION: 'stale',
+    AI_CONTEXT_USED: '1000000', AI_CONTEXT_MAX: '1000000', AI_CONTEXT_OUT: '999', AI_EFFORT: 'x' };
+  const run = buildRun({
+    config, response: { model: 'actual-served-model', usage: { prompt_tokens: 100, completion_tokens: 40 } },
+    usage: { prompt_tokens: 900, completion_tokens: 800 }, session: 'seat-session', task: 'issue-42',
+    env: inherited,
+  });
+  assert.deepEqual(run.metrics, {
+    model: 'actual-served-model', provider: 'local', effort: 'm', context_max: 8192,
+    prompt_tokens: 100, completion_tokens: 40, context_used: 100, context_out: 40,
+    session: 'seat-session', task: 'issue-42',
+  });
+  assert.equal(run.line, '1|local|actual-served-model@-|m|100/8192|40|seat-session|issue-42');
+  assert.equal(Object.isFrozen(run.metrics), true);
+  const publication = buildPublishEnv({
+    config: { ...config, llm: { ...config.llm, model: 'later-alias', context_max: 65536 } },
+    env: inherited, run: { ...run, env: inherited, line: 'stale' },
+  });
+  assert.equal(packAgentRun(publication), run.line);
+  assert.equal(publication.AI_MODEL, run.metrics.model);
+  assert.equal(publication.AI_MODEL_VERSION, '-');
+});
+
+test('missing live usage and unknown capacity omit canonical fields and every publisher count slot', () => {
+  const unknown = { ...config, llm: { ...config.llm, context_max: 0 } };
+  const inherited = { AI_PROVIDER: 'github-copilot', AI_CONTEXT_USED: '1000000',
+    AI_CONTEXT_MAX: '1000000', AI_CONTEXT_OUT: '999' };
+  const run = buildRun({ config: unknown, response: { model: 'actual-served-model', usage: null },
+    usage: { prompt_tokens: 100, completion_tokens: 40 }, env: inherited });
+  assert.deepEqual(run.metrics, { provider: 'local', model: 'actual-served-model', effort: 'm' });
+  assert.equal(run.line, '1|local|actual-served-model@-|m|-/-|-|-|-');
+  const publication = buildPublishEnv({ config, env: inherited, run });
+  for (const field of ['AI_CONTEXT_USED', 'AI_CONTEXT_MAX', 'AI_CONTEXT_OUT']) {
+    assert.equal(Object.hasOwn(publication, field), false);
+  }
+  const failed = buildRun({ config: unknown, response: null, env: inherited });
+  assert.deepEqual(failed.metrics, { provider: 'local', model: 'owner/model', effort: 'm' });
+});
+
+test('partial live usage omits unknown counts, but reported zero remains real evidence', () => {
+  const zero = buildRun({ config, response: { model: 'served-model',
+    usage: { prompt_tokens: 0, completion_tokens: 0 } }, env: {} });
+  assert.equal(zero.metrics.prompt_tokens, 0);
+  assert.equal(zero.metrics.completion_tokens, 0);
+  assert.equal(zero.env.AI_CONTEXT_USED, '0');
+  assert.equal(zero.env.AI_CONTEXT_OUT, '0');
+  const partial = buildRun({ config, response: { model: 'served-model',
+    usage: { completion_tokens: 40 } }, env: {} });
+  assert.equal(Object.hasOwn(partial.metrics, 'prompt_tokens'), false);
+  assert.equal(Object.hasOwn(partial.metrics, 'context_used'), false);
+  assert.equal(partial.metrics.completion_tokens, 40);
+  assert.throws(() => materializeRun({ ...zero.metrics, context_used: 1000000 }), /aliases must match/);
+});
+
+test('only GHCP publication with no completed run may retain declared session capacity', () => {
+  const env = { AI_MODEL: 'GPT-6.1-Sol', AI_PROVIDER: 'github-copilot',
+    AI_CONTEXT_MAX: '1000000', AI_CONTEXT_USED: '1000000', AI_CONTEXT_OUT: '1000000' };
+  const publication = buildPublishEnv({ config: parseConfig(example), env });
+  assert.equal(publication.AI_CONTEXT_MAX, '1000000');
+  assert.equal(publication.AI_CONTEXT_USED, undefined);
+  assert.equal(publication.AI_CONTEXT_OUT, undefined);
+  const local = buildPublishEnv({ config: parseConfig(example), env: { ...env, AI_PROVIDER: 'local' } });
+  assert.equal(local.AI_CONTEXT_MAX, undefined);
+  assert.throws(() => buildPublishEnv({
+    config: parseConfig(example), env: { ...env, AI_CONTEXT_MAX: 'unknown' },
+  }), /GHCP-only AI_CONTEXT_MAX/);
 });

@@ -4,6 +4,7 @@ import { parseRecipe } from '../lib/recipe.mjs';
 import { planAsk } from '../planner/stub.mjs';
 import { appendMemory, readMemory, seatMemoryPath } from '../runtime/memory.mjs';
 import { writeEstimate } from '../runtime/estimate.mjs';
+import { buildRun } from '../metrics/run.mjs';
 
 export async function runPlanner({
   worktree, repoRoot, issue, ask = issue?.body, title = issue?.title,
@@ -26,11 +27,13 @@ export async function runPlanner({
     file: memoryPath, repoRoot, limit: 20, env, apiKeyEnv: config.llm.api_key_env,
   });
   let plan;
+  let lastResponse = null;
   const recipePath = path.join(worktree, 'RECIPE.yml');
   const taskPath = path.join(worktree, 'TASK.md');
   try {
     plan = await planAsk(ask, {
       config, reference, title, fetchImpl, env, vault, memory, learningRoot, metadata, lockedModel,
+      onResponse: (response) => { lastResponse = response; },
     });
     const recipe = parseRecipe(plan.recipe);
     if (recipe.ask !== reference || recipe.seats.length !== 3 ||
@@ -46,6 +49,9 @@ export async function runPlanner({
     await fs.writeFile(taskPath, plan.task, { encoding: 'utf8', flag: 'wx' });
   } catch (error) {
     if (!(error instanceof Error)) throw error;
+    if (config.llm.base_url && lastResponse) {
+      error.run = buildRun({ config, response: lastResponse, task, session, env });
+    }
     await appendMemory({ file: memoryPath, repoRoot, env, apiKeyEnv: config.llm.api_key_env, record: {
       task, session, status: 'failed', error: error.message,
     } });
@@ -55,5 +61,6 @@ export async function runPlanner({
     task, session, status: config.llm.base_url ? 'llm' : 'stub',
     summary: 'Prepared RECIPE.yml and TASK.md',
   } });
-  return { ...plan, recipePath, taskPath };
+  const run = config.llm.base_url ? buildRun({ config, response: lastResponse, task, session, env }) : null;
+  return { ...plan, recipePath, taskPath, run };
 }

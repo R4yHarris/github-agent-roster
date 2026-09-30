@@ -94,6 +94,7 @@ export async function runResearch({ worktree, tools, expectedTask, config, fetch
   await ensureLocalPath(researchPath, worktree);
   const handle = await fs.open(researchPath, 'wx', 0o600);
   let usage = null;
+  let lastResponse = null;
   let turns = 0;
   let summaryStatus = 'not_requested';
   let warning;
@@ -109,6 +110,7 @@ export async function runResearch({ worktree, tools, expectedTask, config, fetch
           { role: 'user', content: boundedText(report) },
         ] });
         usage = response.usage;
+        lastResponse = chat.lastResponse;
         if (!['stop', undefined, null].includes(response.finish_reason) ||
             response.message?.tool_calls !== undefined ||
             typeof response.message?.content !== 'string' || !response.message.content.trim()) {
@@ -128,6 +130,6 @@ export async function runResearch({ worktree, tools, expectedTask, config, fetch
   }
   return {
     researchPath, files: inventory.map(({ excerpt, ...file }) => file),
-    truncated: selected.truncated, usage, turns, summaryStatus, warning,
+    truncated: selected.truncated, usage, turns, response: lastResponse, summaryStatus, warning,
   };
 }

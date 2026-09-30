@@ -62,6 +62,7 @@ test('reviewer reads the diff, RESULT, and acceptance checks without receiving a
           verdict: 'pass', reasons: ['The diff implements the acceptance checks.'],
           security_notes: ['No secret or policy edits in the reviewed diff.'],
         }) } }],
+        model: 'actual-review-model',
         usage: { prompt_tokens: 7, completion_tokens: 2 },
       }) };
     },
@@ -70,6 +71,8 @@ test('reviewer reads the diff, RESULT, and acceptance checks without receiving a
   assert.equal(review.verdict, 'pass', review.content);
   assert.equal(review.queried, true);
   assert.deepEqual(review.usage, { prompt_tokens: 7, completion_tokens: 2 });
+  assert.deepEqual(review.response, { model: 'actual-review-model',
+    usage: { prompt_tokens: 7, completion_tokens: 2 } });
   assert.match(readFileSync(review.reviewPath, 'utf8'),
     /^# Review\n\nVerdict: pass[\s\S]*## Reasons[\s\S]*## Security notes/);
   assert.equal(readFileSync(options.source, 'utf8'), 'export const ready = true;\n');

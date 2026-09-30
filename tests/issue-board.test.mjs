@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import {
   commentMergedIssue, issueMergeMessage, mergedPullNumber, mergedPullNumberFromFailure,
 } from '../src/lib/issue-board.mjs';
+import { materializeRun } from '../src/metrics/run.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -28,6 +29,7 @@ function fixture(t) {
 }
 
 function githubResponses({ merged = true, issueState = 'open', expectedRunLine = runLine,
+  expectedModel = model, expectedMetadata = '',
   headRepo = 'example/project', htmlUrl = 'https://github.com/example/project/pull/7',
   prBody = issueMergeMessage('feat: issue 42', 42) } = {}) {
   const calls = [];
@@ -55,7 +57,8 @@ function githubResponses({ merged = true, issueState = 'open', expectedRunLine =
     }
     if (route === '/repos/example/project/issues/42/comments') {
       assert.equal(body.body,
-        `Merged https://github.com/example/project/pull/7 for issue #42.\n\nModel: ${model}` +
+        `Merged https://github.com/example/project/pull/7 for issue #42.\n\nModel: ${expectedModel}` +
+        expectedMetadata +
         (expectedRunLine ? `\nAI-Run: ${expectedRunLine}` : '') +
         '\n\nIssue remains open for human AI-Eval.');
       return Response.json({ id: 55 }, { status: 201 });
@@ -99,6 +102,29 @@ test('App comments with PR URL, model, and AI-Run without closing the open issue
     'POST /repos/example/project/issues/42/comments',
     'DELETE /installation/token',
   ]);
+});
+
+test('merged issue comments use the complete measured object and omit unknown counts and capacity', async (t) => {
+  for (const reported of [true, false]) {
+    const run = materializeRun({
+      provider: 'vllm', model: 'actual-served-model', effort: 'h',
+      ...(reported ? { prompt_tokens: 100, completion_tokens: 40, context_max: 8192 } : {}),
+      session: 'roster-42-coder', task: 'issue-42',
+    });
+    const { calls, fetchImpl } = githubResponses({
+      expectedModel: run.metrics.model, expectedRunLine: run.line,
+      expectedMetadata: '\nProvider: vllm' +
+        (reported ? '\nPrompt tokens: 100\nCompletion tokens: 40\nContext max: 8192' : '') +
+        '\nSession: roster-42-coder\nTask: issue-42',
+    });
+    await commentMergedIssue({
+      ...fixture(t), issue, pullNumber: 7, run, model: 'GPT-6.1-Sol', runLine, fetchImpl,
+    });
+    const body = calls.find(({ route }) => route.endsWith('/comments')).body.body;
+    assert.doesNotMatch(body, /GPT-6\.1-Sol|1000000|not-read\.pem|installation-token|PRIVATE KEY/);
+    if (!reported) assert.doesNotMatch(body, /Prompt tokens|Completion tokens|Context max/);
+    assert.equal(calls.at(-1).route, '/installation/token');
+  }
 });
 
 test('an already-closed issue is reported without another App comment or state change', async (t) => {

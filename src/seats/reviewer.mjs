@@ -110,6 +110,7 @@ export async function runReviewer({
   const redaction = { env, apiKeyEnv: config.llm.api_key_env };
   let report;
   let usage = null;
+  let lastResponse = null;
   let queried = false;
   let taskDigest;
   let resultDigest;
@@ -152,6 +153,7 @@ export async function runReviewer({
         { role: 'user', content: evidence },
       ] });
       usage = response.usage;
+      lastResponse = chat.lastResponse;
       if (!['stop', null, undefined].includes(response.finish_reason) ||
           response.message?.tool_calls !== undefined ||
           typeof response.message?.content !== 'string') {
@@ -173,7 +175,7 @@ export async function runReviewer({
   const content = formatReview({ verdict: report.verdict, reasons, securityNotes });
   await ensureLocalPath(reviewPath, worktree);
   await fs.writeFile(reviewPath, content, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
-  return { verdict: report.verdict, reasons, securityNotes, content, reviewPath, usage, queried,
+  return { verdict: report.verdict, reasons, securityNotes, content, reviewPath, usage, response: lastResponse, queried,
     taskDigest, resultDigest };
 }
 

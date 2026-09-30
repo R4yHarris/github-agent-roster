@@ -18,6 +18,6 @@ export async function chatCompletion({ config, messages, tools, env, fetchImpl, 
   const response = await chat({ messages, ...(tools ? { tools } : {}) });
   return {
     choices: [{ message: response.message, finish_reason: response.finish_reason }],
-    usage: response.usage,
+    usage: response.usage, response: chat.lastResponse,
   };
 }

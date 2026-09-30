@@ -29,7 +29,7 @@ function retryDelay(response, timeoutMs) {
     : Math.min(1_000, timeoutMs);
 }
 
-function parseCompletion(payload) {
+function parseCompletion(payload, requestedModel) {
   const choice = payload?.choices?.[0];
   const message = choice?.message;
   if (!isObject(message) || typeof message.role !== 'string' || !message.role ||
@@ -47,8 +47,12 @@ function parseCompletion(payload) {
         usage[field] !== undefined && (!Number.isSafeInteger(usage[field]) || usage[field] < 0)))) {
     throw new ChatError('The LLM response contained invalid usage.');
   }
+  const model = payload.model ?? requestedModel;
+  if (typeof model !== 'string' || !model.trim() || model !== model.trim() || /[\r\n\0]/.test(model)) {
+    throw new ChatError('The LLM response contained an invalid model.');
+  }
   return {
-    message, usage,
+    message, usage, model,
     ...(choice.finish_reason === undefined ? {} : { finish_reason: choice.finish_reason }),
   };
 }
@@ -71,7 +75,8 @@ export function createChat(config = {}, { fetch: fetchImpl = globalThis.fetch, e
   }
   if (typeof fetchImpl !== 'function') throw new TypeError('A fetch implementation is required.');
 
-  return async function chat(request) {
+  let lastResponse = null;
+  const chat = async function chat(request) {
     if (!isObject(request) || !Array.isArray(request.messages) || request.messages.length === 0 ||
         request.messages.some((message) => !isObject(message) || typeof message.role !== 'string' || !message.role)) {
       throw new TypeError('A chat request requires a non-empty messages array with message roles.');
@@ -131,12 +136,18 @@ export function createChat(config = {}, { fetch: fetchImpl = globalThis.fetch, e
         } catch {
           throw new ChatError('The LLM response was not valid JSON.');
         }
-        return parseCompletion(payload);
+        return parseCompletion(payload, model);
       }
     }
 
     try {
-      return await Promise.race([send(), deadline]);
+      const response = await Promise.race([send(), deadline]);
+      const usage = response.usage === null ? null : Object.freeze(Object.fromEntries(
+        ['prompt_tokens', 'completion_tokens'].filter((field) => response.usage[field] !== undefined)
+          .map((field) => [field, response.usage[field]]),
+      ));
+      lastResponse = Object.freeze({ model: response.model, usage });
+      return response;
     } catch (error) {
       if (error instanceof ChatError) throw error;
       throw new ChatError('The LLM request failed. Check the endpoint and connection.');
@@ -145,4 +156,6 @@ export function createChat(config = {}, { fetch: fetchImpl = globalThis.fetch, e
       controller.abort();
     }
   };
+  Object.defineProperty(chat, 'lastResponse', { get: () => lastResponse });
+  return chat;
 }
