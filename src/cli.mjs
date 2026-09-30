@@ -25,7 +25,7 @@ const help = `Usage:
   roster doctor
   roster init
   roster ask "..."
-  roster run --issue N [--runtime builtin] [--seats planner,coder] [--auto-model] [--publish]
+  roster run --issue N [--runtime builtin] [--seats planner,coder,reviewer] [--auto-model] [--publish] [--skip-review]
   roster run --seat coder --runtime builtin
   roster prepare --issue N
   roster run --ask-file PATH --runtime builtin
@@ -41,7 +41,7 @@ const help = `Usage:
 Ask creates a GitHub issue when gh is available; otherwise it saves a local draft.
 Doctor checks local prerequisites without contacting GitHub or printing App env values.
 Init copies review-only examples; it never overwrites agent-policy.yml.
-Run plans and executes planner then coder in one worktree by default.
+Run executes planner, coder, then reviewer in one worktree by default.
 Run --seat coder without --issue executes an existing TASK.md in the current worktree.
 Prepare creates a manual handoff without executing seats. Publishing is opt-in.
 Recipe validates strict v0 seat YAML. Stats joins contracts AI-Run history with local runs and human evals.
@@ -124,11 +124,12 @@ async function main(args) {
     }
     const demo = await runDemo({ askFile: options['--ask-file'], repoRoot: rosterRoot });
     process.stdout.write(`Worktree: ${demo.worktreePath}\nRECIPE: ${demo.recipePath}\n` +
-      `TASK: ${demo.taskPath}\nRESULT: ${demo.resultPath}\nMode: ${demo.mode}\n`);
+      `TASK: ${demo.taskPath}\nRESULT: ${demo.resultPath}\nREVIEW: ${demo.reviewPath}\nMode: ${demo.mode}\n`);
   } else if (args[0] === 'run') {
     const options = runOptions(args.slice(1));
     if (options.issue === undefined) await runBuiltinTask({ repoRoot: rosterRoot });
     else await runBuiltinIssue(options.issue, { publish: options.publish, seats: options.seats,
+      skipReview: options.skipReview,
       autoModel: options.autoModel, repoRoot: rosterRoot });
   } else if (args[0] === 'status') {
     let issue;
@@ -184,17 +185,19 @@ async function main(args) {
   function runOptions(args) {
     const options = {};
     const seen = new Set();
-    const usage = 'Use roster run --issue N [--runtime builtin] [--seats planner,coder] [--auto-model] [--publish], ' +
+    const usage = 'Use roster run --issue N [--runtime builtin] [--seats planner,coder,reviewer] ' +
+      '[--auto-model] [--publish] [--skip-review], ' +
       'or roster run --seat coder --runtime builtin for an existing TASK.md.';
     for (let index = 0; index < args.length; index += 1) {
       const flag = args[index];
-      if (!['--issue', '--seat', '--seats', '--runtime', '--auto-model', '--publish'].includes(flag) ||
+      if (!['--issue', '--seat', '--seats', '--runtime', '--auto-model', '--publish', '--skip-review'].includes(flag) ||
           seen.has(flag)) {
         throw new TypeError(usage);
       }
       seen.add(flag);
       if (flag === '--publish') options.publish = true;
       else if (flag === '--auto-model') options.autoModel = true;
+      else if (flag === '--skip-review') options.skipReview = true;
       else {
         const value = args[++index];
         if (!value || value.startsWith('--')) throw new TypeError(usage);
@@ -202,14 +205,15 @@ async function main(args) {
       }
     }
     if (options.issue === undefined && options.seat === 'coder' && options.runtime === 'builtin' &&
-        options.seats === undefined && !options.autoModel && !options.publish) return options;
+        options.seats === undefined && !options.autoModel && !options.publish && !options.skipReview) return options;
     if (!options.issue || (options.runtime !== undefined && options.runtime !== 'builtin') ||
         (options.seat !== undefined && options.seat !== 'coder') ||
-        (options.seats !== undefined && options.seats !== 'planner,coder') ||
+        (options.seats !== undefined &&
+          !['planner,coder', 'planner,coder,reviewer'].includes(options.seats)) ||
         (options.seat !== undefined && options.seats !== undefined)) {
       throw new TypeError(usage);
     }
-    return { ...options, seats: 'planner,coder' };
+    return { ...options, seats: 'planner,coder,reviewer' };
   }
 }
 
@@ -219,5 +223,6 @@ try {
   if (!(error instanceof Error)) throw error;
   process.stderr.write(`${error.message}\n`);
   if (error.result?.resultPath) process.stderr.write(`RESULT: ${error.result.resultPath}\n`);
+  if (error.result?.review?.reviewPath) process.stderr.write(`REVIEW: ${error.result.review.reviewPath}\n`);
   process.exitCode = 1;
 }

@@ -221,7 +221,9 @@ test('/publish prints the SDK command without App env and uses the reviewed work
     env: { AI_MODEL: 'GPT-6-Sol' },
     services: { resolveContractsPath: () => 'contracts' },
   });
-  await withoutApp.dispatch('/publish');
+  await assert.rejects(withoutApp.dispatch('/publish'), /passing REVIEW\.md/);
+  assert.equal(withoutApp.output.text, '');
+  await withoutApp.dispatch('/publish --skip-review');
   assert.match(withoutApp.output.text,
     /--message '<conventional subject>[\s\S]+--model GPT-6-Sol --merge-when-green/);
   assert.match(withoutApp.output.text, /## Model\n\nGPT-6-Sol\n\n## Summary/);
@@ -240,6 +242,7 @@ test('/publish prints the SDK command without App env and uses the reviewed work
       }),
       prepareBuiltinPublication: async (run, options) => {
         calls.push(['prepare', run.task, options.env.GITHUB_APP_ID]);
+        assert.equal(options.skipReview, true);
         return { contractsPath: 'contracts', worktreePath: run.worktreePath,
           publishEnv: { GITHUB_APP_ID: '123', AI_MODEL: 'local-model', AI_SESSION: 'roster-42-coder' } };
       },
@@ -251,7 +254,7 @@ test('/publish prints the SDK command without App env and uses the reviewed work
     },
   });
   await withApp.dispatch('/run 42');
-  await withApp.dispatch('/publish');
+  await withApp.dispatch('/publish --skip-review');
   assert.equal(withApp.state.lastRun.task, 'issue-42');
   assert.equal(withApp.state.published, true);
   assert.deepEqual(calls[0], ['prepare', 'issue-42', '123']);
@@ -259,12 +262,35 @@ test('/publish prints the SDK command without App env and uses the reviewed work
   assert.equal(calls[1][1].model, 'local-model');
   assert.equal(calls[1][1].message, buildPublishMessage({
     subject: 'feat: issue 42', model: 'local-model', summary: 'Updated the reviewed README.', issueNumber: 42,
+    seats: 'planner, coder, reviewer (gate bypassed with --skip-review)',
   }));
   assert.equal(calls[1][1].env.AI_SESSION, 'roster-42-coder');
   assert.equal(calls[2][0], 'close');
   assert.equal(calls[2][1].pullNumber, 7);
   assert.match(calls[2][1].runLine, /\|roster-42-coder\|issue-42$/);
   await assert.rejects(withApp.dispatch('/publish'), /already published/);
+});
+
+test('/publish blocks a failed in-session review until --skip-review is explicit', async () => {
+  const shell = dispatcher({
+    env: { AI_MODEL: 'review-model' },
+    services: {
+      resolveContractsPath: () => 'contracts',
+      runBuiltinIssue: async () => ({
+        issue: { number: 42 }, repoRoot: cwd, task: 'issue-42',
+        worktreePath: join(cwd, '.worktrees', 'issue-42'),
+        result: { summary: 'Changed README and ran tests.' },
+        review: { verdict: 'fail', reasons: ['Acceptance evidence is incomplete.'] },
+      }),
+      publisher: () => assert.fail('No SDK invocation is allowed without App credentials'),
+    },
+  });
+  await shell.dispatch('/run 42');
+  await assert.rejects(shell.dispatch('/publish'), /passing REVIEW\.md/);
+  assert.doesNotMatch(shell.output.text, /node vendor\/github-agent-contracts\/scripts\/agent-pr/);
+  await shell.dispatch('/publish --skip-review');
+  assert.match(shell.output.text, /## Seats\n\nplanner, coder, reviewer \(gate bypassed with --skip-review\)/);
+  assert.match(shell.output.text, /--model review-model --merge-when-green/);
 });
 
 test('an issue publish without a confirmed merge leaves the issue untouched', async () => {
@@ -285,7 +311,7 @@ test('an issue publish without a confirmed merge leaves the issue untouched', as
   });
 
   await shell.dispatch('/run 42');
-  await assert.rejects(shell.dispatch('/publish'), /did not confirm a merged PR/);
+  await assert.rejects(shell.dispatch('/publish --skip-review'), /did not confirm a merged PR/);
   assert.equal(shell.state.published, false);
 });
 
@@ -312,7 +338,7 @@ test('/publish without a run forwards config, then AI_MODEL, then ROSTER_MODEL e
         },
       },
     });
-    await shell.dispatch('/publish fix: metadata');
+    await shell.dispatch('/publish fix: metadata --skip-review');
     assert.equal(shell.state.published, true);
   }
 });
@@ -342,7 +368,7 @@ test('a merged PR with local cleanup failure still finishes its issue without a 
     },
   });
   await shell.dispatch('/run 42');
-  await assert.rejects(shell.dispatch('/publish'), /Local cleanup failed/);
+  await assert.rejects(shell.dispatch('/publish --skip-review'), /Local cleanup failed/);
   assert.equal(closed, 1);
   assert.equal(shell.state.published, true);
   await assert.rejects(shell.dispatch('/publish'), /already published/);
@@ -367,7 +393,7 @@ test('imported contracts publisher receives merge-when-green and reports HTTP 42
     services: { resolveContractsPath: () => contracts },
   };
   const success = dispatcher(options);
-  await success.dispatch('/publish docs: interactive roster shell');
+  await success.dispatch('/publish docs: interactive roster shell --skip-review');
   const result = JSON.parse(success.output.text);
   assert.deepEqual(result.argv,
     ['--message', buildPublishMessage({
@@ -390,7 +416,7 @@ test('imported contracts publisher receives merge-when-green and reports HTTP 42
     env,
     services: { resolveContractsPath: () => otherContracts },
   });
-  await assert.rejects(denied.dispatch('/publish docs: interactive roster shell'),
+  await assert.rejects(denied.dispatch('/publish docs: interactive roster shell --skip-review'),
     /Checks permission is not accepted on the installation/);
   assert.match(denied.errorOutput.text, /HTTP 422/);
 
@@ -411,7 +437,7 @@ test('/publish aborts with set model before calling the publisher or printing an
           publisher: () => assert.fail('No publisher call is allowed without a real model'),
         },
       });
-      await assert.rejects(shell.dispatch('/publish fix: missing model'), /set model/);
+      await assert.rejects(shell.dispatch('/publish fix: missing model --skip-review'), /set model/);
       assert.equal(shell.output.text, '');
       assert.equal(shell.state.published, false);
     }

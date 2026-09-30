@@ -1,0 +1,155 @@
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { parseConfig } from '../src/lib/config.mjs';
+import { requirePassingReview, runReviewer } from '../src/seats/reviewer.mjs';
+
+const example = readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8');
+const config = parseConfig(example.replace('base_url: ""', 'base_url: http://localhost:1234/v1')
+  .replace('model: ""', 'model: review-model'));
+
+function fixture(context) {
+  const base = mkdtempSync(path.join(tmpdir(), 'roster-reviewer-'));
+  context.after(() => rmSync(base, { recursive: true, force: true }));
+  const repoRoot = path.join(base, 'roster');
+  const worktree = path.join(base, 'task');
+  mkdirSync(path.join(repoRoot, 'principals'), { recursive: true });
+  cpSync(new URL('../principals/reviewer.md', import.meta.url),
+    path.join(repoRoot, 'principals', 'reviewer.md'));
+  mkdirSync(path.join(worktree, 'src'), { recursive: true });
+  writeFileSync(path.join(worktree, 'TASK.md'),
+    '# Task: Update app\n\n## Acceptance checks\n- node --test exits 0\n' +
+    '- app exports ready\n\n## Files allowed\n- `src/app.mjs`\n\n## Ask\nUpdate app.\n');
+  const source = path.join(worktree, 'src', 'app.mjs');
+  writeFileSync(source, 'export const ready = false;\n');
+  const git = (...args) => execFileSync('git', args, { cwd: worktree, encoding: 'utf8' }).trim();
+  git('init', '-b', 'main');
+  git('add', '--all');
+  git('-c', 'user.name=Test Fixture', '-c', 'user.email=fixture@example.invalid',
+    'commit', '-m', 'Fixture setup');
+  writeFileSync(source, 'export const ready = true;\n');
+  const resultPath = path.join(worktree, 'RESULT.md');
+  writeFileSync(resultPath, '# Result\n\n## Verification\n\nChecks: PASS\n- node --test exited 0\n\n' +
+    '## Run\n\nModel: review-model\n\n## Summary\n\nChanged app to export ready.\n');
+  const coderResult = { mode: 'llm', model: 'review-model', resultPath,
+    excellence: { pass: true, files: ['src/app.mjs'] } };
+  return { worktree, repoRoot, source, coderResult, git };
+}
+
+test('reviewer reads the diff, RESULT, and acceptance checks without receiving any tools', async (context) => {
+  const options = fixture(context);
+  let requests = 0;
+  const review = await runReviewer({
+    ...options, config, env: { ROSTER_API_KEY: 'not-forwarded' },
+    fetchImpl: async (url, request) => {
+      requests += 1;
+      assert.equal(String(url), 'http://localhost:1234/v1/chat/completions');
+      const body = JSON.parse(request.body);
+      assert.equal(body.tools, undefined);
+      assert.match(body.messages[0].content, /You are the builtin reviewer seat/);
+      assert.match(body.messages[0].content, /Do not request `write_file`/);
+      assert.match(body.messages[1].content, /app exports ready/);
+      assert.match(body.messages[1].content, /Checks: PASS/);
+      assert.match(body.messages[1].content, /-export const ready = false/);
+      assert.match(body.messages[1].content, /\+export const ready = true/);
+      assert.ok(request.headers.Authorization?.startsWith('Bearer '));
+      assert.ok(!request.body.includes('not-forwarded'));
+      return { status: 200, json: async () => ({
+        choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
+          verdict: 'pass', reasons: ['The diff implements the acceptance checks.'],
+          security_notes: ['No secret or policy edits in the reviewed diff.'],
+        }) } }],
+        usage: { prompt_tokens: 7, completion_tokens: 2 },
+      }) };
+    },
+  });
+  assert.equal(requests, 1);
+  assert.equal(review.verdict, 'pass', review.content);
+  assert.equal(review.queried, true);
+  assert.deepEqual(review.usage, { prompt_tokens: 7, completion_tokens: 2 });
+  assert.match(readFileSync(review.reviewPath, 'utf8'),
+    /^# Review\n\nVerdict: pass[\s\S]*## Reasons[\s\S]*## Security notes/);
+  assert.equal(readFileSync(options.source, 'utf8'), 'export const ready = true;\n');
+  await requirePassingReview({ worktreePath: options.worktree, review });
+  writeFileSync(review.reviewPath, review.content.replace('pass', 'fail'));
+  await assert.rejects(requirePassingReview({ worktreePath: options.worktree, review }),
+    /changed after review/);
+  await requirePassingReview({ worktreePath: options.worktree, review }, true);
+  writeFileSync(review.reviewPath, review.content);
+  writeFileSync(options.coderResult.resultPath,
+    readFileSync(options.coderResult.resultPath, 'utf8').replace('Checks: PASS', 'Checks: FAIL'));
+  await assert.rejects(requirePassingReview({ worktreePath: options.worktree, review }),
+    /RESULT\.md changed after review/);
+});
+
+test('reviewer refuses a model-requested write_file under src and writes a failing report', async (context) => {
+  const options = fixture(context);
+  const review = await runReviewer({
+    ...options, config, env: {},
+    fetchImpl: async (_url, request) => {
+      assert.equal(JSON.parse(request.body).tools, undefined);
+      return { status: 200, json: async () => ({
+        choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant', tool_calls: [{ id: 'write', type: 'function',
+            function: { name: 'write_file', arguments: JSON.stringify({
+              path: 'src/app.mjs', content: 'export const ready = false;\n',
+            }) } }],
+        } }],
+      }) };
+    },
+  });
+  assert.equal(review.verdict, 'fail');
+  assert.match(review.content, /Reviewer cannot request tools/);
+  assert.equal(readFileSync(options.source, 'utf8'), 'export const ready = true;\n');
+  await assert.rejects(requirePassingReview({ worktreePath: options.worktree, review }),
+    /passing REVIEW\.md/);
+});
+
+test('stub and malformed reviewer responses fail without deleting coder work', async (context) => {
+  const stub = fixture(context);
+  const stubReview = await runReviewer({
+    ...stub, config: parseConfig(example),
+    coderResult: { ...stub.coderResult, mode: 'stub', excellence: { pass: false, files: [] } },
+    fetchImpl: () => assert.fail('Stub review must not call a model'),
+  });
+  assert.equal(stubReview.verdict, 'fail');
+  assert.equal(stubReview.queried, false);
+  assert.match(stubReview.content, /Coder RESULT\.md has no passing implementation/);
+  assert.match(stubReview.content, /Security review was not completed/);
+  assert.equal(readFileSync(stub.source, 'utf8'), 'export const ready = true;\n');
+
+  const malformed = fixture(context);
+  const malformedReview = await runReviewer({
+    ...malformed, config, env: {},
+    fetchImpl: async () => ({ status: 200, json: async () => ({
+      choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+        content: '{"verdict":"pass","reasons":[]}' } }],
+    }) }),
+  });
+  assert.equal(malformedReview.verdict, 'fail');
+  assert.match(malformedReview.content, /security_notes/);
+  assert.equal(readFileSync(malformed.source, 'utf8'), 'export const ready = true;\n');
+});
+
+test('an incomplete diff or bounded-context failure cannot become a passing review', async (context) => {
+  const options = fixture(context);
+  const noDiff = await runReviewer({
+    ...options, config,
+    coderResult: { ...options.coderResult, excellence: { pass: true, files: [] } },
+    fetchImpl: () => assert.fail('No diff must not contact a model'),
+  });
+  assert.equal(noDiff.verdict, 'fail');
+  assert.match(noDiff.content, /task-allowed changed files/);
+
+  const limited = fixture(context);
+  const short = { ...config, seat: { ...config.seat, context_chars: 32 } };
+  const limitedReview = await runReviewer({
+    ...limited, config: short,
+    fetchImpl: () => assert.fail('Truncated evidence must not be reviewed'),
+  });
+  assert.equal(limitedReview.verdict, 'fail');
+  assert.match(limitedReview.content, /seat\.context_chars/);
+});

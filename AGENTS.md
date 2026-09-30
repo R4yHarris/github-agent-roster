@@ -40,19 +40,20 @@ Fail if no candidate contains the `scripts/agent-pr.mjs` file. See
 ## First loop (v0)
 
 1. Human states an ask (`roster ask` creates a GitHub issue when `gh` is available, otherwise an offline draft).
-2. Stub or configured LLM planner reads its own recent memory and writes a two-seat RECIPE and one TASK in the issue worktree, without app-code tools.
+2. Stub or configured LLM planner reads its own recent memory and writes a three-seat RECIPE and one TASK in the issue worktree, without app-code tools.
 3. Builtin coder loads AGENTS.md, TASK.md, skills, and its own recent memory into a separate bounded loop in that worktree.
-4. Configured coder runs `node --test`; publication uses `agent-pr.mjs` only on explicit request. Roster-managed publication comments with the coder AI-Run and closes the issue after a confirmed merge.
-5. Human posts `AI-Eval:` on the PR.
+4. Builtin reviewer reads the task checks, coder RESULT.md, and diff without app-code tools, then writes REVIEW.md in the same process. It cannot merge or publish.
+5. Configured coder runs `node --test`; Roster-managed publication requires a passing REVIEW.md unless `--skip-review` is explicit. It uses `agent-pr.mjs` only on explicit request, comments with the coder AI-Run, and closes the issue after a confirmed merge.
+6. Human posts `AI-Eval:` on the PR.
 
 With no LLM endpoint, the deterministic stub writes a RESULT summary and does
 not change code or run tests. There is no concurrent swarm or separate task
 board. See [same-session seats](docs/MULTIAGENT.md) and [SDLC](docs/SDLC.md).
 
 GHCP subagent names `planner` and `coder` map to these sequential builtin seats
-in one run/worktree, not separate chats, a second queue, Hermes Kanban, or a
-new runtime. The parent Copilot calls
-`node src/cli.mjs run --issue N --runtime builtin --seats planner,coder`
+in one run/worktree; reviewer is a later read-only builtin seat, not another
+chat, queue, or runtime. The parent Copilot calls
+`node src/cli.mjs run --issue N --runtime builtin --seats planner,coder,reviewer`
 for the issue, then the App publisher for reviewed changes. It must not
 `git commit` as R4yHarris when `GITHUB_APP_*` is set. Follow the
 [GHCP bridge](docs/GHCP.md) for publication and HTTP 422 handling.

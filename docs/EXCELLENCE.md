@@ -12,6 +12,11 @@ failures stop immediately rather than offering a chance to conceal them.
 After memory is recorded, the gate runs again against the verified
 worktree snapshot before writing RESULT.md. The empty-URL stub has no
 preliminary pass and remains an explicitly unverified demonstration.
+After RESULT.md, the separate [reviewer seat](REVIEW.md) inspects the diff
+and writes REVIEW.md. This managed report is excluded from coder source
+snapshots and publication staging, but an unchanged passing verdict and
+the reviewed TASK/RESULT evidence are required for Roster-managed
+publication unless `--skip-review` explicitly bypasses only the review.
 
 Its checklist is:
 

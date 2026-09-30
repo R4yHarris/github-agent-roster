@@ -1,16 +1,17 @@
 # Same-session builtin seats
 
-One human GitHub issue is the Ask. One invocation runs two builtin seats in
+One human GitHub issue is the Ask. One invocation runs three builtin seats in
 sequence, in the same process and issue worktree:
 
 ```sh
 roster run --issue 42
-roster run --issue 42 --seats planner,coder
+roster run --issue 42 --seats planner,coder,reviewer
 ```
 
-`--seats planner,coder` is the only supported selection and is the default.
+`--seats planner,coder,reviewer` is the default and supported selection;
+the older `--seats planner,coder` spelling aliases that full sequence.
 With `--issue N`, the older `--seat coder` flag is accepted as an alias for
-that pair. Without an issue, `roster run --seat coder --runtime builtin`
+that sequence. Without an issue, `roster run --seat coder --runtime builtin`
 runs the [single coder stack](SEAT.md) on an existing TASK.md instead.
 `--runtime builtin` remains available for CI and GHCP. Use
 `roster prepare --issue N` for a handoff without executing the seats.
@@ -20,7 +21,7 @@ is created.
 
 1. The issue lookup creates `.worktrees/issue-N` once, with `ASSIGNMENT.md`
    and an ignored `.env` holding `AI_TASK=issue-N` and
-   `AI_SESSION=roster-N-coder`. Both seats use that worktree.
+   `AI_SESSION=roster-N-coder`. All three seats use that worktree.
 2. The planner session `roster-N-planner` uses the deterministic stub when
    `llm.base_url` is empty. Otherwise it requests a strict JSON plan from
    the configured model. It can retry invalid plans up to
@@ -45,14 +46,21 @@ is created.
    `write_file` rejects the root recipe and task even if a model requests
    them. The runner rechecks both files after the coder's final tests and
    refuses publication if either changed.
-4. The command prints one AI-Run line per configured LLM seat, using its session
+4. After the coder writes RESULT.md, the reviewer session
+   `roster-N-reviewer` reads the acceptance checks, the report, and the
+   task-allowed diff. It has no app-code tools; a `write_file` request fails.
+   The harness writes REVIEW.md with pass/fail reasons and security notes.
+   A stub or missing evidence fails, preserving the coder's diff. The
+   [review gate](REVIEW.md) blocks publication by default on a failed or
+   changed report; only explicit `--skip-review` bypasses this verdict.
+5. The command prints one AI-Run line per configured LLM seat, using its session
    and only its own known usage. Stub runs omit AI-Run, model, and LLM counts.
-   The two completed seats are recorded automatically in the issue
+   The three completed seats are recorded automatically in the issue
    repository's ignored `.roster/runs`, not as a third preparation run.
    Coder records include a passing/failing excellence flag; configured failures
    with result evidence are recorded before propagating their error.
    A single commit published through the contracts SDK can carry only the
-   coder AI-Run trailer; the planner run remains in stdout/local records.
+   coder AI-Run trailer; planner and reviewer runs remain in stdout/local records.
 
 The append-only seat journals default to `.roster/memory/planner.jsonl` and
 `.roster/memory/coder.jsonl` in the roster installation. Each prompt receives
@@ -60,9 +68,10 @@ at most the last 20 lines of its own journal as data, not instructions.
 `paths.memory` preserves a custom coder filename; the planner journal stays
 beside it. These ignored files are not a second task board.
 
-After the coder, the default command **stops** and prints the reviewed
-`agent-pr.mjs` command for the issue worktree root. `--publish` retains the
-explicit opt-in for a configured LLM run with passing tests and App credentials;
+After the reviewer, the default command **stops** and prints the
+`agent-pr.mjs` command for the issue worktree root only when review passes.
+`--publish` retains the explicit opt-in for a configured LLM run with passing
+tests, review (unless explicitly bypassed), and App credentials;
 it stages only task-allowed code and delegates a draft PR to the pinned
 contracts SDK, which marks the PR ready and merges only after required checks
 and repository protections permit it. Neither path deploys. Human review and

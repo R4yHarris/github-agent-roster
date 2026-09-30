@@ -31,6 +31,16 @@ remains non-editing and reports that implementation and tests were not run.
 Publication remains a separate reviewed harness action; a parent-requested
 `--merge-when-green` does not grant merger authority to the coder.
 
+## Builtin reviewer conduct
+
+The [reviewer conduct file](../principals/reviewer.md) instructs a separate
+sequential seat to inspect acceptance checks, RESULT.md, and the diff.
+Its frozen local capability is comment-only. It receives no model file tools,
+cannot write `src/` or any other source, and cannot merge or publish.
+Only the harness writes [REVIEW.md](REVIEW.md). Neither this conduct file
+nor a `principal: reviewer` recipe entry grants GitHub App policy capability.
+Malformed tool calls are refused and result in a failing report.
+
 ## Seats and contracts roles
 
 The roster seat `coder` maps to the contracts role `coder`. A recipe's
@@ -48,7 +58,9 @@ The required coder-only worker baseline is:
 
 Merger and deploy are reserved here, not supported v0 recipe seats. An optional
 planner also uses `principal: coder`; planning grants no merge or deploy
-authority. See [seats and recipes](SEATS.md). An explicit publish request
+authority. The reviewer has no separate contracts App role; its comments
+are local review evidence, not a GitHub approval. See [seats and recipes](SEATS.md).
+An explicit publish request
 uses `--merge-when-green` only through the SDK, which checks the separately
 reviewed `merger.merge` grant and required GitHub checks. The model cannot
 invoke publication through a coder tool.

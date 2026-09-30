@@ -37,7 +37,7 @@ test("help lists every prompt's command", () => {
   assert.match(result.stdout, /roster\s+eval/);
   assert.match(result.stdout, /roster\s+recommend\s+--task-class/);
   assert.match(result.stdout, /roster\s+ask/);
-  assert.match(result.stdout, /^  roster run --issue N \[--runtime builtin\] \[--seats planner,coder\] \[--auto-model\] \[--publish\]$/m);
+  assert.match(result.stdout, /^  roster run --issue N \[--runtime builtin\] \[--seats planner,coder,reviewer\] \[--auto-model\] \[--publish\] \[--skip-review\]$/m);
   assert.match(result.stdout, /--auto-model/);
   assert.match(result.stdout, /^  roster prepare --issue N$/m);
 });
@@ -89,15 +89,21 @@ test("ask CLI creates an offline draft with a create command when gh is missing"
 test("builtin CLI defaults to paired seats, rejects unsupported selections, and refuses stub publication", () => {
   const invalid = run(["run", "--issue", "42", "--seat", "merger", "--runtime", "builtin"]);
   assert.notEqual(invalid.status, 0);
-  assert.match(invalid.stderr, /--seats planner,coder/);
+  assert.match(invalid.stderr, /--seats planner,coder,reviewer/);
   const invalidOrder = run(["run", "--issue", "42", "--runtime", "builtin",
     "--seats", "coder,planner"]);
   assert.notEqual(invalidOrder.status, 0);
-  assert.match(invalidOrder.stderr, /--seats planner,coder/);
+  assert.match(invalidOrder.stderr, /--seats planner,coder,reviewer/);
   const noIssue = run(["run", "--issue", "n/a", "--runtime", "builtin",
     "--seats", "planner,coder"]);
   assert.notEqual(noIssue.status, 0);
   assert.match(noIssue.stderr, /Issue number must be a positive safe integer/);
+  const explicitReviewer = run(["run", "--issue", "n/a", "--seats", "planner,coder,reviewer"]);
+  assert.match(explicitReviewer.stderr, /Issue number must be a positive safe integer/);
+  const skipReviewer = run(["run", "--issue", "n/a", "--skip-review"]);
+  assert.match(skipReviewer.stderr, /Issue number must be a positive safe integer/);
+  const invalidSkip = run(["run", "--seat", "coder", "--runtime", "builtin", "--skip-review"]);
+  assert.match(invalidSkip.stderr, /--skip-review/);
   const autoIssue = run(["run", "--issue", "n/a", "--runtime", "builtin", "--auto-model"]);
   assert.match(autoIssue.stderr, /Issue number must be a positive safe integer/);
   const defaultSeats = run(["run", "--issue", "n/a", "--runtime", "builtin"]);

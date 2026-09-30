@@ -7,6 +7,7 @@ import { TextDecoder } from 'node:util';
 import { cleanAskText, renderAsk } from '../planner/stub.mjs';
 import { runCoder } from '../seats/coder.mjs';
 import { runPlanner } from '../seats/planner.mjs';
+import { runReviewer } from '../seats/reviewer.mjs';
 import { loadConfig } from './config.mjs';
 import { ensureLocalPath } from './paths.mjs';
 
@@ -75,9 +76,12 @@ export async function runDemo({
       fetchImpl: () => { throw new Error('Stub coder must not contact an LLM'); },
       runTestCommand: () => { throw new Error('Stub coder must not run tests'); },
     });
+    const review = await runReviewer({
+      worktree: worktreePath, repoRoot, config: stubConfig, coderResult: coder, env: {},
+    });
     return {
       worktreePath, recipePath: planner.recipePath, taskPath: planner.taskPath,
-      resultPath: coder.resultPath, mode: coder.mode,
+      resultPath: coder.resultPath, reviewPath: review.reviewPath, mode: coder.mode,
     };
   } catch (error) {
     await fs.rm(worktreePath, { recursive: true, force: true });

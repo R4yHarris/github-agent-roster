@@ -1,7 +1,7 @@
 # The SWE delivery feedback loop
 
 Roster is a delivery harness, not a chat UI. One issue moves through a builtin
-planner and coder sequentially in one worktree. GitHub Issues and PRs are the
+planner, coder, and reviewer sequentially in one worktree. GitHub Issues and PRs are the
 board and forge; task artifacts, measured outcomes, and the human retrospective
 connect one delivery to the next.
 
@@ -45,8 +45,13 @@ are not rewritten to erase failed verification.
 
 ## Review before publication
 
-Review the delivered diff, acceptance evidence, and `RESULT.md` before invoking
-the App publisher. Every publish path supplies the real `--model` from config,
+After the coder writes RESULT.md, the read-only reviewer examines its
+acceptance checks and diff and writes [REVIEW.md](REVIEW.md). A failed review
+preserves the work but blocks Roster-managed publication unless `--skip-review`
+is explicit; the flag does not waive tests or human-owned policy. Human PR
+review and AI-Eval remain separate. Review the delivered evidence yourself
+before a direct SDK invocation, which does not enforce this in-process gate.
+Every publish path supplies the real `--model` from config,
 then `AI_MODEL`, then `ROSTER_MODEL`; no candidate means `set model`, not
 `AI-Model: unknown`. GHCP sessions set `AI_MODEL=GPT-6-Sol`.
 The PR body includes `## Model`, `## Summary`, and how to test the change.
@@ -63,7 +68,7 @@ AI-Run: 1|local|served-model@-|h|1200/8192|300|roster-42-coder|issue-42
 The fields are schema, provider, model/version, effort, reported input/context
 tokens and capacity, reported output tokens, session, and task. Usage comes
 from actual reports; missing values stay `-`, never estimated token counts.
-Planner and coder keep separate identities and usage; the publishing SDK carries
+Planner, coder, and reviewer keep separate identities and usage; the publishing SDK carries
 the coder record on the code commit.
 
 A configured model must retain its served ID. **An unknown model is a broken

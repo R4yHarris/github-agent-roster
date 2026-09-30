@@ -12,17 +12,19 @@ If the `roster` bin is installed, the equivalent command is
 uses the sample request in [fixtures/demo-task/ASK.md](../fixtures/demo-task/ASK.md):
 add a Status section to a demo README.
 
-The CLI prints `Worktree`, `RECIPE`, `TASK`, `RESULT`, and `Mode: stub` paths.
-Open the printed `RECIPE.yml` to see the planner and coder seats, `TASK.md` to
-see the requested change, and `RESULT.md` to see the stub's outcome. This is
+The CLI prints `Worktree`, `RECIPE`, `TASK`, `RESULT`, `REVIEW`, and `Mode: stub` paths.
+Open the printed `RECIPE.yml` to see the planner, coder, and reviewer seats,
+`TASK.md` to see the requested change, `RESULT.md` to see the stub's outcome,
+and `REVIEW.md` to see the explicit failing/unverified review. This is
 a temporary demo directory, not a Git worktree; it remains after the command
 so you can inspect it. The copied `README.md` is deliberately unchanged.
 The same directory also contains the bounded `CONTEXT.md`, read-only
 `RESEARCH.md`, and planner `ESTIMATE.md`. RESULT.md labels the stub's
 unexecuted checks as unverified rather than claiming a completed implementation.
 
-The deterministic stub proves that the planner passes a task to the coder and
-the coder writes a result in the same run. It **does not** implement the
+The deterministic stub proves that the planner passes a task to the coder,
+the coder writes a result, and the reviewer reports missing evidence in the
+same run. It **does not** implement the
 requested Status section, run `node --test`, contact a model, create a GitHub
 issue or PR, or publish code. Planner and coder session records are appended
 to ignored `.roster/memory/` files in the repository; leave those journals
@@ -39,4 +41,4 @@ Remove-Item -LiteralPath '<printed Worktree path>' -Recurse
 ```
 
 See the [interactive shell](REPL.md) for the human interface and
-[same-session seats](MULTIAGENT.md) for the issue-based planner/coder run.
+[same-session seats](MULTIAGENT.md) for the issue-based three-seat run.

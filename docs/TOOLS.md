@@ -2,7 +2,7 @@
 
 The configured builtin coder can use only the function tools listed in
 `seat.tools` in the [Roster config](../roster.config.example.yml). The builtin
-planner has no model-invokable tools, and the offline stub never calls tools
+planner and reviewer have no model-invokable tools, and the offline stub never calls tools
 or runs tests. The [tool implementation](../src/runtime/tools.mjs) offers
 exactly five functions:
 
@@ -38,7 +38,8 @@ All file tools deny `.env`, `.env.*`, and `*.env` anywhere, `*.pem`, vault
 storage under `.roster/vault`, Git metadata,
 `agent-policy.yml`, `.github/workflows`, or the pinned
 `vendor/github-agent-contracts` dependency. Root `ASSIGNMENT.md`,
-`RECIPE.yml`, `TASK.md`, `CONTEXT.md`, `RESEARCH.md`, `ESTIMATE.md`, and `RESULT.md` are managed files that the coder
+`RECIPE.yml`, `TASK.md`, `CONTEXT.md`, `RESEARCH.md`, `ESTIMATE.md`,
+`RESULT.md`, and `REVIEW.md` are managed files that the coder
 cannot rewrite. `list_dir` refuses protected paths and hides their names
 when listing a parent. Policy and workflow bodies are no longer readable
 as task context; both reads and writes are denied.
@@ -79,3 +80,7 @@ while an explicitly identified GitHub Copilot endpoint uses
 Tests themselves execute project code; these
 application-level guards are **not** an OS sandbox. See the
 [threat model](THREAT_MODEL.md) for deployment boundaries.
+The reviewer reads task-allowed diff evidence after RESULT.md, receives no
+`write_file` (or any other model tool), and only the harness writes REVIEW.md.
+See the [reviewer gate](REVIEW.md); reviewer comments do not grant merge or
+publish authority.

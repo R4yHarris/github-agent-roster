@@ -2,7 +2,7 @@
 
 A recipe describes a task's ordered seats; it does not assign credentials or
 grant GitHub permissions. GitHub issues and PRs remain the queue. The builtin
-planner emits two ordered seats for a single issue run:
+planner emits three ordered seats for a single issue run:
 
 ```yaml
 version: 1
@@ -16,6 +16,10 @@ seats:
     principal: coder
     worker: builtin
     sequence: [load_context, implement, run_tests, summarize]
+  - id: reviewer
+    principal: reviewer
+    worker: builtin
+    sequence: [read_diff, check_acceptance, write_review]
 ```
 
 When `gh` is unavailable, `roster ask` makes an offline draft with
@@ -39,17 +43,22 @@ seats:
 All three root fields are required. `issue:N` uses a positive, safely
 representable decimal issue number (no leading zeroes); `local:<id>` uses an
 opaque local draft identifier. `seats` contains exactly one `coder`, optionally
-preceded by one `planner` for older recipes; builtin execution requires both.
+preceded by one `planner` for older recipes; the issue runner requires
+all three ordered builtin seats.
 Each seat requires `id`,
-`principal`, and `worker`; keys can appear in any order. The principal is
-always `coder`. Both builtin seats require their exact fixed `sequence` above.
+`principal`, and `worker`; keys can appear in any order. Planner and coder
+use principal `coder`; reviewer uses the fixed read-only `reviewer` principal
+and the builtin worker only. Each builtin seat requires its exact fixed
+`sequence` above. Legacy recipes without the reviewer remain valid for
+read-only parsing, not for the new issue execution path.
 The planner cannot call tools and writes only `RECIPE.yml` and `TASK.md`; the
-coder cannot rewrite those files. Older single-coder builtin recipes and
+coder cannot rewrite those files or the harness-owned REVIEW.md. Older single-coder builtin recipes and
 `copilot`/`hermes` labels remain valid for read-only validation, without being
 selected for execution. Validation alone does not start any worker.
 
-The reviewer seat is a documented future role, not an executable v0 seat;
-humans review PRs today. There is no merger or deploy seat, no deploy or merge
+The reviewer inspects the task checks, diff, and RESULT.md and writes
+REVIEW.md through the harness, not through a model file tool. A human still
+reviews PRs and records AI-Eval. There is no merger or deploy seat, no deploy or merge
 capability, and no arbitrary role or capability field. In particular, `planner`
 with `principal: coder` does **not** inherit merge permission. The recipe
 confers no permissions at all: a trusted executor must separately use the
@@ -59,7 +68,7 @@ closed; nothing falls back to an example or grants a capability.
 
 Only a small YAML subset is supported: plain unquoted values, root keys at
 column zero, list items indented two spaces, and remaining seat keys indented
-four spaces. The two builtin sequences are the supported inline lists. Blank
+four spaces. The three builtin sequences are the supported inline lists. Blank
 lines, CRLF, and full-line or whitespace-separated `#` comments work. Tabs,
 unknown or duplicate keys and seat IDs, omitted keys, empty lists, extra
 seats, other inline collections, quoted values, anchors, aliases, tags,

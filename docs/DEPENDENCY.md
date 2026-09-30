@@ -64,7 +64,8 @@ setup.
 
 A new issue worktree may need `git submodule update --init --recursive` run
 from its own root before manual publication. The builtin `--publish` path
-initializes it, selects reviewed task files, and invokes the SDK from that
+requires a passing REVIEW.md (or explicit `--skip-review`), initializes it,
+selects reviewed task files, and invokes the SDK from that
 root; without the flag, it prints the next command but does not invoke it.
 Every Roster publish path resolves the model from `config.llm.model`, then
 `AI_MODEL`, then `ROSTER_MODEL`, and passes it explicitly with `--model`.

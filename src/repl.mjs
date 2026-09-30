@@ -14,6 +14,7 @@ import { formatMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs'
 import { resolveContractsPath } from './lib/paths.mjs';
 import { buildPublishMessage, formatPublishCommand } from './lib/publication.mjs';
 import { redactEvidence } from './runtime/excellence.mjs';
+import { requirePassingReview } from './seats/reviewer.mjs';
 import { formatStatus, readStatus } from './lib/status.mjs';
 import { createFileVault, validateSecretName } from './vault/file.mjs';
 import { buildPublishEnv } from './metrics/run.mjs';
@@ -26,7 +27,7 @@ const help = `Commands:
   /run N [--auto-model]     Run builtin seats, optionally routing from human evaluations
   /status [N] [--offline]   Show an issue, open PR, and local worktree
   /eval TARGET VERDICT 1-5 y|n [--minutes N] [--comment "TEXT"]
-  /publish [SUBJECT]        Publish reviewed changes (conventional subject)
+  /publish [SUBJECT] [--skip-review]  Publish passing REVIEW.md or explicitly bypass
   /stats [REF]              Show AI-Run metrics
   /recommend feat|fix|docs|test [--difficulty 1-5]
   /vault [list]             List secret names
@@ -198,13 +199,16 @@ export function createDispatcher({
         if (state.lastRun && state.published) {
           throw new Error('This run was already published; start another /run before publishing again.');
         }
-        const subject = args || (state.lastRun ? `feat: issue ${state.lastRun.issue.number}` : null);
+        const skipReview = args === '--skip-review' || args.endsWith(' --skip-review');
+        const requestedSubject = skipReview ? args.slice(0, -'--skip-review'.length).trim() : args;
+        const subject = requestedSubject || (state.lastRun ? `feat: issue ${state.lastRun.issue.number}` : null);
         if (subject !== null) conventionalSubject(subject);
         const appId = Boolean(env.GITHUB_APP_ID);
         const keyPath = Boolean(env.GITHUB_APP_PRIVATE_KEY_PATH);
         if (appId !== keyPath) {
           throw new Error('Set both GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH to publish.');
         }
+        await requirePassingReview(state.lastRun, skipReview);
         if (!appId) {
           const publishEnv = buildPublishEnv({
             config: state.config, env, run: state.lastRun?.runs?.coder,
@@ -216,6 +220,9 @@ export function createDispatcher({
             }),
             testsSkipped: state.lastRun?.result?.testsSkipped,
             issueNumber: state.lastRun?.issue?.number,
+            seats: state.lastRun
+              ? `planner, coder, reviewer (${skipReview ? 'gate bypassed with --skip-review' : 'pass'})`
+              : undefined,
           });
           api.resolveContractsPath({ repoRoot, cwd, env });
           output.write(`From ${state.lastRun?.worktreePath ?? currentRoot()}, publish reviewed changes:\n` +
@@ -228,7 +235,9 @@ export function createDispatcher({
         let publishRoot;
         if (state.lastRun) {
           ({ contractsPath, publishEnv, worktreePath: publishRoot } =
-            await api.prepareBuiltinPublication(state.lastRun, { cwd, config: state.config, env }));
+            await api.prepareBuiltinPublication(state.lastRun, {
+              cwd, config: state.config, env, skipReview,
+            }));
         } else {
           publishRoot = currentRoot();
           contractsPath = api.resolveContractsPath({ repoRoot: publishRoot, cwd, env });
@@ -243,6 +252,9 @@ export function createDispatcher({
             env, apiKeyEnv: state.config.llm.api_key_env,
           }),
           testsSkipped: state.lastRun?.result?.testsSkipped,
+          seats: state.lastRun
+            ? `planner, coder, reviewer (${skipReview ? 'gate bypassed with --skip-review' : 'pass'})`
+            : undefined,
         });
         const finishIssue = async (pullNumber) => {
           state.published = true;

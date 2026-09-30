@@ -1,7 +1,8 @@
 # GHCP identity bridge
 
 Copilot subagent names `planner` and `coder` map to Roster's
-[sequential builtin seats](MULTIAGENT.md): one run executes planner then coder
+[sequential builtin seats](MULTIAGENT.md): one run executes planner, coder,
+then a read-only builtin reviewer
 in the same issue worktree. They do not create separate chats, another queue,
 Hermes Kanban, or a new runtime. GitHub Issues and PRs remain the board; see
 the [SDLC](SDLC.md).
@@ -14,7 +15,7 @@ The parent Copilot coordinates the request by calling Roster, rather than
 starting separate coding chats or writing a second queue:
 
 ```sh
-node src/cli.mjs run --issue N --runtime builtin --seats planner,coder
+node src/cli.mjs run --issue N --runtime builtin --seats planner,coder,reviewer
 ```
 
 In a human TTY, the equivalent is `/run N` in the [Roster shell](REPL.md).
@@ -22,6 +23,10 @@ The parent reviews the resulting worktree and tests, then invokes the
 contracts publisher below for an explicitly requested publication. Copilot
 subagent names label Roster seats; they are not GitHub identities or policy
 grants.
+Roster-managed `--publish` and REPL `/publish` require a passing
+[REVIEW.md](REVIEW.md) unless `--skip-review` is explicit. A direct call to
+the contracts publisher cannot enforce that in-process gate: review the
+code and result yourself before using the manual handoff.
 
 ## Publish from the feature worktree
 
