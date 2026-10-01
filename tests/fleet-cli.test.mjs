@@ -106,6 +106,33 @@ test('fleet add uses reported context without prompting in TTY and non-TTY modes
   }
 });
 
+test('local Ollama registration GETs models and stores max_model_len beside the unchanged Spark default', async (t) => {
+  const spark = { ...first, id: 'default', model: 'deepseek-v4.1-flash',
+    base_url: 'http://spark.example.invalid:8000/v1', context_max: 1048576, hardware: 'Spark' };
+  const options = fixture(t, [spark]);
+  await runFleet(['default', 'default'], options);
+  const configPath = join(options.cwd, '.roster', 'config.yml');
+  const before = readFileSync(configPath, 'utf8');
+  let requests = 0;
+  const result = await runFleet(['add', '--id', 'ollama-local', '--base-url', 'http://127.0.0.1:11434/v1',
+    '--model', 'local-test-model', '--hardware', 'local-host'], {
+    ...options, fetchImpl: async (url, request) => {
+      requests += 1;
+      assert.equal(url, 'http://127.0.0.1:11434/v1/models');
+      assert.equal(request.method, 'GET');
+      assert.equal(request.headers.Authorization, undefined);
+      return Response.json({ data: [{ id: 'local-test-model', max_model_len: 1048576 }] });
+    },
+  });
+  assert.equal(requests, 1);
+  assert.equal(result.profile.context_max, 1048576);
+  assert.equal(result.profile.base_url, 'http://127.0.0.1:11434/v1');
+  assert.equal(readFileSync(configPath, 'utf8'), before);
+  assert.deepEqual((await loadFleet({ cwd: options.cwd })).profiles.map(({ id }) => id),
+    ['default', 'ollama-local']);
+  assert.equal(loadConfig({ repoRoot: options.cwd, cwd: options.cwd }).llm.model, spark.model);
+});
+
 test('fleet add without discovered context retains explicit limits and refuses unknown non-TTY capacity', async (t) => {
   const options = fixture(t);
   await assert.rejects(runFleet(['add', '--id', 'missing', '--base-url', 'https://x.example.invalid',
