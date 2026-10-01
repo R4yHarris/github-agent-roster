@@ -93,10 +93,13 @@ test('configured standalone logging does not become an app diff or opt into JSON
   assert.equal(result.result.mode, 'llm');
   assert.equal(result.result.excellence.pass, true);
   assert.deepEqual(result.result.excellence.files, ['README.md']);
-  assert.equal(readFileSync(result.logPath, 'utf8'), stderr);
-  assert.match(stderr, /seat coder tool write_file path="README\.md"/);
-  assert.match(stderr, /seat coder http chat\.completions ok status=200/);
-  assert.match(stderr, /model="config-model" host="localhost:3456"/);
+  const liveLog = readFileSync(result.logPath, 'utf8');
+  assert.notEqual(liveLog, stderr);
+  assert.match(stderr, /^Saving README\.md\.$/m);
+  assert.match(liveLog, /seat coder tool write_file path="README\.md"/);
+  assert.match(liveLog, /seat coder http chat\.completions ok status=200/);
+  assert.match(liveLog, /model="config-model" host="localhost:3456"/);
+  assert.doesNotMatch(stderr, /http chat|model=|host=|elapsed_ms=|\d{4}-\d\d-\d\dT/);
   assert.doesNotMatch(stderr, /PRIVATE_|test-only-live-key|# Before|## Status/);
   assert.equal(existsSync(path.join(options.worktree, '.roster', 'runs', 'runs.jsonl')), false);
 });
@@ -117,9 +120,12 @@ test('the exact standalone CLI command consumes TASK.md in cwd with no GitHub de
   assert.match(result.stdout, /Mode: stub/);
   assert.match(result.stdout, /CONTEXT: .+CONTEXT\.md/);
   assert.doesNotMatch(result.stdout, /RESEARCH:|undefined/);
-  assert.match(result.stderr, /\d{4}-\d\d-\d\dT.* start seat coder/);
-  assert.match(result.stderr, /seat coder wrote RESULT\.md/);
-  assert.equal(readFileSync(path.join(options.worktree, '.roster', 'runs', 'single-seat-test.log'), 'utf8'), result.stderr);
+  assert.match(result.stderr, /^Preparing the task summary\.$/m);
+  assert.match(result.stderr, /^Checking the diff against the task\.$/m);
+  assert.doesNotMatch(result.stderr, /\d{4}-\d\d-\d\dT|start seat|mode stub/);
+  const liveLog = readFileSync(path.join(options.worktree, '.roster', 'runs', 'single-seat-test.log'), 'utf8');
+  assert.notEqual(liveLog, result.stderr);
+  assert.match(liveLog, /start seat coder[\s\S]*seat coder wrote RESULT\.md/);
   assert.equal(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), '# Before\n');
   assert.equal(existsSync(path.join(options.worktree, 'RECIPE.yml')), false);
   for (const flag of ['--publish', '--auto-model']) {

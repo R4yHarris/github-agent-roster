@@ -206,19 +206,19 @@ test('/run sends live events to its stderr writer before the final summary is re
   const pending = new Promise((resolve) => { finish = resolve; });
   const shell = dispatcher({
     services: { runBuiltinIssue: async (_issue, { log, errorOutput }) => {
-      errorOutput.write('2026-09-30T22:00:00.000Z start seat planner session=roster-92-planner\n');
+      errorOutput.write('Writing the plan: outcome, allowed files, and checks.\n');
       await pending;
       log('Final run summary.');
       return { failed: false, command: null, issue: { number: 92 }, task: 'issue-92' };
     } },
   });
   const running = shell.dispatch('/run 92');
-  assert.match(shell.errorOutput.text, /start seat planner/);
+  assert.equal(shell.errorOutput.text, 'Writing the plan: outcome, allowed files, and checks.\n');
   assert.equal(shell.output.text, '');
   finish();
   assert.equal(await running, true);
   assert.match(shell.output.text, /Final run summary/);
-  assert.doesNotMatch(shell.output.text, /start seat planner/);
+  assert.doesNotMatch(shell.output.text, /Writing the plan:/);
 });
 
 test('/log N tails matching local logs without dispatching a run or network call', async () => {

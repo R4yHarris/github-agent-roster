@@ -10,6 +10,11 @@ const tools = ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text']
 const artifacts = ['RECIPE.yml', 'TASK.md', 'PLAN.md', 'ESTIMATE.md', 'RESULT.md', 'REVIEW.md'];
 const httpErrors = ['authentication', 'network', 'timeout', 'http', 'response', 'abort'];
 const maximumLineBytes = 2048;
+const seatActions = {
+  planner: 'Writing the plan: outcome, allowed files, and checks.',
+  coder: 'Drafting the change.',
+  reviewer: 'Checking the diff against the task.',
+};
 
 export class RunLogError extends Error {
   code = 'ROSTER_RUN_LOG';
@@ -46,7 +51,7 @@ export async function createRunLog({
   await ensureLocalPath(file, repoRoot);
   let pending = Promise.resolve();
 
-  function append(message) {
+  function append(message, human = null) {
     const write = pending.then(async () => {
       const line = `${now().toISOString()} ${safe(message)}\n`;
       if (Buffer.byteLength(line) > maximumLineBytes) throw new RunLogError('Run log metadata line exceeds 2 KiB');
@@ -60,7 +65,7 @@ export async function createRunLog({
       } finally {
         await handle.close();
       }
-      errorOutput.write(line);
+      if (human !== null) errorOutput.write(`${safe(human)}\n`);
     }).catch((error) => {
       if (error instanceof RunLogError) throw error;
       throw new RunLogError(`Could not write live run log (${typeof error.code === 'string' &&
@@ -68,6 +73,24 @@ export async function createRunLog({
     });
     pending = write;
     return write;
+  }
+
+  function humanEventText(name, event) {
+    if (event.type === 'http' && event.phase === 'start') return seatActions[name];
+    if (event.type === 'waiting' && event.elapsedSeconds > 30) {
+      return 'Still waiting on the model. Local hardware can take minutes after idle.';
+    }
+    if (event.type === 'timeout') return 'The model did not answer in time. It may still be waking.';
+    if (event.type !== 'tool') return null;
+    const location = typeof event.path === 'string' ? safe(event.path).slice(0, 512) : 'the requested file';
+    switch (event.name) {
+      case 'read_file': return `Reading ${location} before editing.`;
+      case 'write_file': return `Saving ${location}.`;
+      case 'run_test': return 'Running tests.';
+      case 'list_dir': return `Listing ${location}.`;
+      case 'search_text': return 'Finding the relevant text.';
+      default: throw new TypeError('Invalid live tool event');
+    }
   }
 
   function eventText(event) {
@@ -131,10 +154,11 @@ export async function createRunLog({
         if (text === modelEvent) return;
         modelEvent = text;
       }
-      await append(`seat ${name} ${text}`);
+      await append(`seat ${name} ${text}`, humanEventText(name, event));
     };
     const started = clock();
-    await append(`start seat ${name} session=${safe(seatSession)}`);
+    await append(`start seat ${name} session=${safe(seatSession)}`,
+      name === 'coder' && mode === 'stub' ? 'Preparing the task summary.' : seatActions[name]);
     await onEvent({ type: 'model', model: mode === 'stub' ? 'builtin-stub' : config.llm.model,
       host: mode === 'stub' ? '-' : new URL(config.llm.base_url).host });
     await append(`seat ${name} mode ${mode}`);

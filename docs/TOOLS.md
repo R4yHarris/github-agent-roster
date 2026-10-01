@@ -117,6 +117,11 @@ Live `.roster/runs/*.log` files are managed and write-protected too, and their
 append-only activity is excluded from verification and publication diffs.
 Run logging records only the tool name and requested path, never arguments
 containing file bodies, search queries, tool results, or test output.
+The shell stderr projection is a single human action per tool event, such as
+`Reading README.md before editing.`, `Saving README.md.`, or `Running tests.`
+Paths remain redacted and single-line. Timestamped tool/HTTP/model metadata
+stays in the run log, not the live stderr status. No additional work is
+scheduled by status reporting.
 
 `search_text` is a case-sensitive, fixed-string grep, not a regex or a shell
 command. It walks regular worktree files in sorted directory order, uses
