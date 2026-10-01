@@ -12,6 +12,17 @@ const fields = ['profile_id', 'model_id', 'task_class', 'suggested_difficulty', 
 const required = ['suggested_difficulty', 'context_max', 'concurrency', 'notes'];
 const taskClasses = ['feat', 'fix', 'docs', 'test'];
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+let builtinCapabilities;
+
+export function modelCapabilityPrior(model, taskClass = 'feat', catalog) {
+  if (!taskClasses.includes(taskClass)) throw new TypeError('Model prior requires a known task class');
+  builtinCapabilities ??= parseCapabilities(readConfigFile(path.join(installation, 'examples', 'capabilities.yml')));
+  const records = validateCapabilities(catalog ?? builtinCapabilities).capabilities;
+  const record = records.find((prior) => prior.model_id === model && prior.task_class === taskClass);
+  return record ? { ...record, strength: record.suggested_difficulty >= 4 ? 'strong'
+    : record.suggested_difficulty === 3 ? 'standard' : 'limited' }
+    : { strength: 'unknown', suggested_difficulty: 2 };
+}
 
 function key(record) {
   return JSON.stringify([record.profile_id === undefined ? 'model' : 'profile',

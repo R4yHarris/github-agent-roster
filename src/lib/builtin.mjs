@@ -30,6 +30,7 @@ import { parseTaskDocument } from '../planner/task.mjs';
 import { retryCommandForTask } from '../llm/request.mjs';
 import { selectReasoning } from '../llm/reasoning.mjs';
 import { readTaskMetadata } from '../runtime/estimate.mjs';
+import { loadCapabilities } from './capabilities.mjs';
 
 const execFileAsync = promisify(execFile);
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -143,6 +144,7 @@ export async function runBuiltinTask({
   session = env.AI_SESSION || `roster-${randomBytes(8).toString('hex')}-coder`,
   log = console.log, errorOutput = process.stderr, fetchImpl, vault, runTestCommand,
 } = {}) {
+  config = { ...config, capabilities: config.capabilities ?? await loadCapabilities({ cwd }) };
   if (typeof task !== 'string' || !IDENTIFIER.test(task) ||
       typeof session !== 'string' || !IDENTIFIER.test(session)) {
     throw new TypeError('AI_TASK and AI_SESSION must be opaque 1-64 character identifiers');
@@ -303,6 +305,7 @@ async function runBuiltinAssignment(issueNumber, {
   metricsLoader = loadMetrics,
   now,
 } = {}) {
+  config = { ...config, capabilities: config.capabilities ?? await loadCapabilities({ cwd }) };
   const retryCommand = issueNumber === null ? retryCommandForTask(null) :
     `${retryCommandForTask(`issue-${issueNumber}`)}${autoModel ? ' --auto-model' : ''}`;
   if (!autoModel && !config.llm.model && (env.AI_MODEL || env.ROSTER_MODEL)) {

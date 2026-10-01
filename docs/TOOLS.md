@@ -15,6 +15,15 @@ five functions:
 | `run_test` | `{}` | Runs `node --test` from the worktree root; returns `exit_code`, captured `stdout`, and `stderr`. |
 | `search_text` | `{ "query": "literal text", "path": "src" }` (`path` optional) | At most 50 `{ path, line, text }` matches and a `truncated` flag. |
 
+Every slice limits file reads to TASK.md and its allowed-file patterns, regardless
+of task class, difficulty, or filename. Directory listings expose only allowed
+files and their ancestor directories; recursive searches visit only that scope.
+Explicit reads, listings, or searches outside it fail with a TASK scope denial.
+Tests/fixtures and harness sources are denied unless TASK explicitly allows
+their paths. Secrets, Git metadata, human-owned policy/workflows, and contracts
+remain protected even with broad TASK scope. Test execution remains a separate
+permission; read scope does not waive the acceptance checks.
+
 ## Planner artifact writer
 
 A configured slice planner in an issue worktree receives only `write_file`.

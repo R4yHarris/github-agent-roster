@@ -26,6 +26,22 @@ may describe different task classes, but a selector/class pair is unique.
 Fictional model/profile records are illustrative and do not select a live
 service automatically.
 
+The operator-supplied `deepseek-v4.1-flash` prior is a strong coder with
+`context_max: 1048576` for every task class. A suggested difficulty of 4-5
+means strong, 3 means standard, and 1-2 means limited; an absent model prior
+is unknown. The fleet example describes `spark-4` hardware as 512GB class
+but uses an illustrative endpoint, not a configured service or throughput claim.
+
+Every ask selects effort from task difficulty versus its model prior, not from
+README filenames or docs mode. Strong models use low for difficulty 1-2;
+difficulty 4-5 uses high. Intermediate tasks use medium when not exceeding the prior's
+suggested difficulty, otherwise high; unknown models use a conservative
+difficulty-2 prior. Local DeepSeek maps medium to high. An explicit effort
+override still applies, but a docs slice is always capped at high, including
+overrides and failed-review retries. Output-token budgets remain separate.
+The coder logs `Drafting at low effort. Model prior: strong.` for that selection.
+Prior context is not substituted for measured usage or configured capacity.
+
 [`loadCapabilities`](../src/lib/capabilities.mjs) loads the installed example
 first, then overlays ignored `.roster/capabilities.yml` when present.
 A matching selector/class can override only specified fields; a new record

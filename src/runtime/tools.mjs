@@ -159,6 +159,7 @@ export async function createTools({
   memoryPath,
   allowRunTest = true,
   readmeOnlyDocs = false,
+  sliceReadsOnly = false,
   runCommand = execute,
   onEvent,
 } = {}) {
@@ -168,6 +169,9 @@ export async function createTools({
     throw new TypeError('Planner scope must contain only known root planning artifacts');
   }
   if (typeof allowRunTest !== 'boolean') throw new TypeError('run_test permission must be a boolean');
+  if (typeof sliceReadsOnly !== 'boolean' || sliceReadsOnly && seat !== 'coder') {
+    throw new TypeError('Slice read scope requires a coder seat and a boolean permission');
+  }
   if (typeof readmeOnlyDocs !== 'boolean' || readmeOnlyDocs &&
       (seat !== 'coder' || !Array.isArray(allowedFiles) || allowedFiles.length !== 1 || allowedFiles[0] !== 'README.md')) {
     throw new TypeError('README-only docs tools require coder scope limited to README.md');
@@ -182,6 +186,16 @@ export async function createTools({
   let readmeWritten = false;
   if (seat === 'coder' && (!Array.isArray(allowedFiles) || !allowedFiles.length)) {
     throw new TypeError('TASK.md must list files allowed for writing');
+  }
+
+  function readable(file, directory = false) {
+    if (!sliceReadsOnly || file === 'TASK.md' || isAllowedFile(file, allowedFiles)) return true;
+    if (!directory) return false;
+    const candidate = process.platform === 'win32' ? file.toLowerCase() : file;
+    return !candidate || allowedFiles.some((pattern) => {
+      const allowed = process.platform === 'win32' ? pattern.toLowerCase() : pattern;
+      return allowed.startsWith(`${candidate}/`);
+    });
   }
 
   function locate(input, { directory = false, write = false } = {}) {
@@ -211,6 +225,9 @@ export async function createTools({
     }
     if (isForbiddenRead(normalized)) {
       throw new Error('Tool access to secrets, Git metadata, policy, workflows, or contracts is refused');
+    }
+    if (!write && !readable(normalized, directory)) {
+      throw new Error(`Reading ${normalized} is not allowed by TASK.md slice scope`);
     }
     return { file, relative, normalized };
   }
@@ -328,7 +345,10 @@ export async function createTools({
       if (!entry.isDirectory()) throw new Error('list_dir requires a directory');
       if (relative) await checkParent(file);
       const entries = await fs.readdir(file, { withFileTypes: true });
-      return entries.filter((item) => !isProtectedSurface(path.posix.join(normalized, item.name)))
+      return entries.filter((item) => {
+        const child = path.posix.join(normalized, item.name);
+        return !isProtectedSurface(child) && readable(child, item.isDirectory());
+      })
         .map((item) => ({
         name: item.name,
         type: item.isDirectory() ? 'directory' : item.isFile() ? 'file' :

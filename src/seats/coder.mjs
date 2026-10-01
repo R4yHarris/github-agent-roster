@@ -51,6 +51,7 @@ export async function runCoder({
       apiKeyEnv: config.llm.api_key_env, env: withoutLlmKeys(env, config), runCommand: runTestCommand,
       allowRunTest: config.tools?.run_test !== false,
       readmeOnlyDocs: context.contextPolicy.readmeOnlyDocs,
+      sliceReadsOnly: context.contextPolicy.sliceReadsOnly,
       onEvent,
     });
     if (!context.minimalDocs) {

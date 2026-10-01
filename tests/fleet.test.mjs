@@ -15,8 +15,12 @@ const profile = {
 
 test('fictional catalog parses and round-trips without becoming a configured fleet', () => {
   const fleet = parseFleet(example);
-  assert.equal(fleet.profiles.length, 2);
-  assert.equal(fleet.profiles[1].base_url, 'https://cluster.example.invalid/v1');
+  assert.equal(fleet.profiles.length, 3);
+  assert.equal(fleet.profiles.find(({ id }) => id === 'example-large-context').base_url, 'https://cluster.example.invalid/v1');
+  const spark = fleet.profiles.find(({ id }) => id === 'spark-4');
+  assert.equal(spark.hardware, 'spark-4');
+  assert.equal(spark.context_max, 1048576);
+  assert.match(spark.notes, /512GB class/);
   assert.deepEqual(parseFleet(formatFleet(fleet)), fleet);
   assert.ok(fleet.profiles.every(({ base_url }) => new URL(base_url).hostname.endsWith('.example.invalid')));
   assert.equal(Object.isFrozen(fleet.profiles), true);

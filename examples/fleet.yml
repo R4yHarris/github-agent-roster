@@ -5,6 +5,15 @@
 #        context_max: 32768
 #        concurrency: 2
 profiles:
+  - id: spark-4
+    base_url: https://spark.example.invalid/v1
+    model: deepseek-v4.1-flash
+    provider: vllm
+    context_max: 1048576
+    concurrency: 1
+    hardware: spark-4
+    task_class: [feat, fix, docs, test]
+    notes: "512GB class hardware; illustrative endpoint, not measured throughput."
   - id: example-single-gpu
     base_url: https://gpu.example.invalid/v1
     model: fictional/compact-coder
