@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { buildPublishEnv, buildRun, resolvePublishModel, RUN_ENV_NAMES } from '../metrics/run.mjs';
 import { taskFilesAllowed } from '../planner/stub.mjs';
 import { runCoder } from '../seats/coder.mjs';
-import { preparePlannerHandoff, readPlannerHandoff, readPlannerTask, runPlanner } from '../seats/planner.mjs';
+import { preparePlannerHandoff, readPlannerHandoff, readPlannerTask, readPreviousReview, runPlanner } from '../seats/planner.mjs';
 import { requirePassingReview, runReviewer } from '../seats/reviewer.mjs';
 import { isAllowedFile, isForbiddenWrite, isManagedFile } from '../runtime/tools.mjs';
 import { checkExcellence, redactEvidence } from '../runtime/excellence.mjs';
@@ -17,7 +17,7 @@ import { runIssue, validateIssueNumber } from './issue.mjs';
 import {
   commentMergedIssue, mergedPullNumber, mergedPullNumberFromFailure,
 } from './issue-board.mjs';
-import { IDENTIFIER, inferTaskClass, recordRun } from './learn.mjs';
+import { IDENTIFIER, inferTaskClass, loadLearning, recordRun } from './learn.mjs';
 import { loadMetrics } from './metrics.mjs';
 import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
 import { buildPublishMessage, formatPublishCommand, formatPublishEnvironment } from './publication.mjs';
@@ -28,6 +28,8 @@ import { formatRoute, routeTask } from './route.mjs';
 import { classifyAsk, clarificationHint } from '../planner/classify.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
 import { retryCommandForTask } from '../llm/request.mjs';
+import { selectReasoning } from '../llm/reasoning.mjs';
+import { readTaskMetadata } from '../runtime/estimate.mjs';
 
 const execFileAsync = promisify(execFile);
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -153,6 +155,15 @@ export async function runBuiltinTask({
   const document = parseTaskDocument(taskSource);
   const classification = classifyAsk(document.ask, { title: document.title, filesAllowed: document.files_allowed });
   const askKind = classification.kind;
+  const previousReview = await readPreviousReview(worktreePath);
+  const previousCoder = previousReview?.startsWith('# Review\n\nVerdict: fail\n')
+    ? loadLearning({ cwd: worktreePath }).runs.findLast((run) => run.task === task && run.excellence !== undefined)
+    : null;
+  if (previousCoder && ['l', 'm', 'h', 'x'].includes(previousCoder.effort)) {
+    config = { ...config, llm: { ...config.llm, review_retry_effort: previousCoder.effort } };
+  }
+  config = selectReasoning(config, { kind: askKind, taskClass: readTaskMetadata(taskSource).task_class,
+    difficulty: readTaskMetadata(taskSource).difficulty });
   log(`Ask kind: ${askKind} (${classification.reason})`);
   if (askKind === 'clarify') {
     log(clarificationHint);
@@ -323,6 +334,15 @@ export async function runBuiltinIssue(issueNumber, {
       filesAllowed: taskFilesAllowed(existing.plan.task) });
   }
   const askKind = classification.kind;
+  const previousReview = prepared.reused ? await readPreviousReview(worktreePath) : null;
+  const previousCoder = previousReview?.startsWith('# Review\n\nVerdict: fail\n')
+    ? loadLearning({ cwd: prepared.repoRoot }).runs.findLast((run) => run.session === `roster-${prepared.issue.number}-coder`)
+    : null;
+  activeConfig = selectReasoning({ ...activeConfig, llm: { ...activeConfig.llm,
+    ...(previousCoder && ['l', 'm', 'h', 'x'].includes(previousCoder.effort)
+      ? { review_retry_effort: previousCoder.effort } : {}),
+  } }, { kind: askKind, taskClass: prepared.metadata?.task_class,
+    difficulty: prepared.metadata?.difficulty });
   const sessions = {
     planner: `roster-${prepared.issue.number}-planner`,
     coder: prepared.session,
@@ -391,11 +411,11 @@ export async function runBuiltinIssue(issueNumber, {
       planningOnly: true, failed: false, archivePath, logPath: liveLog.path, logSession: liveLog.session };
   }
   if (planner.error) log(`Planning failed: ${planner.error}\nRECIPE/TASK stubs are unverified; no configured coder will run.`);
-  const coderConfig = { ...activeConfig, llm: Object.freeze({
+  const coderConfig = selectReasoning({ ...activeConfig, llm: {
     ...activeConfig.llm, model: planner.metadata.model || activeConfig.llm.model,
     ...(planner.error ? { base_url: '' } : {}),
     effort: planner.feedback?.effort ?? activeConfig.llm.effort,
-  }) };
+  } }, { kind: askKind, taskClass: planner.metadata.task_class, difficulty: planner.metadata.difficulty });
   const reviewSeat = async (coderResult) => {
     const reviewConfig = { ...coderConfig, llm: {
       ...coderConfig.llm, model: coderResult.mode === 'llm' ? coderResult.model : coderConfig.llm.model,

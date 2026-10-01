@@ -33,8 +33,10 @@ is the manual handoff path. See [SDLC](SDLC.md) for execution and publishing.
   Model-backed seats use the [OpenAI-compatible client](LLM.md): a non-empty environment
   value wins over the same-named vault entry, and authorization is sent only
   for a resolved key. Leave both unset for a keyless local server.
-- `llm.effort: m` records medium effort and `llm.context_max: 0` means an unknown
-  context limit. These are run metadata, not provider-specific request options.
+- `llm.effort: m` is the fallback effort. [Mode-based reasoning](SDLC.md#configuration)
+  selects request effort and output limits; local DeepSeek-V4.1 maps medium
+  to high, while cloud retains medium. `llm.context_max: 0` remains unknown
+  context capacity, not a request option or measured usage.
 - Optional `llm.api_key_optional` overrides the profile's key requirement.
   Optional `llm.provider` records the actual backend (`vllm`,
   `github-copilot`, `anthropic`, `openai`, `local`, or `other`). vLLM is
@@ -72,9 +74,11 @@ available ID for `llm.model`. Keep local servers bound to loopback unless
 remote access is deliberately secured.
 
 In the interactive [Roster shell](REPL.md), `/model MODEL` and `/effort h`
-persist those two fields to ignored `.roster/config.yml` without editing the
-tracked example. `/model clear` leaves the model empty; opt-in
-`/run N --auto-model` can also choose a fleet model while retaining a
+persist those fields to ignored `.roster/config.yml` without editing the
+tracked example. `/effort` also records `llm.effort_override`, so a manual
+choice wins over automatic mode/retry effort. `none` disables thinking.
+`/model clear` leaves the model empty; opt-in `/run N --auto-model` can also
+choose a fleet model while retaining a
 nonempty saved default. Select manual endpoint settings in private config
 or use `roster fleet default ID`. See [model routing](ROUTING.md).
 

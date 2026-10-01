@@ -12,7 +12,7 @@ agents and CI.
 | --- | --- |
 | `/ask TEXT` | Classify Ask, then create its parent issue through `gh`, or save an offline slice TASK/recipe or planning-only PLAN. A `clarify` Ask stops with outcome/file-scope guidance. |
 | `/model [MODEL]` | Show the current model or persist a new one to ignored `.roster/config.yml`. |
-| `/effort [l|m|h|x]` | Show the current effort or persist a new level to ignored `.roster/config.yml`. |
+| `/effort [l|m|h|x|none]` | Show effort or persist an explicit override to ignored `.roster/config.yml`; it wins over mode/retry defaults. |
 | `/run N [--auto-model]` or `/run --issue N [--auto-model]` | Classify before seats. Slices use planner/coder/read-only-reviewer; feature/initiative writes PLAN only; clarify stops. The optional flag chooses a registered fleet profile without rewriting the saved default; no eligible profile uses the deterministic stub. |
 | `/status [N] [--offline]` | Show an issue, its open branch PR, and worktree path. Defaults to the last run or created issue; offline reads only the cached assignment and reports PR state as unknown. |
 | `/log N` | Tail up to 50 safe metadata lines from each local `.roster/runs/roster-N-*.log`, without network or seat execution. |
@@ -75,6 +75,8 @@ of its final summary. Planner start/model request says
 `Writing the plan: outcome, allowed files, and checks.` Coder reads say
 `Reading README.md before editing.`, writes say `Saving README.md.`, model
 requests say `Drafting the change.`, and tests say `Running tests.`
+Configured coder requests include the chosen effort, for example
+`Drafting the change at low effort.`
 Reviewer start says `Checking the diff against the task.` These are status
 projections only: they do not add tools, checks, edits, or work. A stub coder
 says `Preparing the task summary.` rather than claiming an implementation.
@@ -140,10 +142,21 @@ metadata. It does not write config, Task artifacts, or code. A successful
 models probe does not prove model weights are warm; the first chat may still
 need the full cold-start wait.
 
-`/model MODEL` and `/effort h` validate and atomically replace only those
-fields in the private config, keeping the other fields and comments. The
+`/model MODEL` and `/effort h` validate and atomically replace those
+fields in the private config, keeping other fields and comments. `/effort`
+also writes `llm.effort_override` so a human choice is not lost to automatic
+selection. `/effort x` sends max to local DeepSeek-V4.1 and xhigh to cloud;
+`/effort none` disables thinking. Remove the override field in private config
+to return to mode defaults. The
 updated values apply to the next `/run` in this shell. With no selected
 endpoint or profile, setting a model alone still leaves the stub active.
+
+Docs slices at difficulty1-2 use low effort and `max_tokens: 2048`; feature
+and initiative planners use high and 4096. A new `/run` after a failing REVIEW
+uses the preceding journaled coder effort raised one supported tier (never
+past max/xhigh), unless an explicit override exists. The task and minimum
+context are unchanged. No retry/model call is scheduled just by selecting
+effort, and no `reasoning_content` is persisted in seat memory.
 `/model clear` leaves the model empty. `/run N --auto-model` explicitly
 selects a registered fleet endpoint/model in memory, even if a saved
 default exists. It prefers at least three qualifying human evaluations,

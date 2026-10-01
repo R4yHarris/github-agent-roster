@@ -133,7 +133,7 @@ export function buildRun({ config, usage = {}, response, session, task, env = pr
   }
   const counts = mergeUsage(live ? response?.usage ?? {} : usage);
   return materializeRun({
-    provider: runProvider(config, live ? {} : env), model, effort: config.llm.effort,
+    provider: runProvider(config, live ? {} : env), model, effort: config.llm.effort === 'none' ? '-' : config.llm.effort,
     ...(contextMax > 0 ? { context_max: contextMax } : {}),
     ...counts, ...(session === undefined ? {} : { session }), ...(task === undefined ? {} : { task }),
   }, live ? '-' : env.AI_MODEL_VERSION || '-');

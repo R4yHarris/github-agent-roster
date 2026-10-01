@@ -9,6 +9,7 @@ import { redactSecrets } from '../runtime/memory.mjs';
 import { applyFeedback } from './feedback.mjs';
 import { parsePlannerToolCalls } from './tool-calls.mjs';
 import { allowedFile, checkedList, oneLine, parseTaskDocument } from './task.mjs';
+import { selectReasoning } from '../llm/reasoning.mjs';
 
 export { taskFilesAllowed } from './task.mjs';
 
@@ -135,6 +136,7 @@ export async function planAsk(ask, {
   if (!Array.isArray(memory) || memory.some((line) => typeof line !== 'string')) {
     throw new TypeError('Planner memory must contain JSONL lines');
   }
+  config = selectReasoning(config, { kind: 'slice', taskClass: metadata?.task_class, difficulty: metadata?.difficulty });
   if (onResponse !== undefined && typeof onResponse !== 'function') throw new TypeError('onResponse must be a function');
   if (tools !== undefined && (!tools || typeof tools.write_file !== 'function' ||
       Object.keys(tools).some((name) => name !== 'write_file'))) {

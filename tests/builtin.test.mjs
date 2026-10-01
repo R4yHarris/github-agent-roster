@@ -19,6 +19,7 @@ import { renderIssueBody } from '../src/lib/issue.mjs';
 import { formatFleet } from '../src/lib/fleet.mjs';
 import { packAgentRun } from '../vendor/github-agent-contracts/scripts/parse-agent-run.mjs';
 import { withResearchSummary } from './helpers/research.mjs';
+import { recordedCoderRun } from '../src/lib/seat-publication.mjs';
 
 function runBuiltinIssue(issue, options) {
   return runIssueWithSeats(issue, { ...options, fetchImpl: withResearchSummary(options.fetchImpl) });
@@ -308,6 +309,51 @@ test('an inferred-scope Ask writes a validated TASK then stops until the next ex
   assert.equal(next.planner.reused, true);
   assert.equal(next.planningOnly, undefined);
   assert.equal(next.result.mode, 'stub');
+});
+
+test('docs slice retry after failed review raises one supported tier and never exceeds max', async (context) => {
+  const options = fixture(context);
+  options.issue.body = renderIssueBody(options.issue.body, { task_class: 'docs', difficulty: 1 });
+  const config = { ...llmConfig, llm: { ...llmConfig.llm, model: 'deepseek-v4.1-flash',
+    base_url: 'http://192.168.1.48:8888/v1' } };
+  for (const effort of ['low', 'high', 'max', 'max', 'none']) {
+    let coderTurns = 0;
+    const activeConfig = effort === 'none' ? { ...config, llm: { ...config.llm, effort_override: 'none' } } : config;
+    const result = await runIssueWithSeats(42, { ...options, config: activeConfig, log: () => {},
+      fetchImpl: async (_url, request) => {
+        const body = JSON.parse(request.body);
+        const system = body.messages[0].content;
+        if (system.startsWith('You are the builtin planner seat.')) {
+          assert.equal(body.reasoning_effort, 'low');
+          return Response.json({ choices: [{ message: { role: 'assistant', content: JSON.stringify({
+            title: options.issue.title, acceptance_checks: ['node --test exits 0'],
+            files_allowed: ['README.md'], task_class: 'docs', difficulty: 1,
+          }) } }] });
+        }
+        if (system.startsWith('You are the builtin reviewer seat.')) {
+          return Response.json({ choices: [{ message: { role: 'assistant', content: JSON.stringify({
+            verdict: 'fail', reasons: ['Needs additional evidence.'], security_notes: [],
+          }) } }] });
+        }
+        coderTurns += 1;
+        assert.equal(body.reasoning_effort, effort);
+        assert.equal(body.max_tokens, 2048);
+        assert.doesNotMatch(system, /## Principal|## Seat memory|implement-task/);
+        return Response.json({ choices: [{ finish_reason: coderTurns === 1 ? 'tool_calls' : 'stop',
+          message: coderTurns === 1 ? { role: 'assistant', reasoning_content: 'PRIVATE_CODER_THINKING',
+            tool_calls: [{ id: 'edit', type: 'function', function: { name: 'write_file',
+              arguments: JSON.stringify({ path: 'README.md', content: `# Example\n\n## Status\n${effort} ${Date.now()}.\n` }) } }],
+          } : { role: 'assistant', content: 'Changed the scoped README.', reasoning_content: 'PRIVATE_CODER_THINKING' },
+        }] });
+      }, runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+    });
+    assert.equal(result.review.verdict, 'fail');
+    assert.equal(result.runs.coder.metrics.effort, { low: 'l', high: 'h', max: 'x', none: '-' }[effort]);
+    assert.equal(recordedCoderRun({ repoRoot: options.target, run: result.runs.coder }).line, result.runs.coder.line);
+    assert.match(options.stderr, new RegExp(`Drafting the change at ${effort} effort\\.`));
+    assert.doesNotMatch(readFileSync(path.join(options.repoRoot, '.roster', 'memory', 'coder.jsonl'), 'utf8'),
+      /PRIVATE_CODER_THINKING|reasoning_content/);
+  }
 });
 
 test('cold endpoint timeout preserves a valid TASK and retry skips planner rather than marking the TASK bad', async (context) => {

@@ -14,7 +14,7 @@ operational totals.
 object and a contracts-compatible compact schema 1 AI-Run line. Builtin issue
 runs record planner, coder, and reviewer sessions (`roster-N-planner`,
 `roster-N-coder`, and `roster-N-reviewer`) with task `issue-N`. The same known
-model, provider, effort, prompt/completion counts, context capacity, session,
+model, provider, selected effort, prompt/completion counts, context capacity, session,
 and task are written into `.roster/runs/*.jsonl`. Legacy `context_used` and
 `context_out` fields mirror reported prompt and completion tokens for existing
 stats consumers. Context capacity comes only from the selected fleet profile
@@ -23,12 +23,21 @@ are omitted, not estimated as zero or 1,000,000. An explicitly reported zero
 is retained. Unknown slots are `-` in the compact line.
 
 The separate live `.roster/runs/<session>.log` is append-only operational
-activity, printed simultaneously to stderr. For an issue, one
+activity; plain-language actions (including chosen coder effort) are printed
+to stderr separately. For an issue, one
 `roster-N-coder.log` contains all three seats; timestamps, mode, elapsed time,
 HTTP status/error classes, and tool/file names are metadata only. It stores no
 prompts, responses, file bodies, or credentials. Offline status shows its last
 seat and complete line. JSONL metrics/stats ignore `.log` files; a log is not
 an AI-Run token report or a human evaluation.
+
+Effort records the orchestrator-selected compact tier, not a hardcoded
+medium or a model's private reasoning. Local DeepSeek-V4.1 medium is
+normalized to high. `none` is encoded as `-` in the existing contracts schema
+(which has no disabled-thinking tier) and omitted from the JSONL effort field;
+the request itself explicitly disables thinking. `reasoning_content` is
+discarded before model messages are returned or replayed and is never written
+to seat memory.
 
 The publisher derives `AI_PROVIDER`, `AI_MODEL`, `AI_EFFORT`,
 `AI_CONTEXT_USED`, `AI_CONTEXT_MAX`, `AI_CONTEXT_OUT`, `AI_SESSION`, and

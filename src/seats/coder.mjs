@@ -10,6 +10,7 @@ import { runResearch } from '../runtime/research.mjs';
 import { loadSkills, previewSkills } from '../runtime/skills.mjs';
 import { createTools } from '../runtime/tools.mjs';
 import { isLlmTimeout, retryCommandForTask } from '../llm/request.mjs';
+import { selectReasoning } from '../llm/reasoning.mjs';
 
 export async function runCoder({
   worktree, repoRoot, config, task, session, fetchImpl, env = process.env, vault, runTestCommand,
@@ -42,7 +43,8 @@ export async function runCoder({
     }
     metadata = estimateTask(readTaskMetadata(context.task), [], config.llm.model || env?.ROSTER_MODEL || '');
     if (config.llm.base_url && !metadata.model) throw new Error('Set config.llm.model or TASK.md model for the coder seat');
-    config = { ...config, llm: { ...config.llm, model: metadata.model } };
+    config = selectReasoning({ ...config, llm: { ...config.llm, model: metadata.model } },
+      { kind: askKind ?? 'slice', taskClass: metadata.task_class, difficulty: metadata.difficulty });
     result.model = config.llm.base_url ? metadata.model : 'builtin-stub';
     const tools = await createTools({
       worktree, allowedFiles: taskFilesAllowed(context.task), memoryPath,

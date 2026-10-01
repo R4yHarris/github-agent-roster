@@ -54,7 +54,7 @@ function parseCompletion(payload, requestedModel) {
     throw new ChatError('The LLM response contained an invalid model.');
   }
   return {
-    message, usage, model,
+    message: Object.fromEntries(Object.entries(message).filter(([key]) => key !== 'reasoning_content')), usage, model,
     ...(choice.finish_reason === undefined ? {} : { finish_reason: choice.finish_reason }),
   };
 }
@@ -95,7 +95,12 @@ export function createChat(config = {}, {
     }
     let body;
     try {
-      body = JSON.stringify({ ...request, model, stream: false });
+      body = JSON.stringify({
+        ...(llm.reasoning_effort === undefined ? {} : { reasoning_effort: llm.reasoning_effort }),
+        ...(llm.max_tokens === undefined ? {} : { max_tokens: llm.max_tokens }),
+        ...(llm.chat_template_kwargs === undefined ? {} : { chat_template_kwargs: llm.chat_template_kwargs }),
+        ...request, model, stream: false,
+      });
     } catch {
       throw new TypeError('The chat request must be JSON serializable.');
     }
@@ -111,7 +116,8 @@ export function createChat(config = {}, {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         signal.throwIfAborted();
         await onEvent?.({ type: 'model', model: key ? model.split(key).join('[redacted]') : model, host });
-        await onEvent?.({ type: 'http', phase: 'start' });
+        await onEvent?.({ type: 'http', phase: 'start',
+          ...(llm.reasoning_effort === undefined ? {} : { effort: llm.reasoning_effort }) });
         signal.throwIfAborted();
         const response = await fetchImpl(endpoint, {
           method: 'POST',

@@ -60,6 +60,8 @@ test('minimum docs coder makes no research request and still checks tests, file 
     fetchImpl: async (_url, request) => {
       calls += 1;
       const body = JSON.parse(request.body);
+      assert.equal(body.reasoning_effort, 'low');
+      assert.equal(body.max_tokens, 2048);
       assert.doesNotMatch(body.messages[0].content, /builtin research step|## Principal/);
       assert.deepEqual(body.tools.map(({ function: tool }) => tool.name),
         ['read_file', 'write_file', 'run_test']);
@@ -81,6 +83,8 @@ test('minimum docs coder makes no research request and still checks tests, file 
   assert.equal(result.researchPath, undefined);
   assert.equal(existsSync(join(options.worktree, 'RESEARCH.md')), false);
   assert.equal(result.run.metrics.prompt_tokens, 100);
+  assert.equal(result.run.metrics.effort, 'l');
+  assert.doesNotMatch(readFileSync(join(options.repoRoot, '.roster', 'memory', 'coder.jsonl'), 'utf8'), /reasoning_content/);
 });
 
 test('docs1 README-only tools deny planner fixtures, RESEARCH and repo search; reads may precede the required write', async (t) => {
