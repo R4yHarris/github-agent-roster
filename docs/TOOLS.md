@@ -60,6 +60,17 @@ written without any model calls or app-code changes.
 
 ## Coder file scope
 
+Malformed coder tool-call arrays/JSON arguments get exactly one tool-only repair.
+If repair is still malformed, a deterministic edit is available only for an
+explicit Status task whose application scope is exactly README.md and whose
+read/write tools are enabled. It adds `## Status` and one neutral body line
+without changing existing prose, preserves LF/CRLF and EOF conventions, and is
+idempotent. A pre-existing multiline Status section is not silently rewritten.
+Both paths still run required tests and excellence; network errors, denied
+tools, broader tasks, or failing verification are not success fallbacks.
+Live logs and RESULT.md say `model` or `deterministic-readme`; RESULT also lists
+changed files and test exit. The coder never invokes an App publisher itself.
+
 File paths must be relative to the issue worktree. Absolute paths, path
 escapes, symlinked components, and paths resolving outside the worktree
 fail rather than being followed. Ambiguous Windows components (trailing

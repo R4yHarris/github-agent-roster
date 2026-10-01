@@ -337,6 +337,33 @@ test('the final coder response replaces earlier usage instead of retaining total
   }
 });
 
+test('garbage coder arguments get one repair then the scoped README Status fallback and final excellence', async (context) => {
+  const options = fixture(context, llmConfig);
+  let turns = 0;
+  let tests = 0;
+  const events = [];
+  const result = await runCoder({
+    ...options, env: {}, onEvent: async (event) => events.push(event),
+    fetchImpl: async (_url, request) => {
+      turns += 1;
+      if (turns === 2) assert.match(JSON.parse(request.body).messages.at(-1).content, /Emit only tool_calls/);
+      return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+        role: 'assistant', tool_calls: [{ id: `bad-${turns}`, type: 'function',
+          function: { name: 'write_file', arguments: 'garbage' } }],
+      } }], usage: { prompt_tokens: 100, completion_tokens: 40 } });
+    },
+    runTestCommand: async () => { tests += 1; return { stdout: 'pass', stderr: '' }; },
+  });
+  assert.equal(turns, 2);
+  assert.equal(tests, 1);
+  assert.equal(result.excellence.pass, true);
+  assert.deepEqual(result.excellence.files, ['README.md']);
+  assert.equal(result.implementationPath, 'deterministic-readme');
+  assert.match(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), /## Status\nExperimental - APIs may change\./);
+  assert.match(readFileSync(result.resultPath, 'utf8'), /Implementation path: deterministic-readme[\s\S]*## Files changed\n\n- README.md/);
+  assert.ok(events.some((event) => event.type === 'implementation' && event.path === 'deterministic-readme'));
+});
+
 test('model-requested path escape is denied and returned as a tool error, not a file write', async (context) => {
   const options = fixture(context, llmConfig);
   const outside = path.join(options.repoRoot, 'escape.md');
