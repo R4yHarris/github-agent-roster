@@ -24,6 +24,7 @@ import { createFileVault, validateSecretName } from './vault/file.mjs';
 import { buildPublishEnv, resolvePublishModel } from './metrics/run.mjs';
 import { humanEvalHint } from './lib/seat-publication.mjs';
 import { readIssueLogs } from './lib/run-log.mjs';
+import { createDebugLog } from './lib/debug-log.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const help = `Commands:
@@ -34,6 +35,8 @@ const help = `Commands:
   /run N [--auto-model] [--confirm]  Summarize the task and continue; --confirm pauses
   /status [N] [--offline]   Show an issue, open PR, and local worktree
   /log N                   Tail local issue seat logs without network access
+  /debug on|off             Toggle process-only testing metadata logs
+  /log debug                Tail this process's debug file
   /eval TARGET VERDICT 1-5 y|n [--minutes N] [--comment "TEXT"]
   /publish [SUBJECT] [--model MODEL] [--skip-review]  Publish reviewed seat or GHCP changes
   /stats [REF]              Show AI-Run metrics
@@ -109,9 +112,10 @@ export function createDispatcher({
   output = process.stdout,
   errorOutput = process.stderr,
   services = {},
+  debug = createDebugLog({ env }),
 } = {}) {
   const api = { ...defaultServices, ...services };
-  const state = { lastAsk: null, lastRun: null, pendingSecret: null, published: false, config };
+  const state = { lastAsk: null, lastRun: null, pendingSecret: null, published: false, config, debug };
   const currentRoot = () => state.lastRun?.repoRoot ?? api.repositoryRoot(cwd);
   const metrics = (ref) => api.loadMetrics({
     contractsPath: api.resolveContractsPath({ repoRoot, cwd, env }),
@@ -124,7 +128,7 @@ export function createDispatcher({
     state.published = false;
     try {
       state.lastRun = await run({
-        cwd, repoRoot, config: state.config, env, publish: false, ...options,
+        cwd, repoRoot, config: state.config, env, publish: false, debug: state.debug, ...options,
         log: (message) => output.write(`${message}\n`), errorOutput,
       });
     } catch (error) {
@@ -165,6 +169,12 @@ export function createDispatcher({
     const [, command, rawArguments] = match;
     const args = rawArguments?.trim() ?? '';
     switch (command) {
+      case 'debug': {
+        if (!['on', 'off'].includes(args)) throw new TypeError('Use /debug on or /debug off.');
+        state.debug.setEnabled(args === 'on');
+        output.write(`Debug logging ${args}.\n`);
+        return true;
+      }
       case 'ask': {
         if (!args) throw new TypeError('Use /ask TEXT.');
         const ask = await api.submitAsk(args, { cwd, repoRoot, config: state.config, env });
@@ -222,6 +232,11 @@ export function createDispatcher({
         return true;
       }
       case 'log': {
+        if (args === 'debug') {
+          const log = await state.debug.tail({ limit: 50 });
+          output.write(log?.lines.length ? `${log.lines.join('\n')}\n` : 'No debug events recorded in this process.\n');
+          return true;
+        }
         if (!/^[1-9]\d*$/.test(args) || !Number.isSafeInteger(Number(args))) throw new TypeError('Use /log N.');
         const logs = await api.readIssueLogs({ repoRoot: currentRoot(), issue: Number(args), env,
           apiKeyEnv: state.config.llm.api_key_env, limit: 50 });

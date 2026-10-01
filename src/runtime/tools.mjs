@@ -9,6 +9,9 @@ import { assertContractsInitialized, ContractsSubmoduleError, onlyMissingContrac
 
 const execute = promisify(execFile);
 const managedFiles = new Set(['assignment.md', 'task.md', 'recipe.yml', 'plan.md', 'context.md', 'research.md', 'result.md', 'review.md', 'estimate.md']);
+export class ToolAccessError extends Error {
+  code = 'ROSTER_TOOL_DENIED';
+}
 export const plannerArtifactFiles = Object.freeze(['RECIPE.yml', 'TASK.md', 'ESTIMATE.md']);
 export const planArtifactFiles = Object.freeze(['PLAN.md']);
 
@@ -34,7 +37,7 @@ export function isForbiddenRead(file) {
 
 function isProtectedSurface(file) {
   const parts = partsOf(file);
-  return hasAmbiguousComponents(file) || isSecret(file) ||
+  return hasAmbiguousComponents(file) || isSecret(file) || isDebugLog(file) ||
     parts.includes('.git') || parts.includes('agent-policy.yml') ||
     parts.some((part, index) =>
       (part === '.github' && parts[index + 1] === 'workflows') ||
@@ -50,7 +53,12 @@ export function isForbiddenWrite(file) {
 
 export function isManagedFile(file) {
   const parts = partsOf(file);
-  return parts.length === 1 && managedFiles.has(parts[0]) || isRunLog(file);
+  return parts.length === 1 && managedFiles.has(parts[0]) || isRunLog(file) || isDebugLog(file);
+}
+
+export function isDebugLog(file) {
+  const parts = partsOf(file);
+  return parts[0] === '.roster' && parts[1] === 'logs';
 }
 
 export function isRunLog(file) {
@@ -238,33 +246,33 @@ export async function createTools({
   function locate(input, { directory = false, write = false } = {}) {
     if (typeof input !== 'string' || !input.trim() || input.includes('\0') ||
         path.isAbsolute(input) || path.win32.isAbsolute(input)) {
-      throw new Error('Tool path must be relative to the worktree');
+      throw new ToolAccessError('Tool path must be relative to the worktree');
     }
     if (hasAmbiguousComponents(input)) {
-      throw new Error('Tool path must not contain ambiguous Windows components or alternate data streams');
+      throw new ToolAccessError('Tool path must not contain ambiguous Windows components or alternate data streams');
     }
     const file = path.resolve(root, input);
     const relative = path.relative(root, file);
     if ((!directory && !relative) || relative === '..' ||
         relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-      throw new Error('Tool path must stay inside the worktree');
+      throw new ToolAccessError('Tool path must stay inside the worktree');
     }
     const normalized = relative.split(path.sep).join('/');
     if (readmeOnlyDocs && !write && !['TASK.md', 'README.md'].includes(normalized) && !repairFiles.has(normalized)) {
-      throw new Error('README-only docs task may read only TASK.md and README.md; other paths are denied');
+      throw new ToolAccessError('README-only docs task may read only TASK.md and README.md; other paths are denied');
     }
     const allowed = seat === 'planner' ? plannerArtifacts.includes(input) : isAllowedFile(normalized, scopedFiles());
     if (write && (!allowed ||
         (memoryPath && path.relative(file, path.resolve(memoryPath)) === ''))) {
-      throw new Error(seat === 'planner'
+      throw new ToolAccessError(seat === 'planner'
         ? `Planner write_file allows only root ${plannerArtifacts.join(', ').replace(/, ([^,]+)$/, ', and $1')}`
         : `Writing ${normalized} is not allowed by TASK.md or worktree policy`);
     }
     if (isForbiddenRead(normalized)) {
-      throw new Error('Tool access to secrets, Git metadata, policy, workflows, or contracts is refused');
+      throw new ToolAccessError('Tool access to secrets, Git metadata, policy, workflows, contracts, or debug logs is refused');
     }
     if (!write && !readable(normalized, directory)) {
-      throw new Error(`Reading ${normalized} is not allowed by TASK.md slice scope`);
+      throw new ToolAccessError(`Reading ${normalized} is not allowed by TASK.md slice scope`);
     }
     return { file, relative, normalized };
   }
@@ -281,7 +289,7 @@ export async function createTools({
         if (error.code === 'ENOENT') return;
         throw error;
       }
-      if (entry.isSymbolicLink()) throw new Error('Tool paths may not traverse symlinks');
+      if (entry.isSymbolicLink()) throw new ToolAccessError('Tool paths may not traverse symlinks');
       if (index < parts.length - 1 && !entry.isDirectory()) {
         throw new Error('A parent of the tool path is not a directory');
       }
@@ -292,7 +300,7 @@ export async function createTools({
     const canonicalParent = await fs.realpath(path.dirname(file));
     const relative = path.relative(canonicalRoot, canonicalParent);
     if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-      throw new Error('Tool path resolves outside the worktree');
+      throw new ToolAccessError('Tool path resolves outside the worktree');
     }
   }
 
@@ -375,7 +383,7 @@ export async function createTools({
 
     async list_dir(args = {}) {
       argumentsFor(args, [], ['path']);
-      if (readmeOnlyDocs) throw new Error('README-only docs task does not allow directory listing');
+      if (readmeOnlyDocs) throw new ToolAccessError('README-only docs task does not allow directory listing');
       const { file, relative, normalized } = locate(args.path ?? '.', { directory: true });
       if (relative) await checkComponents(relative);
       const entry = await fs.lstat(file);
@@ -398,7 +406,7 @@ export async function createTools({
       if (readmeOnlyDocs && !readmeWritten) {
         throw new Error('README-only docs task must write README.md before running tests or other tools');
       }
-      if (!allowRunTest) throw new Error('run_test is disabled by tools.run_test');
+      if (!allowRunTest) throw new ToolAccessError('run_test is disabled by tools.run_test');
       const testEnv = { ...env, ROSTER_SEAT: 'coder' };
       for (const name of [apiKeyEnv, 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH',
         'GH_TOKEN', 'GITHUB_TOKEN', 'NODE_TEST_CONTEXT']) delete testEnv[name];
@@ -440,7 +448,7 @@ export async function createTools({
     async search_text(args) {
       argumentsFor(args, ['query'], ['path']);
       if (readmeOnlyDocs) {
-        throw new Error('README-only docs task does not allow repository search; read README.md directly');
+        throw new ToolAccessError('README-only docs task does not allow repository search; read README.md directly');
       }
       if (typeof args.query !== 'string' || !args.query.length || /[\r\n\0]/.test(args.query)) {
         throw new TypeError('search_text query must be nonempty, single-line literal text');
@@ -478,7 +486,18 @@ export async function createTools({
   return Object.fromEntries(Object.entries(selected).map(([name, execute]) => [name, async (args) => {
     const location = args?.path ?? (['list_dir', 'search_text'].includes(name) ? '.' : undefined);
     await onEvent({ type: 'tool', name, ...(location === undefined ? {} : { path: location }) });
-    const result = await execute(args);
+    let result;
+    try {
+      result = await execute(args);
+    } catch (error) {
+      if (error?.code === 'ROSTER_RUN_LOG') throw error;
+      await onEvent({ type: 'tool-result', name, ...(location === undefined ? {} : { path: location }),
+        status: error instanceof ToolAccessError ? 'denied' : 'error',
+        ...(error?.tests?.exit_code === undefined ? {} : { exit_code: error.tests.exit_code }) });
+      throw error;
+    }
+    await onEvent({ type: 'tool-result', name, ...(location === undefined ? {} : { path: location }),
+      status: 'ok', ...(result?.exit_code === undefined ? {} : { exit_code: result.exit_code }) });
     if (name === 'write_file' && [...plannerArtifactFiles, ...planArtifactFiles].includes(result.path)) {
       await onEvent({ type: 'wrote', path: result.path });
     }

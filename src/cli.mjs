@@ -20,10 +20,12 @@ import { formatStatus, readStatus } from './lib/status.mjs';
 import { validateRecipe } from './lib/recipe.mjs';
 import { startRepl } from './repl.mjs';
 import { createFileVault, validateSecretName } from './vault/file.mjs';
+import { createDebugLog } from './lib/debug-log.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const help = `Usage:
   roster                     Open the interactive shell in a TTY
+  roster --debug [COMMAND]   Enable process-only debug JSONL logging
   roster --help
   roster doctor [--warm]
   roster init
@@ -101,8 +103,11 @@ function statsOptions(args) {
 }
 
 async function main(args) {
+  const debugFlag = args[0] === '--debug';
+  if (debugFlag) args = args.slice(1);
+  const debug = createDebugLog({ enabled: debugFlag || process.env.ROSTER_DEBUG === '1' });
   if (args.length === 0 && process.stdin.isTTY) {
-    process.exitCode = await startRepl({ repoRoot: rosterRoot });
+    process.exitCode = await startRepl({ repoRoot: rosterRoot, debug });
   } else if (args.length === 0 || (args.length === 1 && ['--help', '-h'].includes(args[0]))) {
     process.stdout.write(help);
     if (args.length === 0) process.exitCode = 2;
@@ -151,12 +156,12 @@ async function main(args) {
       `Mode: ${demo.mode}\n`);
   } else if (args[0] === 'run') {
     const options = runOptions(args.slice(1));
-    if (options.issue === undefined) await runBuiltinTask({ repoRoot: rosterRoot });
+    if (options.issue === undefined) await runBuiltinTask({ repoRoot: rosterRoot, debug });
     else {
       const result = await runBuiltinIssue(options.issue, { publish: options.publish, seats: options.seats,
         skipReview: options.skipReview,
         confirm: options.confirm,
-        autoModel: options.autoModel, repoRoot: rosterRoot });
+        autoModel: options.autoModel, repoRoot: rosterRoot, debug });
       if (result.failed) process.exitCode = 1;
     }
   } else if (args[0] === 'status') {

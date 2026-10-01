@@ -20,6 +20,7 @@ import { formatFleet } from '../src/lib/fleet.mjs';
 import { packAgentRun } from '../vendor/github-agent-contracts/scripts/parse-agent-run.mjs';
 import { withResearchSummary } from './helpers/research.mjs';
 import { recordedCoderRun } from '../src/lib/seat-publication.mjs';
+import { createDebugLog } from '../src/lib/debug-log.mjs';
 
 function runBuiltinIssue(issue, options) {
   return runIssueWithSeats(issue, { ...options, fetchImpl: withResearchSummary(options.fetchImpl) });
@@ -55,7 +56,7 @@ function fixture(context) {
   writeFileSync(path.join(repoRoot, 'roster.config.example.yml'), example);
   writeFileSync(path.join(repoRoot, 'skills', 'implement-task', 'SKILL.md'), '# Code and test\n');
   writeFileSync(path.join(contracts, 'scripts', 'agent-pr.mjs'), 'export {};\n');
-  writeFileSync(path.join(target, '.gitignore'), '.env\n.worktrees/\n.roster/runs/\n.roster/fleet.yml\n.roster/config.yml\n');
+  writeFileSync(path.join(target, '.gitignore'), '.env\n.worktrees/\n.roster/runs/\n.roster/logs/\n.roster/fleet.yml\n.roster/config.yml\n');
   writeFileSync(path.join(target, 'AGENTS.md'), '# Agent instructions\nStay in the worktree.\n');
   writeFileSync(path.join(target, 'README.md'), '# Example\n');
   writeFileSync(path.join(target, 'smoke.test.mjs'),
@@ -88,6 +89,18 @@ function fixture(context) {
   return { base, repoRoot, target, cwd, env, contracts, issue, calls, runCommand, errorOutput,
     get stderr() { return stderr; } };
 }
+
+test('opt-in debug logging reaches planner, coder and reviewer without changing the human summary', async (context) => {
+  const options = fixture(context);
+  const debug = createDebugLog({ env: {}, enabled: true, session: 'builtin-debug' });
+  const result = await runBuiltinIssue(42, { ...options, config: stubConfig, debug, log: () => {} });
+  const rows = readFileSync(debug.path, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  assert.deepEqual([...new Set(rows.map(({ seat }) => seat))], ['planner', 'coder', 'reviewer']);
+  assert.ok(rows.every(({ issue }) => issue === 42));
+  assert.doesNotMatch(options.stderr, /"phase":|"path_class":/);
+  assert.equal(result.result.mode, 'stub');
+  assert.equal(git(options.target, 'check-ignore', debug.path).length > 0, true);
+});
 
 test('new issue and local-ask worktrees contain the initialized contracts publisher', async (context) => {
   const options = fixture(context);

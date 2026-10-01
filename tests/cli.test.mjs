@@ -137,6 +137,16 @@ test("builtin CLI defaults to paired seats, rejects unsupported selections, and 
   assert.match(noPublish.stderr, /set model/);
 });
 
+test("the leading --debug flag enables the process without changing non-TTY shell behavior", () => {
+  const help = run(["--debug", "--help"]);
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /roster --debug \[COMMAND\]/);
+  const shell = run(["--debug"]);
+  assert.equal(shell.status, 2);
+  assert.match(shell.stdout, /Usage:/);
+  assert.doesNotMatch(shell.stderr, /Unknown arguments/);
+});
+
 test("bare run uses the builtin planner and coder while prepare keeps manual handoff explicit", (t) => {
   const directory = mkdtempSync(join(tmpdir(), "roster-default-run-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
