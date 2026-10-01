@@ -1,5 +1,11 @@
 # Research before editing
 
+Difficulty1 `docs` tasks use the [minimum context path](SEAT.md#minimum-context-for-easy-docs):
+they do not create/load RESEARCH.md or make the optional research model call.
+Read-before-write happens directly through scoped tools, with small-diff and
+the usual tests/path/secret excellence guards. Other classes/difficulties keep
+the research sequence below. before editing
+
 The [coder seat](../src/seats/coder.mjs) awaits a
 [read-only research step](../src/runtime/research.mjs) after its context pack
 and before entering the tool loop. No model `write_file` can run before this

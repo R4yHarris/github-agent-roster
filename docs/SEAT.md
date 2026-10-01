@@ -32,6 +32,22 @@ skills stage validates the same selection rather than injecting a second,
 unbudgeted copy into the model. A planner's task model is respected; otherwise
 the configured model or `ROSTER_MODEL` is used. Estimation history is not rerun.
 
+### Minimum context for easy docs
+
+When validated TASK metadata is `task_class: docs` and `difficulty: 1`, the
+coder context contains only TASK, its application allowed paths, and the
+`read-before-write` / `small-diff` skills. Extra task skill selectors do not
+load more skills. AGENTS/principal files, prior feedback, memory input, and
+RESEARCH are not added to this pack; no research file or research-model request
+is generated. The coder stages are context, skills, tool loop, memory output,
+excellence, and result. The reviewer also skips its principal-file load but
+retains fixed read-only conduct and the task/result/diff review gate.
+
+Difficulty2+ docs and all other task classes keep the normal path above.
+The minimum path is not a permission or verification bypass: guarded tools,
+required final tests (unless explicitly waived), path deny rules, secret checks,
+unchanged-artifact checks, and human-owned publication policy remain active.
+
 The result exposes `stages`, paths to the context/research/result artifacts,
 `tests`, `testsSkipped`, `turns`, `model`, `usage`, `research`, and `excellence`.
 Research usage joins coder usage; loop and research turns are separate.

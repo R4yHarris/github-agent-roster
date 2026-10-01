@@ -34,7 +34,13 @@ export function taskSkillNames(task) {
       names.push(item[1]);
     }
   }
-  names = names.map((name) => name.replace(/^(['"])(.*)\1$/, '$2'));
+  return validateSkillNames(names.map((name) => name.replace(/^(['"])(.*)\1$/, '$2')));
+}
+
+function validateSkillNames(names) {
+  if (!Array.isArray(names) || names.some((name) => typeof name !== 'string')) {
+    throw new TypeError('Task skill selection must be a list of names');
+  }
   if (names.some((name) => !/^[a-z][a-z0-9-]{0,63}$/.test(name)) ||
       new Set(names).size !== names.length) {
     throw new Error('TASK.md skills must contain distinct, simple skill names');
@@ -42,8 +48,8 @@ export function taskSkillNames(task) {
   return names;
 }
 
-export async function loadSkills({ repoRoot, skillsPath = 'skills', task = '' }) {
-  const names = taskSkillNames(task);
+export async function loadSkills({ repoRoot, skillsPath = 'skills', task = '', names: selection }) {
+  const names = selection === undefined ? taskSkillNames(task) : validateSkillNames(selection);
   if (!names.length) return [];
   const root = await fs.realpath(repoRoot);
   const directory = path.resolve(root, skillsPath);

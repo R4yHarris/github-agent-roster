@@ -7,6 +7,7 @@ import { createBuiltinChat } from '../lib/llm.mjs';
 import { ensureLocalPath } from '../lib/paths.mjs';
 import { taskFilesAllowed } from '../planner/stub.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
+import { isMinimumDocsTask } from '../runtime/context-policy.mjs';
 import { redactEvidence } from '../runtime/excellence.mjs';
 import { isAllowedFile, isForbiddenRead } from '../runtime/tools.mjs';
 import { loadPrincipal } from './principal.mjs';
@@ -116,10 +117,10 @@ export async function runReviewer({
   let taskDigest;
   let resultDigest;
   try {
-    const principal = await loadPrincipal({ repoRoot, id: 'reviewer' });
     const [task, result] = await Promise.all([
       readRegularText(worktree, 'TASK.md'), readRegularText(worktree, 'RESULT.md'),
     ]);
+    const principal = isMinimumDocsTask(task) ? null : await loadPrincipal({ repoRoot, id: 'reviewer' });
     taskDigest = createHash('sha256').update(task).digest('hex');
     resultDigest = createHash('sha256').update(result).digest('hex');
     if (path.resolve(coderResult.resultPath) !== path.resolve(worktree, 'RESULT.md')) {
@@ -143,13 +144,13 @@ export async function runReviewer({
         `## TASK.md acceptance checks\n\n${checks}\n## TASK.md\n\n${task}\n\n` +
         `## RESULT.md\n\n${result}\n\n## Diff\n\n${diff}`, redaction,
       );
-      if (evidence.length + principal.content.length + instructions.length > budget) {
+      if (evidence.length + (principal?.content.length ?? 0) + instructions.length > budget) {
         throw new Error('Reviewer evidence exceeds seat.context_chars');
       }
       const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent });
       queried = true;
       const response = await chat({ messages: [
-        { role: 'system', content: `${instructions}\n\n${principal.content.trim()}` },
+        { role: 'system', content: instructions + (principal ? `\n\n${principal.content.trim()}` : '') },
         { role: 'user', content: evidence },
       ] });
       usage = response.usage;
