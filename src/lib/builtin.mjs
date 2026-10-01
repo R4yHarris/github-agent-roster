@@ -147,6 +147,7 @@ export async function runBuiltinTask({
   session = env.AI_SESSION || `roster-${randomBytes(8).toString('hex')}-coder`,
   log = console.log, errorOutput = process.stderr, fetchImpl, vault, runTestCommand,
   debug = createDebugLog({ env }),
+  onRunEvent,
 } = {}) {
   config = { ...config, capabilities: config.capabilities ?? await loadCapabilities({ cwd }) };
   if (typeof task !== 'string' || !IDENTIFIER.test(task) ||
@@ -187,6 +188,7 @@ export async function runBuiltinTask({
     repoRoot: worktreePath, session, env, apiKeyEnv: config.llm.api_key_env, errorOutput,
     debug, issue: /^issue-([1-9]\d*)$/.test(task) && Number.isSafeInteger(Number(task.slice(6)))
       ? Number(task.slice(6)) : null,
+    observe: onRunEvent,
   });
   const metricEnv = { ...env };
   for (const name of [...RUN_ENV_NAMES, config.llm.api_key_env,
@@ -312,6 +314,7 @@ async function runBuiltinAssignment(issueNumber, {
   metricsLoader = loadMetrics,
   now,
   debug = createDebugLog({ env }),
+  onRunEvent,
 } = {}) {
   config = { ...config, capabilities: config.capabilities ?? await loadCapabilities({ cwd }) };
   const retryCommand = issueNumber === null ? retryCommandForTask(null) :
@@ -418,6 +421,7 @@ async function runBuiltinAssignment(issueNumber, {
     repoRoot: prepared.repoRoot, session: prepared.session, env,
     apiKeyEnv: activeConfig.llm.api_key_env, errorOutput, now,
     debug, issue: prepared.issue.number ?? null,
+    observe: onRunEvent,
   });
   const metricEnv = { ...commandEnv };
   for (const name of [...RUN_ENV_NAMES, 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH',

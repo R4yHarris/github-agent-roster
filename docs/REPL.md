@@ -1,9 +1,14 @@
 # Interactive Roster shell
 
 Run `roster` with no arguments from a Git worktree and an interactive terminal
-after [installing it](INSTALL.md). The banner names the repository, `seat coder`,
-`runtime builtin`, and the configured `llm.base_url` (or `stub`); the prompt
-is `roster> `.
+after [installing it](INSTALL.md). The bright-blue `github-agent-roster` banner
+appears once. A blue delivery tray shows the product, issue (or `local`), seat,
+state, and branch above a bottom bar with model, host, effort, declared context
+and measured prompt usage, elapsed time, and debug mode. Unknown usage is `-`,
+never an invented zero. The blue input is `roster> `; a cyan `*` marks busy
+seats, failed reviews are red, and passes are green. Bars repaint on seat/test
+events without exposing model prompts or completions. Narrow terminals drop
+elapsed time, then host. `/statusbar on|off` toggles both bars for this process.
 `--help` still prints the existing CLI usage and exits 0; empty arguments
 with non-TTY stdin print that usage and exit 2. Flags remain available for
 agents and CI.
@@ -16,6 +21,7 @@ agents and CI.
 | `/effort [l|m|h|x|none]` | Show effort or persist an explicit override to ignored `.roster/config.yml`; it wins over mode/retry defaults. |
 | `/run N [--auto-model] [--confirm]` or `/run --issue N [--auto-model] [--confirm]` | Classify before seats. Slices print outcome, allowed files, checks, and effort, then automatically continue through coder/read-only-reviewer in the same run. Only `--confirm` pauses after the summary; no `--auto` or second `/run` is required. Feature/initiative writes PLAN only; clarify stops. Auto-model chooses a registered fleet profile without rewriting the saved default; no eligible profile uses the deterministic stub. |
 | `/status [N] [--offline]` | Show an issue, its open branch PR, and worktree path. Defaults to the last run or created issue; offline reads only the cached assignment and reports PR state as unknown. |
+| `/statusbar on\|off` | Toggle both blue delivery-tray bars; the default is on and the setting is process-local. |
 | `/log N` | Tail up to 50 safe metadata lines from each local `.roster/runs/roster-N-*.log`, without network or seat execution. |
 | `/debug on` or `/debug off` | Enable or stop testing metadata logging for this process only; never write config or change environment variables. |
 | `/log debug` | Tail up to 50 validated JSONL events from this process's most recent debug file, even after debug is off. |
