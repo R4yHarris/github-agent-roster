@@ -108,6 +108,9 @@ export async function createRunLog({
 
   function eventText(event) {
     switch (event.type) {
+      case 'completion':
+        if (![null, 'stop', 'tool_calls'].includes(event.reason)) throw new TypeError('Invalid live completion reason');
+        return `completion finish_reason=${JSON.stringify(event.reason)}`;
       case 'finish-reason':
         if (typeof event.reason !== 'string' || !event.reason || event.reason.length > 128 ||
             /[\x00-\x1f\x7f]/.test(event.reason) || typeof event.retry !== 'boolean') {
@@ -259,13 +262,15 @@ export async function readLastRunLog({
     if (!lastLine) return null;
     const parsed = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z (?:start seat|seat) (planner|coder|reviewer) (.+)$/.exec(lastLine);
     const metadata = /^(?:session=[A-Za-z0-9._[\]-]{1,128}|model="(?:[^"\\]|\\.)*" host="(?:[^"\\]|\\.)*"|mode (?:stub|llm)|waiting host=[A-Za-z0-9.:[\]-]{1,255} elapsed=\d+s(?: cold-start up to 15m)?|The LLM request timed out after \d+(?:\.\d+)?s at host=[A-Za-z0-9.:[\]-]{1,255}\. (?:Cold-start: the host may still be warming; Spark\/SGLang can take up to 15m\. )?This is an endpoint timeout, not a bad TASK\. (?:Retry: (?:roster run --issue [1-9]\d*(?: --auto-model)?|roster run --seat coder --runtime builtin|roster doctor --warm)|Retry the same request\.)|implementation (?:model|deterministic-readme)|http chat\.completions (?:start|ok status=2\d\d|error(?: status=[1-5]\d\d)? class=(?:authentication|network|timeout|http|response|abort))|tool (?:read_file|write_file|list_dir|run_test|search_text)(?: path="(?:[^"\\]|\\.)*")?|wrote (?:RECIPE\.yml|TASK\.md|PLAN\.md|ESTIMATE\.md|RESULT\.md|REVIEW\.md)|error class=(?:Error|TypeError|RangeError|AbortError|RunLogError)|elapsed_ms=\d+ mode=(?:stub|llm))$/;
-    if (!parsed || !metadata.test(parsed[2]) || /[\x00-\x1f\x7f]/.test(lastLine) ||
+    const validMetadata = (value) => metadata.test(value) ||
+      /^completion finish_reason=(?:null|"stop"|"tool_calls")$/.test(value);
+    if (!parsed || !validMetadata(parsed[2]) || /[\x00-\x1f\x7f]/.test(lastLine) ||
         Buffer.byteLength(lastLine) > maximumLineBytes) {
       throw new RunLogError('Last live run log line has invalid metadata');
     }
     const valid = lines.filter((line) => {
       const match = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z (?:start seat|seat) (planner|coder|reviewer) (.+)$/.exec(line);
-      return match && metadata.test(match[2]) && !/[\x00-\x1f\x7f]/.test(line) && Buffer.byteLength(line) <= maximumLineBytes;
+      return match && validMetadata(match[2]) && !/[\x00-\x1f\x7f]/.test(line) && Buffer.byteLength(line) <= maximumLineBytes;
     });
     const lastErrorClass = valid.findLast((line) => /\bclass=/.test(line))?.match(/\bclass=([A-Za-z]+)/)?.[1] ?? null;
     return { path: file, session, lastSeat: parsed[1], lastLine: redactSecrets(lastLine, { env, apiKeyEnv }),

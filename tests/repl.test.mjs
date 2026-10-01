@@ -61,7 +61,7 @@ test('/debug toggles process logging without config changes and /log debug tails
   assert.match(output.text, /Debug logging on\.\n/);
   assert.match(output.text, /Debug logging off\.\n/);
   assert.match(output.text, /"phase":"seat-start"/);
-  await assert.rejects(shell.dispatch('/debug true'), /Use \/debug on or \/debug off/);
+  await assert.rejects(shell.dispatch('/debug true'), /Use \/debug on, \/debug off, or \/debug status/);
 });
 
 test('ROSTER_DEBUG=1 enables a shell process until /debug off overrides it', async () => {
@@ -168,8 +168,6 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
     ['set-config', 'model', 'local-model'],
     ['set-config', 'effort', 'h'],
     ['run', '42', false, false, 'local-model', 'h'],
-    ['status', 42, false],
-    ['status', 42, true],
     ['eval', 'roster-42-coder', 'accept', '3', 'n', cwd],
     ['stats', 'HEAD'],
     ['recommend-metrics'],

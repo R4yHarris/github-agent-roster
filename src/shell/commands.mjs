@@ -4,8 +4,9 @@ const page = (name, group, usage, description, example, flags = [], aliases = []
 
 export const commands = Object.freeze([
   page('help', 'Session', '/help [GROUP|COMMAND]', 'Show command groups or a complete command page.', '/help run'),
-  page('status', 'Session', '/status [N] [--offline]', 'Show issue and worktree status.', '/status 108 --offline',
+  page('status', 'Session', '/status [N] [--offline]', 'Show cached session fields without a model or GitHub request.', '/status',
     ['--offline: use local cached evidence only']),
+  page('history', 'Session', '/history', 'Show the last 20 stored safe commands.', '/history'),
   page('redraw', 'Session', '/redraw', 'Repaint the tray without clearing scrollback.', '/redraw'),
   page('clear', 'Session', '/clear', 'Clear the screen and repaint the tray.', '/clear'),
   page('quit', 'Session', '/quit', 'Exit with code 0; bare exit is also accepted.', '/q', [], ['q']),
@@ -29,7 +30,7 @@ export const commands = Object.freeze([
     'Read a fleet recommendation without changing the default.', '/recommend fix --difficulty 2',
     ['--difficulty 1-5: required task capacity']),
   page('statusbar', 'Settings', '/statusbar on|off', 'Toggle both tray bars for this process.', '/statusbar off'),
-  page('debug', 'Settings', '/debug on|off', 'Toggle metadata-only debug logging for this process.', '/debug on'),
+  page('debug', 'Settings', '/debug on|off|status', 'Toggle or show metadata-only debug logging for this process.', '/debug status'),
   page('vault', 'Settings', '/vault [list]|get NAME|set NAME', 'Manage named secrets without showing values.',
     '/vault set ROSTER_API_KEY'),
 ]);
