@@ -131,6 +131,35 @@ test('new issue and local-ask worktrees contain the initialized contracts publis
   }
 });
 
+test('local retry reuses its registered worktree, cached planner handoff and initialized submodule', async (context) => {
+  const options = fixture(context);
+  const ask = 'Add a Status section to README.md.';
+  const first = await runBuiltinAsk(ask, { ...options, config: stubConfig, log: () => {} });
+  const second = await runBuiltinAsk(ask, { ...options, config: stubConfig, preparedRun: first, log: () => {} });
+  assert.equal(second.worktreePath, first.worktreePath);
+  assert.equal(second.planner.reused, true);
+  assert.equal(second.planningOnly, undefined);
+  assert.ok(second.archivePath);
+  assert.equal(options.calls.filter(({ program, args }) =>
+    program === 'git' && args[0] === 'worktree' && args[1] === 'add').length, 1);
+  await assert.rejects(runBuiltinAsk('Change a different Ask in README.md.', {
+    ...options, config: stubConfig, preparedRun: second, log: () => {},
+  }), /unchanged prepared Ask/);
+});
+
+test('a confirmed issue resumes its prepared handoff without another gh view or worktree add', async (context) => {
+  const options = fixture(context);
+  const first = await runBuiltinIssue(42, { ...options, config: stubConfig, confirm: true, log: () => {} });
+  const initialGh = options.calls.filter(({ program }) => program === 'gh').length;
+  const second = await runBuiltinIssue(42, { ...options, config: stubConfig, preparedRun: first, log: () => {} });
+  assert.equal(second.worktreePath, first.worktreePath);
+  assert.equal(second.planner.reused, true);
+  assert.equal(second.planningOnly, undefined);
+  assert.equal(second.result.mode, 'stub');
+  assert.equal(options.calls.filter(({ program }) => program === 'gh').length, initialGh);
+  assert.equal(options.calls.filter(({ args }) => args[0] === 'worktree' && args[1] === 'add').length, 1);
+});
+
 test('roster ask writes a local draft ask, recipe, and executable task without network', async (context) => {
   const { repoRoot } = fixture(context);
   const result = await writeAsk('Add a Status section to README.md.', {

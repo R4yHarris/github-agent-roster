@@ -4,7 +4,6 @@ import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { Writable } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { formatAsk, submitAsk } from './lib/ask.mjs';
 import { prepareBuiltinPublication, runBuiltinAsk, runBuiltinIssue } from './lib/builtin.mjs';
 import {
   commentMergedIssue, mergedPullNumber, mergedPullNumberFromFailure,
@@ -74,7 +73,7 @@ async function publishWithContracts({ contractsPath, cwd, env, message, model, o
 }
 
 const defaultServices = {
-  submitAsk, runBuiltinAsk, runBuiltinIssue, recordEvaluation, repositoryRoot, loadMetrics,
+  runBuiltinAsk, runBuiltinIssue, recordEvaluation, repositoryRoot, loadMetrics,
   summarizeMetrics, formatMetrics, loadAvailableMetrics, routeTask, formatRoute,
   resolveContractsPath, prepareBuiltinPublication, createFileVault,
   validateSecretName, readStatus, formatStatus, setConfigValue,
@@ -113,6 +112,7 @@ export function createDispatcher({
 } = {}) {
   const api = { ...defaultServices, ...services };
   const state = { lastAsk: null, lastRun: null, pendingSecret: null, published: false, config, debug,
+    lastRequest: null, pendingConfirm: null,
     statusbar: true, controller: null, history: [], issueCache: new Map(), display: {
       issue: null, branch: api.repositoryBranch(cwd), seat: config.seat.id, state: 'idle', busy: false,
       model: config.llm.model, host: config.llm.base_url ? new URL(config.llm.base_url).host : '',
@@ -149,10 +149,25 @@ export function createDispatcher({
     ...(ref ? { ref } : {}),
   });
 
-  async function executeRun(run, options = {}) {
+  function cancel() {
+    if (state.pendingConfirm !== null) {
+      state.pendingConfirm = null;
+      state.display.state = 'idle';
+      notify();
+      output.write('Run cancelled.\n');
+      return true;
+    }
+    if (state.controller === null || state.controller.signal.aborted) return false;
+    state.controller.abort(new RunCancelledError());
+    return true;
+  }
+
+  async function executeRun(run, options = {}, request) {
     if (state.controller !== null) throw new Error('A seat is already running; cancel it before starting another.');
     const controller = new AbortController();
     state.controller = controller;
+    state.pendingConfirm = null;
+    if (request) state.lastRequest = request;
     state.lastRun = { planningOnly: true, failed: true, askKind: 'clarify', command: null };
     state.published = false;
     Object.assign(state.display, { issue: options.issue ?? null,
@@ -166,6 +181,12 @@ export function createDispatcher({
         log: (message) => output.write(`${message}\n`), errorOutput,
         onRunEvent: receiveEvent,
         signal: controller.signal,
+        onPrepared(prepared) {
+          if (request) request.prepared = prepared;
+          state.lastRun = { ...prepared, planningOnly: true, failed: true, askKind: 'clarify', command: null };
+          state.display.branch = prepared.task;
+          notify();
+        },
       });
     } catch (error) {
       if (isLlmTimeout(error)) {
@@ -179,6 +200,8 @@ export function createDispatcher({
       notify();
     }
     if (state.lastRun.task) state.display.branch = state.lastRun.task;
+    if (request) request.prepared = state.lastRun;
+    if (state.lastRun.confirmedPause && request) state.pendingConfirm = request;
     state.display.state = state.lastRun.review
       ? state.lastRun.review.verdict === 'pass' ? 'passed' : 'failed'
       : state.lastRun.failed ? 'failed' : 'idle';
@@ -193,11 +216,25 @@ export function createDispatcher({
       : state.lastRun.planPath
       ? 'PLAN ready; review the child drafts and run bounded slices. No coder ran.\n'
       : state.lastRun.planningOnly
-      ? 'Paused by --confirm; review TASK.md before running without --confirm.\n'
+      ? 'Paused by --confirm. Press Enter to continue, or /stop to cancel.\n'
       : state.lastRun.failed
       ? 'Planning failed; stubs are unverified and publication is disabled. Fix the endpoint output, then retry.\n'
       : 'Use /publish to publish reviewed changes with --merge-when-green.\n');
     return true;
+  }
+
+  function runRequest(request, { retry = false, continueConfirmed = false } = {}) {
+    if (retry && !request.prepared?.worktreePath) {
+      throw new Error('No prepared worktree is available to retry; start the Ask or issue run first.');
+    }
+    const options = { ...request.options,
+      ...(request.kind === 'run' ? { issue: Number(request.issue) } : {}),
+      ...(retry ? { preparedRun: request.prepared } : {}),
+      ...(continueConfirmed ? { confirm: false } : {}),
+    };
+    const run = request.kind === 'ask' ? (options) => api.runBuiltinAsk(request.text, options)
+      : (options) => api.runBuiltinIssue(request.issue, options);
+    return executeRun(run, options, request);
   }
 
   async function dispatch(line) {
@@ -210,10 +247,13 @@ export function createDispatcher({
       return true;
     }
     const text = line.trim();
-    if (!text) return true;
+    if (!text) {
+      if (state.pendingConfirm) return runRequest(state.pendingConfirm, { retry: true, continueConfirmed: true });
+      return true;
+    }
     if (text === 'exit') return false;
     if (text === '/') { output.write(formatHelp()); return true; }
-    if (!text.startsWith('/')) return executeRun((options) => api.runBuiltinAsk(text, options));
+    if (!text.startsWith('/')) return runRequest({ kind: 'ask', text, options: {} });
     const match = /^\/([a-z]+)(?:\s+(.*))?$/.exec(text);
     if (!match) {
       errorOutput.write(unknownCommand);
@@ -223,6 +263,14 @@ export function createDispatcher({
     const command = canonicalCommand(inputCommand);
     const args = rawArguments?.trim() ?? '';
     switch (command) {
+      case 'stop':
+        if (args) throw new TypeError('Use /stop.');
+        if (!cancel()) output.write('No active run.\n');
+        return true;
+      case 'retry':
+        if (args) throw new TypeError('Use /retry.');
+        if (!state.lastRequest) throw new Error('No Ask or issue run is available to retry.');
+        return runRequest(state.lastRequest, { retry: true, continueConfirmed: true });
       case 'redraw':
       case 'clear':
         if (args) throw new TypeError(`Use /${command}.`);
@@ -250,10 +298,7 @@ export function createDispatcher({
       }
       case 'ask': {
         if (!args) throw new TypeError('Use /ask TEXT.');
-        const ask = await api.submitAsk(args, { cwd, repoRoot, config: state.config, env });
-        state.lastAsk = ask;
-        output.write(formatAsk(ask));
-        return true;
+        return runRequest({ kind: 'ask', text: args, options: {} });
       }
       case 'model': {
         if (!args) {
@@ -286,9 +331,9 @@ export function createDispatcher({
             new Set(flags).size !== flags.length) {
           throw new TypeError('Use /run N [--auto-model] [--confirm] or /run --issue N [--auto-model] [--confirm].');
         }
-        return executeRun((options) => api.runBuiltinIssue(issue[1], options), {
-          autoModel: flags.includes('--auto-model'), confirm: flags.includes('--confirm'), issue: Number(issue[1]),
-        });
+        return runRequest({ kind: 'run', issue: issue[1], options: {
+          autoModel: flags.includes('--auto-model'), confirm: flags.includes('--confirm'),
+        } });
       }
       case 'status': {
         const fields = args ? args.split(/\s+/) : [];
@@ -505,11 +550,7 @@ export function createDispatcher({
     dispatch,
     state,
     banner: 'github-agent-roster',
-    cancel() {
-      if (state.controller === null || state.controller.signal.aborted) return false;
-      state.controller.abort(new RunCancelledError());
-      return true;
-    },
+    cancel,
   };
 }
 
@@ -535,6 +576,7 @@ export async function startRepl({
   state.history = await history.load();
   let historyError;
   let suppressEcho = false;
+  const handledLines = [];
   const terminalOutput = new Writable({
     write(chunk, encoding, callback) {
       if (!suppressEcho && state.pendingSecret === null) output.write(chunk, encoding);
@@ -556,6 +598,13 @@ export async function startRepl({
   });
   shell.on('line', (line) => {
     tray?.committed();
+    const activeStop = line.trim() === '/stop' && state.controller !== null;
+    handledLines.push(activeStop);
+    if (activeStop) cancel();
+    if (state.controller !== null && ['/quit', '/q', 'exit'].includes(line.trim())) {
+      cancel();
+      shell.close();
+    }
     const secret = suppressEcho || state.pendingSecret !== null;
     history.record(line, { secret }).then(() => { state.history = history.lines; }).catch((error) => {
       historyError ??= error;
@@ -569,6 +618,7 @@ export async function startRepl({
   let exitCode = 0;
   try {
     for await (const line of shell) {
+      if (handledLines.shift()) continue;
       const wasSecret = state.pendingSecret !== null;
       if (wasSecret) output.write('\n');
       try {
