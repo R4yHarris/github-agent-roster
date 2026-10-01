@@ -32,7 +32,10 @@ agents and CI.
 | `/statusbar on\|off` | Toggle both blue delivery-tray bars; the default is on and the setting is process-local. |
 | `/log N` | Tail up to 50 safe metadata lines from each local `.roster/runs/roster-N-*.log`, without network or seat execution. |
 | `/debug on` or `/debug off` or `/debug status` | Enable, stop or show testing metadata logging for this process only; never write config or change environment variables. |
-| `/log debug` | Tail up to 50 validated JSONL events from this process's most recent debug file, even after debug is off. |
+| `/log debug` | Tail up to 50 validated JSONL events from this process's most recent debug file. Fail closed while debug is off; reenable explicitly before reading. |
+| `/issues` | Print up to 100 current-repository open issue numbers and titles only, with a notice at the retrieval limit. Never print bodies. |
+| `/issue N` | Print cached title, state, branch and PR URL. Reuse cached metadata from runs/listings/status; use GitHub only when that issue is missing from cache. Unknown cached PR state stays unknown. |
+| `/diff` | Run filename-only Git diff in the current issue worktree; print tracked changed names, never file bodies. |
 | `/eval TARGET accept\|reject\|rework 1-5 y\|n [--minutes N] [--comment "TEXT"]` | Record the [human retrospective](RETRO.md), including actual minutes and local feedback. |
 | `/publish [SUBJECT] [--model MODEL] [--skip-review]` | Publish with an unchanged passing REVIEW.md, or explicitly bypass that verdict. After `/run N`, the default subject is `feat: issue N`; a confirmed merge comments on the still-open issue with PR URL and model ID. Local asks default to `feat: local ask`, publish from their worktree, and never comment on an issue. Otherwise supply a conventional subject and declare the GHCP model with `--model` or `AI_MODEL`. Completed seat metadata wins over the flag. |
 | `/stats [REF]` | Summarize contracts and local AI-Run records, optionally at a Git ref. |
@@ -182,7 +185,7 @@ The file never receives prompts, completions, file or test-output bodies,
 token counts, credentials, PEM paths, environment values, model IDs, or
 endpoint addresses. Enabling debug adds **no JSON lines to shell output**:
 the existing one-line human status remains unchanged. Only an explicit
-`/log debug` request displays a validated tail. Tail reading refuses malformed
+`/log debug` request with debug enabled displays a validated tail. Tail reading refuses malformed
 or extra fields rather than printing untrusted content.
 
 ### Local LLM cold starts
