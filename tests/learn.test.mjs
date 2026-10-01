@@ -494,6 +494,7 @@ function issueHarness(cwd, options = {}) {
           return '';
         }
         if (program === 'git' && args[0] === 'for-each-ref') return '';
+        if (program === 'git' && args[0] === 'submodule') return '';
         throw new Error(`Unexpected command: ${program} ${args.join(' ')}`);
       },
       ...options,

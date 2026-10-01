@@ -89,6 +89,35 @@ function fixture(context) {
     get stderr() { return stderr; } };
 }
 
+test('new issue and local-ask worktrees contain the initialized contracts publisher', async (context) => {
+  const options = fixture(context);
+  git(options.contracts, 'init', '-b', 'main');
+  git(options.contracts, 'add', '--all');
+  git(options.contracts, '-c', 'user.name=Test Fixture', '-c', 'user.email=fixture@example.invalid',
+    'commit', '-m', 'Fixture contracts');
+  git(options.target, '-c', 'protocol.file.allow=always', 'submodule', 'add', options.contracts,
+    'vendor/github-agent-contracts');
+  git(options.target, '-c', 'user.name=Test Fixture', '-c', 'user.email=fixture@example.invalid',
+    'commit', '-am', 'Fixture submodule');
+  const original = options.runCommand;
+  const runCommand = async (program, args, cwd) => {
+    if (program === 'git' && args[0] === 'submodule') {
+      return git(cwd, '-c', 'protocol.file.allow=always', ...args);
+    }
+    return original(program, args, cwd);
+  };
+  const issue = await runBuiltinIssue(42, { ...options, runCommand, config: stubConfig, log: () => {} });
+  const local = await runBuiltinAsk('Add a Status section to README.md.', {
+    ...options, runCommand, config: stubConfig, log: () => {},
+  });
+  for (const run of [issue, local]) {
+    const publisher = path.join(run.worktreePath, 'vendor', 'github-agent-contracts', 'scripts', 'agent-pr.mjs');
+    assert.equal(existsSync(publisher), true);
+    assert.equal(readFileSync(publisher, 'utf8').replaceAll('\r\n', '\n'), 'export {};\n');
+    assert.doesNotMatch(git(run.worktreePath, 'submodule', 'status'), /^-/);
+  }
+});
+
 test('roster ask writes a local draft ask, recipe, and executable task without network', async (context) => {
   const { repoRoot } = fixture(context);
   const result = await writeAsk('Add a Status section to README.md.', {
@@ -165,7 +194,7 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
   assert.match(logs.join('\n'), /Publication unavailable: set model/);
   assert.equal((logs[0].match(/AI-Run:/g) ?? []).length, 0);
   assert.deepEqual(result.runs, { planner: null, coder: null, reviewer: null });
-  assert.deepEqual(options.calls.map(({ program }) => program), ['git', 'git', 'gh', 'git', 'git', 'git']);
+  assert.deepEqual(options.calls.map(({ program }) => program), ['git', 'git', 'gh', 'git', 'git', 'git', 'git']);
   assert.equal(options.calls.filter(({ program, args }) =>
     program === 'git' && args[0] === 'worktree' && args[1] === 'add').length, 1);
   assert.equal(JSON.parse(readFileSync(path.join(options.repoRoot,

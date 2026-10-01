@@ -27,6 +27,19 @@ git submodule update --init --recursive
 See [installation and bootstrap](INSTALL.md) for the local npm bin,
 private configuration, and preflight checks.
 
+Roster runs `git submodule update --init --recursive` from every new issue or
+local-ask worktree root before writing the assignment or starting seats.
+Reused issue worktrees are initialized too. A declared contracts submodule
+must then contain `scripts/agent-pr.mjs`; an environment or sibling fallback
+does not replace that local file for tests with worktree-relative imports.
+
+If tests are blocked only by missing contracts scripts, the harness prints
+`Contracts submodule was not initialized`, not a vendor directory listing.
+This is an infrastructure blocker, not a slice test failure: no code repair
+budget is consumed, RESULT records `Checks: BLOCKED`, and review/publication
+cannot pass until the dependency is initialized. Mixed failures and unrelated
+missing modules retain normal failed-test handling.
+
 ## Resolution
 
 [`resolveContractsPath`](../src/lib/paths.mjs) returns the first usable contracts
@@ -62,8 +75,9 @@ The publisher also requires a feature branch and a human-owned root
 origin's default branch. Do not create or edit policy as part of dependency
 setup.
 
-A new issue worktree may need `git submodule update --init --recursive` run
-from its own root before manual publication. The builtin `--publish` path
+A manually created worktree needs `git submodule update --init --recursive`
+from its own root; Roster-created worktrees already do this during preparation.
+The builtin `--publish` path
 requires a passing REVIEW.md (or explicit `--skip-review`), initializes it,
 selects reviewed task files, and invokes the SDK from that
 root; without the flag, it prints the next command but does not invoke it.

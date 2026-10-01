@@ -135,6 +135,12 @@ export async function runReviewer({
         reasons: ['Coder HTTP timeout: the coder timed out before verification; review was not completed.'],
         security_notes: ['No passing implementation or completed review is available.'],
       };
+    } else if (coderResult.blocked === true) {
+      report = {
+        verdict: 'fail',
+        reasons: ['Contracts submodule was not initialized; verification is infrastructure-blocked, not a slice test failure.'],
+        security_notes: ['No passing verification or completed review is available.'],
+      };
     } else if (coderResult.repairBudgetExhausted === true) {
       report = {
         verdict: 'fail',

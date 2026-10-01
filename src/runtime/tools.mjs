@@ -5,6 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { redactSecrets } from './memory.mjs';
+import { assertContractsInitialized, ContractsSubmoduleError, onlyMissingContractsScripts } from '../lib/contracts.mjs';
 
 const execute = promisify(execFile);
 const managedFiles = new Set(['assignment.md', 'task.md', 'recipe.yml', 'plan.md', 'context.md', 'research.md', 'result.md', 'review.md', 'estimate.md']);
@@ -402,17 +403,26 @@ export async function createTools({
       for (const name of [apiKeyEnv, 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH',
         'GH_TOKEN', 'GITHUB_TOKEN', 'NODE_TEST_CONTEXT']) delete testEnv[name];
       try {
+        await assertContractsInitialized(root);
         const { stdout, stderr } = await runCommand(process.execPath, ['--test'], {
           cwd: root, timeout: 60_000, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
           env: testEnv,
         });
         return { exit_code: 0, stdout, stderr };
       } catch (error) {
+        if (error instanceof ContractsSubmoduleError) {
+          await onEvent?.({ type: 'contracts-uninitialized' });
+          throw error;
+        }
         if (error.code === 'ETIMEDOUT' || error.killed) {
           throw new Error('node --test timed out after 60 seconds', { cause: error });
         }
         if (typeof error.code === 'number') {
           const result = { exit_code: error.code, stdout: error.stdout ?? '', stderr: error.stderr ?? '' };
+          if (onlyMissingContractsScripts(result)) {
+            await onEvent?.({ type: 'contracts-uninitialized' });
+            throw new ContractsSubmoduleError({ cause: error, tests: { exit_code: result.exit_code } });
+          }
           for (const file of failingTestPaths(`${result.stdout}\n${result.stderr}`, root)) {
             const target = path.join(root, file);
             await checkComponents(file.split('/').join(path.sep));

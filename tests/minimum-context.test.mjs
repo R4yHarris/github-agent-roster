@@ -30,6 +30,32 @@ function fixture(t, metadata = { task_class: 'docs', difficulty: 1 }) {
   return { repoRoot, worktree, taskText, task: 'issue-92', session: 'roster-92-coder', config, env: {} };
 }
 
+test('an uninitialized contracts worktree writes blocked result and review without test-repair inference', async (t) => {
+  const options = fixture(t, { task_class: 'fix', difficulty: 2 });
+  writeFileSync(join(options.worktree, '.gitmodules'),
+    '[submodule "github-agent-contracts"]\n\tpath = vendor/github-agent-contracts\n\turl = fixture\n');
+  const events = [];
+  let blocked;
+  await assert.rejects(runCoder({ ...options, askKind: 'slice', onEvent: (event) => events.push(event),
+    fetchImpl: async () => Response.json({ choices: [{ finish_reason: 'stop',
+      message: { role: 'assistant', content: 'Done.' } }] }),
+    runTestCommand: () => assert.fail('Missing declared contracts must be detected before running node tests'),
+  }), (error) => {
+    blocked = error.result;
+    return error.message === 'Contracts submodule was not initialized';
+  });
+  assert.equal(blocked.blocked, true);
+  assert.equal(blocked.testRepairs, 0);
+  const output = readFileSync(blocked.resultPath, 'utf8');
+  assert.match(output, /Outcome: blocked \(contracts infrastructure\)[\s\S]*Checks: BLOCKED/);
+  assert.doesNotMatch(output, /vendor\//);
+  const review = await runReviewer({ ...options, askKind: 'slice', coderResult: blocked,
+    fetchImpl: () => assert.fail('Infrastructure-blocked work must not request reviewer inference') });
+  assert.equal(review.verdict, 'fail');
+  assert.match(review.content, /infrastructure-blocked, not a slice test failure/);
+  assert.ok(!events.some(({ type }) => type === 'test-repair'));
+});
+
 test('difficulty1 docs uses exactly TASK, allowed files, read-before-write and small-diff without auxiliary loads', async (t) => {
   const options = fixture(t);
   writeFileSync(join(options.worktree, 'AGENTS.md'), 'UNNEEDED_AGENTS_MARKER');

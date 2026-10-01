@@ -168,6 +168,12 @@ error. Final verification must pass before a configured run reports
 success or publishes. The [excellence gate](EXCELLENCE.md) verifies actual
 diff paths and secret checks before RESULT.md and again before publication;
 a test process cannot bypass those checks by editing outside task scope.
+One infrastructure exception is missing contracts scripts: a declared
+submodule is checked before tests, and a dependency-only missing-module
+diagnostic produces `Contracts submodule was not initialized` rather than
+a slice repair or vendor listing. RESULT records the blocked prerequisite;
+verification and publication remain unavailable. Real or mixed failures
+are not exempted.
 `tools.run_test: false`, selectable in [onboarding](ONBOARDING.md), removes
 the model tool and denies automatic execution. A test-required task fails
 before a model request; only an explicit TASK.md `tests: none` waiver can

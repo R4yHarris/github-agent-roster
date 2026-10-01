@@ -4,6 +4,7 @@ import { taskAndRepairFiles, toolDefinitions } from './tools.mjs';
 import { redactEvidence, taskSkipsTests } from './excellence.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
 import { applyReadmeStatus } from './readme-status.mjs';
+import { ContractsSubmoduleError, onlyMissingContractsScripts } from '../lib/contracts.mjs';
 
 class MalformedCoderTools extends Error {}
 export const testRepairBudget = 4;
@@ -91,6 +92,10 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     }
     progress.tests = tests;
     if (tests.exit_code === 0) return false;
+    if (onlyMissingContractsScripts(tests)) {
+      await onEvent?.({ type: 'contracts-uninitialized' });
+      throw new ContractsSubmoduleError({ tests: { exit_code: tests.exit_code } });
+    }
     progress.repairFiles = taskAndRepairFiles([], tests.repair_files ?? progress.repairFiles);
     const output = redactEvidence([tests.stdout, tests.stderr].filter(Boolean).join('\n'), {
       env, apiKeyEnv: config.llm.api_key_env,
@@ -256,6 +261,9 @@ export async function runLoop(options) {
     return { ...progress, ...result };
   } catch (error) {
     if (!(error instanceof Error)) throw error;
+    if (error instanceof ContractsSubmoduleError) {
+      return { ...progress, tests: error.tests, blocked: true, summary: error.message, error };
+    }
     return { ...progress, summary: 'Coder execution stopped before a verified result.', error };
   }
 }
