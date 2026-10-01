@@ -118,7 +118,8 @@ export function createChat(config = {}, {
         signal.throwIfAborted();
         await onEvent?.({ type: 'model', model: key ? model.split(key).join('[redacted]') : model, host });
         await onEvent?.({ type: 'http', phase: 'start',
-          ...(llm.reasoning_effort === undefined ? {} : { effort: llm.reasoning_effort }) });
+          ...((request.reasoning_effort ?? llm.reasoning_effort) === undefined ? {}
+            : { effort: request.reasoning_effort ?? llm.reasoning_effort }) });
         signal.throwIfAborted();
         const response = await fetchImpl(endpoint, {
           method: 'POST',

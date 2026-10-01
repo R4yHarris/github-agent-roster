@@ -89,8 +89,10 @@ says `Preparing the task summary.` rather than claiming an implementation.
 
 Unsupported LLM finish reasons are named in the shell and run log without
 printing response bodies. `stop` and `tool_calls` are accepted. The first
-`length` logs `Response truncated. Retrying.` and uses one extra model turn
-with half the completion cap and a concise-response instruction. Repeated
+`length` uses one extra model turn. A docs slice logs
+`Response truncated. Retrying without reasoning.`, disables reasoning, and
+raises the completion cap once from 2048 to 4096. Other tasks retain
+`Response truncated. Retrying.` with half the cap. Repeated
 truncation or another unsupported reason fails review with that reason,
 preserving any completed README write. This does not consume a test repair.
 

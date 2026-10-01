@@ -101,9 +101,14 @@ The shared builtin adapter accepts `stop` and `tool_calls` and grants one
 `length` retry per chat instance (the coder keeps one instance for its run).
 It logs `Response truncated. Retrying.` in the shell and run log, discards the
 truncated completion without executing or replaying its tool calls, and asks
-for a concise complete response with half the previous completion cap.
+for a concise complete response with half the previous completion cap for
+non-docs-slice runs. A docs slice instead logs
+`Response truncated. Retrying without reasoning.`, disables reasoning
+(`reasoning_effort: none`, and local DeepSeek `thinking: false`), and raises
+its completion cap once from 2048 to 4096. This retry applies regardless of
+the docs filename, preserves completed writes, and has no second retry.
 Builtin requests start at 4096 tokens unless the seat supplies a cap, such as
-2048 for low-difficulty docs. The reduced cap remains in effect for later
+2048 for low-difficulty docs. The retry cap and, for docs slices, disabled reasoning remain in effect for later
 requests; it is an output cap, not the model context capacity.
 The retry is an extra coder model turn, independent of failed-test repairs.
 A second `length` or any other unsupported reason is terminal and appears by
