@@ -32,7 +32,9 @@ agents and CI.
 | `/vault` or `/vault list` | List vault entry names, never values. |
 | `/vault get NAME` | Check whether an entry exists without revealing its value; use piped `roster vault get NAME` to retrieve it. |
 | `/vault set NAME` | Read the next line with terminal echo and readline history disabled, then store it in the existing file vault. |
-| `/help` | Show slash-command help. |
+| `/help` or `/` | Show the six command groups: Session, Ask, Model, Board, Human, Settings. |
+| `/help GROUP` | List one group's commands, for example `/help Session` or `/help Board`. |
+| `/help COMMAND` | Show usage, aliases, flags and one example, for example `/help run`. Lowercase command names win; `/help Model` selects the Model group. |
 | `/quit` or `/q` or `exit` | Exit with status 0. Ctrl+C cancels an active run; a second interrupt or idle Ctrl+C exits. |
 
 ## Keys and history
@@ -52,7 +54,9 @@ to the prompt. A second Ctrl+C, Ctrl+D on an empty input, `/quit`, `/q`, or
 work. `/redraw` repaints the tray without clearing scrollback; `/clear` clears
 the screen and repaints it. No extra terminal dependency is used.
 
-Unknown commands report an error and leave the prompt open. Secrets are never
+Unknown commands print `Unknown command. /help lists commands.` and leave the
+prompt open without running a seat. Every registered command has a help page;
+the same registry drives Tab completion. Secrets are never
 accepted as part of `/vault set NAME` itself. The shell dispatches to existing
 library functions in the same Node process; those libraries may still invoke
 Git, GitHub CLI, tests, or the metrics exporter. It does not spawn another

@@ -28,34 +28,12 @@ import { humanEvalHint } from './lib/seat-publication.mjs';
 import { readIssueLogs } from './lib/run-log.mjs';
 import { createDebugLog } from './lib/debug-log.mjs';
 import { createTray } from './shell/tray.mjs';
-import { canonicalCommand, completeCommand } from './shell/commands.mjs';
+import { canonicalCommand, completeCommand, formatHelp } from './shell/commands.mjs';
 import { createHistory, safeHistoryLine } from './shell/history.mjs';
 import { isRunCancelled, RunCancelledError } from './runtime/cancel.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
-const help = `Commands:
-  TEXT                      Run a direct local ask without creating an issue
-  /ask TEXT                 Create an issue, or draft one if gh is unavailable
-  /model [MODEL]            Show or persist the LLM model
-  /effort [l|m|h|x|none]    Show or persist an explicit effort override
-  /run N [--auto-model] [--confirm]  Summarize the task and continue; --confirm pauses
-  /status [N] [--offline]   Show an issue, open PR, and local worktree
-  /log N                   Tail local issue seat logs without network access
-  /debug on|off             Toggle process-only testing metadata logs
-  /log debug                Tail this process's debug file
-  /statusbar on|off          Toggle both delivery-tray bars for this process
-  /redraw                   Repaint the tray without clearing scrollback
-  /clear                    Clear the screen and repaint the tray
-  /eval TARGET VERDICT 1-5 y|n [--minutes N] [--comment "TEXT"]
-  /publish [SUBJECT] [--model MODEL] [--skip-review]  Publish reviewed seat or GHCP changes
-  /stats [REF]              Show AI-Run metrics
-  /recommend feat|fix|docs|test [--difficulty 1-5]
-  /vault [list]             List secret names
-  /vault get NAME           Check whether a secret is stored, without revealing it
-  /vault set NAME           Enter a secret with input hidden
-  /help                     Show these commands
-  /quit                     Exit
-`;
+const unknownCommand = 'Unknown command. /help lists commands.\n';
 
 class ChecksPermissionError extends Error {}
 
@@ -223,10 +201,11 @@ export function createDispatcher({
     const text = line.trim();
     if (!text) return true;
     if (text === 'exit') return false;
+    if (text === '/') { output.write(formatHelp()); return true; }
     if (!text.startsWith('/')) return executeRun((options) => api.runBuiltinAsk(text, options));
     const match = /^\/([a-z]+)(?:\s+(.*))?$/.exec(text);
     if (!match) {
-      errorOutput.write(`Unknown command: ${text.split(/\s+/)[0]}. Type /help.\n`);
+      errorOutput.write(unknownCommand);
       return true;
     }
     const [, inputCommand, rawArguments] = match;
@@ -264,7 +243,9 @@ export function createDispatcher({
           output.write(`Model: ${state.config.llm.model || '(unset)'}\n`);
           return true;
         }
-        state.config = await api.setConfigValue('model', args === 'clear' ? '' : args, { repoRoot, cwd });
+        const selection = /^(\S+)(?:\s+--save)?$/.exec(args);
+        if (!selection) throw new TypeError('Use /model [ID|clear] [--save].');
+        state.config = await api.setConfigValue('model', selection[1] === 'clear' ? '' : selection[1], { repoRoot, cwd });
         state.display.model = state.config.llm.model;
         notify();
         output.write(`Model: ${state.config.llm.model || '(unset)'}\n`);
@@ -476,14 +457,18 @@ export function createDispatcher({
         return true;
       }
       case 'help':
-        if (args) throw new TypeError('Use /help.');
-        output.write(help);
+        if (/\s/.test(args)) throw new TypeError('Use /help [GROUP|COMMAND].');
+        {
+          const help = formatHelp(args);
+          if (help === null) errorOutput.write(unknownCommand);
+          else output.write(help);
+        }
         return true;
       case 'quit':
         if (args) throw new TypeError('Use /quit.');
         return false;
       default:
-        errorOutput.write(`Unknown command: /${command}. Type /help.\n`);
+        errorOutput.write(unknownCommand);
         return true;
     }
   }
