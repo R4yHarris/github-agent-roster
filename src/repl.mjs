@@ -31,6 +31,7 @@ import { createTray } from './shell/tray.mjs';
 import { canonicalCommand, completeCommand, formatHelp } from './shell/commands.mjs';
 import { createHistory, safeHistoryLine } from './shell/history.mjs';
 import { isRunCancelled, RunCancelledError } from './runtime/cancel.mjs';
+import { formatSessionStatus } from './shell/status.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const unknownCommand = 'Unknown command. /help lists commands.\n';
@@ -112,15 +113,18 @@ export function createDispatcher({
 } = {}) {
   const api = { ...defaultServices, ...services };
   const state = { lastAsk: null, lastRun: null, pendingSecret: null, published: false, config, debug,
-    statusbar: true, controller: null, history: [], display: {
+    statusbar: true, controller: null, history: [], issueCache: new Map(), display: {
       issue: null, branch: api.repositoryBranch(cwd), seat: config.seat.id, state: 'idle', busy: false,
       model: config.llm.model, host: config.llm.base_url ? new URL(config.llm.base_url).host : '',
       effort: config.llm.effort, contextUsed: undefined, contextMax: config.llm.context_max, startedAt: null,
+      lastFinishReason: null, lastTestName: null, review: null,
     } };
   const notify = () => onStateChange(state);
   const receiveEvent = (event) => {
     const display = state.display;
     display.seat = event.seat;
+    if (['finish-reason', 'completion'].includes(event.type)) display.lastFinishReason = event.reason;
+    if (event.type === 'tool' && event.name === 'run_test') display.lastTestName = 'node --test';
     if (event.type === 'seat-start') {
       display.state = { planner: 'planning', coder: 'drafting', reviewer: 'reviewing' }[event.seat];
       Object.assign(display, { model: event.model, host: event.host, effort: event.effort,
@@ -134,6 +138,7 @@ export function createDispatcher({
       if (event.model) display.model = event.model;
       display.contextUsed = event.contextUsed;
       if (event.verdict) display.state = event.verdict === 'pass' ? 'passed' : 'failed';
+      if (event.verdict) display.review = event.verdict;
     }
     notify();
   };
@@ -152,7 +157,8 @@ export function createDispatcher({
     state.published = false;
     Object.assign(state.display, { issue: options.issue ?? null,
       branch: options.issue ? `issue-${options.issue}` : state.display.branch,
-      seat: 'planner', state: 'planning', busy: true, startedAt: Date.now(), contextUsed: undefined });
+      seat: 'planner', state: 'planning', busy: true, startedAt: Date.now(), contextUsed: undefined,
+      lastFinishReason: null, lastTestName: null, review: null });
     notify();
     try {
       state.lastRun = await run({
@@ -176,6 +182,11 @@ export function createDispatcher({
     state.display.state = state.lastRun.review
       ? state.lastRun.review.verdict === 'pass' ? 'passed' : 'failed'
       : state.lastRun.failed ? 'failed' : 'idle';
+    state.display.review = state.lastRun.review?.verdict ?? null;
+    if (state.lastRun.issue?.number) state.issueCache.set(state.lastRun.issue.number, {
+      issue: state.lastRun.issue, branch: state.lastRun.task, openPr: undefined, worktreePath: state.lastRun.worktreePath,
+      display: { ...state.display },
+    });
     notify();
     output.write(state.lastRun.askKind === 'clarify'
       ? `${state.lastRun.clarification}\n`
@@ -225,10 +236,16 @@ export function createDispatcher({
         output.write(`Status bars ${args}.\n`);
         return true;
       case 'debug': {
-        if (!['on', 'off'].includes(args)) throw new TypeError('Use /debug on or /debug off.');
-        state.debug.setEnabled(args === 'on');
+        if (!['on', 'off', 'status'].includes(args)) throw new TypeError('Use /debug on, /debug off, or /debug status.');
+        if (args !== 'status') state.debug.setEnabled(args === 'on');
         notify();
-        output.write(`Debug logging ${args}.\n`);
+        output.write(`Debug logging ${state.debug.enabled ? 'on' : 'off'}.\n`);
+        return true;
+      }
+      case 'history': {
+        if (args) throw new TypeError('Use /history.');
+        const lines = state.history.filter((line) => safeHistoryLine(line, { env })).slice(-20);
+        output.write(lines.length ? `${lines.join('\n')}\n` : 'No stored commands.\n');
         return true;
       }
       case 'ask': {
@@ -282,9 +299,20 @@ export function createDispatcher({
           throw new TypeError('Use /status [N] [--offline].');
         }
         const issue = numbers[0] ?? state.lastRun?.issue?.number ?? state.lastAsk?.number;
-        output.write(api.formatStatus(await api.readStatus({
+        if (numbers.length === 0 || Number(issue) === state.display.issue) {
+          output.write(formatSessionStatus(state, { env }));
+          return true;
+        }
+        const cached = state.issueCache.get(Number(issue));
+        if (cached?.display) {
+          output.write(formatSessionStatus({ display: cached.display, lastRun: cached }, { env }));
+          return true;
+        }
+        const status = await api.readStatus({
           issue, offline, cwd: currentRoot(), config: state.config,
-        })));
+        });
+        state.issueCache.set(status.issue.number, status);
+        output.write(api.formatStatus(status));
         return true;
       }
       case 'eval': {

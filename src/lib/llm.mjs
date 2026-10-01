@@ -47,6 +47,7 @@ export function createBuiltinChat(config, {
       lastAttempts += 1;
       try {
         const response = await transport(current);
+        await onEvent?.({ type: 'completion', reason: response.finish_reason ?? null });
         usages.push(response.usage);
         lastUsage = usages.length === 1 ? response.usage : mergeUsage(...usages);
         return { ...response, usage: lastUsage };

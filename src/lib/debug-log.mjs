@@ -13,7 +13,7 @@ const tools = ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text']
 const pathClasses = ['root', 'outside', 'secret', 'git', 'policy', 'workflow', 'vendor', 'managed', 'tests', 'source', 'docs', 'other'];
 const phases = ['seat-start', 'seat-end', 'seat-error', 'model', 'http-start', 'http-ok', 'http-error',
   'waiting', 'timeout', 'tool-start', 'tool-ok', 'tool-error', 'tool-denied', 'finish-reason',
-  'finish-retry', 'test-repair', 'contracts-uninitialized', 'wrote', 'implementation'];
+  'finish-retry', 'completion', 'test-repair', 'contracts-uninitialized', 'wrote', 'implementation'];
 const fields = ['time', 'issue', 'seat', 'phase', 'tool_name', 'path_class', 'finish_reason',
   'test_name', 'exit_code', 'repair', 'elapsed_ms'];
 const finishReasons = ['stop', 'tool_calls', 'length', 'content_filter', 'function_call', 'eos_token',
@@ -98,7 +98,7 @@ export function createDebugLog({
       time: timestamp.toISOString(), issue, seat, phase,
       tool_name: ['tool', 'tool-result'].includes(event.type) ? event.name : null,
       path_class: ['tool', 'tool-result', 'wrote'].includes(event.type) ? debugPathClass(event.path) : null,
-      finish_reason: event.type === 'finish-reason' ? safeReason(event.reason) : null,
+      finish_reason: ['finish-reason', 'completion'].includes(event.type) ? safeReason(event.reason ?? undefined) : null,
       test_name: ['tool', 'tool-result'].includes(event.type) && event.name === 'run_test' ? 'node --test' : null,
       exit_code: event.type === 'tool-result' ? event.exit_code ?? null : null,
       repair: event.type === 'test-repair' ? { n: event.attempt, of: event.budget } : null,

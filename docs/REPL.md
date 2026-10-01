@@ -20,10 +20,11 @@ agents and CI.
 | `/model [MODEL]` | Show the current model or persist a new one to ignored `.roster/config.yml`. |
 | `/effort [l|m|h|x|none]` | Show effort or persist an explicit override to ignored `.roster/config.yml`; it wins over mode/retry defaults. |
 | `/run N [--auto-model] [--confirm]` or `/run --issue N [--auto-model] [--confirm]` | Classify before seats. Slices print outcome, allowed files, checks, and effort, then automatically continue through coder/read-only-reviewer in the same run. Only `--confirm` pauses after the summary; no `--auto` or second `/run` is required. Feature/initiative writes PLAN only; clarify stops. Auto-model chooses a registered fleet profile without rewriting the saved default; no eligible profile uses the deterministic stub. |
-| `/status [N] [--offline]` | Show an issue, its open branch PR, and worktree path. Defaults to the last run or created issue; offline reads only the cached assignment and reports PR state as unknown. |
+| `/status [N] [--offline]` | With no number, show cached issue, branch, seat, state, model, host, effort, last finish reason, last test name, and review. Current and previously run issue snapshots use no model/GitHub request. An uncached explicit issue uses the existing status reader; `--offline` prohibits GitHub. |
+| `/history` | Show the last 20 stored safe commands, without vault or secret lines. |
 | `/statusbar on\|off` | Toggle both blue delivery-tray bars; the default is on and the setting is process-local. |
 | `/log N` | Tail up to 50 safe metadata lines from each local `.roster/runs/roster-N-*.log`, without network or seat execution. |
-| `/debug on` or `/debug off` | Enable or stop testing metadata logging for this process only; never write config or change environment variables. |
+| `/debug on` or `/debug off` or `/debug status` | Enable, stop or show testing metadata logging for this process only; never write config or change environment variables. |
 | `/log debug` | Tail up to 50 validated JSONL events from this process's most recent debug file, even after debug is off. |
 | `/eval TARGET accept\|reject\|rework 1-5 y\|n [--minutes N] [--comment "TEXT"]` | Record the [human retrospective](RETRO.md), including actual minutes and local feedback. |
 | `/publish [SUBJECT] [--model MODEL] [--skip-review]` | Publish with an unchanged passing REVIEW.md, or explicitly bypass that verdict. After `/run N`, the default subject is `feat: issue N`; a confirmed merge comments on the still-open issue with PR URL and model ID. Local asks default to `feat: local ask`, publish from their worktree, and never comment on an issue. Otherwise supply a conventional subject and declare the GHCP model with `--model` or `AI_MODEL`. Completed seat metadata wins over the flag. |
