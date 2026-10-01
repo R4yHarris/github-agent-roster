@@ -1,5 +1,6 @@
 import { createChat } from '../llm/openai.mjs';
 import { mappedEffort, usesDeepseekReasoning } from '../llm/reasoning.mjs';
+import { modelCapabilityPrior } from './capabilities.mjs';
 
 export function createBuiltinChat(config, {
   fetchImpl, env = process.env, vault, onEvent, retryCommand, clock,
@@ -15,7 +16,11 @@ export function createBuiltinChat(config, {
     ...(usesDeepseekReasoning(config.llm) ? {
       chat_template_kwargs: { thinking: config.llm.effort !== 'none' },
     } : {}),
-  } }, { fetch: fetchImpl, env, vault, onEvent, retryCommand, clock });
+  } }, { fetch: fetchImpl, env, vault, onEvent: onEvent && ((event) => onEvent({
+    ...event, ...(event.type === 'http' ? {
+      modelPrior: config.llm.model_prior ?? modelCapabilityPrior(config.llm.model).strength,
+    } : {}),
+  })), retryCommand, clock });
 }
 
 export async function chatCompletion({ config, messages, tools, env, fetchImpl, vault, onEvent, retryCommand }) {

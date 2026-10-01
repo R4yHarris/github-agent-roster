@@ -14,6 +14,36 @@ function fixture(context) {
   return worktree;
 }
 
+test('every slice denies out-of-scope file reads, including fixtures and harness sources', async (context) => {
+  const worktree = fixture(context);
+  mkdirSync(path.join(worktree, 'docs'));
+  mkdirSync(path.join(worktree, 'tests', 'fixtures'), { recursive: true });
+  writeFileSync(path.join(worktree, 'docs', 'guide.md'), 'needle allowed\n');
+  writeFileSync(path.join(worktree, 'tests', 'fixtures', 'planner.md'), 'needle fixture\n');
+  writeFileSync(path.join(worktree, 'src', 'repl.mjs'), 'needle harness\n');
+  writeFileSync(path.join(worktree, 'TASK.md'), 'Task scope\n');
+  const tools = await createTools({ worktree, allowedFiles: ['docs/guide.md'], sliceReadsOnly: true });
+  assert.equal(await tools.read_file({ path: 'docs/guide.md' }), 'needle allowed\n');
+  assert.equal(await tools.read_file({ path: 'TASK.md' }), 'Task scope\n');
+  for (const file of ['README.md', 'tests/fixtures/planner.md', 'src/repl.mjs']) {
+    await assert.rejects(tools.read_file({ path: file }), /not allowed by TASK\.md slice scope/);
+    await assert.rejects(tools.search_text({ path: file, query: 'needle' }), /not allowed/);
+  }
+  for (const directory of ['tests', 'tests/fixtures', 'src']) {
+    await assert.rejects(tools.list_dir({ path: directory }), /not allowed/);
+  }
+  assert.deepEqual((await tools.list_dir({ path: '.' })).map(({ name }) => name), ['docs', 'TASK.md']);
+  assert.deepEqual((await tools.search_text({ query: 'needle' })).matches,
+    [{ path: 'docs/guide.md', line: 1, text: 'needle allowed' }]);
+  const explicitlyAllowed = await createTools({ worktree,
+    allowedFiles: ['tests/fixtures/planner.md', 'src/repl.mjs'], sliceReadsOnly: true });
+  assert.match(await explicitlyAllowed.read_file({ path: 'tests/fixtures/planner.md' }), /fixture/);
+  assert.match(await explicitlyAllowed.read_file({ path: 'src/repl.mjs' }), /harness/);
+  const subtree = await createTools({ worktree, allowedFiles: ['docs/**'], sliceReadsOnly: true });
+  assert.match(await subtree.read_file({ path: 'docs/guide.md' }), /allowed/);
+  await assert.rejects(subtree.read_file({ path: 'src/repl.mjs' }), /not allowed/);
+});
+
 test('limits reading, writing, and listing to worktree files allowed by TASK.md', async (context) => {
   const worktree = fixture(context);
   const tools = await createTools({ worktree, allowedFiles: ['README.md', 'src/**'] });

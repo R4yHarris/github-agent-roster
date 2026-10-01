@@ -15,18 +15,27 @@ const example = readFileSync(new URL('../roster.config.example.yml', import.meta
 const config = parseConfig(example.replace('base_url: ""', 'base_url: http://192.168.1.48:8888/v1')
   .replace('model: ""', 'model: deepseek-v4.1-flash'));
 
-test('docs slices use low/2048, feature and initiative plans high/4096, other classes retain configured effort', () => {
-  for (const difficulty of [1, 2]) {
-    const selected = selectReasoning(config, { kind: 'slice', taskClass: 'docs', difficulty });
-    assert.equal(selected.llm.effort, 'l');
-    assert.equal(selected.llm.max_tokens, 2048);
+test('difficulty versus model prior selects effort for every task class and ask kind', () => {
+  for (const kind of ['slice', 'feature', 'initiative']) {
+    for (const taskClass of ['feat', 'fix', 'docs', 'test']) {
+      for (const difficulty of [1, 2, 4, 5]) {
+        const selected = selectReasoning(config, { kind, taskClass, difficulty });
+        assert.equal(selected.llm.effort, difficulty <= 2 ? 'l' : 'h');
+        assert.equal(selected.llm.model_prior, 'strong');
+      }
+    }
   }
   for (const kind of ['feature', 'initiative']) {
     const selected = selectReasoning(config, { kind });
-    assert.equal(selected.llm.effort, 'h');
+    assert.equal(selected.llm.effort, 'l');
     assert.equal(selected.llm.max_tokens, 4096);
   }
-  assert.equal(selectReasoning(config, { kind: 'slice', taskClass: 'fix', difficulty: 2 }).llm.effort, 'h');
+  assert.equal(selectReasoning(config, { kind: 'slice', taskClass: 'docs', difficulty: 1 }).llm.max_tokens, 2048);
+  const unknown = selectReasoning({ ...config, llm: { ...config.llm, model: 'unrated' } },
+    { kind: 'slice', taskClass: 'fix', difficulty: 1 });
+  assert.equal(unknown.llm.effort, 'm');
+  assert.equal(unknown.llm.model_prior, 'unknown');
+  assert.throws(() => selectReasoning(config, { difficulty: 6 }), /difficulty/);
 });
 
 test('SGLang DeepSeek4.1 maps medium to high and caps at max; cloud retains four effort tiers', () => {
@@ -58,11 +67,11 @@ test('selected docs request sends low/2048 and drops reasoning_content from all 
   assert.doesNotMatch(JSON.stringify([result, chat.lastResponse]), /PRIVATE_THINKING|reasoning_content/);
 });
 
-test('feature planner request sends high/4096 without implementation tools', async () => {
+test('feature planner request uses the strong model prior with low/4096 without implementation tools', async () => {
   await planOutline('Implement a feature.', { config, kind: 'feature', env: {},
     fetchImpl: async (_url, request) => {
       const body = JSON.parse(request.body);
-      assert.equal(body.reasoning_effort, 'high');
+      assert.equal(body.reasoning_effort, 'low');
       assert.equal(body.max_tokens, 4096);
       assert.equal(body.tools, undefined);
       return Response.json({ choices: [{ message: { role: 'assistant', content: JSON.stringify({
@@ -73,7 +82,7 @@ test('feature planner request sends high/4096 without implementation tools', asy
   });
 });
 
-test('/effort x persists override and wins over docs mode and review retry; none disables thinking', async (t) => {
+test('/effort x persists but docs slices cap overrides and retries at high; none disables thinking', async (t) => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'roster-reasoning-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
   writeFileSync(join(repoRoot, 'roster.config.example.yml'), example);
@@ -81,8 +90,8 @@ test('/effort x persists override and wins over docs mode and review retry; none
   assert.equal(updated.llm.effort_override, 'x');
   const selected = selectReasoning({ ...updated, llm: { ...updated.llm, base_url: config.llm.base_url,
     model: config.llm.model } }, { kind: 'slice', taskClass: 'docs', difficulty: 1, previousEffort: 'l' });
-  assert.equal(selected.llm.effort, 'x');
-  assert.equal(mappedEffort(selected.llm), 'max');
+  assert.equal(selected.llm.effort, 'h');
+  assert.equal(mappedEffort(selected.llm), 'high');
   const disabled = await setConfigValue('effort', 'none', { repoRoot });
   assert.equal(buildRun({ config: { ...disabled, llm: { ...disabled.llm, model: 'served' } },
     response: null, env: {} }).env.AI_EFFORT, '-');
@@ -96,7 +105,7 @@ test('/effort x persists override and wins over docs mode and review retry; none
   await chat({ messages: [{ role: 'user', content: 'Task' }] });
 });
 
-test('shell /effort x is explicit and overrides the next docs-slice request', async (t) => {
+test('shell /effort x remains explicit but cannot send max or xhigh for a docs slice', async (t) => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'roster-shell-effort-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
   writeFileSync(join(repoRoot, 'roster.config.example.yml'), example);
@@ -107,7 +116,7 @@ test('shell /effort x is explicit and overrides the next docs-slice request', as
       runBuiltinIssue: async (_issue, options) => {
         assert.equal(options.config.llm.effort_override, 'x');
         const selected = selectReasoning(options.config, { kind: 'slice', taskClass: 'docs', difficulty: 1 });
-        assert.equal(mappedEffort(selected.llm), 'xhigh');
+        assert.equal(mappedEffort(selected.llm), 'high');
         return { issue: { number: 108 }, command: null };
       },
     },
@@ -122,9 +131,40 @@ test('human coder request status records chosen effort without exposing reasonin
   const logger = await createRunLog({ repoRoot, session: 'effort-test', env: {},
     errorOutput: { write(line) { stderr += line; } } });
   await logger.seat('coder', 'effort-test', config, async (onEvent) => {
-    await onEvent({ type: 'http', phase: 'start', effort: 'low', reasoning_content: 'PRIVATE_THINKING' });
+    await onEvent({ type: 'http', phase: 'start', effort: 'low', modelPrior: 'strong',
+      reasoning_content: 'PRIVATE_THINKING' });
     return {};
   });
-  assert.match(stderr, /^Drafting the change at low effort\.$/m);
+  assert.match(stderr, /^Drafting at low effort\. Model prior: strong\.$/m);
   assert.doesNotMatch(stderr, /PRIVATE_THINKING/);
+});
+
+test('difficulty 1 sends low and difficulty 5 sends high for a strong coder, independent of filenames', async () => {
+  for (const difficulty of [1, 5]) {
+    const selected = selectReasoning(config, { kind: 'slice', taskClass: 'fix', difficulty });
+    const chat = createBuiltinChat(selected, { env: {}, fetchImpl: async (_url, request) => {
+      assert.equal(JSON.parse(request.body).reasoning_effort, difficulty === 1 ? 'low' : 'high');
+      return Response.json({ choices: [{ message: { role: 'assistant', content: 'Done.' } }] });
+    } });
+    await chat({ messages: [{ role: 'user', content: 'Fix src/widget.mjs.' }] });
+  }
+  for (const difficulty of [1, 2, 3, 4, 5]) {
+    const selected = selectReasoning(config,
+      { kind: 'slice', taskClass: 'docs', difficulty, previousEffort: 'x' });
+    assert.equal(mappedEffort(selected.llm), 'high');
+  }
+});
+
+test('catalog overlays change the model prior without fabricating measured or configured context', () => {
+  const selected = selectReasoning({ ...config, capabilities: { capabilities: [{
+    model_id: config.llm.model, task_class: 'fix', suggested_difficulty: 1,
+    context_max: 1048576, concurrency: 1, notes: 'Operator starting guess.',
+  }] } }, { kind: 'slice', taskClass: 'fix', difficulty: 2 });
+  assert.equal(selected.llm.model_prior, 'limited');
+  assert.equal(mappedEffort(selected.llm), 'high');
+  assert.equal(selected.llm.context_max, config.llm.context_max);
+  const inherited = selectReasoning(selectReasoning(config,
+    { kind: 'initiative', taskClass: 'feat', difficulty: 5 }), { kind: 'initiative' });
+  assert.equal(mappedEffort(inherited.llm), 'high');
+  assert.equal(inherited.llm.task_difficulty, 5);
 });

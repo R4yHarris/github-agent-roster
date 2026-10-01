@@ -80,7 +80,7 @@ of its final summary. Planner start/model request says
 `Reading README.md before editing.`, writes say `Saving README.md.`, model
 requests say `Drafting the change.`, and tests say `Running tests.`
 Configured coder requests include the chosen effort, for example
-`Drafting the change at low effort.`
+`Drafting at low effort. Model prior: strong.`
 Reviewer start says `Checking the diff against the task.` These are status
 projections only: they do not add tools, checks, edits, or work. A stub coder
 says `Preparing the task summary.` rather than claiming an implementation.
@@ -149,16 +149,22 @@ need the full cold-start wait.
 `/model MODEL` and `/effort h` validate and atomically replace those
 fields in the private config, keeping other fields and comments. `/effort`
 also writes `llm.effort_override` so a human choice is not lost to automatic
-selection. `/effort x` sends max to local DeepSeek-V4.1 and xhigh to cloud;
+selection. `/effort x` sends max to local DeepSeek-V4.1 and xhigh to cloud
+except for docs slices, which cap all choices at high;
 `/effort none` disables thinking. Remove the override field in private config
-to return to mode defaults. The
+to return to difficulty/model-prior defaults. The
 updated values apply to the next `/run` in this shell. With no selected
 endpoint or profile, setting a model alone still leaves the stub active.
 
-Docs slices at difficulty1-2 use low effort and `max_tokens: 2048`; feature
-and initiative planners use high and 4096. A new `/run` after a failing REVIEW
+Every ask uses difficulty versus the [model capability prior](CAPABILITIES.md):
+strong models use low at difficulty1-2, while difficulty4-5 uses high.
+This is independent of task class or filenames. Low-difficulty docs slices
+retain `max_tokens: 2048`; feature/initiative plans retain 4096.
+Every slice denies reads outside TASK.md and its allowed files, including
+tests/fixtures and harness sources unless allowed explicitly.
+A new `/run` after a failing REVIEW
 uses the preceding journaled coder effort raised one supported tier (never
-past max/xhigh), unless an explicit override exists. The task and minimum
+past max/xhigh, or high for docs slices), unless an explicit override exists. The task and minimum
 context are unchanged. No retry/model call is scheduled just by selecting
 effort, and no `reasoning_content` is persisted in seat memory.
 `/model clear` leaves the model empty. `/run N --auto-model` explicitly

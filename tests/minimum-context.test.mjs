@@ -14,7 +14,7 @@ import { createTools } from '../src/runtime/tools.mjs';
 
 const sourceRoot = fileURLToPath(new URL('../', import.meta.url));
 const config = parseConfig(readFileSync(join(sourceRoot, 'roster.config.example.yml'), 'utf8')
-  .replace('base_url: ""', 'base_url: http://localhost:8000/v1').replace('model: ""', 'model: docs-model'));
+  .replace('base_url: ""', 'base_url: http://localhost:8000/v1').replace('model: ""', 'model: deepseek-v4.1-flash'));
 
 function fixture(t, metadata = { task_class: 'docs', difficulty: 1 }) {
   const repoRoot = mkdtempSync(join(tmpdir(), 'roster-minimum-context-'));
@@ -121,6 +121,39 @@ test('docs1 scope is exact; other task classes/difficulties/file sets keep their
   }).task).readmeOnlyDocs, false);
   await assert.rejects(createTools({ worktree: options.worktree, allowedFiles: ['**/*'], readmeOnlyDocs: true }),
     /scope limited to README\.md/);
+});
+
+test('non-README slices send difficulty-based effort and deny fixture and harness reads through coder tools', async (t) => {
+  for (const difficulty of [1, 5]) {
+    const options = fixture(t, { task_class: 'fix', difficulty });
+    mkdirSync(join(options.worktree, 'src', 'runtime'), { recursive: true });
+    mkdirSync(join(options.worktree, 'tests', 'fixtures'), { recursive: true });
+    writeFileSync(join(options.worktree, 'src', 'widget.mjs'), 'export const ready = false;\n');
+    writeFileSync(join(options.worktree, 'src', 'runtime', 'loop.mjs'), 'PRIVATE_HARNESS');
+    writeFileSync(join(options.worktree, 'tests', 'fixtures', 'planner.md'), 'PRIVATE_FIXTURE');
+    writeFileSync(join(options.worktree, 'TASK.md'),
+      planStub('Fix src/widget.mjs.', { metadata: { task_class: 'fix', difficulty } }).task);
+    let calls = 0;
+    const result = await runCoder({ ...options, askKind: 'slice', fetchImpl: async (_url, request) => {
+      calls += 1;
+      const body = JSON.parse(request.body);
+      assert.equal(body.reasoning_effort, difficulty === 1 ? 'low' : 'high');
+      assert.ok(!request.body.includes('PRIVATE_FIXTURE') && !request.body.includes('PRIVATE_HARNESS'));
+      if ([2, 3].includes(calls)) assert.match(body.messages.at(-1).content, /not allowed by TASK\.md slice scope/);
+      const call = calls === 1 ? { name: 'read_file', args: { path: 'tests/fixtures/planner.md' } }
+        : calls === 2 ? { name: 'read_file', args: { path: 'src/runtime/loop.mjs' } }
+          : calls === 3 ? { name: 'read_file', args: { path: 'src/widget.mjs' } }
+            : calls === 4 ? { name: 'write_file', args: { path: 'src/widget.mjs',
+              content: 'export const ready = true;\n' } } : null;
+      return Response.json({ choices: [{ finish_reason: call ? 'tool_calls' : 'stop', message: call ? {
+        role: 'assistant', tool_calls: [{ id: `call-${calls}`, type: 'function', function: {
+          name: call.name, arguments: JSON.stringify(call.args),
+        } }],
+      } : { role: 'assistant', content: 'Fixed the widget.' } }] });
+    }, runTestCommand: async () => ({ stdout: 'pass', stderr: '' }) });
+    assert.equal(result.excellence.pass, true);
+    assert.equal(calls, 5);
+  }
 });
 
 test('configured docs slice cannot read planner-task fixture, offers only exact file tools, and writes before tests', async (t) => {

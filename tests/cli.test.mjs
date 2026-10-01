@@ -82,6 +82,7 @@ test("ask CLI creates an offline draft with a create command when gh is missing"
   try {
     const fixtureRoot = join(directory, "roster");
     cpSync(join(root, "src"), join(fixtureRoot, "src"), { recursive: true });
+    cpSync(join(root, "examples"), join(fixtureRoot, "examples"), { recursive: true });
     cpSync(join(root, "templates"), join(fixtureRoot, "templates"), { recursive: true });
     cpSync(join(root, "roster.config.example.yml"), join(fixtureRoot, "roster.config.example.yml"));
     const offlineEnv = Object.fromEntries(Object.entries(process.env)
@@ -141,6 +142,7 @@ test("bare run uses the builtin planner and coder while prepare keeps manual han
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const fixtureRoot = join(directory, "roster");
   cpSync(join(root, "src"), join(fixtureRoot, "src"), { recursive: true });
+  cpSync(join(root, "examples"), join(fixtureRoot, "examples"), { recursive: true });
   const example = readFileSync(join(root, "roster.config.example.yml"), "utf8");
   writeFileSync(join(fixtureRoot, "roster.config.example.yml"),
     example.replace('profile: ""', "profile: vllm-local"));

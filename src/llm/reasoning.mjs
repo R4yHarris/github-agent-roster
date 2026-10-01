@@ -1,4 +1,5 @@
 import { isLocalLlmHost } from './request.mjs';
+import { modelCapabilityPrior } from '../lib/capabilities.mjs';
 
 const cloudEfforts = { l: 'low', m: 'medium', h: 'high', x: 'xhigh', none: 'none' };
 const deepseekEfforts = { l: 'low', m: 'high', h: 'high', x: 'max', none: 'none' };
@@ -25,14 +26,24 @@ export function nextEffort(llm, effort) {
 
 export function selectReasoning(config, { kind, taskClass, difficulty, previousEffort } = {}) {
   previousEffort ??= config.llm.review_retry_effort;
-  const docsSlice = kind === 'slice' && taskClass === 'docs' && [1, 2].includes(difficulty);
+  difficulty ??= config.llm.task_difficulty ?? 2;
+  taskClass ??= config.llm.task_class ?? 'feat';
+  if (!Number.isInteger(difficulty) || difficulty < 1 || difficulty > 5) {
+    throw new TypeError('Reasoning difficulty must be an integer from 1 to 5');
+  }
+  const prior = modelCapabilityPrior(config.llm.model, taskClass, config.capabilities);
+  const docsSlice = kind === 'slice' && taskClass === 'docs';
   const planning = ['feature', 'initiative'].includes(kind);
-  let effort = config.llm.effort_override ?? (docsSlice ? 'l' : planning ? 'h' : config.llm.effort);
+  const defaultEffort = difficulty <= 2 && prior.strength === 'strong' ? 'l'
+    : difficulty >= 4 || difficulty > prior.suggested_difficulty ? 'h' : 'm';
+  let effort = config.llm.effort_override ?? defaultEffort;
   if (previousEffort !== undefined && config.llm.effort_override === undefined) {
     effort = nextEffort(config.llm, previousEffort);
   }
+  if (docsSlice && effort === 'x') effort = 'h';
   if (usesDeepseekReasoning(config.llm) && effort === 'm') effort = 'h';
-  return { ...config, llm: { ...config.llm, effort,
-    ...(docsSlice ? { max_tokens: 2048 } : planning ? { max_tokens: 4096 } : {}),
+  return { ...config, llm: { ...config.llm, effort, model_prior: prior.strength,
+    task_difficulty: difficulty, task_class: taskClass,
+    ...(docsSlice && difficulty <= 2 ? { max_tokens: 2048 } : planning ? { max_tokens: 4096 } : {}),
   } };
 }

@@ -77,7 +77,9 @@ export async function createRunLog({
 
   function humanEventText(name, event) {
     if (event.type === 'http' && event.phase === 'start') {
-      return name === 'coder' && event.effort ? `Drafting the change at ${event.effort} effort.` : seatActions[name];
+      return name === 'coder' && event.effort
+        ? `Drafting at ${event.effort} effort. Model prior: ${event.modelPrior ?? 'unknown'}.`
+        : seatActions[name];
     }
     if (event.type === 'waiting' && event.elapsedSeconds > 30) {
       return 'Still waiting on the model. Local hardware can take minutes after idle.';
@@ -120,6 +122,9 @@ export async function createRunLog({
         return `model=${JSON.stringify(model)} host=${JSON.stringify(host)}`;
       }
       case 'http': {
+        if (event.modelPrior !== undefined && !['strong', 'standard', 'limited', 'unknown'].includes(event.modelPrior)) {
+          throw new TypeError('Invalid live model capability prior');
+        }
         if (event.effort !== undefined && !['low', 'medium', 'high', 'max', 'xhigh', 'none'].includes(event.effort)) {
           throw new TypeError('Invalid live reasoning effort');
         }

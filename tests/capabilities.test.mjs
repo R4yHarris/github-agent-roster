@@ -3,7 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { formatCapabilities, loadCapabilities, parseCapabilities, validateCapabilities } from '../src/lib/capabilities.mjs';
+import { formatCapabilities, loadCapabilities, modelCapabilityPrior, parseCapabilities, validateCapabilities } from '../src/lib/capabilities.mjs';
 
 const example = readFileSync(new URL('../examples/capabilities.yml', import.meta.url), 'utf8');
 const record = { profile_id: 'default', task_class: 'fix', suggested_difficulty: 2,
@@ -23,10 +23,23 @@ function fixture(t) {
 
 test('tracked hypothetical priors validate and round-trip without registering a model', () => {
   const catalog = parseCapabilities(example);
-  assert.equal(catalog.capabilities.length, 6);
+  assert.equal(catalog.capabilities.length, 10);
   assert.deepEqual(parseCapabilities(formatCapabilities(catalog)), catalog);
   assert.equal(Object.isFrozen(catalog.capabilities[0]), true);
   assert.ok(catalog.capabilities.every(({ notes }) => /guess|illustration/.test(notes)));
+});
+
+test('DeepSeek V4.1 Flash has a strong 1M-context starting prior for every task class', () => {
+  for (const taskClass of ['feat', 'fix', 'docs', 'test']) {
+    const prior = modelCapabilityPrior('deepseek-v4.1-flash', taskClass);
+    assert.equal(prior.strength, 'strong');
+    assert.equal(prior.context_max, 1048576);
+  }
+  assert.equal(modelCapabilityPrior('unrated').strength, 'unknown');
+  assert.equal(modelCapabilityPrior('local', 'fix', { capabilities: [{
+    model_id: 'local', task_class: 'fix', suggested_difficulty: 2,
+    context_max: 8192, concurrency: 1, notes: 'Starting guess.',
+  }] }).strength, 'limited');
 });
 
 test('private overlay merges fields by selector and class while preserving other priors', async (t) => {

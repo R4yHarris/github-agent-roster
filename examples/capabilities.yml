@@ -37,3 +37,27 @@ capabilities:
     context_max: 65536
     concurrency: 1
     notes: "Fictional model illustration; do not treat as a benchmark."
+  - model_id: deepseek-v4.1-flash
+    task_class: feat
+    suggested_difficulty: 5
+    context_max: 1048576
+    concurrency: 1
+    notes: "Strong coder starting guess supplied by the operator, not a benchmark."
+  - model_id: deepseek-v4.1-flash
+    task_class: fix
+    suggested_difficulty: 5
+    context_max: 1048576
+    concurrency: 1
+    notes: "Strong coder starting guess supplied by the operator, not a benchmark."
+  - model_id: deepseek-v4.1-flash
+    task_class: docs
+    suggested_difficulty: 5
+    context_max: 1048576
+    concurrency: 1
+    notes: "Strong coder starting guess supplied by the operator, not a benchmark."
+  - model_id: deepseek-v4.1-flash
+    task_class: test
+    suggested_difficulty: 5
+    context_max: 1048576
+    concurrency: 1
+    notes: "Strong coder starting guess supplied by the operator, not a benchmark."

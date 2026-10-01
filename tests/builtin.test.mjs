@@ -425,12 +425,12 @@ test('a configured direct ask implements and reviews the slice after its streame
   assert.match(logs.join('\n'), /Human AI-Eval|human AI-Eval/);
 });
 
-test('docs slice retry after failed review raises one supported tier and never exceeds max', async (context) => {
+test('docs slice retry after failed review raises one supported tier and never exceeds high', async (context) => {
   const options = fixture(context);
   options.issue.body = renderIssueBody(options.issue.body, { task_class: 'docs', difficulty: 1 });
   const config = { ...llmConfig, llm: { ...llmConfig.llm, model: 'deepseek-v4.1-flash',
     base_url: 'http://192.168.1.48:8888/v1' } };
-  for (const effort of ['low', 'high', 'max', 'max', 'none']) {
+  for (const effort of ['low', 'high', 'high', 'high', 'none']) {
     let coderTurns = 0;
     const activeConfig = effort === 'none' ? { ...config, llm: { ...config.llm, effort_override: 'none' } } : config;
     const result = await runIssueWithSeats(42, { ...options, config: activeConfig, log: () => {},
@@ -464,7 +464,7 @@ test('docs slice retry after failed review raises one supported tier and never e
     assert.equal(result.review.verdict, 'fail');
     assert.equal(result.runs.coder.metrics.effort, { low: 'l', high: 'h', max: 'x', none: '-' }[effort]);
     assert.equal(recordedCoderRun({ repoRoot: options.target, run: result.runs.coder }).line, result.runs.coder.line);
-    assert.match(options.stderr, new RegExp(`Drafting the change at ${effort} effort\\.`));
+    assert.match(options.stderr, new RegExp(`Drafting at ${effort} effort\\. Model prior: strong\\.`));
     assert.doesNotMatch(readFileSync(path.join(options.repoRoot, '.roster', 'memory', 'coder.jsonl'), 'utf8'),
       /PRIVATE_CODER_THINKING|reasoning_content/);
   }
@@ -953,7 +953,7 @@ for (const selection of ['explicit', 'feedback']) {
     assert.equal(result.runs.planner.env.AI_MODEL, 'local-model');
     assert.equal(result.runs.planner.env.AI_EFFORT, 'm');
     assert.equal(result.runs.coder.env.AI_MODEL, 'task-model');
-    assert.equal(result.runs.coder.env.AI_EFFORT, selection === 'explicit' ? 'm' : 'h');
+    assert.equal(result.runs.coder.env.AI_EFFORT, 'h');
   });
 }
 
@@ -1001,7 +1001,7 @@ test('auto-model uses a three-evaluation recommendation for both seats without e
   assert.equal(result.result.mode, 'llm');
   assert.equal(result.runs.planner.env.AI_MODEL, 'candidate-model');
   assert.equal(result.runs.coder.env.AI_MODEL, 'candidate-model');
-  assert.equal(result.runs.coder.env.AI_EFFORT, 'h');
+  assert.equal(result.runs.coder.env.AI_EFFORT, 'm');
   assert.equal(result.runs.coder.env.AI_CONTEXT_USED, '3');
   assert.equal(config.llm.model, '');
   assert.equal(existsSync(path.join(options.repoRoot, '.roster', 'config.yml')), false);

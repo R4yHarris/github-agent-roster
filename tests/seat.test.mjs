@@ -24,7 +24,7 @@ function fixture(context) {
   const repoRoot = path.join(root, 'roster');
   const worktree = path.join(root, 'task');
   mkdirSync(worktree);
-  for (const directory of ['principals', 'skills']) {
+  for (const directory of ['principals', 'skills', 'examples']) {
     cpSync(path.join(sourceRoot, directory), path.join(repoRoot, directory), { recursive: true });
   }
   mkdirSync(path.join(repoRoot, 'vendor', 'github-agent-contracts', 'scripts'), { recursive: true });

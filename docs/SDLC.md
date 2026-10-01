@@ -74,16 +74,18 @@ without editing the tracked example or storing credentials.
   or store an API key under that name in the file vault. A non-empty environment
   value wins. Put only its **name** in config, never the key. HTTP errors report status,
   not the response body or Authorization header.
-- `llm.effort` (`l|m|h|x|none`) is the fallback effort. The orchestrator selects
-  low/2048 output tokens for difficulty1-2 docs slices and high/4096 for
-  feature/initiative plans; slice context remains minimum. Requests send the
+- `llm.effort` (`l|m|h|x|none`) describes effort; automatic seat selection uses
+  task difficulty versus the model capability prior for every ask. A strong
+  model uses low at difficulty1-2; difficulty4-5 uses high, regardless of
+  task class or filenames. Docs difficulty1-2 retains 2048 output tokens;
+  feature/initiative plans retain 4096; slice context remains minimum. Requests send the
   selected `reasoning_effort` and `max_tokens`. Cloud maps l/m/h/x to
   low/medium/high/xhigh. Local DeepSeek-V4.1 maps to low/high/high/max;
   `none` disables thinking (local DeepSeek template `thinking: false`).
-  `/effort` persists `llm.effort_override`, which wins over mode and retry
-  selection. Remove that optional field from private config to resume automatic
+  `/effort` persists `llm.effort_override`, which wins over automatic and retry
+  selection except that docs slices never exceed high. Remove that optional field from private config to resume automatic
   selection. A retry of a failed review raises the last recorded coder effort
-  one supported tier, capped at the backend maximum. No automatic retry or
+  one supported tier, capped at high for docs slices and otherwise the backend maximum. No automatic retry or
   extra seat is created. `llm.context_max` remains declared capacity, not usage.
 - Optional `llm.request_timeout_ms` overrides the complete HTTP request
   deadline with a positive integer, at most 2147483647 milliseconds. Without

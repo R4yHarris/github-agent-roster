@@ -14,6 +14,6 @@ export function taskContextPolicy(task, { askKind, files } = {}) {
   const allowed = metadata.task_class === 'docs' && metadata.difficulty === 1
     ? files ?? taskFilesAllowed(task) : [];
   const readmeOnlyDocs = allowed.length === 1 && allowed[0] === 'README.md';
-  return { minimum: !research, research, readmeOnlyDocs,
+  return { minimum: !research, research, readmeOnlyDocs, sliceReadsOnly: askKind === undefined || askKind === 'slice',
     skills: research ? undefined : [...minimumDocsSkills] };
 }
