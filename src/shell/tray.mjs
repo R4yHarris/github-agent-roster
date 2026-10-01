@@ -74,7 +74,7 @@ export function createTray({ output, state, shell }) {
   }
 
   function render() {
-    if (state.pendingSecret !== null) return;
+    if (state.pendingSecret !== null || state.pendingQuestion) return;
     erase();
     const { top, bottom, prompt } = frame();
     barLines = state.statusbar ? 2 : 0;

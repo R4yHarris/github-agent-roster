@@ -165,8 +165,6 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
 
   assert.deepEqual(calls, [
     ['local-ask', 'Add a status section.'],
-    ['set-config', 'model', 'local-model'],
-    ['set-config', 'effort', 'h'],
     ['run', '42', false, false, 'local-model', 'h'],
     ['eval', 'roster-42-coder', 'accept', '3', 'n', cwd],
     ['stats', 'HEAD'],
@@ -240,7 +238,7 @@ test('/model clear and /run --auto-model opt into routing without persisting a s
   });
   await shell.dispatch('/model clear');
   await shell.dispatch('/run 42 --auto-model');
-  assert.deepEqual(calls, [['set', 'model', ''], ['run', '42', true, '']]);
+  assert.deepEqual(calls, [['run', '42', true, '']]);
   assert.match(shell.output.text, /Model: \(unset\)/);
 });
 

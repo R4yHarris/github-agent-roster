@@ -17,8 +17,13 @@ agents and CI.
 | --- | --- |
 | `TEXT` (no slash) | Classify a direct local ask without `gh` or issue creation. In a local Git worktree, slices print the task summary and run planner/coder/reviewer to RESULT.md and REVIEW.md; features and initiatives write PLAN.md and stop. |
 | `/ask TEXT` | Use the same local planner/coder/reviewer path as plain text; never create a GitHub issue. A bounded slice reaches RESULT and REVIEW, while clarify and initiative/feature planning retain their existing boundaries. CLI `roster ask` keeps its separate issue/draft behavior. |
-| `/model [MODEL]` | Show the current model or persist a new one to ignored `.roster/config.yml`. |
-| `/effort [l|m|h|x|none]` | Show effort or persist an explicit override to ignored `.roster/config.yml`; it wins over mode/retry defaults. |
+| `/model [ID\|clear] [--save]` | Show the session model and host, or change only this process. `--save` explicitly writes the private model setting; `clear` lets the next run route. |
+| `/effort [l|m|h|x|none|status]` | Show or select session effort without writing config; docs still cap at high and their truncation retry drops reasoning. |
+| `/provider` | Show the selected profile name and host, never a key. |
+| `/fleet` or `/fleet list` | List configured profile IDs, hosts, models and context capacities; no endpoint paths or catalog notes. |
+| `/fleet use ID` | Select an endpoint/model/context for this session only; do not write the catalog or saved default. |
+| `/fleet probe [ID] [--set-model [MODEL]]` | Read-only GET of `/v1/models`, listing IDs and reported context. Only explicit `--set-model` saves a listed model to private config; the shell does not rewrite fleet entries. Ambiguous model lists require a supplied ID. |
+| `/fleet add FLAGS` | Use existing non-TTY add flags. Terminal model/context questions use this readline interface and are not recorded as commands or submitted as asks. CLI interactive add behavior is unchanged. |
 | `/run N [--auto-model] [--confirm]` or `/run --issue N [--auto-model] [--confirm]` | Run an existing issue, initializing contracts before tests. Slices print the summary and continue. `--confirm` pauses; Enter resumes the prepared task in its worktree without another issue lookup, while `/stop` cancels. Feature/initiative writes PLAN only; clarify stops. Auto-model does not rewrite the saved default. |
 | `/retry` | Rerun the last plain or slash Ask or issue run in the same registered worktree. Preserve app changes, validate the unchanged assignment and branch, archive managed run artifacts, reuse a valid TASK/recipe, and never call worktree add for a retry. |
 | `/stop` | Immediately cancel an in-flight seat or a confirmed handoff, like one Ctrl+C. |
@@ -228,13 +233,14 @@ metadata. It does not write config, Task artifacts, or code. A successful
 models probe does not prove model weights are warm; the first chat may still
 need the full cold-start wait.
 
-`/model MODEL` and `/effort h` validate and atomically replace those
-fields in the private config, keeping other fields and comments. `/effort`
-also writes `llm.effort_override` so a human choice is not lost to automatic
-selection. `/effort x` sends max to local DeepSeek-V4.1 and xhigh to cloud
+`/model MODEL` and `/effort h` change the in-memory session, not files.
+`/model MODEL --save` atomically changes only the private model field, preserving
+saved endpoint settings and comments. Session fleet endpoints are not persisted
+as a side effect. `/effort` sets an in-memory `llm.effort_override` so a human
+choice is not lost to automatic selection. `/effort x` sends max to local DeepSeek-V4.1 and xhigh to cloud
 except for docs slices, which cap all choices at high;
 `/effort none` disables thinking. Remove the override field in private config
-to return to difficulty/model-prior defaults. The
+to return to difficulty/model-prior defaults in a later process. The
 updated values apply to the next `/run` in this shell. With no selected
 endpoint or profile, setting a model alone still leaves the stub active.
 
@@ -249,7 +255,9 @@ uses the preceding journaled coder effort raised one supported tier (never
 past max/xhigh, or high for docs slices), unless an explicit override exists. The task and minimum
 context are unchanged. No retry/model call is scheduled just by selecting
 effort, and no `reasoning_content` is persisted in seat memory.
-`/model clear` leaves the model empty. `/run N --auto-model` explicitly
+`/model clear` leaves only the session model empty and opts the next run into
+fleet routing; no eligible profile remains a stub, and an absent catalog needs
+onboarding. `/run N --auto-model` explicitly
 selects a registered fleet endpoint/model in memory, even if a saved
 default exists. It prefers at least three qualifying human evaluations,
 otherwise starting priors/class hints; the [routing guide](ROUTING.md)
@@ -258,8 +266,8 @@ endpoint is still an explicit error.
 Running `/model` or `/effort` without a value shows the current setting.
 Do not put API key values in the config; it remains ignored by Git.
 When [onboarding](ONBOARDING.md) saved a project private config, the shell
-loads it and `/model`/`/effort` update that file rather than the installed
-package's settings.
+loads it; only `/model ID --save` or an explicit probe `--set-model` changes
+the saved model. Plain model/effort/fleet selection never writes that file.
 
 The CLI equivalent is `roster status --issue N [--offline]`. Without an
 explicit number, status uses the current `issue-N` branch or a single issue
