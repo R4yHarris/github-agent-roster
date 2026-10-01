@@ -5,6 +5,7 @@ import { redactEvidence, taskSkipsTests } from './excellence.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
 import { applyReadmeStatus } from './readme-status.mjs';
 import { ContractsSubmoduleError, onlyMissingContractsScripts } from '../lib/contracts.mjs';
+import { UnsupportedFinishReasonError } from '../llm/finish-reason.mjs';
 
 class MalformedCoderTools extends Error {}
 export const testRepairBudget = 4;
@@ -142,7 +143,16 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
           },
         } },
       } : tool) : definitions;
-    const response = await chat({ messages, tools: currentDefinitions });
+    let response;
+    try {
+      response = await chat({ messages, tools: currentDefinitions });
+    } catch (error) {
+      progress.turns += Math.max(0, chat.lastAttempts - 1);
+      progress.response = chat.lastResponse ?? progress.response;
+      progress.usage = mergeUsage(...usages, chat.lastUsage);
+      throw error;
+    }
+    progress.turns += chat.lastAttempts - 1;
     progress.response = chat.lastResponse;
     usages.push(response.usage);
     progress.usage = mergeUsage(...usages);
@@ -223,7 +233,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     progress.tests = tests;
     const summary = deterministic ?? message.content.trim();
     const result = {
-      mode: 'llm', model: config.llm.model, summary, usage, turns: turn, tests, testsSkipped,
+      mode: 'llm', model: config.llm.model, summary, usage, turns: progress.turns, tests, testsSkipped,
       implementationPath: progress.implementationPath ?? 'model',
       testRepairs: progress.testRepairs, repairFiles: progress.repairFiles,
     };
@@ -263,6 +273,9 @@ export async function runLoop(options) {
     if (!(error instanceof Error)) throw error;
     if (error instanceof ContractsSubmoduleError) {
       return { ...progress, tests: error.tests, blocked: true, summary: error.message, error };
+    }
+    if (error instanceof UnsupportedFinishReasonError) {
+      return { ...progress, finishReason: error.finishReason, summary: error.message, error };
     }
     return { ...progress, summary: 'Coder execution stopped before a verified result.', error };
   }

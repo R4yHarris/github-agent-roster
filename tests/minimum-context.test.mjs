@@ -30,6 +30,85 @@ function fixture(t, metadata = { task_class: 'docs', difficulty: 1 }) {
   return { repoRoot, worktree, taskText, task: 'issue-92', session: 'roster-92-coder', config, env: {} };
 }
 
+test('truncated tool calls are not executed and the complete tool_calls retry is accepted', async (t) => {
+  const options = fixture(t);
+  let calls = 0;
+  const caps = [];
+  const result = await runCoder({ ...options, fetchImpl: async (_url, request) => {
+    calls += 1;
+    caps.push(JSON.parse(request.body).max_tokens);
+    if (calls === 2) {
+      assert.equal(readFileSync(join(options.worktree, 'README.md'), 'utf8'), '# Project\n');
+      assert.ok(!request.body.includes('PRIVATE_TRUNCATED_BODY'));
+    }
+    if (calls < 3) return Response.json({ choices: [{ finish_reason: calls === 1 ? 'length' : 'tool_calls',
+      message: { role: 'assistant', tool_calls: [{ id: 'readme', type: 'function', function: {
+        name: 'write_file', arguments: JSON.stringify({ path: 'README.md',
+          content: calls === 1 ? 'PRIVATE_TRUNCATED_BODY' : '# Project\n\n## Status\nActive.\n' }),
+      } }] } }] });
+    return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Added Status.' } }] });
+  }, runTestCommand: async () => ({ stdout: 'pass', stderr: '' }) });
+  assert.equal(result.excellence.pass, true);
+  assert.equal(result.turns, 3);
+  assert.deepEqual(caps, [2048, 1024, 1024]);
+  assert.doesNotMatch(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /PRIVATE_TRUNCATED_BODY/);
+});
+
+test('a README write survives one length retry and completes with a smaller cap', async (t) => {
+  const options = fixture(t);
+  const caps = [];
+  let calls = 0;
+  const result = await runCoder({ ...options, fetchImpl: async (_url, request) => {
+    calls += 1;
+    const body = JSON.parse(request.body);
+    caps.push(body.max_tokens);
+    if (calls === 1) return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+      role: 'assistant', tool_calls: [{ id: 'readme', type: 'function', function: {
+        name: 'write_file', arguments: JSON.stringify({ path: 'README.md', content: '# Project\n\n## Status\nActive.\n' }),
+      } }],
+    } }] });
+    if (calls === 3) assert.ok(!request.body.includes('PRIVATE_TRUNCATED_RESPONSE'));
+    return Response.json({ choices: [{ finish_reason: calls === 2 ? 'length' : 'stop', message: {
+      role: 'assistant', content: calls === 2 ? 'PRIVATE_TRUNCATED_RESPONSE' : 'Added Status.',
+    } }] });
+  }, runTestCommand: async () => ({ stdout: 'pass', stderr: '' }) });
+  assert.equal(result.excellence.pass, true);
+  assert.equal(result.turns, 3);
+  assert.deepEqual(caps, [2048, 2048, 1024]);
+  assert.match(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /## Status/);
+});
+
+test('an unknown finish reason after a README write fails review by name without printing its response', async (t) => {
+  const options = fixture(t);
+  let calls = 0;
+  let failed;
+  await assert.rejects(runCoder({ ...options, fetchImpl: async () => {
+    calls += 1;
+    if (calls === 1) return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+      role: 'assistant', tool_calls: [{ id: 'readme', type: 'function', function: {
+        name: 'write_file', arguments: JSON.stringify({ path: 'README.md', content: '# Project\n\n## Status\nActive.\n' }),
+      } }],
+    } }] });
+    return Response.json({ model: 'failed-response-model',
+      usage: { prompt_tokens: 17, completion_tokens: 9 },
+      choices: [{ finish_reason: 'eos_token', message: { role: 'assistant', content: 'PRIVATE_RESPONSE_BODY' } }] });
+  }, runTestCommand: () => assert.fail('An unknown finish reason must fail before tests') }), (error) => {
+    failed = error.result;
+    return /finish reason: eos_token/.test(error.message) && !error.message.includes('PRIVATE_RESPONSE_BODY');
+  });
+  assert.equal(calls, 2);
+  assert.equal(failed.finishReason, 'eos_token');
+  assert.equal(failed.run.env.AI_MODEL, 'failed-response-model');
+  assert.equal(failed.run.env.AI_CONTEXT_USED, '17');
+  assert.match(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /## Status/);
+  assert.doesNotMatch(readFileSync(failed.resultPath, 'utf8'), /PRIVATE_RESPONSE_BODY/);
+  const review = await runReviewer({ ...options, coderResult: failed,
+    fetchImpl: () => assert.fail('Failed finish reason must not request reviewer inference') });
+  assert.equal(review.verdict, 'fail');
+  assert.match(review.content, /Unsupported LLM finish reason: eos_token/);
+  assert.doesNotMatch(review.content, /PRIVATE_RESPONSE_BODY/);
+});
+
 test('an uninitialized contracts worktree writes blocked result and review without test-repair inference', async (t) => {
   const options = fixture(t, { task_class: 'fix', difficulty: 2 });
   writeFileSync(join(options.worktree, '.gitmodules'),

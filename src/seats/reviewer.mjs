@@ -135,6 +135,12 @@ export async function runReviewer({
         reasons: ['Coder HTTP timeout: the coder timed out before verification; review was not completed.'],
         security_notes: ['No passing implementation or completed review is available.'],
       };
+    } else if (coderResult.finishReason !== undefined) {
+      report = {
+        verdict: 'fail',
+        reasons: [`Unsupported LLM finish reason: ${coderResult.finishReason}.`],
+        security_notes: ['No passing implementation or completed review is available.'],
+      };
     } else if (coderResult.blocked === true) {
       report = {
         verdict: 'fail',

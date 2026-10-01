@@ -85,6 +85,13 @@ Reviewer start says `Checking the diff against the task.` These are status
 projections only: they do not add tools, checks, edits, or work. A stub coder
 says `Preparing the task summary.` rather than claiming an implementation.
 
+Unsupported LLM finish reasons are named in the shell and run log without
+printing response bodies. `stop` and `tool_calls` are accepted. The first
+`length` logs `Response truncated. Retrying.` and uses one extra model turn
+with half the completion cap and a concise-response instruction. Repeated
+truncation or another unsupported reason fails review with that reason,
+preserving any completed README write. This does not consume a test repair.
+
 Failed tests keep the coder running for up to four repair attempts after the
 initial failure. It reads a bounded, redacted summary, repairs allowed files
 plus any specifically identified failing test, and reruns `node --test`.
