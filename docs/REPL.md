@@ -123,6 +123,19 @@ comes from the reviewed result; without a run, the conventional subject
 describes the staged changes. Issue-run bodies also list the three seats and
 disclose a bypass.
 
+After a passing reviewer, the run prints its worktree and `git diff --stat`,
+then the exact human evaluation command for `roster-N-coder`. Issue publication
+uses the coder model and token counts from its persisted runs JSONL row, not
+Copilot defaults; a missing/mismatched row refuses publication. Bodies use
+`Refs #N` and the issue remains open. After a confirmed merge, the human runs:
+
+```sh
+roster eval roster-N-coder accept 1 n --minutes M
+```
+
+Replace N with the issue number and M with actual minutes. This is only a hint:
+Roster does not execute it or generate AI-Eval on the human's behalf.
+
 Setting only one App variable is an error. An HTTP 422 response from
 `--merge-when-green` stops the shell and reports that Checks permission is
 not accepted on the installation; there is no human-credential fallback.

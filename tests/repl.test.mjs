@@ -317,6 +317,7 @@ test('/publish prints the SDK command without App env and uses the reviewed work
   assert.equal(calls[2][1].run, withApp.state.lastRun.runs.coder);
   assert.match(calls[2][1].runLine, /\|roster-42-coder\|issue-42$/);
   assert.match(withApp.output.text, /left it open for human AI-Eval/);
+  assert.match(withApp.output.text, /roster eval roster-42-coder accept 1 n --minutes M/);
   await assert.rejects(withApp.dispatch('/publish'), /already published/);
 });
 
