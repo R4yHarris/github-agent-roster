@@ -34,7 +34,7 @@ test('offline status reads the cached issue and worktree without invoking gh or 
     issue: { number: 42, title: 'Fix status', state: 'UNKNOWN',
       url: 'https://github.com/example/project/issues/42' },
     openPr: undefined, worktreePath, worktreeExists: true, offline: true,
-    branch: 'issue-42', artifacts: { 'TASK.md': false, 'RECIPE.yml': false, 'RESULT.md': false, 'REVIEW.md': false },
+    branch: 'issue-42', artifacts: { 'TASK.md': false, 'RECIPE.yml': false, 'PLAN.md': false, 'RESULT.md': false, 'REVIEW.md': false },
     lastRun: null,
   });
   assert.match(formatStatus(status), /Issue: #42 Fix status \(UNKNOWN\)/);
@@ -58,7 +58,7 @@ test('online status fetches the issue and its open branch PR from the current or
     },
   });
   assert.deepEqual(status, { issue, openPr: pr, worktreePath, worktreeExists: true, offline: false,
-    branch: 'issue-42', artifacts: { 'TASK.md': false, 'RECIPE.yml': false, 'RESULT.md': false, 'REVIEW.md': false },
+    branch: 'issue-42', artifacts: { 'TASK.md': false, 'RECIPE.yml': false, 'PLAN.md': false, 'RESULT.md': false, 'REVIEW.md': false },
     lastRun: null });
   assert.deepEqual(calls, [
     { program: 'git', args: ['remote', 'get-url', 'origin'], cwd: repoRoot },
@@ -79,7 +79,7 @@ test('offline status reports missing cache and unknown PR instead of claiming th
   assert.equal(formatStatus(status),
     `Issue: #42 (not cached offline)\nOpen PR: unknown (offline)\nBranch: issue-42\nWorktree: ${worktreePath} (missing)\n` +
     'Last seat: unknown (no run log)\nLast log line: none\nLast error class: -\n' +
-    'Artifacts: TASK.md=no RECIPE.yml=no RESULT.md=no REVIEW.md=no\n' +
+    'Artifacts: TASK.md=no RECIPE.yml=no PLAN.md=no RESULT.md=no REVIEW.md=no\n' +
     'Last run: model=- prompt_tokens=- completion_tokens=- context_max=-\n');
 });
 
@@ -101,7 +101,7 @@ test('offline status shows active seat activity while the run has not yet finish
 
 test('offline status includes artifact flags, latest measured row, and last error class', async (t) => {
   const { repoRoot, worktreePath } = fixture(t);
-  for (const name of ['TASK.md', 'RECIPE.yml', 'RESULT.md', 'REVIEW.md']) writeFileSync(join(worktreePath, name), 'fixture');
+  for (const name of ['TASK.md', 'RECIPE.yml', 'PLAN.md', 'RESULT.md', 'REVIEW.md']) writeFileSync(join(worktreePath, name), 'fixture');
   mkdirSync(join(repoRoot, '.roster', 'runs'), { recursive: true });
   writeFileSync(join(repoRoot, '.roster', 'runs', 'runs.jsonl'), JSON.stringify({
     session: 'roster-42-coder', task: 'issue-42', provider: 'vllm', model: 'deepseek-v4.1-flash',

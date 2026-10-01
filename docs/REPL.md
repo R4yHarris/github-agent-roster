@@ -10,10 +10,10 @@ agents and CI.
 
 | Command | Behavior |
 | --- | --- |
-| `/ask TEXT` | Create an issue through `gh`, or write a local Ask, recipe, task, and create command when `gh` is missing. |
+| `/ask TEXT` | Classify Ask, then create its parent issue through `gh`, or save an offline slice TASK/recipe or planning-only PLAN. A `clarify` Ask stops with outcome/file-scope guidance. |
 | `/model [MODEL]` | Show the current model or persist a new one to ignored `.roster/config.yml`. |
 | `/effort [l|m|h|x]` | Show the current effort or persist a new level to ignored `.roster/config.yml`. |
-| `/run N [--auto-model]` or `/run --issue N [--auto-model]` | Run builtin planner, coder, then read-only reviewer in one issue worktree. The optional flag chooses a registered fleet profile from qualifying human evaluations or starting priors without rewriting the saved default; no eligible profile leaves an unverified stub. |
+| `/run N [--auto-model]` or `/run --issue N [--auto-model]` | Classify before seats. Slices use planner/coder/read-only-reviewer; feature/initiative writes PLAN only; clarify stops. The optional flag chooses a registered fleet profile without rewriting the saved default; no eligible profile uses the deterministic stub. |
 | `/status [N] [--offline]` | Show an issue, its open branch PR, and worktree path. Defaults to the last run or created issue; offline reads only the cached assignment and reports PR state as unknown. |
 | `/log N` | Tail up to 50 safe metadata lines from each local `.roster/runs/roster-N-*.log`, without network or seat execution. |
 | `/eval TARGET accept\|reject\|rework 1-5 y\|n [--minutes N] [--comment "TEXT"]` | Record the [human retrospective](RETRO.md), including actual minutes and local feedback. |
@@ -38,7 +38,7 @@ the assignment/environment are preserved. An existing branch is never passed
 to `git worktree add -b`. Malformed planner tool output is repaired once; if it
 still cannot be decoded, RECIPE/TASK stubs and a clear error are written, coding
 and publication stay disabled, and `/help`, `/quit`, or a later `/run` still work.
-When the existing RECIPE/TASK validate for the issue, `/run N` preserves them
+For a slice, when the existing RECIPE/TASK validate for the issue, `/run N` preserves them
 and skips planner execution entirely. A complete newly written TASK also ends
 planning immediately instead of consuming another turn for confirmation.
 Heading case and the `Original Ask`, `Acceptance Checks`/`acceptance_checks`,
@@ -52,12 +52,22 @@ Cached Ask matching uses the issue title or first substantive body line after
 whitespace/backtick/template normalization. A valid cached handoff makes no
 planner/model request; an empty Original Ask never qualifies.
 
-The senior-team default uses Ask, TASK outcome/scope/checks, two small skills,
-final tests/excellence, read-only review, and a human eval hint. Difficulty1-2
-and all docs tasks do not load research or implementation packs. Only feat>=4
-can use them. If scope was inferred or the Ask states multiple Outcomes, the
-first run writes a validated planning handoff and stops; review it and issue
-`/run N` again. A planning-only handoff cannot be published, even with a
+`Ask kind: clarify | slice | feature | initiative` is determined before seats,
+separately from task class and model/difficulty. A README one-liner is a slice;
+"build an orchestrator" is an initiative, not a README edit. Features write
+2-5 child issue drafts in PLAN.md; initiatives write outcomes, waves, and
+issues in PLAN.md only. Waves are issue labels (`wave:N`), not another queue.
+No coder/reviewer/tests/publisher or automatic child issue creation occurs
+on these planning-only runs. Review the drafts on GitHub and create bounded
+slice issues, then `/run` those issues; rerunning the parent only plans again.
+
+The slice senior-team default uses Ask, TASK outcome/scope/checks, two small
+skills, final tests/excellence, read-only review, and a human eval hint.
+Classified slices do not load research/implementation packs, even at
+feat difficulty4+. If slice scope was inferred, the first run writes a
+validated TASK handoff and stops; review it and issue `/run N` again.
+Multiple Outcomes now take the feature PLAN path instead.
+A planning-only handoff or clarification cannot publish, even with a
 review bypass. No file scope is invented for an Ask that names no files.
 
 `/run N` streams timestamped seat activity to stderr immediately, independently
@@ -68,7 +78,7 @@ milliseconds. No prompts, completions, file bodies, keys, or upstream error
 messages are logged. `/status N --offline` reads a bounded local tail and shows
 the last seat and last complete line; it does not contact GitHub.
 Offline status also shows the expected issue branch, last error class, whether
-TASK/RECIPE/RESULT/REVIEW exist, and the latest matching JSONL model and prompt/
+TASK/RECIPE/PLAN/RESULT/REVIEW exist, and the latest matching JSONL model and prompt/
 completion counts. Unknown counts stay `-`, never invented zero. `/log N`
 reads every matching seat log with a bounded tail; builtin runs already persist
 their stderr events into those files, so no transcript reconstruction is needed.

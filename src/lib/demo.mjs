@@ -10,6 +10,7 @@ import { runPlanner } from '../seats/planner.mjs';
 import { runReviewer } from '../seats/reviewer.mjs';
 import { loadConfig } from './config.mjs';
 import { ensureLocalPath } from './paths.mjs';
+import { classifyAsk, clarificationHint } from '../planner/classify.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
 
@@ -51,6 +52,10 @@ export async function runDemo({
     if (ask.includes('{{ASK}}')) throw new Error('Ask file contains an unresolved {{ASK}} placeholder');
     title = ask.split('\n').find((line) => line.trim() && !line.startsWith('#')) ?? path.basename(file);
   }
+  const askKind = classifyAsk(ask, { title }).kind;
+  if (askKind === 'clarify') {
+    return { askKind, planningOnly: true, clarification: clarificationHint, mode: 'clarify' };
+  }
   const stubConfig = { ...config, llm: { ...config.llm, base_url: '', model: '', profile: '' } };
   const id = randomBytes(8).toString('hex');
   const task = `demo-${id}`;
@@ -67,20 +72,23 @@ export async function runDemo({
     const planner = await runPlanner({
       worktree: worktreePath, repoRoot, ask, title, reference: `local:${task}`,
       task, session: `roster-${task}-planner`, config: stubConfig, env: {},
-      fetchImpl: () => { throw new Error('Stub planner must not contact an LLM'); },
+      fetchImpl: () => { throw new Error('Stub planner must not contact an LLM'); }, askKind,
     });
+    if (askKind !== 'slice') {
+      return { worktreePath, askKind, planPath: planner.planPath, planningOnly: true, mode: 'stub' };
+    }
     const coder = await runCoder({
       worktree: worktreePath, repoRoot, config: stubConfig, task,
       session: `roster-${task}-coder`, env: {},
       priorFeedback: planner.feedback?.context,
       fetchImpl: () => { throw new Error('Stub coder must not contact an LLM'); },
-      runTestCommand: () => { throw new Error('Stub coder must not run tests'); },
+      runTestCommand: () => { throw new Error('Stub coder must not run tests'); }, askKind,
     });
     const review = await runReviewer({
-      worktree: worktreePath, repoRoot, config: stubConfig, coderResult: coder, env: {},
+      worktree: worktreePath, repoRoot, config: stubConfig, coderResult: coder, env: {}, askKind,
     });
     return {
-      worktreePath, recipePath: planner.recipePath, taskPath: planner.taskPath,
+      worktreePath, askKind, recipePath: planner.recipePath, taskPath: planner.taskPath,
       resultPath: coder.resultPath, reviewPath: review.reviewPath, mode: coder.mode,
     };
   } catch (error) {

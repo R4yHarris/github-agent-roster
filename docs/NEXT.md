@@ -32,7 +32,9 @@ selection above remains available outside that explicit routing path.
 ## Prior feedback
 
 If a matching evaluation exists, the second task's generated `CONTEXT.md`
-may contain `## Prior feedback` on the complex feat>=4 context path. Ordinary
+may contain `## Prior feedback` on the unclassified complex feat>=4 context path. Classified
+slices always use the minimum pack, and feature/initiative runs stop at PLAN.md.
+Ordinary
 minimum packs omit this model input while retaining factual memory/evaluation
 records in the harness. When supplied, it summarizes the latest human verdict
 and copies the last nonempty reject/rework comment for the same task class,

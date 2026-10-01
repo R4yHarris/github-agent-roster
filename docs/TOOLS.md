@@ -17,7 +17,7 @@ five functions:
 
 ## Planner artifact writer
 
-A configured planner in an issue worktree receives only `write_file`.
+A configured slice planner in an issue worktree receives only `write_file`.
 Its path schema and runtime guard allow exactly `RECIPE.yml`, `TASK.md`,
 and `ESTIMATE.md` at that root, not directories, aliases, absolute paths,
 app files, or other managed files. Planner scope does not inherit the
@@ -25,6 +25,16 @@ coder's `files_allowed` patterns. Each UTF-8 artifact is bounded to 64 KiB;
 only drafts created by this writer may be replaced. Pre-existing files,
 symlinks, hard links, and externally modified drafts are refused.
 Known credentials and private-key material cannot be persisted in drafts.
+
+Feature and initiative planners instead return bounded, validated JSON without
+model-invokable tools. Their harness writer permits only root PLAN.md, not
+TASK/recipe/estimate, directories, or app code. Features must contain 2-5
+distinct child issue drafts; initiatives contain outcomes, waves, and issues.
+`wave:N` labels are generated from contiguous positive wave numbers. Optional
+child file lists cannot exceed human-named scope, and unknown scope remains a
+human clarification, not a wildcard. One invalid JSON/shape correction is
+allowed within the planner budget; failure is explicit and never starts coder.
+The same regular-file/link/size/credential protections apply to PLAN writes.
 
 The bounded planner loop returns tool results and denials to the model,
 redacting known credentials from error messages and replayed tool-call history.
@@ -42,7 +52,7 @@ headings in any order, with other sections such as Scope retained. They must
 contain the issue Ask text and pass the
 same title, metadata, acceptance-check, allowed-path, and routed-model checks.
 Wrapped Markdown list items are joined before validating checks. Root
-RECIPE.yml, TASK.md, and ESTIMATE.md entries describe planner bookkeeping only;
+RECIPE.yml, TASK.md, ESTIMATE.md, and PLAN.md entries describe planner bookkeeping only;
 they are excluded from application scope and never writable by the coder.
 The harness finalizes the managed recipe/task/estimate through this writer;
 recipe topology and estimation evidence remain harness-owned, not model grants.
@@ -95,7 +105,7 @@ All file tools deny `.env`, `.env.*`, and `*.env` anywhere, `*.pem`, vault
 storage under `.roster/vault`, Git metadata,
 `agent-policy.yml`, `.github/workflows`, or the pinned
 `vendor/github-agent-contracts` dependency. Root `ASSIGNMENT.md`,
-`RECIPE.yml`, `TASK.md`, `CONTEXT.md`, `RESEARCH.md`, `ESTIMATE.md`,
+`RECIPE.yml`, `TASK.md`, `PLAN.md`, `CONTEXT.md`, `RESEARCH.md`, `ESTIMATE.md`,
 `RESULT.md`, and `REVIEW.md` are managed files that the coder
 cannot rewrite. `list_dir` refuses protected paths and hides their names
 when listing a parent. Policy and workflow bodies are no longer readable

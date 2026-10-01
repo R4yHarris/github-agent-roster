@@ -2,7 +2,7 @@ import { basename, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { Writable } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { submitAsk } from './lib/ask.mjs';
+import { formatAsk, submitAsk } from './lib/ask.mjs';
 import { prepareBuiltinPublication, runBuiltinIssue } from './lib/builtin.mjs';
 import {
   commentMergedIssue, mergedPullNumber, mergedPullNumberFromFailure,
@@ -140,9 +140,7 @@ export function createDispatcher({
         if (!args) throw new TypeError('Use /ask TEXT.');
         const ask = await api.submitAsk(args, { cwd, repoRoot, config: state.config, env });
         state.lastAsk = ask;
-        output.write(ask.mode === 'issue'
-          ? `Issue: ${ask.url}\n`
-          : `Ask: ${ask.askPath}\nRECIPE: ${ask.recipePath}\nTASK: ${ask.taskPath}\nNext: ${ask.command}\n`);
+        output.write(formatAsk(ask));
         return true;
       }
       case 'model': {
@@ -168,6 +166,7 @@ export function createDispatcher({
         if (!issue) throw new TypeError('Use /run N [--auto-model] or /run --issue N [--auto-model].');
         const autoModel = args.endsWith(' --auto-model');
         const messages = [];
+        state.lastRun = { planningOnly: true, failed: true, askKind: 'clarify', command: null };
         state.lastRun = await api.runBuiltinIssue(issue[1], {
           cwd, repoRoot, config: state.config, env, publish: false, autoModel,
           log: (message) => messages.push(message), errorOutput,
@@ -180,7 +179,11 @@ export function createDispatcher({
             ? message.replace(command, `${command} --merge-when-green`)
             : message}\n`);
         }
-        output.write(state.lastRun.planningOnly
+        output.write(state.lastRun.askKind === 'clarify'
+          ? `${state.lastRun.clarification}\n`
+          : state.lastRun.planPath
+          ? 'PLAN ready; review and create the child issue drafts on GitHub, then /run each slice. This issue will not run coder.\n'
+          : state.lastRun.planningOnly
           ? `TASK validates; review its outcome/scope, then /run ${state.lastRun.issue.number} to start coder.\n`
           : state.lastRun.failed
           ? 'Planning failed; stubs are unverified and publication is disabled. Fix the endpoint output, then retry /run.\n'
@@ -217,6 +220,9 @@ export function createDispatcher({
       }
       case 'publish': {
         requirePublicationEnabled(state.config);
+        if (state.lastRun?.askKind && state.lastRun.askKind !== 'slice') {
+          throw new Error('Planning-only PLAN or clarification is not code to publish; create and run a bounded slice first.');
+        }
         if (state.lastRun?.planningOnly) throw new Error('Planning-only TASK is not code to publish; /run the validated task first.');
         if (state.lastRun && state.published) {
           throw new Error('This run was already published; start another /run before publishing again.');

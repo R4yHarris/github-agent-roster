@@ -7,18 +7,48 @@ dependency is needed. Use Node 20+ ESM.
 
 ## Agile mapping
 
-An **epic** is the GitHub issue containing the Ask, a **story** is the
-generated `TASK.md` with acceptance checks and allowed paths, and a **seat**
-is its assigned owner. One issue produces one task in this sequential loop:
+GitHub issues and PRs are the board and forge. Before any seat runs, the
+Ask is classified independently of `task_class` (`feat|fix|docs|test`) and
+difficulty:
+
+| Ask kind | Execution |
+| --- | --- |
+| `clarify` | Stop with a concrete outcome/file-scope clarification. No model seat, implementation, or publication. |
+| `slice` | One bounded outcome uses the minimum planner/coder/read-only-reviewer loop. A valid cached TASK/recipe skips planner. |
+| `feature` | Planner writes `PLAN.md` with **2-5 child issue drafts**. No coder, reviewer, tests, or publication in this run. |
+| `initiative` | Planner writes `PLAN.md` only: outcomes, waves, and child issue drafts. No coder or application edits. |
+
+Classification is deterministic and conservative, not an extra model call:
+a README one-liner or named-file task is a slice; multiple explicit `Outcomes`
+or an explicit feature/end-to-end request is a feature; "build an orchestrator",
+more than five declared outcomes, or a whole-system/multi-wave initiative is
+an initiative. Merely mentioning
+these words in documentation or acceptance checks does not change the kind.
+Missing executable scope or unclear planning intent yields `clarify`, never
+an invented file allowlist. A validated existing TASK can supply slice scope,
+but cannot turn a feature or initiative into a coder run.
 
 ```text
-Issue or shell /ask -> RECIPE.yml -> TASK.md -> planner then coder -> PR -> human AI-Eval
+Ask -> classify
+  clarify -> human clarification
+  slice -> RECIPE.yml + TASK.md -> coder -> reviewer -> reviewed App PR -> human AI-Eval
+  feature / initiative -> planner -> PLAN.md -> human-created GitHub child issues
 ```
 
-The planner writes only the recipe and task; the coder implements that task
-without rewriting the plan. A reviewer seat is documented as a future role,
-not executed in v0; the human reviews the PR. GitHub Issues and PRs are the
-board and forge, not a separate Kanban database.
+Plans are bounded Markdown drafts, not another task board. Each draft has a
+title, one outcome, acceptance checks, and an issue label such as `wave:1`;
+the Waves section groups those drafts by label. File scope may only come from
+human-named paths. When unknown, the draft says to obtain explicit allowed
+files before generating an executable TASK. Review the drafts and create
+child issues on GitHub, then `/run` each slice separately. Repeating the parent
+feature/initiative run only plans again; it never executes the whole plan.
+No issues or labels are created automatically, and `--publish` or a review
+bypass cannot publish planning-only output.
+
+The same classification applies to offline Ask drafts, Ask-file demos, and
+standalone TASK execution. Empty endpoints remain deterministic stubs.
+Prior generated PLAN/task/run files are archived when reusing an issue
+worktree; application edits and assignment/environment are preserved.
 
 ## Configuration
 
@@ -48,9 +78,11 @@ without editing the tracked example or storing credentials.
   provenance for AI-Run. They are not guessed from the endpoint or sent as a
   model-specific reasoning parameter.
 - `planner.turn_budget` bounds planning chat responses to 1-64 (example: 2).
-  The issue-worktree planner has only artifact-scoped `write_file` for root
+  The slice planner has only artifact-scoped `write_file` for root
   `RECIPE.yml`, `TASK.md`, and `ESTIMATE.md`; no app-code tools. The harness
   validates and finalizes those files. Tool replies and repairs consume turns.
+  Feature/initiative planning instead uses tool-free JSON and a PLAN-only
+  harness writer, with at most one correction inside that budget.
   Private schema 1 configs predating the planner section use a one-turn planner.
 - `seat.id` and `seat.principal` are both `coder`. The principal does not confer
   merge or deploy rights. `seat.turn_budget` limits coder responses to 1-64
@@ -81,11 +113,12 @@ capabilities. The coder's recipe labels expand to the
 roster ask "Add a Status section to README.md"
 ```
 
-When `gh` is installed, this creates an issue in the current GitHub origin
+For a non-clarification Ask, when `gh` is installed, this creates an issue in the current GitHub origin
 using the first Ask line as its title and the Ask as its body, then prints
 the issue URL. It does not plan locally first. A failed authenticated issue
 creation is an error, not an offline fallback. When `gh` is missing, it
-writes `.roster/asks/<id>.md` and adjacent `RECIPE.yml` and `TASK.md`, then
+writes `.roster/asks/<id>.md` and adjacent slice `RECIPE.yml` and `TASK.md`
+(or feature/initiative `PLAN.md`), then
 prints a `gh issue create --body-file` command for later use. The offline
 draft uses the deterministic stub even if an LLM endpoint is configured:
 it makes no network request. A local draft uses `ask: local:<id>`; a real
@@ -94,8 +127,8 @@ Git repository; its body file path is absolute. The stub uses the first ask
 line as the title, picks up
 explicit **Acceptance checks** and **Files allowed** bullet sections when
 present, and otherwise lists `node --test exits 0` plus the Ask, with
-referenced filenames or `**/*` subject to the tool denylist. Review broad
-draft scopes before running a real issue. With an LLM, only a configured
+human-named filenames subject to the tool denylist. No wildcard is invented
+for absent scope. With an LLM, only a configured
 `base_url` triggers a chat request; the model proposes a title (the issue title
 takes precedence), short acceptance checks, and allowed worktree paths, which
 are validated before writing the task.

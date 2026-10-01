@@ -6,8 +6,9 @@ import { promisify } from 'node:util';
 import { redactSecrets } from './memory.mjs';
 
 const execute = promisify(execFile);
-const managedFiles = new Set(['assignment.md', 'task.md', 'recipe.yml', 'context.md', 'research.md', 'result.md', 'review.md', 'estimate.md']);
+const managedFiles = new Set(['assignment.md', 'task.md', 'recipe.yml', 'plan.md', 'context.md', 'research.md', 'result.md', 'review.md', 'estimate.md']);
 export const plannerArtifactFiles = Object.freeze(['RECIPE.yml', 'TASK.md', 'ESTIMATE.md']);
+export const planArtifactFiles = Object.freeze(['PLAN.md']);
 
 function partsOf(file) {
   return file.replaceAll('\\', '/').toLowerCase().split('/');
@@ -152,6 +153,7 @@ export async function createTools({
   worktree,
   allowedFiles,
   seat = 'coder',
+  plannerArtifacts = plannerArtifactFiles,
   env = process.env,
   apiKeyEnv = 'ROSTER_API_KEY',
   memoryPath,
@@ -160,6 +162,10 @@ export async function createTools({
   onEvent,
 } = {}) {
   if (!['planner', 'coder'].includes(seat)) throw new TypeError('Only planner and coder seats have file tools');
+  if (seat === 'planner' && (!Array.isArray(plannerArtifacts) || !plannerArtifacts.length ||
+      plannerArtifacts.some((name) => ![...plannerArtifactFiles, ...planArtifactFiles].includes(name)))) {
+    throw new TypeError('Planner scope must contain only known root planning artifacts');
+  }
   if (typeof allowRunTest !== 'boolean') throw new TypeError('run_test permission must be a boolean');
   if (onEvent !== undefined && typeof onEvent !== 'function') throw new TypeError('Live tool observer must be a function');
   const root = path.resolve(worktree);
@@ -187,11 +193,11 @@ export async function createTools({
       throw new Error('Tool path must stay inside the worktree');
     }
     const normalized = relative.split(path.sep).join('/');
-    const allowed = seat === 'planner' ? plannerArtifactFiles.includes(input) : isAllowedFile(normalized, allowedFiles);
+    const allowed = seat === 'planner' ? plannerArtifacts.includes(input) : isAllowedFile(normalized, allowedFiles);
     if (write && (!allowed ||
         (memoryPath && path.relative(file, path.resolve(memoryPath)) === ''))) {
       throw new Error(seat === 'planner'
-        ? 'Planner write_file allows only root RECIPE.yml, TASK.md, and ESTIMATE.md'
+        ? `Planner write_file allows only root ${plannerArtifacts.join(', ').replace(/, ([^,]+)$/, ', and $1')}`
         : `Writing ${normalized} is not allowed by TASK.md or worktree policy`);
     }
     if (isForbiddenRead(normalized)) {
@@ -381,7 +387,7 @@ export async function createTools({
     const location = args?.path ?? (['list_dir', 'search_text'].includes(name) ? '.' : undefined);
     await onEvent({ type: 'tool', name, ...(location === undefined ? {} : { path: location }) });
     const result = await execute(args);
-    if (name === 'write_file' && plannerArtifactFiles.includes(result.path)) {
+    if (name === 'write_file' && [...plannerArtifactFiles, ...planArtifactFiles].includes(result.path)) {
       await onEvent({ type: 'wrote', path: result.path });
     }
     return result;

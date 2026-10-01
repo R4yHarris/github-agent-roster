@@ -102,7 +102,7 @@ function formatReview({ verdict, reasons, securityNotes }) {
 }
 
 export async function runReviewer({
-  worktree, repoRoot, config, coderResult, env = process.env, fetchImpl, vault, onEvent,
+  worktree, repoRoot, config, coderResult, env = process.env, fetchImpl, vault, onEvent, askKind,
 } = {}) {
   if (typeof worktree !== 'string' || typeof repoRoot !== 'string' ||
       typeof coderResult?.resultPath !== 'string' || !config?.llm || !config.seat) {
@@ -120,7 +120,7 @@ export async function runReviewer({
     const [task, result] = await Promise.all([
       readRegularText(worktree, 'TASK.md'), readRegularText(worktree, 'RESULT.md'),
     ]);
-    const principal = taskContextPolicy(task).minimum ? null : await loadPrincipal({ repoRoot, id: 'reviewer' });
+    const principal = taskContextPolicy(task, { askKind }).minimum ? null : await loadPrincipal({ repoRoot, id: 'reviewer' });
     taskDigest = createHash('sha256').update(task).digest('hex');
     resultDigest = createHash('sha256').update(result).digest('hex');
     if (path.resolve(coderResult.resultPath) !== path.resolve(worktree, 'RESULT.md')) {

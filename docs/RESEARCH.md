@@ -4,7 +4,11 @@ Ordinary tasks use the [minimum team path](SEAT.md#minimum-enforced-senior-team-
 they do not create/load RESEARCH.md or make the optional research model call.
 Read-before-write happens directly through scoped tools, with small-diff and
 the usual tests/path/secret excellence guards. Only `feat` tasks with difficulty
->=4 may use the research sequence below; docs tasks never do. before editing
+>=4 may use the research sequence below; docs tasks never do. Classified
+slices always stay minimum, even at feat>=4. Features and initiatives write
+PLAN.md without invoking coder, so they do not create RESEARCH.md either.
+The optional sequence below remains available to unclassified lower-level
+coder/context callers, not as permission to implement a whole plan.
 
 The [coder seat](../src/seats/coder.mjs) awaits a
 [read-only research step](../src/runtime/research.mjs) after its context pack

@@ -157,7 +157,7 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
   assert.equal(result.run, result.runs.coder);
   assert.equal(result.result.mode, 'stub');
   assert.equal(result.command, null);
-  assert.match(logs[0], /Publication unavailable: set model/);
+  assert.match(logs.join('\n'), /Publication unavailable: set model/);
   assert.equal((logs[0].match(/AI-Run:/g) ?? []).length, 0);
   assert.deepEqual(result.runs, { planner: null, coder: null, reviewer: null });
   assert.deepEqual(options.calls.map(({ program }) => program), ['git', 'git', 'gh', 'git', 'git', 'git']);
@@ -253,6 +253,7 @@ test('a valid existing issue-92 RECIPE/TASK skips the planner and starts the sco
     runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
   });
   assert.equal(calls, 2, 'Only coder turns should reach this mock');
+  assert.equal(result.askKind, 'slice');
   assert.equal(result.planner.reused, true);
   assert.equal(result.reused, true);
   assert.equal(result.worktreePath, worktree);
@@ -301,6 +302,149 @@ test('an inferred-scope Ask writes a validated TASK then stops until the next ex
   assert.equal(next.planner.reused, true);
   assert.equal(next.planningOnly, undefined);
   assert.equal(next.result.mode, 'stub');
+});
+
+test('README one-liner runs the sequential slice seats with minimum pack even at feat difficulty4', async (context) => {
+  const options = fixture(context);
+  options.issue.body = renderIssueBody(options.issue.body, { task_class: 'feat', difficulty: 4 });
+  const result = await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {},
+    fetchImpl: () => assert.fail('Stub slice must not call a model') });
+  assert.equal(result.askKind, 'slice');
+  assert.deepEqual([...options.stderr.matchAll(/start seat (planner|coder|reviewer)/g)].map((match) => match[1]),
+    ['planner', 'coder', 'reviewer']);
+  assert.equal(result.result.stages.includes('research'), false);
+  assert.equal(existsSync(path.join(result.worktreePath, 'RESEARCH.md')), false);
+  const pack = readFileSync(result.result.contextPath, 'utf8');
+  assert.ok(pack.length < 3500, `Slice minimum pack grew to ${pack.length} characters`);
+  assert.match(pack, /## Issue Ask[\s\S]*# Outcome:/);
+  assert.match(pack, /read-before-write[\s\S]*small-diff/);
+  assert.doesNotMatch(pack, /## Principal|## AGENTS|## Seat memory|## Prior feedback|implement-task/);
+  assert.equal(existsSync(path.join(result.worktreePath, 'PLAN.md')), false);
+});
+
+test('build an orchestrator produces initiative PLAN only and cannot edit README or publish', async (context) => {
+  const options = fixture(context);
+  options.issue.title = 'build an orchestrator';
+  options.issue.body = renderIssueBody('build an orchestrator');
+  const worktree = path.join(options.target, '.worktrees', 'issue-42');
+  git(options.target, 'worktree', 'add', '-b', 'issue-42', worktree);
+  const before = readFileSync(path.join(worktree, 'README.md'));
+  const result = await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {},
+    fetchImpl: () => assert.fail('Stub initiative must not contact a model'),
+    runTestCommand: () => assert.fail('Initiative must not run coder tests'),
+    publisher: () => assert.fail('Initiative must not publish'),
+    issueCommenter: () => assert.fail('Initiative must not create issues or PR comments'),
+  });
+  assert.equal(result.askKind, 'initiative');
+  assert.equal(result.planningOnly, true);
+  assert.equal(result.command, null);
+  assert.equal(result.runs.coder, null);
+  assert.equal(result.runs.reviewer, null);
+  assert.equal(result.result, undefined);
+  assert.deepEqual(readFileSync(path.join(result.worktreePath, 'README.md')), before);
+  assert.equal(git(result.worktreePath, 'diff', '--name-only'), '');
+  for (const name of ['TASK.md', 'RECIPE.yml', 'ESTIMATE.md', 'CONTEXT.md', 'RESEARCH.md', 'RESULT.md', 'REVIEW.md']) {
+    assert.equal(existsSync(path.join(result.worktreePath, name)), false, name);
+  }
+  const plan = readFileSync(result.planPath, 'utf8');
+  assert.match(plan, /Ask kind: initiative[\s\S]*## Outcomes[\s\S]*## Waves[\s\S]*## Child issue drafts/);
+  assert.match(plan, /Labels: `wave:1`/);
+  assert.doesNotMatch(plan, /README\.md|\*\*\/\*/);
+  assert.match(options.stderr, /start seat planner[\s\S]*tool write_file path="PLAN\.md"[\s\S]*wrote PLAN\.md/);
+  assert.doesNotMatch(options.stderr, /start seat coder|start seat reviewer|tool run_test|build an orchestrator/);
+  assert.deepEqual(loadLearning({ cwd: options.target }).runs.map(({ session }) => session), ['roster-42-planner']);
+  const status = await readStatus({ issue: 42, offline: true, repoRoot: options.target, config: stubConfig });
+  assert.equal(status.artifacts['PLAN.md'], true);
+  assert.equal(status.runLog.lastSeat, 'planner');
+  assert.ok(status.runLog.lines.some((line) => line.endsWith('wrote PLAN.md')));
+  assert.match(formatStatus(status), /PLAN\.md=yes/);
+  await assert.rejects(prepareBuiltinPublication(result, { config: stubConfig, skipReview: true, env: options.env }),
+    /Planning-only output is not code/);
+});
+
+test('an initiative cannot consume even a valid cached TASK and prior PLAN is archived on repeat planning', async (context) => {
+  const options = fixture(context);
+  options.issue.title = 'build an orchestrator';
+  options.issue.body = 'build an orchestrator.\n\n## Allowed files\n- `README.md`';
+  const worktree = path.join(options.target, '.worktrees', 'issue-42');
+  git(options.target, 'worktree', 'add', '-b', 'issue-42', worktree);
+  const before = readFileSync(path.join(worktree, 'README.md'));
+  const cached = planStub(options.issue.body, { title: options.issue.title, reference: 'issue:42' });
+  writeFileSync(path.join(worktree, 'TASK.md'), cached.task);
+  writeFileSync(path.join(worktree, 'RECIPE.yml'), cached.recipe);
+  const first = await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {},
+    runTestCommand: () => assert.fail('Cached initiative cannot become a coder task') });
+  assert.equal(first.askKind, 'initiative');
+  assert.equal(first.planner.reused, undefined);
+  assert.equal(readFileSync(path.join(first.archivePath, 'TASK.md'), 'utf8'), cached.task);
+  assert.equal(existsSync(path.join(worktree, 'TASK.md')), false);
+  const firstPlan = readFileSync(first.planPath, 'utf8');
+  const again = await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {},
+    runTestCommand: () => assert.fail('Repeating initiative must stay planning-only') });
+  assert.equal(again.reused, true);
+  assert.equal(again.planningOnly, true);
+  assert.equal(readFileSync(path.join(again.archivePath, 'PLAN.md'), 'utf8'), firstPlan);
+  assert.deepEqual(readFileSync(path.join(worktree, 'README.md')), before);
+  assert.doesNotMatch(options.stderr, /start seat coder|start seat reviewer/);
+});
+
+test('feature planner writes five child issue drafts with wave labels and --publish cannot start coder', async (context) => {
+  const options = fixture(context);
+  options.issue.title = 'Implement a profile feature';
+  options.issue.body = 'Implement a profile feature.\n\n## Allowed files\n- `README.md`';
+  const worktree = path.join(options.target, '.worktrees', 'issue-42');
+  git(options.target, 'worktree', 'add', '-b', 'issue-42', worktree);
+  const before = readFileSync(path.join(worktree, 'README.md'));
+  let calls = 0;
+  const result = await runBuiltinIssue(42, { ...options, config: llmConfig, publish: true, log: () => {},
+    env: { ...options.env, GITHUB_APP_ID: 'test-app', GITHUB_APP_PRIVATE_KEY_PATH: 'test-only.pem' },
+    fetchImpl: async (_url, request) => {
+      calls += 1;
+      const body = JSON.parse(request.body);
+      assert.equal(body.tools, undefined);
+      assert.match(body.messages[0].content, /feature planner seat/);
+      return Response.json({ model: 'served-planner', usage: { prompt_tokens: 100, completion_tokens: 40 },
+        choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
+          outcomes: ['A profile feature works'],
+          issues: Array.from({ length: 5 }, (_, index) => ({
+            title: `Profile slice ${index + 1}`, outcome: `Profile outcome ${index + 1}`, wave: index + 1,
+            acceptance_checks: ['Outcome is verified'], files_allowed: ['README.md'],
+          })),
+        }) } }] });
+    },
+    runTestCommand: () => assert.fail('Feature cannot call coder tests'),
+    publisher: () => assert.fail('Feature cannot publish even with --publish'),
+    issueCommenter: () => assert.fail('Feature children remain drafts'),
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.askKind, 'feature');
+  assert.equal(result.planningOnly, true);
+  assert.equal(result.runs.planner.metrics.model, 'served-planner');
+  assert.equal(result.runs.coder, null);
+  const plan = readFileSync(result.planPath, 'utf8');
+  assert.equal([...plan.matchAll(/^### Draft \d+:/gm)].length, 5);
+  assert.match(plan, /Labels: `wave:5`/);
+  assert.deepEqual(readFileSync(path.join(result.worktreePath, 'README.md')), before);
+  assert.doesNotMatch(options.stderr, /start seat coder|start seat reviewer|Profile outcome/);
+  assert.equal(options.calls.filter(({ program }) => program === 'gh').length, 1);
+});
+
+test('an Ask without scope or planning intent stops for clarify before any seat', async (context) => {
+  const options = fixture(context);
+  options.issue.title = 'Improve things';
+  options.issue.body = 'Improve things';
+  const messages = [];
+  const result = await runBuiltinIssue(42, { ...options, config: stubConfig, log: (message) => messages.push(message),
+    fetchImpl: () => assert.fail('Clarify must not call a model'),
+    runTestCommand: () => assert.fail('Clarify must not call tests'),
+  });
+  assert.equal(result.askKind, 'clarify');
+  assert.equal(result.planningOnly, true);
+  assert.deepEqual(result.runs, { planner: null, coder: null, reviewer: null });
+  assert.match(messages.join('\n'), /Ask kind: clarify[\s\S]*Clarify one concrete outcome/);
+  assert.equal(options.stderr, '');
+  assert.equal(existsSync(path.join(result.worktreePath, 'PLAN.md')), false);
+  assert.equal(existsSync(path.join(result.worktreePath, 'TASK.md')), false);
 });
 
 test('an existing branch is reused when its issue worktree needs to be created', async (context) => {
@@ -852,8 +996,8 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
   assert.ok(seatRecords.every(({ context_max }) => context_max === undefined));
   assert.deepEqual(seatRecords.map(({ excellence }) => excellence), [undefined, 'pass', undefined]);
   assert.deepEqual(seatRecords[1].defects, []);
-  assert.equal((logs[0].match(/AI-Run:/g) ?? []).length, 3);
-  assert.match(logs[0], /AI_CONTEXT_MAX=\n/);
+  assert.equal((logs.join('\n').match(/AI-Run:/g) ?? []).length, 3);
+  assert.match(logs.join('\n'), /AI_CONTEXT_MAX=\n/);
   assert.ok(logs.some((line) => line.includes('Merged PR #7')));
   assert.ok(!logs.join('\n').includes('private-key'));
   assert.match(logs.join('\n'), /Reviewed worktree:[\s\S]*git diff --stat:[\s\S]*README.md/);
@@ -1176,7 +1320,7 @@ test('planner and coder use an environment key before the vault and fall back to
   }
 });
 
-test('planner and coder read only their own last 20 memory lines and append separately', async (context) => {
+test('planner reads its last 20 lines; slice coder omits memory input and both append separately', async (context) => {
   const options = fixture(context);
   const directory = path.join(options.repoRoot, '.roster', 'memory');
   mkdirSync(directory, { recursive: true });
@@ -1188,14 +1332,11 @@ test('planner and coder read only their own last 20 memory lines and append sepa
   const fetchImpl = async (_url, request) => {
     calls += 1;
     const body = JSON.parse(request.body);
-    const expected = calls === 1 ? 'planner' : 'coder';
-    const other = calls === 1 ? 'coder' : 'planner';
     const context = body.messages[calls === 1 ? 1 : 0].content;
-    assert.match(context, new RegExp(`"seat":"${expected}","index":5`));
-    assert.match(context, new RegExp(`"seat":"${expected}","index":24`));
-    assert.doesNotMatch(context, new RegExp(`"seat":"${expected}","index":4`));
-    assert.doesNotMatch(context, new RegExp(`"seat":"${other}"`));
     if (calls === 1) {
+      assert.match(context, /"seat":"planner","index":5/);
+      assert.match(context, /"seat":"planner","index":24/);
+      assert.doesNotMatch(context, /"seat":"planner","index":4|"seat":"coder"/);
       return { status: 200, json: async () => ({ choices: [{ message: {
         role: 'assistant', content: JSON.stringify({
           title: 'Add status', acceptance_checks: ['node --test exits 0'],
@@ -1203,6 +1344,7 @@ test('planner and coder read only their own last 20 memory lines and append sepa
         }),
       } }] }) };
     }
+    assert.doesNotMatch(context, /"seat":"(?:planner|coder)"|## Seat memory/);
     return { status: 200, json: async () => ({ choices: [{
       finish_reason: 'stop', message: { role: 'assistant', content: 'Done.' },
     }] }) };

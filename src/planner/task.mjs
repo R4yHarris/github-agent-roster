@@ -1,5 +1,5 @@
 import { splitTaskFrontmatter } from '../runtime/skills.mjs';
-import { isForbiddenWrite, plannerArtifactFiles } from '../runtime/tools.mjs';
+import { isForbiddenWrite, planArtifactFiles, plannerArtifactFiles } from '../runtime/tools.mjs';
 
 export function oneLine(value, label) {
   if (typeof value !== 'string' || !value.trim() ||
@@ -87,7 +87,7 @@ function sectionList(section, label, { continuations = false } = {}) {
 }
 
 export function applicationFiles(items) {
-  return checkedList(items.filter((file) => !plannerArtifactFiles.some((name) =>
+  return checkedList(items.filter((file) => ![...plannerArtifactFiles, ...planArtifactFiles].some((name) =>
     typeof file === 'string' && file.toLowerCase() === name.toLowerCase())),
   'Files allowed', allowedFile, 32);
 }

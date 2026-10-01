@@ -66,7 +66,7 @@ export function askRequirements(ask, { allowMissing = false } = {}) {
     throw new TypeError('Ask must name or declare allowed files before TASK can validate; no file scope will be invented');
   }
   const outcomes = listInAsk(cleanAsk, 'Outcomes');
-  return { files, explicit: Boolean(explicitFiles), requiresRun: !explicitFiles || (outcomes?.length ?? 1) !== 1 };
+  return { files, outcomes, explicit: Boolean(explicitFiles), requiresRun: !explicitFiles || (outcomes?.length ?? 1) !== 1 };
 }
 
 function checkAskScope(files, requirements) {

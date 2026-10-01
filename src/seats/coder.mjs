@@ -12,7 +12,7 @@ import { createTools } from '../runtime/tools.mjs';
 
 export async function runCoder({
   worktree, repoRoot, config, task, session, fetchImpl, env = process.env, vault, runTestCommand,
-  priorFeedback = null, onEvent,
+  priorFeedback = null, onEvent, askKind,
 }) {
   const stages = [];
   const memoryPath = seatMemoryPath({
@@ -31,7 +31,7 @@ export async function runCoder({
     turns: 0, usage: null, response: null, summary: 'Coder preparation stopped before implementation.',
   };
   try {
-    context = await loadContext({ worktree, memoryPath, repoRoot, config, env, priorFeedback });
+    context = await loadContext({ worktree, memoryPath, repoRoot, config, env, priorFeedback, askKind });
     if (!context.minimalDocs) stages.push('principal');
     stages.push('context');
     const skipsTests = taskSkipsTests(context.task);

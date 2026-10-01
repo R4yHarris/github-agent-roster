@@ -6,7 +6,7 @@ import { redactSecrets } from '../runtime/memory.mjs';
 
 const seats = ['planner', 'coder', 'reviewer'];
 const tools = ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text'];
-const artifacts = ['RECIPE.yml', 'TASK.md', 'ESTIMATE.md', 'RESULT.md', 'REVIEW.md'];
+const artifacts = ['RECIPE.yml', 'TASK.md', 'PLAN.md', 'ESTIMATE.md', 'RESULT.md', 'REVIEW.md'];
 const httpErrors = ['authentication', 'network', 'timeout', 'http', 'response', 'abort'];
 const maximumLineBytes = 2048;
 
@@ -168,7 +168,7 @@ export async function readLastRunLog({
     const lastLine = lines.at(-1);
     if (!lastLine) return null;
     const parsed = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z (?:start seat|seat) (planner|coder|reviewer) (.+)$/.exec(lastLine);
-    const metadata = /^(?:session=[A-Za-z0-9._[\]-]{1,128}|model="(?:[^"\\]|\\.)*" host="(?:[^"\\]|\\.)*"|mode (?:stub|llm)|implementation (?:model|deterministic-readme)|http chat\.completions (?:start|ok status=2\d\d|error(?: status=[1-5]\d\d)? class=(?:authentication|network|timeout|http|response|abort))|tool (?:read_file|write_file|list_dir|run_test|search_text)(?: path="(?:[^"\\]|\\.)*")?|wrote (?:RECIPE\.yml|TASK\.md|ESTIMATE\.md|RESULT\.md|REVIEW\.md)|error class=(?:Error|TypeError|RangeError|AbortError|RunLogError)|elapsed_ms=\d+ mode=(?:stub|llm))$/;
+    const metadata = /^(?:session=[A-Za-z0-9._[\]-]{1,128}|model="(?:[^"\\]|\\.)*" host="(?:[^"\\]|\\.)*"|mode (?:stub|llm)|implementation (?:model|deterministic-readme)|http chat\.completions (?:start|ok status=2\d\d|error(?: status=[1-5]\d\d)? class=(?:authentication|network|timeout|http|response|abort))|tool (?:read_file|write_file|list_dir|run_test|search_text)(?: path="(?:[^"\\]|\\.)*")?|wrote (?:RECIPE\.yml|TASK\.md|PLAN\.md|ESTIMATE\.md|RESULT\.md|REVIEW\.md)|error class=(?:Error|TypeError|RangeError|AbortError|RunLogError)|elapsed_ms=\d+ mode=(?:stub|llm))$/;
     if (!parsed || !metadata.test(parsed[2]) || /[\x00-\x1f\x7f]/.test(lastLine) ||
         Buffer.byteLength(lastLine) > maximumLineBytes) {
       throw new RunLogError('Last live run log line has invalid metadata');

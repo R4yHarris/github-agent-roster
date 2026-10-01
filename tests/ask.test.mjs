@@ -31,7 +31,7 @@ test('available gh creates an issue in the current GitHub repository without a l
   const result = await submitAsk(ask, { repoRoot, cwd: repoRoot, config, env: {}, runCommand });
   assert.deepEqual(result, {
     mode: 'issue', url: 'https://github.com/example/project/issues/42',
-    number: 42, title: 'Add status to README.md.',
+    number: 42, title: 'Add status to README.md.', askKind: 'slice',
   });
   assert.deepEqual(calls.map(({ program, args }) => [program, args]), [
     ['gh', ['--version']],
@@ -79,6 +79,47 @@ test('conventional task class is in the issue body before gh creates the issue',
   });
   assert.match(calls[2][1].at(-1),
     /task_class: fix\ndifficulty: 2\nestimate_min: 15\n$/);
+  assert.equal(existsSync(join(repoRoot, '.roster', 'asks')), false);
+});
+
+test('offline feature and initiative asks write PLAN only, with child issue drafts rather than a new queue', async (t) => {
+  const repoRoot = fixture(t);
+  for (const [id, ask, askKind] of [['feature', 'Implement the profile feature.', 'feature'],
+    ['initiative', 'build an orchestrator', 'initiative']]) {
+    const result = await submitAsk(ask, {
+      repoRoot, cwd: repoRoot, config: llmConfig, env: {}, id,
+      fetchImpl: () => assert.fail('Offline planning cannot contact a model'),
+      runCommand: async () => { throw Object.assign(new Error('Missing gh'), { code: 'ENOENT' }); },
+    });
+    assert.equal(result.mode, 'draft');
+    assert.equal(result.askKind, askKind);
+    assert.equal(result.taskPath, undefined);
+    assert.equal(result.recipePath, undefined);
+    assert.equal(existsSync(join(repoRoot, '.roster', 'asks', id, 'TASK.md')), false);
+    const plan = readFileSync(result.planPath, 'utf8');
+    assert.match(plan, /## Outcomes[\s\S]*## Waves[\s\S]*Labels: `wave:1`/);
+    assert.match(result.command, /^gh issue create --title .+ --body-file .+$/);
+  }
+});
+
+test('online broad asks create only the parent issue; clarify does not contact GitHub or infer scope', async (t) => {
+  const repoRoot = fixture(t);
+  const calls = [];
+  const runCommand = async (program, args) => {
+    calls.push([program, args]);
+    if (program === 'git') return 'https://github.com/example/project.git';
+    return args[0] === '--version' ? 'gh version test' : 'https://github.com/example/project/issues/42';
+  };
+  const planned = await submitAsk('build an orchestrator', { repoRoot, config, env: {}, runCommand });
+  assert.equal(planned.askKind, 'initiative');
+  assert.equal(planned.mode, 'issue');
+  assert.equal(calls.filter(([program, args]) => program === 'gh' && args[0] === 'issue').length, 1);
+  const clarify = await submitAsk('Improve things.', {
+    repoRoot, config, env: {}, runCommand: () => assert.fail('Clarify must not contact GitHub'),
+  });
+  assert.equal(clarify.mode, 'clarify');
+  assert.equal(clarify.askKind, 'clarify');
+  assert.match(clarify.clarification, /one concrete outcome[\s\S]*allowed files/);
   assert.equal(existsSync(join(repoRoot, '.roster', 'asks')), false);
 });
 
