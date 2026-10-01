@@ -145,12 +145,14 @@ export async function checkExcellence({
 
 export async function writeResult({ worktree, result, excellence, env, apiKeyEnv, run }) {
   const timedOut = result.timedOut === true;
-  const passed = excellence.pass && !timedOut;
+  const blocked = result.blocked === true;
+  const passed = excellence.pass && !timedOut && !blocked;
   const summary = timedOut ? 'Coder HTTP request timed out. No change was verified; this run did not complete.' : result.summary;
   const tests = result.tests ? `node --test exited ${result.tests.exit_code}`
     : result.testsSkipped ? 'Tests explicitly waived by TASK.md (tests: none).' : 'Tests were not run.';
-  const body = '# Result\n\n' + (timedOut ? 'Outcome: timed out (unverified)\n\n' : '') +
-    `## Verification\n\nChecks: ${passed ? 'PASS' : 'FAIL'}\n` +
+  const body = '# Result\n\n' + (blocked ? 'Outcome: blocked (contracts infrastructure)\n\n'
+    : timedOut ? 'Outcome: timed out (unverified)\n\n' : '') +
+    `## Verification\n\nChecks: ${blocked ? 'BLOCKED' : passed ? 'PASS' : 'FAIL'}\n` +
     (passed ? '- Operational checks passed.\n'
       : excellence.reasons.map((reason, index) => `- ${index === 0 ? 'First failure: ' : ''}${reason}`).join('\n') + '\n') +
     `- ${tests}\n\n## Run\n\nModel: ${run?.metrics?.model ?? result.model}\nTool-loop turns: ${result.turns}\n` +

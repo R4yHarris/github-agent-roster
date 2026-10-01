@@ -31,6 +31,17 @@ test('each test repair logs its exact attempt without failure output', async (t)
   assert.doesNotMatch(readFileSync(logger.path, 'utf8'), /PRIVATE_TEST_OUTPUT/);
 });
 
+test('missing contracts prints the dependency diagnostic without listing vendor', async (t) => {
+  const options = fixture(t);
+  const logger = await createRunLog(options);
+  await logger.seat('coder', options.session, config, async (onEvent) => {
+    await onEvent({ type: 'contracts-uninitialized' });
+    return {};
+  });
+  assert.match(options.text, /Contracts submodule was not initialized\n/);
+  assert.doesNotMatch(options.text, /vendor\/|Listing/);
+});
+
 test('planner start streams one human action while timestamps and elapsed metadata remain only in the log', async (t) => {
   const options = fixture(t);
   let elapsed = 100;

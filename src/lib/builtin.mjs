@@ -31,6 +31,7 @@ import { retryCommandForTask } from '../llm/request.mjs';
 import { selectReasoning } from '../llm/reasoning.mjs';
 import { readTaskMetadata } from '../runtime/estimate.mjs';
 import { loadCapabilities } from './capabilities.mjs';
+import { initializeWorktreeSubmodules } from './contracts.mjs';
 
 const execFileAsync = promisify(execFile);
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -270,6 +271,7 @@ async function prepareLocalAsk(ask, { cwd, config, runCommand }) {
   const worktreePath = path.join(repoRoot, worktrees, task);
   await ensureLocalPath(worktreePath, repoRoot);
   await runCommand('git', ['worktree', 'add', '-b', task, worktreePath], repoRoot);
+  await initializeWorktreeSubmodules(worktreePath, runCommand);
   const assignmentPath = path.join(worktreePath, 'ASSIGNMENT.md');
   await fs.writeFile(assignmentPath, `# Local Ask\n\n${ask}\n`, { flag: 'wx' });
   return { repoRoot, worktreePath, task, session: `roster-${task}-coder`, ask, assignmentPath,

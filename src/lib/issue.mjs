@@ -8,6 +8,7 @@ import { buildPublishMessage, formatPublishCommand, formatPublishEnvironment } f
 import { buildPublishEnv } from '../metrics/run.mjs';
 import { cleanAskText, renderAssignment } from '../planner/stub.mjs';
 import { estimateTask } from '../runtime/estimate.mjs';
+import { initializeWorktreeSubmodules } from './contracts.mjs';
 
 const execFileAsync = promisify(execFile);
 const metadataMarker = '\n\n## Task metadata\n\n';
@@ -204,6 +205,7 @@ export async function runIssue(issueNumber, {
     await command('git', knownBranch.split('\n').includes(branch)
       ? ['worktree', 'add', worktreePath, task] : ['worktree', 'add', '-b', task, worktreePath], repoRoot);
   }
+  await initializeWorktreeSubmodules(worktreePath, command);
 
   const assignment = renderAssignment(issue);
   const writeAssignment = async (file, content, options) => {

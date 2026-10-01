@@ -24,6 +24,7 @@ function harness(issueResponse = issue) {
     if (program === 'gh' && args[0] === 'issue') return JSON.stringify(issueResponse);
     if (program === 'git' && args[0] === 'worktree') return '';
     if (program === 'git' && args[0] === 'for-each-ref') return '';
+    if (program === 'git' && args[0] === 'submodule') return '';
     throw new Error(`Unexpected command: ${program} ${args.join(' ')}`);
   };
   const fileSystem = {
@@ -64,6 +65,7 @@ test('reads the issue in the current repository and prepares one coder worktree'
     { program: 'git', args: ['worktree', 'list', '--porcelain', '-z'], cwd: repoRoot },
     { program: 'git', args: ['for-each-ref', '--format=%(refname)', 'refs/heads/issue-42'], cwd: repoRoot },
     { program: 'git', args: ['worktree', 'add', '-b', 'issue-42', worktreePath], cwd: repoRoot },
+    { program: 'git', args: ['submodule', 'update', '--init', '--recursive'], cwd: worktreePath },
   ]);
   assert.deepEqual(writes, [
     { directory: path.join(repoRoot, '.worktrees'), options: { recursive: true } },
