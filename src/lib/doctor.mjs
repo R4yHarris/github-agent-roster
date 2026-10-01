@@ -8,6 +8,7 @@ import { resolveSecret } from './secrets.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
 import { defaultRequestFetch } from '../llm/http.mjs';
 import { ChatError, isLocalLlmHost, resolveRequestTimeout, withRequestTimeout } from '../llm/request.mjs';
+import { isRunCancelled, throwIfCancelled } from '../runtime/cancel.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
 
@@ -15,7 +16,9 @@ export async function warmDoctor({
   cwd = process.cwd(), installationRoot = rosterRoot, env = process.env, vault, fetchImpl, clock,
   config = loadConfig({ repoRoot: installationRoot, cwd }),
   errorOutput = process.stderr,
+  signal,
 } = {}) {
+  throwIfCancelled(signal);
   if (!config.llm.base_url) {
     errorOutput.write('SKIP warming: empty LLM endpoint uses the deterministic stub\n');
     return { skipped: true };
@@ -50,10 +53,12 @@ export async function warmDoctor({
   };
   let result;
   try {
-    result = await withRequestTimeout(probe, { host, local, timeoutMs, clock, retryCommand: 'roster doctor --warm',
+    result = await withRequestTimeout(probe, { host, local, timeoutMs, clock, signal, retryCommand: 'roster doctor --warm',
       onWaiting: ({ elapsedSeconds }) => errorOutput.write(`warming host=${host} elapsed=${elapsedSeconds}s` +
         (local ? ' cold-start up to 15m' : '') + '\n') });
   } catch (error) {
+    if (isRunCancelled(error)) throw error;
+    throwIfCancelled(signal);
     if (error instanceof ChatError || error?.code === 'ROSTER_RUN_LOG') throw error;
     throw new ChatError('Warming probe request failed. Check the endpoint and connection.', 'network');
   }
