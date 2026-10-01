@@ -62,8 +62,9 @@ write_file or omitting the edit fails explicitly, even when tests are waived.
 
 Planner scope is limited to files explicitly listed or named by the human Ask.
 An Ask with no file scope needs clarification; it never becomes an invented
-`**/*` allowance. A slice with inferred scope creates a validated TASK-only
-planning handoff, then stops for another explicit `/run`. Multiple explicitly
+`**/*` allowance. A slice with inferred scope prints its validated TASK summary
+and continues to coder in the same run. Only `--confirm` pauses after the
+summary; no second `/run` or `--auto` is required. Multiple explicitly
 stated Outcomes classify as a feature and produce child issue drafts in
 PLAN.md instead. An already valid cached slice TASK/recipe bypasses the
 planner and starts coder; a feature/initiative cannot reuse it to bypass

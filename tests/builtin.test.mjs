@@ -7,7 +7,7 @@ import test from 'node:test';
 import { parseConfig } from '../src/lib/config.mjs';
 import { writeAsk } from '../src/lib/ask.mjs';
 import {
-  prepareBuiltinPublication, runBuiltinIssue as runIssueWithSeats, stageReviewedFiles,
+  prepareBuiltinPublication, runBuiltinAsk, runBuiltinIssue as runIssueWithSeats, stageReviewedFiles,
 } from '../src/lib/builtin.mjs';
 import { loadLearning } from '../src/lib/learn.mjs';
 import { readStatus, formatStatus } from '../src/lib/status.mjs';
@@ -296,19 +296,133 @@ test('an invalid cached recipe is preserved in the archive and replanned, not bl
   assert.match(logs.join('\n'), /do not validate for this issue; replanning is required/);
 });
 
-test('an inferred-scope Ask writes a validated TASK then stops until the next explicit run', async (context) => {
+test('an inferred-scope slice continues after the task summary without a second run', async (context) => {
   const options = fixture(context);
   options.issue.body = 'Add a one-line Status section to README.md.';
-  const first = await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {},
+  const logs = [];
+  const first = await runBuiltinIssue(42, { ...options, config: stubConfig,
+    log: (message) => {
+      logs.push(message);
+      if (message.startsWith('Task summary:')) {
+        assert.equal(existsSync(path.join(options.target, '.worktrees', 'issue-42', 'RESULT.md')), false);
+      }
+    },
     fetchImpl: () => assert.fail('Stub planning does not call a model') });
-  assert.equal(first.planningOnly, true);
-  assert.equal(existsSync(path.join(first.worktreePath, 'RESULT.md')), false);
-  assert.equal(existsSync(path.join(first.worktreePath, 'REVIEW.md')), false);
-  assert.equal(first.runs.coder, null);
+  assert.equal(first.planningOnly, undefined);
+  assert.equal(existsSync(path.join(first.worktreePath, 'RESULT.md')), true);
+  assert.equal(existsSync(path.join(first.worktreePath, 'REVIEW.md')), true);
+  assert.match(logs.join('\n'), /Task summary:\nOutcome: .+\nAllowed files: README\.md\nChecks:\n- .+\n- .+\nEffort: [lmhx]/);
+  assert.doesNotMatch(logs.join('\n'), /then \/run 42/);
   const next = await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {} });
   assert.equal(next.planner.reused, true);
   assert.equal(next.planningOnly, undefined);
   assert.equal(next.result.mode, 'stub');
+});
+
+test('--confirm is the explicit slice pause, including declared file scope', async (context) => {
+  const options = fixture(context);
+  const logs = [];
+  const first = await runBuiltinIssue(42, { ...options, config: stubConfig, confirm: true,
+    log: (message) => logs.push(message) });
+  assert.equal(first.confirmedPause, true);
+  assert.equal(first.runs.coder, null);
+  assert.equal(existsSync(path.join(first.worktreePath, 'RESULT.md')), false);
+  assert.equal(existsSync(path.join(first.worktreePath, 'REVIEW.md')), false);
+  assert.match(logs.join('\n'), /Task summary:[\s\S]*Paused by --confirm/);
+  const next = await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {} });
+  assert.equal(next.planner.reused, true);
+  assert.equal(next.result.mode, 'stub');
+  await assert.rejects(runBuiltinIssue(42, { ...options, config: stubConfig, confirm: true, publish: true }),
+    /--confirm cannot be combined with --publish/);
+});
+
+test('direct local asks run to RESULT and REVIEW in a Git worktree without gh', async (context) => {
+  const options = fixture(context);
+  const logs = [];
+  const result = await runBuiltinAsk('Add a one-line Status section to README.md.', {
+    ...options, config: stubConfig, log: (message) => logs.push(message),
+    runCommand: async (program, args, workingDirectory) => {
+      assert.equal(program, 'git', 'A local ask must never invoke gh');
+      return options.runCommand(program, args, workingDirectory);
+    },
+  });
+  assert.equal(result.local, true);
+  assert.equal(result.issue.number, undefined);
+  assert.equal(result.planningOnly, undefined);
+  assert.equal(result.worktreePath, path.join(options.target, '.worktrees', result.task));
+  assert.equal(git(result.worktreePath, 'branch', '--show-current'), result.task);
+  assert.equal(parseRecipe(result.planner.recipe).ask, `local:${result.task}`);
+  assert.equal(existsSync(result.result.resultPath), true);
+  assert.equal(existsSync(result.review.reviewPath), true);
+  assert.match(logs.join('\n'), /Task summary:[\s\S]*Allowed files: README\.md/);
+  assert.match(readFileSync(result.assignmentPath, 'utf8'), /# Local Ask/);
+});
+
+test('a direct initiative prints PLAN and does not run coder or reviewer', async (context) => {
+  const options = fixture(context);
+  const logs = [];
+  const result = await runBuiltinAsk('Build an orchestrator.', {
+    ...options, config: stubConfig, log: (message) => logs.push(message),
+    runCommand: async (program, args, workingDirectory) => {
+      assert.equal(program, 'git');
+      return options.runCommand(program, args, workingDirectory);
+    },
+  });
+  assert.equal(result.askKind, 'initiative');
+  assert.equal(result.planningOnly, true);
+  assert.equal(existsSync(result.planPath), true);
+  assert.equal(existsSync(path.join(result.worktreePath, 'RESULT.md')), false);
+  assert.equal(existsSync(path.join(result.worktreePath, 'REVIEW.md')), false);
+  assert.match(logs.join('\n'), /PLAN:/);
+  assert.doesNotMatch(logs.join('\n'), /Task summary:/);
+});
+
+test('a configured direct ask implements and reviews the slice after its streamed summary', async (context) => {
+  const options = fixture(context);
+  const logs = [];
+  let coderTurns = 0;
+  let tests = 0;
+  const result = await runBuiltinAsk('Add a one-line Status section to README.md.', {
+    ...options, config: llmConfig, log: (message) => logs.push(message),
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      const system = body.messages[0].content;
+      if (system.startsWith('You are the builtin planner seat.')) {
+        return Response.json({ choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant', content: JSON.stringify({
+            title: 'Add Status to README', acceptance_checks: ['node --test exits 0'],
+            files_allowed: ['README.md'],
+          }),
+        } }] });
+      }
+      assert.match(logs.join('\n'), /Task summary:[\s\S]*Allowed files: README\.md[\s\S]*Effort:/);
+      if (system.startsWith('You are the builtin reviewer seat.')) {
+        return Response.json({ choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant', content: JSON.stringify({ verdict: 'pass',
+            reasons: ['Diff matches the checked slice.'], security_notes: ['Documentation-only change.'] }),
+        } }] });
+      }
+      coderTurns += 1;
+      return Response.json({ choices: [coderTurns === 1 ? { finish_reason: 'tool_calls', message: {
+        role: 'assistant', tool_calls: [{ id: 'readme', type: 'function', function: {
+          name: 'write_file', arguments: JSON.stringify({ path: 'README.md', content: '# Example\n\n## Status\nReady.\n' }),
+        } }],
+      } } : { finish_reason: 'stop', message: { role: 'assistant', content: 'Added Status.' } }] });
+    },
+    runTestCommand: async () => { tests += 1; return { stdout: 'pass', stderr: '' }; },
+    runCommand: async (program, args, workingDirectory) => {
+      assert.equal(program, 'git');
+      return options.runCommand(program, args, workingDirectory);
+    },
+  });
+  assert.equal(result.planningOnly, undefined);
+  assert.equal(result.result.mode, 'llm');
+  assert.equal(result.result.excellence.pass, true);
+  assert.equal(result.review.verdict, 'pass');
+  assert.ok(tests > 0);
+  assert.match(readFileSync(path.join(result.worktreePath, 'README.md'), 'utf8'), /## Status\nReady/);
+  assert.equal(readFileSync(path.join(options.target, 'README.md'), 'utf8'), '# Example\n');
+  assert.match(logs.join('\n'), /Human AI-Eval|human AI-Eval/);
 });
 
 test('docs slice retry after failed review raises one supported tier and never exceeds max', async (context) => {

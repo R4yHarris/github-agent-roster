@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { buildPublishEnv, buildRun, resolvePublishModel, RUN_ENV_NAMES } from '../metrics/run.mjs';
-import { taskFilesAllowed } from '../planner/stub.mjs';
+import { cleanAskText, taskFilesAllowed } from '../planner/stub.mjs';
 import { runCoder } from '../seats/coder.mjs';
 import { preparePlannerHandoff, readPlannerHandoff, readPlannerTask, readPreviousReview, runPlanner } from '../seats/planner.mjs';
 import { requirePassingReview, runReviewer } from '../seats/reviewer.mjs';
@@ -246,7 +246,42 @@ export async function runBuiltinTask({
     reviewerRun: reviewRun, askKind, classification, logPath: liveLog.path, logSession: liveLog.session };
 }
 
-export async function runBuiltinIssue(issueNumber, {
+export async function runBuiltinIssue(issueNumber, options = {}) {
+  validateIssueNumber(issueNumber);
+  return runBuiltinAssignment(issueNumber, options);
+}
+
+export async function runBuiltinAsk(ask, options = {}) {
+  return runBuiltinAssignment(null, { ...options, ask: cleanAskText(ask), publish: false });
+}
+
+async function prepareLocalAsk(ask, { cwd, config, runCommand }) {
+  const repoRoot = path.resolve((await runCommand('git', ['rev-parse', '--show-toplevel'], cwd)).trim());
+  const task = `local-${randomBytes(8).toString('hex')}`;
+  const worktrees = config.paths.worktrees;
+  if (typeof worktrees !== 'string' || !worktrees || path.isAbsolute(worktrees) ||
+      path.win32.isAbsolute(worktrees) ||
+      worktrees.split(/[\\/]/).some((part) => !part || part === '.' || part === '..')) {
+    throw new TypeError('Worktrees path must be relative to the repository root');
+  }
+  const worktreePath = path.join(repoRoot, worktrees, task);
+  await ensureLocalPath(worktreePath, repoRoot);
+  await runCommand('git', ['worktree', 'add', '-b', task, worktreePath], repoRoot);
+  const assignmentPath = path.join(worktreePath, 'ASSIGNMENT.md');
+  await fs.writeFile(assignmentPath, `# Local Ask\n\n${ask}\n`, { flag: 'wx' });
+  return { repoRoot, worktreePath, task, session: `roster-${task}-coder`, ask, assignmentPath,
+    issue: { title: ask.split('\n')[0], body: ask }, local: true, reused: false };
+}
+
+function taskSummary(planner, effort) {
+  const document = parseTaskDocument(planner.task);
+  return `Task summary:\nOutcome: ${document.title}\n` +
+    `Allowed files: ${document.files_allowed.join(', ')}\n` +
+    `Checks:\n${document.acceptance_checks.map((check) => `- ${check}`).join('\n')}\n` +
+    `Effort: ${effort}\n`;
+}
+
+async function runBuiltinAssignment(issueNumber, {
   cwd = process.cwd(),
   repoRoot = rosterRoot,
   config = loadConfig({ repoRoot, cwd }),
@@ -255,6 +290,8 @@ export async function runBuiltinIssue(issueNumber, {
   seats = 'planner,coder,reviewer',
   autoModel = false,
   skipReview = false,
+  confirm = false,
+  ask,
   log = console.log,
   errorOutput = process.stderr,
   runCommand,
@@ -266,8 +303,8 @@ export async function runBuiltinIssue(issueNumber, {
   metricsLoader = loadMetrics,
   now,
 } = {}) {
-  validateIssueNumber(issueNumber);
-  const retryCommand = `${retryCommandForTask(`issue-${issueNumber}`)}${autoModel ? ' --auto-model' : ''}`;
+  const retryCommand = issueNumber === null ? retryCommandForTask(null) :
+    `${retryCommandForTask(`issue-${issueNumber}`)}${autoModel ? ' --auto-model' : ''}`;
   if (!autoModel && !config.llm.model && (env.AI_MODEL || env.ROSTER_MODEL)) {
     config = { ...config, llm: Object.freeze({ ...config.llm, model: resolvePublishModel({ config, env }) }) };
   }
@@ -276,6 +313,8 @@ export async function runBuiltinIssue(issueNumber, {
   }
   if (typeof autoModel !== 'boolean') throw new TypeError('--auto-model must be a boolean');
   if (typeof skipReview !== 'boolean') throw new TypeError('--skip-review must be a boolean');
+  if (typeof confirm !== 'boolean') throw new TypeError('--confirm must be a boolean');
+  if (confirm && publish) throw new TypeError('--confirm cannot be combined with --publish');
   if (publish) requirePublicationEnabled(config);
   const reviewBypass = skipReview || !isReviewRequired(config);
   const fleet = autoModel ? await loadFleet({ cwd }) : null;
@@ -294,11 +333,14 @@ export async function runBuiltinIssue(issueNumber, {
   const contractsPath = resolveContractsPath({ repoRoot, cwd, env });
   const issueCommand = runCommand ?? (async (program, args, workingDirectory) =>
     (await execFileAsync(program, args, { cwd: workingDirectory, env: commandEnv, encoding: 'utf8' })).stdout);
-  const prepared = await runIssue(issueNumber, {
+  const prepared = issueNumber === null ? await prepareLocalAsk(ask, { cwd, config, runCommand: issueCommand })
+    : await runIssue(issueNumber, {
     cwd, runCommand: issueCommand, worktrees: config.paths.worktrees, log: () => {}, now, config,
     beforeWorktree: (root, worktreePath) => ensureLocalPath(worktreePath, root),
     sessionId: `roster-${issueNumber}-coder`, recordPreparation: false,
   });
+  const reference = prepared.local ? `local:${prepared.task}` : `issue:${prepared.issue.number}`;
+  const sessionPrefix = prepared.local ? `roster-${prepared.task}` : `roster-${prepared.issue.number}`;
   const { worktreePath } = prepared;
   let classification = classifyAsk(prepared.ask, { title: prepared.issue.title });
   let activeConfig = config;
@@ -326,7 +368,7 @@ export async function runBuiltinIssue(issueNumber, {
     }
   }
   const existing = prepared.reused && ['slice', 'clarify'].includes(classification.kind) ? await readPlannerHandoff({
-    worktree: worktreePath, reference: `issue:${prepared.issue.number}`, ask: prepared.ask, lockedModel: route?.profile.model,
+    worktree: worktreePath, reference, ask: prepared.ask, lockedModel: route?.profile.model,
     issueTitle: prepared.issue.title, issueBody: prepared.issue.body,
   }) : { plan: null };
   if (classification.kind === 'clarify' && existing.plan) {
@@ -336,7 +378,7 @@ export async function runBuiltinIssue(issueNumber, {
   const askKind = classification.kind;
   const previousReview = prepared.reused ? await readPreviousReview(worktreePath) : null;
   const previousCoder = previousReview?.startsWith('# Review\n\nVerdict: fail\n')
-    ? loadLearning({ cwd: prepared.repoRoot }).runs.findLast((run) => run.session === `roster-${prepared.issue.number}-coder`)
+    ? loadLearning({ cwd: prepared.repoRoot }).runs.findLast((run) => run.session === `${sessionPrefix}-coder`)
     : null;
   activeConfig = selectReasoning({ ...activeConfig, llm: { ...activeConfig.llm,
     ...(previousCoder && ['l', 'm', 'h', 'x'].includes(previousCoder.effort)
@@ -344,9 +386,9 @@ export async function runBuiltinIssue(issueNumber, {
   } }, { kind: askKind, taskClass: prepared.metadata?.task_class,
     difficulty: prepared.metadata?.difficulty });
   const sessions = {
-    planner: `roster-${prepared.issue.number}-planner`,
+    planner: `${sessionPrefix}-planner`,
     coder: prepared.session,
-    reviewer: `roster-${prepared.issue.number}-reviewer`,
+    reviewer: `${sessionPrefix}-reviewer`,
   };
   log(`Ask kind: ${askKind} (${classification.reason})`);
   if (askKind === 'clarify') {
@@ -374,7 +416,7 @@ export async function runBuiltinIssue(issueNumber, {
       worktree: worktreePath, learningRoot: prepared.repoRoot, config: activeConfig, env,
     }) : await liveLog.seat('planner', sessions.planner, activeConfig, (onEvent) => runPlanner({
       worktree: worktreePath, repoRoot, issue: prepared.issue, config: activeConfig,
-      ask: prepared.ask, metadata: prepared.metadata ?? undefined, task: prepared.task,
+      ask: prepared.ask, reference, metadata: prepared.metadata ?? undefined, task: prepared.task,
       session: sessions.planner, fetchImpl, env, vault, learningRoot: prepared.repoRoot,
       lockedModel: route?.profile.model, onEvent, askKind, retryCommand,
     }));
@@ -403,19 +445,22 @@ export async function runBuiltinIssue(issueNumber, {
       runs: { planner: plannerRun, coder: null, reviewer: null }, run: null, command: null,
       planningOnly: true, failed: false, archivePath, logPath: liveLog.path, logSession: liveLog.session };
   }
-  if (planner.requiresRun && !planner.error) {
-    log(`TASK validates; planning-only handoff: ${planner.taskPath}\n` +
-      `Review the single outcome and allowed files, then /run ${prepared.issue.number}. No coder or publisher ran.`);
-    return { ...prepared, askKind, classification, planner, recipePath: planner.recipePath, taskPath: planner.taskPath,
-      sessions, runs: { planner: plannerRun, coder: null, reviewer: null }, run: null, command: null,
-      planningOnly: true, failed: false, archivePath, logPath: liveLog.path, logSession: liveLog.session };
-  }
   if (planner.error) log(`Planning failed: ${planner.error}\nRECIPE/TASK stubs are unverified; no configured coder will run.`);
   const coderConfig = selectReasoning({ ...activeConfig, llm: {
     ...activeConfig.llm, model: planner.metadata.model || activeConfig.llm.model,
     ...(planner.error ? { base_url: '' } : {}),
     effort: planner.feedback?.effort ?? activeConfig.llm.effort,
   } }, { kind: askKind, taskClass: planner.metadata.task_class, difficulty: planner.metadata.difficulty });
+  if (!planner.error) {
+    log(taskSummary(planner, coderConfig.llm.effort));
+    if (confirm) {
+      log(`Paused by --confirm. TASK: ${planner.taskPath}\nNo coder, reviewer, tests, or publisher ran.`);
+      return { ...prepared, askKind, classification, planner, recipePath: planner.recipePath, taskPath: planner.taskPath,
+        sessions, runs: { planner: plannerRun, coder: null, reviewer: null }, run: null, command: null,
+        planningOnly: true, confirmedPause: true, failed: false, archivePath,
+        logPath: liveLog.path, logSession: liveLog.session };
+    }
+  }
   const reviewSeat = async (coderResult) => {
     const reviewConfig = { ...coderConfig, llm: {
       ...coderConfig.llm, model: coderResult.mode === 'llm' ? coderResult.model : coderConfig.llm.model,
@@ -453,7 +498,8 @@ export async function runBuiltinIssue(issueNumber, {
   const runs = { planner: plannerRun, coder: coderRun, reviewer: reviewerRun };
   const model = result.mode === 'llm' ? coderRun.metrics.model : null;
   const publishMessage = model ? buildPublishMessage({
-    subject: `feat: issue ${prepared.issue.number}`, model, issueNumber: prepared.issue.number,
+    subject: prepared.local ? 'feat: local ask' : `feat: issue ${prepared.issue.number}`,
+    model, issueNumber: prepared.issue.number,
     summary: redactEvidence(result.summary, { env, apiKeyEnv: config.llm.api_key_env }),
     testsSkipped: result.testsSkipped,
     seats: `planner, coder, reviewer (${skipReview ? 'gate bypassed with --skip-review'
