@@ -7,22 +7,14 @@ import {
 } from './learn.mjs';
 import { githubRepository } from './issue.mjs';
 import { loadAvailableMetrics } from './metrics.mjs';
+import { splitArguments } from './arguments.mjs';
 
 const usage = 'Use eval <sha-or-session> <accept|reject|rework> <1-5> <y|n> [--minutes N] [--comment "TEXT"].';
 
 export function parseEvaluationArgs(input) {
   let args = input;
   if (typeof input === 'string') {
-    args = [];
-    const text = input.trim();
-    const token = /\s*("(?:\\.|[^"\\])*"|'[^']*'|[^\s"']+)(?=\s|$)/gy;
-    while (token.lastIndex < text.length) {
-      const match = token.exec(text);
-      if (!match) throw new TypeError(usage);
-      const value = match[1];
-      args.push(value.startsWith('"') ? JSON.parse(value)
-        : value.startsWith("'") ? value.slice(1, -1) : value);
-    }
+    args = splitArguments(input, usage);
   }
   if (!Array.isArray(args) || args.length < 4 || args.some((value) => typeof value !== 'string')) {
     throw new TypeError(usage);

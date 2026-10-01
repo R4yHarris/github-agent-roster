@@ -31,6 +31,10 @@ import { canonicalCommand, completeCommand, formatHelp } from './shell/commands.
 import { createHistory, safeHistoryLine } from './shell/history.mjs';
 import { isRunCancelled, RunCancelledError } from './runtime/cancel.mjs';
 import { formatSessionStatus } from './shell/status.mjs';
+import { getFleetProfile, loadFleet, withFleetProfile } from './lib/fleet.mjs';
+import { runFleet } from './lib/fleet-cli.mjs';
+import { probeModelDetails } from './onboard/wizard.mjs';
+import { splitArguments } from './lib/arguments.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const unknownCommand = 'Unknown command. /help lists commands.\n';
@@ -79,6 +83,7 @@ const defaultServices = {
   validateSecretName, readStatus, formatStatus, setConfigValue,
   publicationTask,
   readIssueLogs,
+  getFleetProfile, loadFleet, withFleetProfile, runFleet, probeModelDetails,
   issueCommenter: commentMergedIssue,
   publisher: publishWithContracts,
   repositoryBranch(cwd) {
@@ -109,10 +114,13 @@ export function createDispatcher({
   debug = createDebugLog({ env }),
   onStateChange = () => {},
   onUiAction = () => {},
+  input = process.stdin,
+  askInput,
 } = {}) {
   const api = { ...defaultServices, ...services };
   const state = { lastAsk: null, lastRun: null, pendingSecret: null, published: false, config, debug,
     lastRequest: null, pendingConfirm: null,
+    routeNext: false, fleetProfileId: null, pendingQuestion: false,
     statusbar: true, controller: null, history: [], issueCache: new Map(), display: {
       issue: null, branch: api.repositoryBranch(cwd), seat: config.seat.id, state: 'idle', busy: false,
       model: config.llm.model, host: config.llm.base_url ? new URL(config.llm.base_url).host : '',
@@ -148,6 +156,25 @@ export function createDispatcher({
     cwd: currentRoot(),
     ...(ref ? { ref } : {}),
   });
+  const host = (active = state.config) => active.llm.base_url ? new URL(active.llm.base_url).host : '-';
+  const safeWrite = (value) => output.write(redactEvidence(value, { env, apiKeyEnv: state.config.llm.api_key_env }));
+  const syncModelDisplay = () => {
+    Object.assign(state.display, { model: state.config.llm.model, host: host(), effort: state.config.llm.effort,
+      contextMax: state.config.llm.context_max, contextUsed: undefined });
+    notify();
+  };
+  async function selectModel(value, save = false) {
+    const model = value === 'clear' ? '' : resolvePublishModel({ env: { AI_MODEL: value } });
+    if (model === 'builtin-stub') throw new TypeError('Use an actual served model ID, not builtin-stub.');
+    if (redactEvidence(model, { env, apiKeyEnv: state.config.llm.api_key_env }) !== model) {
+      throw new TypeError('Use a public model ID, not a secret.');
+    }
+    if (save) await api.setConfigValue('model', model, { repoRoot, cwd });
+    state.config = { ...state.config, llm: { ...state.config.llm, model } };
+    state.routeNext = !model;
+    syncModelDisplay();
+    safeWrite(`Model: ${model || '(unset)'}\nHost: ${host()}\n`);
+  }
 
   function cancel() {
     if (state.pendingConfirm !== null) {
@@ -228,6 +255,7 @@ export function createDispatcher({
       throw new Error('No prepared worktree is available to retry; start the Ask or issue run first.');
     }
     const options = { ...request.options,
+      ...(state.routeNext ? { autoModel: true } : {}),
       ...(request.kind === 'run' ? { issue: Number(request.issue) } : {}),
       ...(retry ? { preparedRun: request.prepared } : {}),
       ...(continueConfirmed ? { confirm: false } : {}),
@@ -302,26 +330,77 @@ export function createDispatcher({
       }
       case 'model': {
         if (!args) {
-          output.write(`Model: ${state.config.llm.model || '(unset)'}\n`);
+          safeWrite(`Model: ${state.config.llm.model || '(unset)'}\nHost: ${host()}\n`);
           return true;
         }
-        const selection = /^(\S+)(?:\s+--save)?$/.exec(args);
+        const selection = /^([^\s-]\S*)(?:\s+(--save))?$/.exec(args);
         if (!selection) throw new TypeError('Use /model [ID|clear] [--save].');
-        state.config = await api.setConfigValue('model', selection[1] === 'clear' ? '' : selection[1], { repoRoot, cwd });
-        state.display.model = state.config.llm.model;
-        notify();
-        output.write(`Model: ${state.config.llm.model || '(unset)'}\n`);
+        await selectModel(selection[1], selection[2] === '--save');
         return true;
       }
       case 'effort': {
-        if (!args) {
+        if (!args || args === 'status') {
           output.write(`Effort: ${state.config.llm.effort}\n`);
           return true;
         }
-        state.config = await api.setConfigValue('effort', args, { repoRoot, cwd });
-        state.display.effort = state.config.llm.effort;
-        notify();
+        if (!['l', 'm', 'h', 'x', 'none'].includes(args)) throw new TypeError('Use /effort l|m|h|x|none|status.');
+        state.config = { ...state.config, llm: { ...state.config.llm, effort: args, effort_override: args } };
+        syncModelDisplay();
         output.write(`Effort: ${state.config.llm.effort}\n`);
+        return true;
+      }
+      case 'provider':
+        if (args) throw new TypeError('Use /provider.');
+        safeWrite(`Profile: ${state.fleetProfileId ?? (state.config.llm.profile || '(custom)')}\nHost: ${host()}\n`);
+        return true;
+      case 'fleet': {
+        const words = splitArguments(args);
+        const command = words[0] ?? 'list';
+        if (command === 'add') {
+          await api.runFleet(words, { cwd: currentRoot(), installationRoot: repoRoot, env,
+            input, output: { isTTY: output.isTTY, write: safeWrite }, errorOutput,
+            ...(askInput ? { question: askInput } : {}) });
+          return true;
+        }
+        if (!['list', 'use', 'probe'].includes(command)) throw new TypeError('Use /fleet [list|use ID|probe [ID] [--set-model [MODEL]]|add FLAGS].');
+        const fleet = await api.loadFleet({ cwd: currentRoot() });
+        if (command === 'list') {
+          if (words.length > 1) throw new TypeError('Use /fleet or /fleet list.');
+          if (!fleet.profiles.length) output.write('No fleet profiles configured.\n');
+          for (const profile of fleet.profiles) safeWrite(
+            `${profile.id} | ${new URL(profile.base_url).host} | ${profile.model} | ctx ${profile.context_max || '-'}\n`);
+          return true;
+        }
+        if (command === 'use') {
+          if (words.length !== 2) throw new TypeError('Use /fleet use ID.');
+          const profile = api.getFleetProfile(fleet, words[1]);
+          state.config = api.withFleetProfile(state.config, profile);
+          state.fleetProfileId = profile.id;
+          state.routeNext = false;
+          syncModelDisplay();
+          safeWrite(`Session profile: ${profile.id}\nModel: ${profile.model}\nHost: ${host()}\n`);
+          return true;
+        }
+        const rest = words.slice(1);
+        const id = rest[0] && !rest[0].startsWith('--') ? rest.shift() : null;
+        const save = rest[0] === '--set-model';
+        const supplied = save ? rest[1] : undefined;
+        if (rest.length && (!save || rest.length > 2 || supplied?.startsWith('--'))) {
+          throw new TypeError('Use /fleet probe [ID] [--set-model [MODEL]].');
+        }
+        const active = id ? api.withFleetProfile(state.config, api.getFleetProfile(fleet, id)) : state.config;
+        if (!active.llm.base_url) throw new Error('Select a session endpoint with /fleet use ID before probing.');
+        const models = await api.probeModelDetails(active.llm.base_url, { env, apiKeyEnv: active.llm.api_key_env });
+        safeWrite(`Models at ${host(active)}:\n` + models.map(({ id, context_max: capacity }) =>
+          `  ${id} | ctx ${capacity ?? '-'}\n`).join(''));
+        if (save) {
+          const model = supplied ?? (models.some(({ id }) => id === active.llm.model)
+            ? active.llm.model : models.length === 1 ? models[0].id : null);
+          if (!model || !models.some(({ id }) => id === model)) {
+            throw new TypeError('Choose a listed model with /fleet probe --set-model MODEL.');
+          }
+          await selectModel(model, true);
+        }
         return true;
       }
       case 'run': {
@@ -564,11 +643,21 @@ export async function startRepl({
 } = {}) {
   let tray;
   const terminal = input.isTTY === true;
-  const messages = { write(text) { if (tray) tray.write(text); else output.write(text); } };
+  const messages = { isTTY: output.isTTY, write(text) { if (tray) tray.write(text); else output.write(text); } };
   const errors = { write(text) { if (tray) tray.write(text, errorOutput); else errorOutput.write(text); } };
-  const { dispatch, state, banner, cancel } = createDispatcher({ ...options, output: messages, errorOutput: errors,
+  let question;
+  let shell;
+  const { dispatch, state, banner, cancel } = createDispatcher({ ...options, input, output: messages, errorOutput: errors,
     onStateChange() { if (tray) tray.render(); },
     onUiAction(command) { if (command === 'clear') { tray?.erase(); output.write('\x1b[2J\x1b[H'); } },
+    askInput(prompt) {
+      if (question) throw new Error('A shell question is already active.');
+      tray?.erase();
+      state.pendingQuestion = true;
+      shell.setPrompt(prompt);
+      shell.prompt();
+      return new Promise((resolve, reject) => { question = { resolve, reject }; });
+    },
   });
   const history = historyStore ?? createHistory({
     repoRoot: historyRoot ?? resolveProjectRoot(options.cwd ?? process.cwd()), env: options.env ?? process.env,
@@ -585,27 +674,29 @@ export async function startRepl({
   });
   terminalOutput.isTTY = terminal;
   terminalOutput.columns = output.columns ?? 80;
-  const shell = createInterface({ input, output: terminalOutput, terminal, historySize: 200,
+  shell = createInterface({ input, output: terminalOutput, terminal, historySize: 200,
     history: [...state.history].reverse(), removeHistoryDuplicates: true, completer: completeCommand });
   if (terminal) tray = createTray({ output, state, shell });
   shell.on('SIGINT', () => { if (!cancel()) shell.close(); });
-  shell.on('close', () => cancel());
+  shell.on('close', () => { cancel(); question?.reject(new RunCancelledError()); question = null; });
   shell.on('history', (entries) => {
-    const secret = suppressEcho || state.pendingSecret !== null;
+    const secret = suppressEcho || state.pendingSecret !== null || state.pendingQuestion;
     const safe = entries.filter((line, index) => !(secret && index === 0) &&
       safeHistoryLine(line, { env: options.env ?? process.env }));
     entries.splice(0, entries.length, ...safe);
   });
   shell.on('line', (line) => {
     tray?.committed();
+    const answer = question;
     const activeStop = line.trim() === '/stop' && state.controller !== null;
-    handledLines.push(activeStop);
+    handledLines.push(activeStop || Boolean(answer));
+    if (answer) { question = null; state.pendingQuestion = false; answer.resolve(line); }
     if (activeStop) cancel();
     if (state.controller !== null && ['/quit', '/q', 'exit'].includes(line.trim())) {
       cancel();
       shell.close();
     }
-    const secret = suppressEcho || state.pendingSecret !== null;
+    const secret = suppressEcho || state.pendingSecret !== null || Boolean(answer);
     history.record(line, { secret }).then(() => { state.history = history.lines; }).catch((error) => {
       historyError ??= error;
       errors.write(`${error.message}\n`);
