@@ -842,6 +842,8 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
   assert.match(logs[0], /AI_CONTEXT_MAX=\n/);
   assert.ok(logs.some((line) => line.includes('Merged PR #7')));
   assert.ok(!logs.join('\n').includes('private-key'));
+  assert.match(logs.join('\n'), /Reviewed worktree:[\s\S]*git diff --stat:[\s\S]*README.md/);
+  assert.match(logs.join('\n'), /roster eval roster-42-coder accept 1 n --minutes M/);
 });
 
 test('a failed reviewer keeps coder changes but blocks publication unless explicitly bypassed', async (context) => {

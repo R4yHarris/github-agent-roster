@@ -21,6 +21,7 @@ import { requirePassingReview } from './seats/reviewer.mjs';
 import { formatStatus, readStatus } from './lib/status.mjs';
 import { createFileVault, validateSecretName } from './vault/file.mjs';
 import { buildPublishEnv, resolvePublishModel } from './metrics/run.mjs';
+import { humanEvalHint } from './lib/seat-publication.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const help = `Commands:
@@ -282,6 +283,9 @@ export function createDispatcher({
             repoRoot: state.lastRun.repoRoot, cwd, env,
           });
           output.write(`Commented on issue #${state.lastRun.issue.number}; left it open for human AI-Eval.\n`);
+          output.write(`Human AI-Eval after merge (replace M with actual minutes):\n` +
+            `${humanEvalHint(state.lastRun.runs?.coder?.metrics?.session ??
+              state.lastRun.runs?.coder?.env?.AI_SESSION ?? `roster-${state.lastRun.issue.number}-coder`)}\n`);
         };
         let publication;
         try {

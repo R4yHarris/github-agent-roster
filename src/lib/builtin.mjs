@@ -23,6 +23,7 @@ import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
 import { buildPublishMessage, formatPublishCommand, formatPublishEnvironment } from './publication.mjs';
 import { archiveRunArtifacts } from './run-artifacts.mjs';
 import { createRunLog } from './run-log.mjs';
+import { humanEvalHint, recordedCoderRun } from './seat-publication.mjs';
 import { formatRoute, routeTask } from './route.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -95,7 +96,9 @@ export async function prepareBuiltinPublication(run, {
   if (!env.GITHUB_APP_ID || !env.GITHUB_APP_PRIVATE_KEY_PATH) {
     throw new Error('Publishing requires GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH');
   }
-  const publishEnv = buildPublishEnv({ config, env, run: run.runs.coder });
+  buildPublishEnv({ config, env, run: run.runs.coder });
+  const recorded = recordedCoderRun({ repoRoot: run.repoRoot ?? run.worktreePath, run: run.runs.coder });
+  const publishEnv = buildPublishEnv({ config, env, run: recorded });
   await requirePassingReview(run, skipReview || !isReviewRequired(config));
   await ensureUnchanged(run.recipePath, run.planner.recipe);
   await ensureUnchanged(run.taskPath, run.planner.task);
@@ -396,6 +399,13 @@ export async function runBuiltinIssue(issueNumber, {
         : model
         ? 'Publication unavailable: REVIEW.md failed; rerun the reviewer or explicitly use --skip-review.'
         : 'Publication unavailable: set model and complete a configured coder run with passing checks.'));
+  if (review.verdict === 'pass') {
+    const diffStat = result.excellence.files.length ? await git(worktreePath,
+      ['diff', '--stat', 'HEAD', '--', ...result.excellence.files], commandEnv) : '';
+    log(`Reviewed worktree: ${worktreePath}\ngit diff --stat:\n` +
+      redactEvidence(diffStat.trim() || '(no application diff)', { env, apiKeyEnv: config.llm.api_key_env }) +
+      `\nAfter merge, human AI-Eval (replace M with actual minutes):\n${humanEvalHint(sessions.coder)}`);
+  }
 
   const completed = {
     ...prepared, recipePath: planner.recipePath, taskPath: planner.taskPath,
