@@ -1,14 +1,15 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { TextDecoder } from 'node:util';
-import { parseRecipe } from '../lib/recipe.mjs';
-import { planAsk, planFromTask } from '../planner/stub.mjs';
+import { parseRecipe, RecipeError } from '../lib/recipe.mjs';
+import { planAsk, planFromTask, planStub } from '../planner/stub.mjs';
 import { appendMemory, readMemory, seatMemoryPath } from '../runtime/memory.mjs';
 import { writeEstimate } from '../runtime/estimate.mjs';
 import { buildRun } from '../metrics/run.mjs';
 import { createTools } from '../runtime/tools.mjs';
 import { ensureLocalPath } from '../lib/paths.mjs';
-import { taskSections } from '../planner/task.mjs';
+import { parseTaskDocument, taskSections } from '../planner/task.mjs';
+import { validatePlanningReceipt } from '../planner/receipt.mjs';
 
 function validateBuiltinRecipe(source, reference) {
   const recipe = parseRecipe(source);
@@ -39,8 +40,8 @@ export async function readPlannerHandoff({ worktree, reference, ask, issueTitle,
     readArtifact(worktree, 'RECIPE.yml'), readArtifact(worktree, 'TASK.md'),
   ]);
   if (recipe === null || task === null) return { plan: null, reason: 'Existing RECIPE/TASK handoff is incomplete' };
+  let runtimeRecipe = recipe;
   try {
-    validateBuiltinRecipe(recipe, reference);
     const metadata = planFromTask(task, ask, { issueTitle, issueBody });
     if (taskSections(task).sections.some(({ name }) => name === 'planning failure')) {
       throw new TypeError('Existing TASK records a failed planner attempt');
@@ -48,17 +49,32 @@ export async function readPlannerHandoff({ worktree, reference, ask, issueTitle,
     if (lockedModel && metadata.model && metadata.model !== lockedModel) {
       throw new TypeError('The routed planner must keep the selected fleet model');
     }
+    try {
+      validateBuiltinRecipe(recipe, reference);
+    } catch (error) {
+      if (!(error instanceof RecipeError)) throw error;
+      const document = parseTaskDocument(task, { expectedAsk: ask, issueTitle, issueBody });
+      validatePlanningReceipt(recipe, document);
+      runtimeRecipe = planStub(document.ask, { reference, title: document.title }).recipe;
+      validateBuiltinRecipe(runtimeRecipe, reference);
+    }
   } catch (error) {
     if (!(error instanceof Error)) throw error;
     return { plan: null, reason: 'Existing RECIPE/TASK do not validate for this issue; replanning is required' };
   }
-  return { plan: { recipe, task, recipePath: path.join(worktree, 'RECIPE.yml'),
+  return { plan: { recipe: runtimeRecipe, normalizedRecipe: runtimeRecipe !== recipe, task, recipePath: path.join(worktree, 'RECIPE.yml'),
     taskPath: path.join(worktree, 'TASK.md'), reused: true, run: null, turns: 0, usage: null, response: null } };
 }
 
 export async function preparePlannerHandoff(plan, { worktree, learningRoot, config, env }) {
-  if (await readArtifact(worktree, 'RECIPE.yml') !== plan.recipe || await readArtifact(worktree, 'TASK.md') !== plan.task) {
+  const recipe = await readArtifact(worktree, 'RECIPE.yml');
+  if ((plan.normalizedRecipe ? recipe !== null : recipe !== plan.recipe) ||
+      await readArtifact(worktree, 'TASK.md') !== plan.task) {
     throw new Error('Existing RECIPE/TASK changed after validation; refusing the cached handoff');
+  }
+  if (plan.normalizedRecipe) {
+    const tools = await createTools({ worktree, seat: 'planner', env, apiKeyEnv: config.llm.api_key_env });
+    await tools.write_file({ path: 'RECIPE.yml', content: plan.recipe });
   }
   const { task: _updatedTask, ...estimated } = await writeEstimate(plan.task, { worktree, learningRoot, config, env });
   return { ...plan, ...estimated };

@@ -43,7 +43,10 @@ planning immediately instead of consuming another turn for confirmation.
 Heading case and the `Original Ask`, `Acceptance Checks`/`acceptance_checks`,
 and `Allowed Files` aliases are accepted by all task consumers. Allowed Files
 must be explicit, and cached recipes must still match the builtin runtime
-schema; a model's task-plan YAML is not a runtime seat recipe.
+schema. A matching task-plan YAML receipt is validated and archived, then
+normalized to that fixed schema by the harness without another model request.
+`planner skipped artifacts valid` confirms the reuse path. Planning artifact
+names in Allowed Files remain write-protected and are excluded from coder scope.
 Cached Ask matching uses the issue title or first substantive body line after
 whitespace/backtick/template normalization. A valid cached handoff makes no
 planner/model request; an empty Original Ask never qualifies.
