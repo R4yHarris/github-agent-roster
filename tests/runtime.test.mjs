@@ -438,8 +438,17 @@ test('failed final tests receive another turn before acceptance while usage and 
       if (tests === 1) throw Object.assign(new Error('tests failed'), {
         code: 1, stdout: 'not ok private-value', stderr: 'warning: test output also captured',
       });
+      return { stdout: 'pass', stderr: '' };
+    },
+  });
+  assert.equal(turns, 3);
+  assert.equal(tests, 2);
+  assert.equal(result.excellence.pass, true);
+  assert.deepEqual(result.usage, { prompt_tokens: 3, completion_tokens: 3 });
+  assert.match(readFileSync(result.resultPath, 'utf8'), /Checks: PASS/);
+});
 
-      test('first exit 1 gets a repair turn and excellence waits for green tests', async () => {
+test('first exit 1 gets a repair turn and excellence waits for green tests', async () => {
         let turns = 0;
         let tests = 0;
         let verifies = 0;
@@ -472,8 +481,15 @@ test('failed final tests receive another turn before acceptance while usage and 
             return { pass: true, reasons: [] };
           },
         });
+        assert.equal(result.error, undefined);
+        assert.equal(result.testRepairs, 1);
+        assert.equal(tests, 2);
+        assert.equal(verifies, 1);
+        assert.deepEqual(events.filter(({ type }) => type === 'test-repair'),
+          [{ type: 'test-repair', attempt: 1, budget: 4 }]);
+});
 
-        test('a failed test defers the rest of its tool batch until a repair turn reads the summary', async () => {
+test('a failed test defers the rest of its tool batch until a repair turn reads the summary', async () => {
           let turns = 0;
           let writes = 0;
           let tests = 0;
@@ -506,7 +522,7 @@ test('failed final tests receive another turn before acceptance while usage and 
           assert.equal(writes, 1);
         });
 
-        test('an optional test that exits 1 cannot be waived into a successful final summary', async () => {
+test('an optional test that exits 1 cannot be waived into a successful final summary', async () => {
           let tests = 0;
           let turns = 0;
           let verifies = 0;
@@ -522,8 +538,13 @@ test('failed final tests receive another turn before acceptance while usage and 
             },
             verify: () => { verifies += 1; return { pass: true, reasons: [] }; },
           });
+          assert.match(result.error.message, /Test repair budget \(4\) exhausted/);
+          assert.equal(result.testRepairs, 4);
+          assert.equal(tests, 5);
+          assert.equal(verifies, 0);
+});
 
-          test('repair turns can reach their tool allowance without ending on the first failed check', async () => {
+test('repair turns can reach their tool allowance without ending on the first failed check', async () => {
             let turns = 0;
             let tests = 0;
             let changed = false;
@@ -551,27 +572,6 @@ test('failed final tests receive another turn before acceptance while usage and 
             assert.equal(result.testRepairs, 1);
             assert.equal(result.turns, 3);
             assert.equal(tests, 3);
-          });
-          assert.match(result.error.message, /Test repair budget \(4\) exhausted/);
-          assert.equal(result.testRepairs, 4);
-          assert.equal(tests, 5);
-          assert.equal(verifies, 0);
-        });
-        assert.equal(result.error, undefined);
-        assert.equal(result.testRepairs, 1);
-        assert.equal(tests, 2);
-        assert.equal(verifies, 1);
-        assert.deepEqual(events.filter(({ type }) => type === 'test-repair'),
-          [{ type: 'test-repair', attempt: 1, budget: 4 }]);
-      });
-      return { stdout: 'pass', stderr: '' };
-    },
-  });
-  assert.equal(turns, 3);
-  assert.equal(tests, 2);
-  assert.equal(result.excellence.pass, true);
-  assert.deepEqual(result.usage, { prompt_tokens: 3, completion_tokens: 3 });
-  assert.match(readFileSync(result.resultPath, 'utf8'), /Checks: PASS/);
 });
 
 test('an unsafe final-test side effect stops the loop without asking the model to hide it', async (context) => {

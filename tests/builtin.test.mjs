@@ -348,8 +348,17 @@ test('test budget exhaustion runs all four repairs, then writes failing review w
     failed = error.result;
     return /Test repair budget \(4\) exhausted/.test(error.message);
   });
+  assert.equal(tests, 5);
+  assert.equal(coderTurns, 5);
+  assert.equal(failed.repairBudgetExhausted, true);
+  assert.equal(failed.review.verdict, 'fail');
+  assert.match(readFileSync(failed.review.reviewPath, 'utf8'), /Verdict: fail[\s\S]*repair budget \(4\) exhausted/);
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    assert.match(options.stderr, new RegExp(`Tests failed\\. Repair ${attempt} of 4\\.`));
+  }
+});
 
-  test('a repaired failing test passes excellence, read-only review, and publication staging without widening TASK', async (context) => {
+test('a repaired failing test passes excellence, read-only review, and publication staging without widening TASK', async (context) => {
     const options = fixture(context);
     let tests = 0;
     let coderTurns = 0;
@@ -400,15 +409,6 @@ test('test budget exhaustion runs all four repairs, then writes failing review w
     const prepared = await prepareBuiltinPublication(result, { cwd: options.cwd, config: llmConfig,
       env: { ...options.env, GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'test-only-key.pem' } });
     assert.equal(git(prepared.worktreePath, 'diff', '--cached', '--name-only'), 'README.md\nsmoke.test.mjs');
-  });
-  assert.equal(tests, 5);
-  assert.equal(coderTurns, 5);
-  assert.equal(failed.repairBudgetExhausted, true);
-  assert.equal(failed.review.verdict, 'fail');
-  assert.match(readFileSync(failed.review.reviewPath, 'utf8'), /Verdict: fail[\s\S]*repair budget \(4\) exhausted/);
-  for (let attempt = 1; attempt <= 4; attempt += 1) {
-    assert.match(options.stderr, new RegExp(`Tests failed\\. Repair ${attempt} of 4\\.`));
-  }
 });
 
 test('--confirm is the explicit slice pause, including declared file scope', async (context) => {
