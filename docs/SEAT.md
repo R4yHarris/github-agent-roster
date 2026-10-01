@@ -72,6 +72,14 @@ planning-only execution. See [Ask classification](SDLC.md#agile-mapping).
 
 The result exposes `stages`, paths to the context/research/result artifacts,
 `tests`, `testsSkipped`, `turns`, `model`, `usage`, `research`, and `excellence`.
+Configured runs also expose `testRepairs`, `repairFiles`, and (on exhaustion)
+`repairBudgetExhausted`. Failed tests are repaired up to four times after the
+initial run, with a fresh tool-turn budget per attempt and redacted diagnostics.
+The harness grants only regular failing test files identified in Node failure
+locations in addition to TASK scope; reviewer and publication use that same
+recorded scope. TASK.md itself remains unchanged. Only green tests can pass;
+budget exhaustion writes a failing review without reviewer inference.
+Timeouts and denied tool paths still stop with an unverified result.
 Research usage joins coder usage; loop and research turns are separate.
 Configured runs expose the existing contracts AI-Run without inventing unknown
 counts. Private before/after snapshots are in-process evidence, not source

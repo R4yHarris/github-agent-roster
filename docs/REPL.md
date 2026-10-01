@@ -85,6 +85,14 @@ Reviewer start says `Checking the diff against the task.` These are status
 projections only: they do not add tools, checks, edits, or work. A stub coder
 says `Preparing the task summary.` rather than claiming an implementation.
 
+Failed tests keep the coder running for up to four repair attempts after the
+initial failure. It reads a bounded, redacted summary, repairs allowed files
+plus any specifically identified failing test, and reruns `node --test`.
+Each repair streams `Tests failed. Repair 1 of 4.` with its actual attempt.
+Excellence and reviewer wait for green tests or exhaustion of that budget;
+exit 1 is never done. Timeouts and denied paths remain failures, and initiative
+plans still stop after PLAN.md.
+
 The existing timestamped technical metadata is appended **only** to the issue repository's
 `.roster/runs/roster-N-coder.log`: seat starts, model/endpoint host, HTTP
 phase/status/error class, tool names/paths, managed file writes, mode, and elapsed

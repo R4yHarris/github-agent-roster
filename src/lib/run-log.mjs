@@ -76,6 +76,7 @@ export async function createRunLog({
   }
 
   function humanEventText(name, event) {
+    if (event.type === 'test-repair') return `Tests failed. Repair ${event.attempt} of ${event.budget}.`;
     if (event.type === 'http' && event.phase === 'start') {
       return name === 'coder' && event.effort
         ? `Drafting at ${event.effort} effort. Model prior: ${event.modelPrior ?? 'unknown'}.`
@@ -99,6 +100,11 @@ export async function createRunLog({
 
   function eventText(event) {
     switch (event.type) {
+      case 'test-repair':
+        if (event.budget !== 4 || !Number.isInteger(event.attempt) || event.attempt < 1 || event.attempt > event.budget) {
+          throw new TypeError('Invalid live test repair event');
+        }
+        return `test repair ${event.attempt}/${event.budget}`;
       case 'waiting':
       case 'timeout': {
         if (typeof event.host !== 'string' || !/^[A-Za-z0-9.:[\]-]{1,255}$/.test(event.host) ||

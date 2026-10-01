@@ -5,10 +5,12 @@ loop and memory append, before the harness creates RESULT.md. It does not
 grade its own work with a human AI-Eval or claim that a passing test proves
 every requirement.
 For a configured coder, the same gate also checks each final summary
-inside the bounded tool loop. Passing final tests and a passing gate end
-the loop; a failed final test can be repaired within the remaining
-turn budget using redacted diagnostics. Protected-path and secret
-failures stop immediately rather than offering a chance to conceal them.
+inside the bounded tool loop, but only after tests turn green. A nonzero test
+exit starts a separate repair attempt, with up to four repairs after the
+initial run. Each attempt has a fresh configured tool-turn allowance and
+receives a bounded, redacted failure summary; exit 1 is never completion.
+Excellence and reviewer wait for green tests or exhaustion of that repair
+budget. Timeouts and denied tool paths remain terminal failures.
 After memory is recorded, the gate runs again against the verified
 worktree snapshot before writing RESULT.md. The empty-URL stub has no
 preliminary pass and remains an explicitly unverified demonstration.
@@ -22,7 +24,8 @@ Its checklist is:
 
 - Tests were executed successfully after the final edit, unless initial task
   frontmatter explicitly declares `tests: none`.
-- Changed paths stay inside TASK.md's allowed paths and outside protected
+- Changed paths stay inside TASK.md's allowed paths plus identified failing
+  test files granted by the harness, and outside protected
   policy, workflow, secret, contracts, evaluation, notebook, and managed paths.
 - Changed file bodies and the Git diff contain no detected secret material.
 - The result has a summary and records the actual model ID and tool-loop turns.

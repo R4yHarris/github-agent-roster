@@ -20,7 +20,10 @@ of task class, difficulty, or filename. Directory listings expose only allowed
 files and their ancestor directories; recursive searches visit only that scope.
 Explicit reads, listings, or searches outside it fail with a TASK scope denial.
 Tests/fixtures and harness sources are denied unless TASK explicitly allows
-their paths. Secrets, Git metadata, human-owned policy/workflows, and contracts
+their paths, with one narrow repair exception: a regular test file identified
+by failed Node test diagnostics may be read and repaired. This does not grant
+the tests directory, sibling tests, imported app code, or harness sources.
+Secrets, Git metadata, human-owned policy/workflows, and contracts
 remain protected even with broad TASK scope. Test execution remains a separate
 permission; read scope does not waive the acceptance checks.
 
@@ -86,8 +89,10 @@ the write schema accepts only README.md. Reads may precede the edit, but a
 successful README write is required before tests or final completion,
 including tasks that explicitly waive tests. Directory listing and search
 are denied on this class, so requests for RESEARCH.md, tests/fixtures, or a
-repo-wide `search_text` cannot enlarge the context. A tool denial is returned
-as an error, not file content or evidence of completed work. Other task
+repo-wide `search_text` cannot enlarge the context. Identified failing tests
+are added to the read/write schemas only after a failed test run.
+A tool denial terminates coding with an unverified result, not file content
+or evidence of completed work. Other task
 classes/difficulties/scopes retain the existing behavior below.
 
 Malformed coder tool-call arrays/JSON arguments get exactly one tool-only repair.
@@ -157,8 +162,8 @@ is required.
 configured model API key and App/GitHub credentials from the child
 environment, marks the child as `ROSTER_SEAT=coder` to preserve the human-only
 evaluation boundary, applies a 60-second timeout, and captures test output.
-A nonzero Node exit is a failed tool result rather than a process crash,
-so the coder can use another turn to fix it. A timeout is an explicit
+A nonzero Node exit is a failed tool result rather than completion,
+so the coder receives its summary and a fresh repair attempt. A timeout is an explicit
 error. Final verification must pass before a configured run reports
 success or publishes. The [excellence gate](EXCELLENCE.md) verifies actual
 diff paths and secret checks before RESULT.md and again before publication;
@@ -168,10 +173,19 @@ the model tool and denies automatic execution. A test-required task fails
 before a model request; only an explicit TASK.md `tests: none` waiver can
 run without tests. The `tools.internet` preference is stored only and adds
 no internet or search tool.
-After a final summary, the configured coder runs final tests and checks
-excellence before ending its loop. Failed final tests return redacted,
-bounded diagnostics for another tool turn while the configured turn
-budget remains. An unsafe path or detected secret stops immediately;
+After a final summary, the configured coder runs final tests. Every failed
+test run (model-requested or final) starts a repair, up to four after the initial
+failure, independent of already consumed tool turns. Remaining calls in a failed
+test batch are deferred so the model reads the summary before further edits.
+If a repair consumes its tool-turn allowance without a summary, the harness
+reruns tests: another failure starts the next repair, while green tests request
+a final summary without additional tools. The first failed check cannot end
+the run just because the ordinary tool-turn allowance was already consumed.
+Each repair logs `Tests failed. Repair 1 of 4.` with its actual attempt number.
+After the fourth unsuccessful repair, RESULT records budget exhaustion and
+review fails without model inference. Excellence runs only after green tests
+or terminal failure; the reviewer runs after that finalized result.
+An unsafe path or detected secret cannot pass final verification;
 a summary alone is never a passing gate. The harness checks the verified
 worktree snapshot again after recording memory. Successful model and
 reported usage feed the run journal and contracts-compatible AI-Run;

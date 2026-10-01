@@ -15,6 +15,22 @@ function fixture(t) {
 
 const config = { llm: { base_url: '', model: '' } };
 
+test('each test repair logs its exact attempt without failure output', async (t) => {
+  const options = fixture(t);
+  const logger = await createRunLog(options);
+  await logger.seat('coder', options.session, config, async (onEvent) => {
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      await onEvent({ type: 'test-repair', attempt, budget: 4, stdout: 'PRIVATE_TEST_OUTPUT' });
+    }
+    await assert.rejects(onEvent({ type: 'test-repair', attempt: 5, budget: 4 }), /Invalid live test repair/);
+    return {};
+  });
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    assert.ok(options.text.includes(`Tests failed. Repair ${attempt} of 4.\n`));
+  }
+  assert.doesNotMatch(readFileSync(logger.path, 'utf8'), /PRIVATE_TEST_OUTPUT/);
+});
+
 test('planner start streams one human action while timestamps and elapsed metadata remain only in the log', async (t) => {
   const options = fixture(t);
   let elapsed = 100;

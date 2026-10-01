@@ -1,11 +1,12 @@
 import { createBuiltinChat } from '../lib/llm.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
-import { toolDefinitions } from './tools.mjs';
+import { taskAndRepairFiles, toolDefinitions } from './tools.mjs';
 import { redactEvidence, taskSkipsTests } from './excellence.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
 import { applyReadmeStatus } from './readme-status.mjs';
 
 class MalformedCoderTools extends Error {}
+export const testRepairBudget = 4;
 
 function decodeCalls(message, offered, ids, turn) {
   if (message.tool_calls !== undefined && !Array.isArray(message.tool_calls)) {
@@ -80,11 +81,63 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   const ids = new Set();
   let repaired = false;
   let needsTools = false;
+  let attemptTurns = 0;
+  let finalSummaryOnly = false;
+  progress.testRepairs = 0;
+  progress.repairFiles = [];
+  const repairTests = async (tests) => {
+    if (!Number.isSafeInteger(tests?.exit_code) || tests.exit_code < 0) {
+      throw new TypeError('run_test must return a nonnegative integer exit_code');
+    }
+    progress.tests = tests;
+    if (tests.exit_code === 0) return false;
+    progress.repairFiles = taskAndRepairFiles([], tests.repair_files ?? progress.repairFiles);
+    const output = redactEvidence([tests.stdout, tests.stderr].filter(Boolean).join('\n'), {
+      env, apiKeyEnv: config.llm.api_key_env,
+    }).slice(0, 4096);
+    const failure = `Final node --test failed (exit ${tests.exit_code}):\n${output}`;
+    if (progress.testRepairs === testRepairBudget) {
+      progress.repairBudgetExhausted = true;
+      throw new Error(`${failure}\nTest repair budget (${testRepairBudget}) exhausted`);
+    }
+    progress.testRepairs += 1;
+    attemptTurns = 0;
+    finalSummaryOnly = false;
+    await onEvent?.({ type: 'test-repair', attempt: progress.testRepairs, budget: testRepairBudget });
+    messages.push({ role: 'user', content: `${failure}\n` +
+      `Repair ${progress.testRepairs} of ${testRepairBudget}. Read this failure summary and repair TASK-allowed files` +
+      (progress.repairFiles.length ? ` plus the failing tests: ${progress.repairFiles.join(', ')}` : '') +
+      '. Rerun node --test, then provide a new summary. No change is verified yet.' });
+    return true;
+  };
   await onEvent?.({ type: 'implementation', path: 'model' });
-  for (let turn = 1; turn <= config.seat.turn_budget + Number(repaired); turn += 1) {
-    progress.turns = turn;
+  for (;;) {
+    if (attemptTurns === config.seat.turn_budget + Number(repaired)) {
+      if (progress.testRepairs === 0 || finalSummaryOnly) {
+        throw new Error(`Coder turn budget (${config.seat.turn_budget}) exhausted`);
+      }
+      if (await repairTests(await tools.run_test({}))) continue;
+      attemptTurns = 0;
+      finalSummaryOnly = true;
+      needsTools = false;
+      messages.push({ role: 'user', content: 'Repair tests are green. Return a final summary only; do not request more tools.' });
+    }
+    attemptTurns += 1;
+    progress.turns += 1;
+    const turn = progress.turns;
     progress.usage = null;
-    const response = await chat({ messages, tools: definitions });
+    const currentDefinitions = readmeOnlyDocs && progress.repairFiles.length ? definitions.map((tool) =>
+      ['read_file', 'write_file'].includes(tool.function.name) ? {
+        ...tool, function: { ...tool.function, parameters: { ...tool.function.parameters,
+          properties: { ...tool.function.parameters.properties,
+            path: { type: 'string', enum: [
+              ...(tool.function.name === 'read_file' ? ['TASK.md', 'README.md'] : ['README.md']),
+              ...progress.repairFiles,
+            ] },
+          },
+        } },
+      } : tool) : definitions;
+    const response = await chat({ messages, tools: currentDefinitions });
     progress.response = chat.lastResponse;
     usages.push(response.usage);
     progress.usage = mergeUsage(...usages);
@@ -92,6 +145,11 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     if (!message || typeof message !== 'object' || !['stop', 'tool_calls', undefined, null]
       .includes(finishReason)) {
       throw new Error('LLM coder returned an unsupported chat response');
+    }
+    if (finalSummaryOnly && (finishReason === 'tool_calls' ||
+        message.tool_calls !== undefined && (!Array.isArray(message.tool_calls) || message.tool_calls.length) ||
+        typeof message.content !== 'string' || !message.content.trim())) {
+      throw new Error('Coder must return a final summary without tools after green repair tests');
     }
     let calls;
     let deterministic;
@@ -118,27 +176,36 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       calls = [];
     }
     if (calls.length) {
-      if (turn === config.seat.turn_budget + Number(repaired)) {
+      if (finalSummaryOnly) throw new Error('Coder requested tools instead of the required final summary after green repair tests');
+      if (progress.testRepairs === 0 && attemptTurns === config.seat.turn_budget + Number(repaired)) {
         throw new Error(`Coder turn budget (${config.seat.turn_budget}) exhausted before a summary`);
       }
       if (finishReason === 'stop') throw new Error('LLM coder stopped while requesting tools');
       calls.forEach((call) => ids.add(call.id));
       messages.push({ role: 'assistant', content: message.content ?? null,
         tool_calls: calls.map(({ args: _args, ...call }) => call) });
-      for (const call of calls) {
-        let result;
-        try {
-          result = await tools[call.function.name](call.args);
-        } catch (error) {
-          if (!(error instanceof Error)) throw error;
-          if (error.code === 'ROSTER_RUN_LOG') throw error;
-          result = { error: error.message };
-        }
+      let failedTests;
+      for (const [index, call] of calls.entries()) {
+        const result = await tools[call.function.name](call.args);
         messages.push({
           role: 'tool', tool_call_id: call.id,
-          content: typeof result === 'string' ? result : JSON.stringify(result),
+          content: redactEvidence(typeof result === 'string' ? result : JSON.stringify(result), {
+            env, apiKeyEnv: config.llm.api_key_env,
+          }),
         });
+        if (call.function.name === 'run_test') {
+          progress.tests = result;
+          if (result.exit_code !== 0) {
+            failedTests = result;
+            for (const pending of calls.slice(index + 1)) {
+              messages.push({ role: 'tool', tool_call_id: pending.id,
+                content: 'Deferred after failed tests; read the failure summary before more edits.' });
+            }
+            break;
+          }
+        }
       }
+      if (failedTests) await repairTests(failedTests);
       continue;
     }
     if (!deterministic && (finishReason === 'tool_calls' || typeof message.content !== 'string' ||
@@ -147,13 +214,19 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     }
     const usage = mergeUsage(...usages);
     const testsSkipped = taskSkipsTests(context.task);
-    const tests = testsSkipped ? undefined : await tools.run_test({});
+    const tests = testsSkipped && progress.testRepairs === 0 ? undefined : await tools.run_test({});
     progress.tests = tests;
     const summary = deterministic ?? message.content.trim();
     const result = {
       mode: 'llm', model: config.llm.model, summary, usage, turns: turn, tests, testsSkipped,
       implementationPath: progress.implementationPath ?? 'model',
+      testRepairs: progress.testRepairs, repairFiles: progress.repairFiles,
     };
+    if (tests && tests.exit_code !== 0) {
+      messages.push({ role: 'assistant', content: summary });
+      await repairTests(tests);
+      continue;
+    }
     const excellence = await verify(result);
     if (typeof excellence?.pass !== 'boolean' || !Array.isArray(excellence.reasons)) {
       throw new TypeError('Coder excellence verifier returned an invalid report');
@@ -169,19 +242,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     if (!tests || tests.exit_code === 0) {
       throw new Error('Coder excellence verifier did not confirm passing final tests');
     }
-    const output = redactEvidence([tests.stdout, tests.stderr].filter(Boolean).join('\n'), {
-      env, apiKeyEnv: config.llm.api_key_env,
-    }).slice(0, 4096);
-    const failure = `Final node --test failed (exit ${tests.exit_code}):\n${output}`;
-    if (turn === config.seat.turn_budget + Number(repaired)) {
-      throw new Error(`${failure}\nCoder turn budget (${config.seat.turn_budget}) exhausted`);
-    }
-    messages.push({ role: 'assistant', content: summary });
-    messages.push({ role: 'user', content: `${failure}\nFix the failing tests using only the offered tools, ` +
-      'then provide a new summary. No change is verified yet.' });
   }
-
-  throw new Error(`Coder turn budget (${config.seat.turn_budget}) exhausted`);
 }
 
 export async function runLoop(options) {
