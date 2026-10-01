@@ -4,6 +4,10 @@ The configured builtin coder can use only the function tools listed in
 `seat.tools` in the [Roster config](../roster.config.example.yml). The builtin
 planner has only the artifact-scoped writer described below; reviewer has no
 model-invokable tools. The offline stub makes no model tool calls or test runs.
+The opt-in [testing log](REPL.md#opt-in-testing-log) records tool start/result
+metadata, including refused path classes and test exit codes, without arguments
+or output bodies. Result events add no human status lines. Debug log files are
+managed and protected from coder reads/writes, even with broad TASK scope.
 The [tool implementation](../src/runtime/tools.mjs) offers the coder exactly
 five functions:
 

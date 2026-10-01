@@ -33,6 +33,46 @@ function dispatcher({ env = {}, services = {}, config: activeConfig = config } =
   return { ...commands, output, errorOutput };
 }
 
+test('/debug toggles process logging without config changes and /log debug tails its file', async (t) => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'roster-repl-debug-'));
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  const output = capture();
+  let active;
+  const shell = createDispatcher({ cwd: repoRoot, repoRoot: root, config, env: {},
+    output, errorOutput: capture(), services: {
+      repositoryRoot: () => repoRoot,
+      setConfigValue: () => assert.fail('Debug must not persist config'),
+      runBuiltinIssue: async (issue, options) => {
+        active = options.debug;
+        await options.debug.record({ repoRoot, issue: Number(issue), seat: 'coder', event: { type: 'seat-start' } });
+        return { issue: { number: Number(issue) }, repoRoot, askKind: 'slice' };
+      },
+    } });
+  await shell.dispatch('/run 42');
+  assert.equal(active.path, null);
+  await shell.dispatch('/debug on');
+  await shell.dispatch('/run 42');
+  const before = readFileSync(active.path, 'utf8');
+  await shell.dispatch('/debug off');
+  await shell.dispatch('/run 42');
+  assert.equal(readFileSync(active.path, 'utf8'), before);
+  assert.equal(shell.state.debug.enabled, false);
+  await shell.dispatch('/log debug');
+  assert.match(output.text, /Debug logging on\.\n/);
+  assert.match(output.text, /Debug logging off\.\n/);
+  assert.match(output.text, /"phase":"seat-start"/);
+  await assert.rejects(shell.dispatch('/debug true'), /Use \/debug on or \/debug off/);
+});
+
+test('ROSTER_DEBUG=1 enables a shell process until /debug off overrides it', async () => {
+  const shell = dispatcher({ env: { ROSTER_DEBUG: '1' } });
+  assert.equal(shell.state.debug.enabled, true);
+  await shell.dispatch('/debug off');
+  assert.equal(shell.state.debug.enabled, false);
+  await shell.dispatch('/log debug');
+  assert.match(shell.output.text, /No debug events recorded in this process/);
+});
+
 test('slash dispatcher calls existing services and keeps one run in the shell', async () => {
   const calls = [];
   let activeConfig = config;

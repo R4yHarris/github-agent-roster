@@ -17,6 +17,8 @@ agents and CI.
 | `/run N [--auto-model] [--confirm]` or `/run --issue N [--auto-model] [--confirm]` | Classify before seats. Slices print outcome, allowed files, checks, and effort, then automatically continue through coder/read-only-reviewer in the same run. Only `--confirm` pauses after the summary; no `--auto` or second `/run` is required. Feature/initiative writes PLAN only; clarify stops. Auto-model chooses a registered fleet profile without rewriting the saved default; no eligible profile uses the deterministic stub. |
 | `/status [N] [--offline]` | Show an issue, its open branch PR, and worktree path. Defaults to the last run or created issue; offline reads only the cached assignment and reports PR state as unknown. |
 | `/log N` | Tail up to 50 safe metadata lines from each local `.roster/runs/roster-N-*.log`, without network or seat execution. |
+| `/debug on` or `/debug off` | Enable or stop testing metadata logging for this process only; never write config or change environment variables. |
+| `/log debug` | Tail up to 50 validated JSONL events from this process's most recent debug file, even after debug is off. |
 | `/eval TARGET accept\|reject\|rework 1-5 y\|n [--minutes N] [--comment "TEXT"]` | Record the [human retrospective](RETRO.md), including actual minutes and local feedback. |
 | `/publish [SUBJECT] [--model MODEL] [--skip-review]` | Publish with an unchanged passing REVIEW.md, or explicitly bypass that verdict. After `/run N`, the default subject is `feat: issue N`; a confirmed merge comments on the still-open issue with PR URL and model ID. Local asks default to `feat: local ask`, publish from their worktree, and never comment on an issue. Otherwise supply a conventional subject and declare the GHCP model with `--model` or `AI_MODEL`. Completed seat metadata wins over the flag. |
 | `/stats [REF]` | Summarize contracts and local AI-Run records, optionally at a Git ref. |
@@ -112,6 +114,38 @@ completion counts. Unknown counts stay `-`, never invented zero. `/log N`
 reads every matching seat log with a bounded tail. Model/mode/status/elapsed and
 managed-write metadata stays log-only; stderr is not a technical transcript.
 Explicit `/log` and `/status` diagnostics retain the original technical evidence.
+
+### Opt-in testing log
+
+Debug logging is **off by default**. Start the shell with `roster --debug`, use
+the leading flag for a command (`roster --debug run --issue N`), set
+`ROSTER_DEBUG=1`, or enter `/debug on`. `/debug off` stops new events even when
+the environment originally enabled logging. These choices are process-local,
+not a saved config preference.
+
+The first enabled seat event creates
+`.roster/logs/debug-<opaque-process-session>.jsonl` in the issue repository.
+Disabled logging creates no debug file or logs directory. That directory is
+gitignored; consumer repositories must ignore `.roster/logs/` too, otherwise
+logging fails explicitly rather than creating a publishable debug file.
+It is excluded from task snapshots and publication, and denied to coder tools.
+
+Each line has `time`, `issue` (or null for local asks), `seat`, `phase`,
+`tool_name`, `path_class`, `finish_reason`, `test_name`, `exit_code`, `repair`
+(`{"n":1,"of":4}` for test repairs), and `elapsed_ms`. Inapplicable fields are
+null; elapsed time starts when the process logger is created.
+A refused vendor list is `tool-denied` with `path_class: "vendor"`,
+not a stored path or error body. `test_name` is the controlled runner label
+`node --test`, not copied test-output titles. Finish metadata uses known
+reason labels, `redacted`, or `unsupported`; arbitrary provider text is not
+copied. Human/technical finish diagnostics retain their existing named reasons.
+
+The file never receives prompts, completions, file or test-output bodies,
+token counts, credentials, PEM paths, environment values, model IDs, or
+endpoint addresses. Enabling debug adds **no JSON lines to shell output**:
+the existing one-line human status remains unchanged. Only an explicit
+`/log debug` request displays a validated tail. Tail reading refuses malformed
+or extra fields rather than printing untrusted content.
 
 ### Local LLM cold starts
 

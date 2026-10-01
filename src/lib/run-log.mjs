@@ -4,6 +4,7 @@ import { performance } from 'node:perf_hooks';
 import { ensureLocalPath } from './paths.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
 import { timeoutHint, validateRequestTimeout, validateRetryCommand } from '../llm/request.mjs';
+import { createDebugLog } from './debug-log.mjs';
 
 const seats = ['planner', 'coder', 'reviewer'];
 const tools = ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text'];
@@ -38,6 +39,7 @@ function errorClass(error) {
 export async function createRunLog({
   repoRoot, session, env = process.env, apiKeyEnv = 'ROSTER_API_KEY',
   errorOutput = process.stderr, now = () => new Date(), clock = () => performance.now(),
+  debug = createDebugLog({ env }), issue = null,
 }) {
   if (typeof repoRoot !== 'string' || typeof errorOutput?.write !== 'function' ||
       typeof now !== 'function' || typeof clock !== 'function') {
@@ -159,6 +161,11 @@ export async function createRunLog({
         const location = typeof event.path === 'string' ? safe(event.path).slice(0, 512) : '[invalid]';
         return `tool ${event.name}` + (event.path === undefined ? '' : ` path=${JSON.stringify(location)}`);
       }
+      case 'tool-result':
+        if (!tools.includes(event.name) || !['ok', 'error', 'denied'].includes(event.status)) {
+          throw new TypeError('Invalid live tool result event');
+        }
+        return `tool result ${event.name} ${event.status}`;
       case 'wrote':
         if (!artifacts.includes(event.path)) throw new TypeError('Invalid live artifact event');
         return `wrote ${event.path}`;
@@ -177,6 +184,8 @@ export async function createRunLog({
     let modelEvent;
     const onEvent = async (event) => {
       const text = eventText(event);
+      await debug.record({ repoRoot, issue, seat: name, event });
+      if (event.type === 'tool-result') return;
       if (event.type === 'model') {
         if (text === modelEvent) return;
         modelEvent = text;
@@ -184,6 +193,7 @@ export async function createRunLog({
       await append(`seat ${name} ${text}`, humanEventText(name, event));
     };
     const started = clock();
+    await debug.record({ repoRoot, issue, seat: name, event: { type: 'seat-start' } });
     await append(`start seat ${name} session=${safe(seatSession)}`,
       name === 'coder' && mode === 'stub' ? 'Preparing the task summary.' : seatActions[name]);
     await onEvent({ type: 'model', model: mode === 'stub' ? 'builtin-stub' : config.llm.model,
@@ -200,9 +210,11 @@ export async function createRunLog({
       return result;
     } catch (error) {
       mode = error?.result?.mode ?? mode;
+      await debug.record({ repoRoot, issue, seat: name, event: { type: 'seat-error' } });
       await append(`seat ${name} error class=${errorClass(error)}`);
       throw error;
     } finally {
+      await debug.record({ repoRoot, issue, seat: name, event: { type: 'seat-end' } });
       await append(`seat ${name} elapsed_ms=${Math.max(0, Math.round(clock() - started))} mode=${mode}`);
     }
   }
