@@ -329,6 +329,13 @@ export async function runBuiltinIssue(issueNumber, {
   }, { cwd: prepared.repoRoot, env: { ...metricEnv, ...run?.env }, createDirectory: true, run });
   const plannerRun = planner.run;
   if (!planner.reused) await recordSeat(sessions.planner, plannerRun);
+  if (planner.requiresRun && !planner.error) {
+    log(`TASK validates; planning-only handoff: ${planner.taskPath}\n` +
+      `Review the single outcome and allowed files, then /run ${prepared.issue.number}. No coder or publisher ran.`);
+    return { ...prepared, planner, recipePath: planner.recipePath, taskPath: planner.taskPath,
+      sessions, runs: { planner: plannerRun, coder: null, reviewer: null }, run: null, command: null,
+      planningOnly: true, failed: false, archivePath, logPath: liveLog.path, logSession: liveLog.session };
+  }
   if (planner.error) log(`Planning failed: ${planner.error}\nRECIPE/TASK stubs are unverified; no configured coder will run.`);
   const coderConfig = { ...activeConfig, llm: Object.freeze({
     ...activeConfig.llm, model: planner.metadata.model || activeConfig.llm.model,

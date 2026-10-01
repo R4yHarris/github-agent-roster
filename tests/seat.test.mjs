@@ -32,7 +32,7 @@ function fixture(context) {
     'throw new Error("Standalone coder must not publish");\n');
   writeFileSync(path.join(repoRoot, 'roster.config.example.yml'), example);
   writeFileSync(path.join(worktree, 'AGENTS.md'), '# Instructions\nStay scoped.\n');
-  const taskText = planStub('Update README.md.', { title: 'Add a Status section' }).task;
+  const taskText = planStub('Update README.md.', { title: 'Add a Status section', metadata: { task_class: 'feat', difficulty: 4 } }).task;
   writeFileSync(path.join(worktree, 'TASK.md'), taskText);
   writeFileSync(path.join(worktree, 'README.md'), '# Before\n');
   return { root, repoRoot, worktree, taskText, task: 'issue-42', session: 'coder-42', env: {},

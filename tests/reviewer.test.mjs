@@ -21,7 +21,7 @@ function fixture(context) {
     path.join(repoRoot, 'principals', 'reviewer.md'));
   mkdirSync(path.join(worktree, 'src'), { recursive: true });
   writeFileSync(path.join(worktree, 'TASK.md'),
-    '# Task: Update app\n\n## Acceptance checks\n- node --test exits 0\n' +
+    '# Task: Update app\n\ndifficulty: 4\ntask_class: feat\n\n## Acceptance checks\n- node --test exits 0\n' +
     '- app exports ready\n\n## Files allowed\n- `src/app.mjs`\n\n## Ask\nUpdate app.\n');
   const source = path.join(worktree, 'src', 'app.mjs');
   writeFileSync(source, 'export const ready = false;\n');

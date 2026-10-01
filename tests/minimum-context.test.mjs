@@ -7,7 +7,7 @@ import test from 'node:test';
 import { parseConfig } from '../src/lib/config.mjs';
 import { planStub } from '../src/planner/stub.mjs';
 import { loadContext } from '../src/runtime/context.mjs';
-import { isMinimumDocsTask } from '../src/runtime/context-policy.mjs';
+import { taskContextPolicy } from '../src/runtime/context-policy.mjs';
 import { runCoder } from '../src/seats/coder.mjs';
 import { runReviewer } from '../src/seats/reviewer.mjs';
 
@@ -42,12 +42,10 @@ test('difficulty1 docs uses exactly TASK, allowed files, read-before-write and s
   assert.deepEqual(context.skills.map(({ name }) => name), context.skillNames);
   assert.deepEqual(context.memory, []);
   assert.equal(context.agents, null);
-  assert.deepEqual([...context.pack.matchAll(/^## (TASK\.md|Allowed files|read-before-write|small-diff)$/gm)].map((match) => match[1]),
-    ['TASK.md', 'Allowed files', 'read-before-write', 'small-diff']);
-  assert.equal(context.pack.slice(context.pack.indexOf('## TASK.md')), [
-    `## TASK.md\n\n${context.task.trim()}`, '## Allowed files\n\n- `README.md`',
-    ...context.skills.map(({ name, content }) => `## ${name}\n\n${content}`),
-  ].join('\n\n') + '\n');
+  assert.match(context.pack, /## Issue Ask\n\nAdd a one-line Status section to README.md/);
+  assert.match(context.pack, /## TASK.md\n\n# Outcome:/);
+  assert.deepEqual(context.skills.map(({ name }) => name), ['read-before-write', 'small-diff']);
+  assert.doesNotMatch(context.pack, /skills: \[|difficulty:|estimate_min:/);
   assert.doesNotMatch(context.pack, /UNNEEDED_|## Principal|## Seat memory|## Task skills/);
   assert.equal(existsSync(join(options.repoRoot, 'principals')), false);
 });
@@ -129,10 +127,10 @@ test('minimum docs still fails on required tests and does not hide secrets in th
   }
 });
 
-test('docs2 and difficulty1 non-docs retain the normal principal/research context path', async (t) => {
-  for (const metadata of [{ task_class: 'docs', difficulty: 2 }, { task_class: 'feat', difficulty: 1 }]) {
+test('only difficulty4+ feat may load the normal research and implementation path', async (t) => {
+  for (const metadata of [{ task_class: 'feat', difficulty: 4 }, { task_class: 'feat', difficulty: 5 }]) {
     const options = fixture(t, metadata);
-    assert.equal(isMinimumDocsTask(options.taskText), false);
+    assert.equal(taskContextPolicy(options.taskText).minimum, false);
     await assert.rejects(loadContext({ ...options }), /principal|ENOENT/);
   }
 });

@@ -19,7 +19,7 @@ async function fixture(context, allowed = 'src/**') {
   const worktree = path.join(repoRoot, 'worktree');
   mkdirSync(path.join(worktree, 'src'), { recursive: true });
   const task = planStub(`Inspect the requested change.\n\n## Files allowed\n- \`${allowed}\`\n`,
-    { title: 'Implement the task' }).task;
+    { title: 'Implement the task', metadata: { task_class: 'feat', difficulty: 4 } }).task;
   writeFileSync(path.join(worktree, 'TASK.md'), task);
   const tools = await createTools({ worktree, allowedFiles: taskFilesAllowed(task) });
   return { repoRoot, worktree, tools, expectedTask: task, env: {}, vault: { get: async () => undefined } };

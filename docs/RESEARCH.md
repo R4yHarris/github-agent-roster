@@ -1,10 +1,10 @@
 # Research before editing
 
-Difficulty1 `docs` tasks use the [minimum context path](SEAT.md#minimum-context-for-easy-docs):
+Ordinary tasks use the [minimum team path](SEAT.md#minimum-enforced-senior-team-loop):
 they do not create/load RESEARCH.md or make the optional research model call.
 Read-before-write happens directly through scoped tools, with small-diff and
-the usual tests/path/secret excellence guards. Other classes/difficulties keep
-the research sequence below. before editing
+the usual tests/path/secret excellence guards. Only `feat` tasks with difficulty
+>=4 may use the research sequence below; docs tasks never do. before editing
 
 The [coder seat](../src/seats/coder.mjs) awaits a
 [read-only research step](../src/runtime/research.mjs) after its context pack

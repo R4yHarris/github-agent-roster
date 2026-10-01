@@ -32,21 +32,27 @@ skills stage validates the same selection rather than injecting a second,
 unbudgeted copy into the model. A planner's task model is respected; otherwise
 the configured model or `ROSTER_MODEL` is used. Estimation history is not rerun.
 
-### Minimum context for easy docs
+### Minimum enforced senior-team loop
 
-When validated TASK metadata is `task_class: docs` and `difficulty: 1`, the
-coder context contains only TASK, its application allowed paths, and the
-`read-before-write` / `small-diff` skills. Extra task skill selectors do not
-load more skills. AGENTS/principal files, prior feedback, memory input, and
-RESEARCH are not added to this pack; no research file or research-model request
-is generated. The coder stages are context, skills, tool loop, memory output,
-excellence, and result. The reviewer also skips its principal-file load but
-retains fixed read-only conduct and the task/result/diff review gate.
+Ordinary tasks use a short harness-selected pack: issue Ask, TASK outcome/
+allowed files/checks (plus any explicit Scope constraints), and the
+`read-before-write` / `small-diff` skills. Difficulty1-2 always take this path;
+docs tasks do so at every difficulty. Extra skill selectors and principal/
+AGENTS/memory/feedback inputs do not enlarge it. No RESEARCH file or research
+model request is generated. Memory output remains factual. Only `feat` tasks
+with difficulty >=4 may use RESEARCH and requested implementation skills,
+including `implement-task`; other classes do not unlock that path.
 
-Difficulty2+ docs and all other task classes keep the normal path above.
-The minimum path is not a permission or verification bypass: guarded tools,
-required final tests (unless explicitly waived), path deny rules, secret checks,
-unchanged-artifact checks, and human-owned publication policy remain active.
+The team contract is enforced by code, not a longer role prompt: scoped reads/
+writes, `run_test` unless explicitly waived, excellence for paths/secrets/tests,
+read-only reviewer, App-only reviewed publication, and a human eval hint.
+No task metadata grants permissions or generates AI-Eval.
+
+Planner scope is limited to files explicitly listed or named by the human Ask.
+An Ask with no file scope needs clarification; it never becomes an invented
+`**/*` allowance. Inferred scope or multiple explicitly stated Outcomes creates
+a validated TASK-only planning handoff, then stops for another explicit `/run`.
+An already valid cached TASK/recipe bypasses the planner and starts coder.
 
 The result exposes `stages`, paths to the context/research/result artifacts,
 `tests`, `testsSkipped`, `turns`, `model`, `usage`, `research`, and `excellence`.

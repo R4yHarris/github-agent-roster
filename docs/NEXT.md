@@ -32,7 +32,9 @@ selection above remains available outside that explicit routing path.
 ## Prior feedback
 
 If a matching evaluation exists, the second task's generated `CONTEXT.md`
-**must** contain `## Prior feedback`. It summarizes the latest human verdict
+may contain `## Prior feedback` on the complex feat>=4 context path. Ordinary
+minimum packs omit this model input while retaining factual memory/evaluation
+records in the harness. When supplied, it summarizes the latest human verdict
 and copies the last nonempty reject/rework comment for the same task class,
 in append order. A newer acceptance does not erase that earlier lesson.
 With only acceptances, the section explicitly says there is no reject/rework

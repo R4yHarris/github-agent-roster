@@ -43,13 +43,13 @@ test('stub creates an executable planner/coder/reviewer recipe and task without 
     `- Issue number: 42\n- Title: Example task\n\n## Ask\n\n${ask}\n`);
 });
 
-test('stub uses explicit acceptance checks and allowed paths, or a broad local draft when none are known', () => {
+test('stub uses explicit acceptance checks and paths, and never invents broad scope', () => {
   const plan = planStub('Implement this.\n\n## Acceptance checks\n- `node --test` exits 0\n' +
     '- README has a Status section\n\n## Files allowed\n- `README.md`\n- `src/**`\n');
   assert.equal(parseRecipe(plan.recipe).ask, 'local:draft');
   assert.match(plan.task, /- README has a Status section/);
   assert.deepEqual(taskFilesAllowed(plan.task), ['README.md', 'src/**']);
-  assert.deepEqual(taskFilesAllowed(planStub('Do the thing.').task), ['**/*']);
+  assert.throws(() => planStub('Do the thing.'), /must name or declare allowed files/);
   assert.throws(() => planStub('Write secrets.\n## Files allowed\n- `.env`'), /protected files/);
   assert.throws(() => planStub(Array.from({ length: 33 }, (_, index) =>
     `Update src/file${index}.mjs`).join('\n')), /Files allowed must contain 1-32 entries/);
@@ -110,7 +110,7 @@ test('LLM planner validates JSON before generating a recipe and never exposes th
     assert.equal(options.headers.Authorization, 'Bearer secret-value');
     const body = JSON.parse(options.body);
     assert.equal(body.model, 'test-model');
-    assert.equal(body.messages[1].content, 'Add status to README.');
+    assert.equal(body.messages[1].content, 'Add status to README.md.');
     assert.equal(body.tools, undefined);
     return {
       status: 200,
@@ -123,7 +123,7 @@ test('LLM planner validates JSON before generating a recipe and never exposes th
       },
     };
   };
-  const plan = await planAsk('Add status to README.', {
+  const plan = await planAsk('Add status to README.md.', {
     config: llmConfig, reference: 'issue:8', fetchImpl, env: { ROSTER_API_KEY: 'secret-value' },
   });
   assert.equal(calls, 1);
@@ -131,7 +131,7 @@ test('LLM planner validates JSON before generating a recipe and never exposes th
   assert.deepEqual(taskFilesAllowed(plan.task), ['README.md']);
   assert.deepEqual(plan.usage, { prompt_tokens: 30, completion_tokens: 11 });
   assert.equal(plan.turns, 1);
-  await assert.rejects(planAsk('Add status to README.', {
+  await assert.rejects(planAsk('Add status to README.md.', {
     config: llmConfig, fetchImpl: async () => ({ ok: false, status: 401 }),
     env: { ROSTER_API_KEY: 'secret-value' },
   }), (error) => {
@@ -139,7 +139,7 @@ test('LLM planner validates JSON before generating a recipe and never exposes th
     assert.ok(!error.message.includes('secret-value'));
     return true;
   });
-  await assert.rejects(planAsk('Add status to README.', {
+  await assert.rejects(planAsk('Add status to README.md.', {
     config: llmConfig, fetchImpl: async () => ({ status: 200, json: async () => ({
       choices: [{ message: { role: 'assistant', content: JSON.stringify({
         title: 'Bad plan', acceptance_checks: ['test'], files_allowed: ['../secrets'],

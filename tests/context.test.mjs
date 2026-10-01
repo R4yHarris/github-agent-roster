@@ -17,7 +17,7 @@ function fixture(context) {
   mkdirSync(path.join(repoRoot, 'principals'));
   writeFileSync(path.join(repoRoot, 'principals', 'coder.md'), '# Conduct\nStay within scope.\n');
   writeFileSync(path.join(worktree, 'TASK.md'),
-    planStub('Update README.md.', { reference: 'issue:4' }).task.replace(/^skills:.*$/m, 'skills: []'));
+    planStub('Update README.md.', { reference: 'issue:4', metadata: { task_class: 'feat', difficulty: 4 } }).task.replace(/^skills:.*$/m, 'skills: []'));
   writeFileSync(path.join(worktree, 'AGENTS.md'), '# Instructions\nRead before editing.\n');
   for (const file of ['.env', 'app.pem', 'agent-policy.yml', 'unrelated.txt']) {
     writeFileSync(path.join(worktree, file), `body-of-${file}`);
