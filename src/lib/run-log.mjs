@@ -144,8 +144,9 @@ export async function createRunLog({
 }
 
 export async function readLastRunLog({
-  repoRoot, session, env = process.env, apiKeyEnv = 'ROSTER_API_KEY',
+  repoRoot, session, env = process.env, apiKeyEnv = 'ROSTER_API_KEY', limit = 1,
 }) {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new TypeError('Run log tail limit must be 1-200');
   const file = logPath(repoRoot, session);
   await ensureLocalPath(file, repoRoot);
   let handle;
@@ -172,8 +173,33 @@ export async function readLastRunLog({
         Buffer.byteLength(lastLine) > maximumLineBytes) {
       throw new RunLogError('Last live run log line has invalid metadata');
     }
-    return { path: file, session, lastSeat: parsed[1], lastLine: redactSecrets(lastLine, { env, apiKeyEnv }) };
+    const valid = lines.filter((line) => {
+      const match = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z (?:start seat|seat) (planner|coder|reviewer) (.+)$/.exec(line);
+      return match && metadata.test(match[2]) && !/[\x00-\x1f\x7f]/.test(line) && Buffer.byteLength(line) <= maximumLineBytes;
+    });
+    const lastErrorClass = valid.findLast((line) => /\bclass=/.test(line))?.match(/\bclass=([A-Za-z]+)/)?.[1] ?? null;
+    return { path: file, session, lastSeat: parsed[1], lastLine: redactSecrets(lastLine, { env, apiKeyEnv }),
+      lastErrorClass, lines: valid.slice(-limit).map((line) => redactSecrets(line, { env, apiKeyEnv })) };
   } finally {
     await handle.close();
   }
+}
+
+export async function readIssueLogs({ repoRoot, issue, env = process.env, apiKeyEnv = 'ROSTER_API_KEY', limit = 50 }) {
+  if (!Number.isSafeInteger(Number(issue)) || Number(issue) < 1) throw new TypeError('Issue log requires a positive issue number');
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new TypeError('Run log tail limit must be 1-200');
+  const directory = path.join(repoRoot, '.roster', 'runs');
+  await ensureLocalPath(directory, repoRoot);
+  const entries = await fs.readdir(directory, { withFileTypes: true }).catch((error) => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
+  const pattern = new RegExp(`^roster-${Number(issue)}-[A-Za-z0-9._-]+\\.log$`);
+  const logs = [];
+  for (const entry of entries.filter((entry) => pattern.test(entry.name)).sort((a, b) => a.name.localeCompare(b.name))) {
+    if (!entry.isFile()) throw new RunLogError('Issue log must be a regular file');
+    const log = await readLastRunLog({ repoRoot, session: entry.name.slice(0, -4), env, apiKeyEnv, limit });
+    if (log) logs.push(log);
+  }
+  return logs;
 }

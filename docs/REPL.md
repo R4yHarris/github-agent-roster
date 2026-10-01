@@ -15,6 +15,7 @@ agents and CI.
 | `/effort [l|m|h|x]` | Show the current effort or persist a new level to ignored `.roster/config.yml`. |
 | `/run N [--auto-model]` or `/run --issue N [--auto-model]` | Run builtin planner, coder, then read-only reviewer in one issue worktree. The optional flag chooses a registered fleet profile from qualifying human evaluations or starting priors without rewriting the saved default; no eligible profile leaves an unverified stub. |
 | `/status [N] [--offline]` | Show an issue, its open branch PR, and worktree path. Defaults to the last run or created issue; offline reads only the cached assignment and reports PR state as unknown. |
+| `/log N` | Tail up to 50 safe metadata lines from each local `.roster/runs/roster-N-*.log`, without network or seat execution. |
 | `/eval TARGET accept\|reject\|rework 1-5 y\|n [--minutes N] [--comment "TEXT"]` | Record the [human retrospective](RETRO.md), including actual minutes and local feedback. |
 | `/publish [SUBJECT] [--model MODEL] [--skip-review]` | Publish with an unchanged passing REVIEW.md, or explicitly bypass that verdict. After `/run N`, the default subject is `feat: issue N`; a confirmed merge comments on the still-open issue with PR URL and model ID. Otherwise supply a conventional subject and declare the GHCP model with `--model` or `AI_MODEL`. Completed seat metadata wins over the flag. |
 | `/stats [REF]` | Summarize contracts and local AI-Run records, optionally at a Git ref. |
@@ -58,6 +59,11 @@ phase/status/error class, tool names/paths, managed file writes, mode, and elaps
 milliseconds. No prompts, completions, file bodies, keys, or upstream error
 messages are logged. `/status N --offline` reads a bounded local tail and shows
 the last seat and last complete line; it does not contact GitHub.
+Offline status also shows the expected issue branch, last error class, whether
+TASK/RECIPE/RESULT/REVIEW exist, and the latest matching JSONL model and prompt/
+completion counts. Unknown counts stay `-`, never invented zero. `/log N`
+reads every matching seat log with a bounded tail; builtin runs already persist
+their stderr events into those files, so no transcript reconstruction is needed.
 
 `/model MODEL` and `/effort h` validate and atomically replace only those
 fields in the private config, keeping the other fields and comments. The

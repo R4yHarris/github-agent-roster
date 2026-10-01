@@ -220,6 +220,20 @@ test('/run sends live events to its stderr writer before the final summary is re
   assert.doesNotMatch(shell.output.text, /start seat planner/);
 });
 
+test('/log N tails matching local logs without dispatching a run or network call', async () => {
+  const shell = dispatcher({ services: {
+    readIssueLogs: async (options) => {
+      assert.equal(options.issue, 92);
+      assert.equal(options.limit, 50);
+      return [{ path: 'issue-seat.log', lines: ['2026-09-30T22:00:00.000Z seat coder mode llm'] }];
+    },
+    runBuiltinIssue: () => assert.fail('Log command must not run a seat'),
+  } });
+  await shell.dispatch('/log 92');
+  assert.match(shell.output.text, /issue-seat.log[\s\S]*seat coder mode llm/);
+  await assert.rejects(shell.dispatch('/log invalid'), /Use \/log N/);
+});
+
 test('/run reports a failed planner stub without throwing and leaves the shell usable', async () => {
   const shell = dispatcher({
     services: { runBuiltinIssue: async (_issue, { log }) => {

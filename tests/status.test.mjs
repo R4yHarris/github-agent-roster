@@ -34,6 +34,8 @@ test('offline status reads the cached issue and worktree without invoking gh or 
     issue: { number: 42, title: 'Fix status', state: 'UNKNOWN',
       url: 'https://github.com/example/project/issues/42' },
     openPr: undefined, worktreePath, worktreeExists: true, offline: true,
+    branch: 'issue-42', artifacts: { 'TASK.md': false, 'RECIPE.yml': false, 'RESULT.md': false, 'REVIEW.md': false },
+    lastRun: null,
   });
   assert.match(formatStatus(status), /Issue: #42 Fix status \(UNKNOWN\)/);
   assert.match(formatStatus(status), /Open PR: unknown \(offline\)/);
@@ -55,7 +57,9 @@ test('online status fetches the issue and its open branch PR from the current or
       return args[0] === 'issue' ? JSON.stringify(issue) : JSON.stringify([pr]);
     },
   });
-  assert.deepEqual(status, { issue, openPr: pr, worktreePath, worktreeExists: true, offline: false });
+  assert.deepEqual(status, { issue, openPr: pr, worktreePath, worktreeExists: true, offline: false,
+    branch: 'issue-42', artifacts: { 'TASK.md': false, 'RECIPE.yml': false, 'RESULT.md': false, 'REVIEW.md': false },
+    lastRun: null });
   assert.deepEqual(calls, [
     { program: 'git', args: ['remote', 'get-url', 'origin'], cwd: repoRoot },
     { program: 'gh', args: ['issue', 'view', '42', '--repo', 'example/project',
@@ -73,8 +77,10 @@ test('offline status reports missing cache and unknown PR instead of claiming th
     runCommand: () => assert.fail('Offline status must not fetch GitHub data'),
   });
   assert.equal(formatStatus(status),
-    `Issue: #42 (not cached offline)\nOpen PR: unknown (offline)\nWorktree: ${worktreePath} (missing)\n` +
-    'Last seat: unknown (no run log)\nLast log line: none\n');
+    `Issue: #42 (not cached offline)\nOpen PR: unknown (offline)\nBranch: issue-42\nWorktree: ${worktreePath} (missing)\n` +
+    'Last seat: unknown (no run log)\nLast log line: none\nLast error class: -\n' +
+    'Artifacts: TASK.md=no RECIPE.yml=no RESULT.md=no REVIEW.md=no\n' +
+    'Last run: model=- prompt_tokens=- completion_tokens=- context_max=-\n');
 });
 
 test('offline status shows active seat activity while the run has not yet finished', async (t) => {
@@ -91,6 +97,27 @@ test('offline status shows active seat activity while the run has not yet finish
     assert.match(formatStatus(status), /Last seat: coder\nLast log line: .+ write_file/);
     return { mode: 'stub' };
   });
+});
+
+test('offline status includes artifact flags, latest measured row, and last error class', async (t) => {
+  const { repoRoot, worktreePath } = fixture(t);
+  for (const name of ['TASK.md', 'RECIPE.yml', 'RESULT.md', 'REVIEW.md']) writeFileSync(join(worktreePath, name), 'fixture');
+  mkdirSync(join(repoRoot, '.roster', 'runs'), { recursive: true });
+  writeFileSync(join(repoRoot, '.roster', 'runs', 'runs.jsonl'), JSON.stringify({
+    session: 'roster-42-coder', task: 'issue-42', provider: 'vllm', model: 'deepseek-v4.1-flash',
+    effort: 'm', prompt_tokens: 100, completion_tokens: 40, context_used: 100, context_out: 40,
+  }) + '\n');
+  writeFileSync(join(repoRoot, '.roster', 'runs', 'roster-42-coder.log'),
+    '2026-09-30T22:00:00.000Z seat coder http chat.completions error class=timeout\n' +
+    '2026-09-30T22:00:00.001Z seat reviewer elapsed_ms=1 mode=stub\n');
+  const status = await readStatus({ issue: 42, repoRoot, config, offline: true,
+    runCommand: () => assert.fail('Offline status must not contact GitHub') });
+  assert.equal(status.runLog.lastSeat, 'reviewer');
+  assert.equal(status.runLog.lastErrorClass, 'timeout');
+  assert.equal(status.lastRun.model, 'deepseek-v4.1-flash');
+  assert.ok(Object.values(status.artifacts).every(Boolean));
+  assert.match(formatStatus(status), /Branch: issue-42[\s\S]*Last error class: timeout/);
+  assert.match(formatStatus(status), /model=deepseek-v4.1-flash prompt_tokens=100 completion_tokens=40/);
 });
 
 test('invalid cached metadata and ambiguous issue selection fail without GitHub access', async (t) => {

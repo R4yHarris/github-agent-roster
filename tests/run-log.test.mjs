@@ -3,7 +3,7 @@ import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sym
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createRunLog, readLastRunLog, RunLogError } from '../src/lib/run-log.mjs';
+import { createRunLog, readIssueLogs, readLastRunLog, RunLogError } from '../src/lib/run-log.mjs';
 
 function fixture(t) {
   const repoRoot = mkdtempSync(path.join(tmpdir(), 'roster-run-log-'));
@@ -114,6 +114,19 @@ test('run logs refuse hard links, symlinks, and unsafe session paths rather than
   }
   await assert.rejects(createRunLog(other), /symlinks/);
   assert.equal(existsSync(path.join(options.repoRoot, 'runs')), false);
+});
+
+test('issue tail reads all matching seat logs and excludes another issue', async (t) => {
+  const options = fixture(t);
+  for (const [session, seat] of [['roster-42-planner', 'planner'], ['roster-42-coder', 'coder'],
+    ['roster-43-coder', 'coder']]) {
+    const logger = await createRunLog({ ...options, session });
+    await logger.seat(seat, session, config, async () => ({ mode: 'stub' }));
+  }
+  const logs = await readIssueLogs({ repoRoot: options.repoRoot, issue: 42, limit: 2 });
+  assert.equal(logs.length, 2);
+  assert.ok(logs.every((log) => log.session.startsWith('roster-42-') && log.lines.length === 2));
+  await assert.rejects(readIssueLogs({ repoRoot: options.repoRoot, issue: 42, limit: 201 }), /tail limit/);
 });
 
 test('log append errors remain explicit and are never success-shaped fallbacks', async (t) => {
