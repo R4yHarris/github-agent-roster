@@ -7,8 +7,9 @@ import { promisify } from 'node:util';
 import { loadConfig } from './config.mjs';
 import { githubRepository, renderIssueBody } from './issue.mjs';
 import { ensureLocalPath } from './paths.mjs';
-import { cleanAskText, planAsk } from '../planner/stub.mjs';
+import { askRequirements, cleanAskText, planAsk } from '../planner/stub.mjs';
 import { readTaskMetadata } from '../runtime/estimate.mjs';
+import { parseTaskDocument } from '../planner/task.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
 const execFileAsync = promisify(execFile);
@@ -32,6 +33,7 @@ export async function writeAsk(ask, {
     throw new TypeError('Ask ID must be an opaque local identifier');
   }
   const plan = await planAsk(ask, { config, reference: `local:${id}`, fetchImpl, env, vault, learningRoot: repoRoot });
+  parseTaskDocument(plan.task, { expectedAsk: ask });
   const directory = path.join(repoRoot, config.paths.asks);
   const draft = path.join(directory, id);
   const askPath = path.join(directory, `${id}.md`);
@@ -61,6 +63,7 @@ export async function submitAsk(ask, {
   vault,
 } = {}) {
   const text = cleanAskText(ask);
+  askRequirements(text);
   const title = text.split('\n')[0];
   if (title.length > 240) throw new TypeError('Issue title must be at most 240 characters');
   const body = renderIssueBody(text);

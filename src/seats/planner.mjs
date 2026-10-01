@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { TextDecoder } from 'node:util';
 import { parseRecipe, RecipeError } from '../lib/recipe.mjs';
-import { planAsk, planFromTask, planStub } from '../planner/stub.mjs';
+import { planAsk, planFromTask, runtimeRecipe as canonicalRecipe } from '../planner/stub.mjs';
 import { appendMemory, readMemory, seatMemoryPath } from '../runtime/memory.mjs';
 import { writeEstimate } from '../runtime/estimate.mjs';
 import { buildRun } from '../metrics/run.mjs';
@@ -55,7 +55,7 @@ export async function readPlannerHandoff({ worktree, reference, ask, issueTitle,
       if (!(error instanceof RecipeError)) throw error;
       const document = parseTaskDocument(task, { expectedAsk: ask, issueTitle, issueBody });
       validatePlanningReceipt(recipe, document);
-      runtimeRecipe = planStub(document.ask, { reference, title: document.title }).recipe;
+      runtimeRecipe = canonicalRecipe(reference);
       validateBuiltinRecipe(runtimeRecipe, reference);
     }
   } catch (error) {

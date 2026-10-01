@@ -234,6 +234,15 @@ test('/log N tails matching local logs without dispatching a run or network call
   await assert.rejects(shell.dispatch('/log invalid'), /Use \/log N/);
 });
 
+test('planning-only handoff requires another explicit run and cannot be published with a review bypass', async () => {
+  const shell = dispatcher({ services: { runBuiltinIssue: async () => ({
+    planningOnly: true, command: null, issue: { number: 92 }, task: 'issue-92',
+  }) } });
+  await shell.dispatch('/run 92');
+  assert.match(shell.output.text, /TASK validates[\s\S]*\/run 92 to start coder/);
+  await assert.rejects(shell.dispatch('/publish --skip-review'), /Planning-only TASK is not code/);
+});
+
 test('/run reports a failed planner stub without throwing and leaves the shell usable', async () => {
   const shell = dispatcher({
     services: { runBuiltinIssue: async (_issue, { log }) => {

@@ -34,7 +34,7 @@ function fixture(context, config = stubConfig) {
   writeFileSync(path.join(repoRoot, 'skills', 'run-tests', 'SKILL.md'), '# Run tests\nUse node --test.\n');
   writeFileSync(path.join(worktree, 'AGENTS.md'), '# Instructions\nCode carefully.\n');
   writeFileSync(path.join(worktree, 'TASK.md'),
-    planStub('Update `README.md` with a Status section.', { reference: 'issue:4' }).task);
+    planStub('Update `README.md` with a Status section.', { reference: 'issue:4', metadata: { task_class: 'feat', difficulty: 4 } }).task);
   writeFileSync(path.join(worktree, 'README.md'), '# Example\n');
   return {
     repoRoot, worktree, config, task: 'issue-4', session: 'roster-session',

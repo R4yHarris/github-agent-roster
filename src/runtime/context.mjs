@@ -2,11 +2,11 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { ensureLocalPath } from '../lib/paths.mjs';
 import { taskFilesAllowed } from '../planner/stub.mjs';
-import { parseTaskDocument } from '../planner/task.mjs';
+import { parseTaskDocument, taskSections } from '../planner/task.mjs';
 import { loadPrincipal } from '../seats/principal.mjs';
 import { readMemory, redactSecrets } from './memory.mjs';
 import { loadSkills, previewSkills } from './skills.mjs';
-import { isMinimumDocsTask, minimumDocsSkills } from './context-policy.mjs';
+import { taskContextPolicy } from './context-policy.mjs';
 
 async function requiredFile(file, worktree) {
   await ensureLocalPath(file, worktree);
@@ -20,8 +20,8 @@ async function requiredFile(file, worktree) {
 function boundedPack(sections, budget, minimum = false) {
   const omitted = '[Omitted by context budget]';
   const render = (bodies) => '# Coder context\n\n' +
-    (minimum ? 'Minimum docs context: use only this task, allowed files, and the two supplied skills. ' +
-      'Do not load principals, RESEARCH.md, AGENTS.md, memory, or extra skills for this task.\n\n' : '') +
+    (minimum ? 'Minimum team context: use the Ask, outcome, allowed files, checks, and two supplied skills. ' +
+      'The harness enforces tests, paths, secrets, read-only review, and human eval.\n\n' : '') +
     sections.map(({ heading }, index) => `## ${heading}\n\n${bodies[index]}`).join('\n\n') + '\n';
   const bodies = sections.map(({ body, required }) =>
     required || body.length <= omitted.length ? body : omitted);
@@ -60,9 +60,10 @@ export async function loadContext({ worktree, memoryPath, repoRoot, config, prin
   }
   const task = await requiredFile(path.join(worktree, 'TASK.md'), worktree);
   const files = taskFilesAllowed(task);
-  parseTaskDocument(task);
-  const minimalDocs = isMinimumDocsTask(task);
-  const skillNames = minimalDocs ? [...minimumDocsSkills] : undefined;
+  const document = parseTaskDocument(task);
+  const policy = taskContextPolicy(task);
+  const minimalDocs = policy.minimum;
+  const skillNames = policy.skills;
   let agents = null;
   let memory = [];
   if (!minimalDocs) {
@@ -73,8 +74,14 @@ export async function loadContext({ worktree, memoryPath, repoRoot, config, prin
     ]);
   }
   const skills = previewSkills(await loadSkills({ repoRoot, skillsPath: config?.paths?.skills, task, names: skillNames }));
+  const taskBrief = `# Outcome: ${document.title}\n\n## Allowed files\n` +
+    files.map((file) => `- \`${file}\``).join('\n') + '\n\n## Checks\n' +
+    document.acceptance_checks.map((check) => `- ${check}`).join('\n') +
+    taskSections(task).sections.filter(({ name }) => !['ask', 'metadata', 'acceptance checks', 'files allowed'].includes(name))
+      .map(({ source }) => `\n\n${source.trim()}`).join('');
   const sections = minimalDocs ? [
-    { heading: 'TASK.md', body: task.trim(), required: true },
+    { heading: 'Issue Ask', body: document.ask, required: true },
+    { heading: 'TASK.md', body: taskBrief, required: true },
     { heading: 'Allowed files', body: files.map((file) => `- \`${file}\``).join('\n'), required: true },
     ...skills.map(({ name, content }) => ({ heading: name, body: content, required: true })),
   ] : [
@@ -94,5 +101,6 @@ export async function loadContext({ worktree, memoryPath, repoRoot, config, prin
   const contextPath = path.join(worktree, 'CONTEXT.md');
   await ensureLocalPath(contextPath, worktree);
   await fs.writeFile(contextPath, pack, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
-  return { agents, task, memory, files, skills, pack, contextPath, truncated, minimalDocs, skillNames };
+  return { agents, task, memory, files, skills, pack, contextPath, truncated, minimalDocs, skillNames,
+    contextPolicy: policy };
 }

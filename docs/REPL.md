@@ -52,6 +52,14 @@ Cached Ask matching uses the issue title or first substantive body line after
 whitespace/backtick/template normalization. A valid cached handoff makes no
 planner/model request; an empty Original Ask never qualifies.
 
+The senior-team default uses Ask, TASK outcome/scope/checks, two small skills,
+final tests/excellence, read-only review, and a human eval hint. Difficulty1-2
+and all docs tasks do not load research or implementation packs. Only feat>=4
+can use them. If scope was inferred or the Ask states multiple Outcomes, the
+first run writes a validated planning handoff and stops; review it and issue
+`/run N` again. A planning-only handoff cannot be published, even with a
+review bypass. No file scope is invented for an Ask that names no files.
+
 `/run N` streams timestamped seat activity to stderr immediately, independently
 of its final summary. The same metadata is appended to the issue repository's
 `.roster/runs/roster-N-coder.log`: seat starts, model/endpoint host, HTTP

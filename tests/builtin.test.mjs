@@ -99,7 +99,7 @@ test('roster ask writes a local draft ask, recipe, and executable task without n
     renderIssueBody('Add a Status section to README.md.'));
   assert.equal(parseRecipe(readFileSync(result.recipePath, 'utf8')).ask, 'local:draft-1');
   assert.match(readFileSync(result.taskPath, 'utf8'), /Files allowed\n- `README\.md`/);
-  await assert.rejects(writeAsk('Another ask', { repoRoot, config: stubConfig, id: 'draft-1' }), /EEXIST/);
+  await assert.rejects(writeAsk('Another ask for README.md', { repoRoot, config: stubConfig, id: 'draft-1' }), /EEXIST/);
   await assert.rejects(writeAsk('', { repoRoot, config: stubConfig, id: 'draft-2' }), /Ask must be nonempty/);
 });
 
@@ -243,7 +243,7 @@ test('a valid existing issue-92 RECIPE/TASK skips the planner and starts the sco
       calls += 1;
       const body = JSON.parse(request.body);
       assert.doesNotMatch(body.messages[0].content, /builtin planner seat/);
-      assert.match(body.messages[0].content, /## Original Ask[\s\S]*## Scope[\s\S]*## Allowed Files/);
+      assert.match(body.messages[0].content, /## Issue Ask[\s\S]*# Outcome:[\s\S]*## Scope/);
       return Response.json({ choices: [calls === 1 ? { finish_reason: 'tool_calls', message: {
         role: 'assistant', tool_calls: [{ id: 'status', type: 'function', function: {
           name: 'write_file', arguments: JSON.stringify({ path: 'README.md', content: '# Example\n\n## Status\nActive.\n' }),
@@ -286,6 +286,21 @@ test('an invalid cached recipe is preserved in the archive and replanned, not bl
   assert.equal(readFileSync(path.join(result.archivePath, 'RECIPE.yml'), 'utf8'), wrongRecipe);
   assert.equal(parseRecipe(result.planner.recipe).ask, 'issue:42');
   assert.match(logs.join('\n'), /do not validate for this issue; replanning is required/);
+});
+
+test('an inferred-scope Ask writes a validated TASK then stops until the next explicit run', async (context) => {
+  const options = fixture(context);
+  options.issue.body = 'Add a one-line Status section to README.md.';
+  const first = await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {},
+    fetchImpl: () => assert.fail('Stub planning does not call a model') });
+  assert.equal(first.planningOnly, true);
+  assert.equal(existsSync(path.join(first.worktreePath, 'RESULT.md')), false);
+  assert.equal(existsSync(path.join(first.worktreePath, 'REVIEW.md')), false);
+  assert.equal(first.runs.coder, null);
+  const next = await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {} });
+  assert.equal(next.planner.reused, true);
+  assert.equal(next.planningOnly, undefined);
+  assert.equal(next.result.mode, 'stub');
 });
 
 test('an existing branch is reused when its issue worktree needs to be created', async (context) => {
@@ -570,9 +585,8 @@ for (const selection of ['explicit', 'feedback']) {
         const body = JSON.parse(request.body);
         assert.equal(body.model, requests === 1 ? 'local-model' : 'task-model');
         if (requests === 2) {
-          assert.match(body.messages[0].content,
-            /difficulty: 4\nestimate_min: 25\ntask_class: fix\nmodel: task-model\n/);
-          assert.match(body.messages[0].content, /## Prior feedback/);
+          assert.match(body.messages[0].content, /# Outcome:[\s\S]*## Checks/);
+          assert.doesNotMatch(body.messages[0].content, /## Prior feedback|## Principal/);
           assert.match(readFileSync(path.join(options.target, '.worktrees', 'issue-42', 'ESTIMATE.md'), 'utf8'),
             new RegExp(`Source: ${selection === 'explicit' ? 'history' : 'recommendation'}`));
         }
@@ -739,7 +753,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
       }) };
     }
     if (completion === 2) {
-      assert.match(body.messages[0].content, /## TASK\.md\n\n---\nskills: [^\n]+\n---\n# Task: Add Status to README/);
+      assert.match(body.messages[0].content, /## TASK\.md\n\n# Outcome: Add Status to README/);
       assert.match(readFileSync(path.join(options.target, '.worktrees', 'issue-42', 'ESTIMATE.md'), 'utf8'),
         /model: local-model/);
       assert.deepEqual(body.tools.map(({ function: tool }) => tool.name),
@@ -1153,7 +1167,7 @@ test('planner and coder use an environment key before the vault and fall back to
       log: (message) => logs.push(message),
     });
     assert.equal(requests, 2);
-    assert.equal(vaultReads, source === 'environment' ? 0 : 3);
+    assert.equal(vaultReads, source === 'environment' ? 0 : 2);
     assert.equal(result.runs.planner.env.AI_CONTEXT_USED, '3');
     assert.equal(result.runs.coder.env.AI_CONTEXT_USED, '5');
     assert.ok(!logs.join('\n').includes(key));
@@ -1185,7 +1199,7 @@ test('planner and coder read only their own last 20 memory lines and append sepa
       return { status: 200, json: async () => ({ choices: [{ message: {
         role: 'assistant', content: JSON.stringify({
           title: 'Add status', acceptance_checks: ['node --test exits 0'],
-          files_allowed: ['README.md'],
+          files_allowed: ['README.md'], task_class: 'feat', difficulty: 4,
         }),
       } }] }) };
     }

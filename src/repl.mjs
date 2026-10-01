@@ -180,7 +180,9 @@ export function createDispatcher({
             ? message.replace(command, `${command} --merge-when-green`)
             : message}\n`);
         }
-        output.write(state.lastRun.failed
+        output.write(state.lastRun.planningOnly
+          ? `TASK validates; review its outcome/scope, then /run ${state.lastRun.issue.number} to start coder.\n`
+          : state.lastRun.failed
           ? 'Planning failed; stubs are unverified and publication is disabled. Fix the endpoint output, then retry /run.\n'
           : 'Use /publish to publish reviewed changes with --merge-when-green.\n');
         return true;
@@ -215,6 +217,7 @@ export function createDispatcher({
       }
       case 'publish': {
         requirePublicationEnabled(state.config);
+        if (state.lastRun?.planningOnly) throw new Error('Planning-only TASK is not code to publish; /run the validated task first.');
         if (state.lastRun && state.published) {
           throw new Error('This run was already published; start another /run before publishing again.');
         }
