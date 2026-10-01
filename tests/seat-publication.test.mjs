@@ -33,4 +33,7 @@ test('missing journal evidence and invalid eval sessions fail explicitly', (t) =
     session: 'roster-92-coder', task: 'issue-92' });
   assert.throws(() => recordedCoderRun({ repoRoot, run }), /missing from/);
   assert.throws(() => humanEvalHint('ghcp-123'), /issue coder session/);
+  assert.equal(humanEvalHint('roster-local-0123456789abcdef-coder'),
+    'roster eval roster-local-0123456789abcdef-coder accept 1 n --minutes M');
+  assert.throws(() => humanEvalHint('roster-local-bad-coder'), /local ask coder session/);
 });

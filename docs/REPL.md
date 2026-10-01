@@ -10,14 +10,15 @@ agents and CI.
 
 | Command | Behavior |
 | --- | --- |
+| `TEXT` (no slash) | Classify a direct local ask without `gh` or issue creation. In a local Git worktree, slices print the task summary and run planner/coder/reviewer to RESULT.md and REVIEW.md; features and initiatives write PLAN.md and stop. |
 | `/ask TEXT` | Classify Ask, then create its parent issue through `gh`, or save an offline slice TASK/recipe or planning-only PLAN. A `clarify` Ask stops with outcome/file-scope guidance. |
 | `/model [MODEL]` | Show the current model or persist a new one to ignored `.roster/config.yml`. |
 | `/effort [l|m|h|x|none]` | Show effort or persist an explicit override to ignored `.roster/config.yml`; it wins over mode/retry defaults. |
-| `/run N [--auto-model]` or `/run --issue N [--auto-model]` | Classify before seats. Slices use planner/coder/read-only-reviewer; feature/initiative writes PLAN only; clarify stops. The optional flag chooses a registered fleet profile without rewriting the saved default; no eligible profile uses the deterministic stub. |
+| `/run N [--auto-model] [--confirm]` or `/run --issue N [--auto-model] [--confirm]` | Classify before seats. Slices print outcome, allowed files, checks, and effort, then automatically continue through coder/read-only-reviewer in the same run. Only `--confirm` pauses after the summary; no `--auto` or second `/run` is required. Feature/initiative writes PLAN only; clarify stops. Auto-model chooses a registered fleet profile without rewriting the saved default; no eligible profile uses the deterministic stub. |
 | `/status [N] [--offline]` | Show an issue, its open branch PR, and worktree path. Defaults to the last run or created issue; offline reads only the cached assignment and reports PR state as unknown. |
 | `/log N` | Tail up to 50 safe metadata lines from each local `.roster/runs/roster-N-*.log`, without network or seat execution. |
 | `/eval TARGET accept\|reject\|rework 1-5 y\|n [--minutes N] [--comment "TEXT"]` | Record the [human retrospective](RETRO.md), including actual minutes and local feedback. |
-| `/publish [SUBJECT] [--model MODEL] [--skip-review]` | Publish with an unchanged passing REVIEW.md, or explicitly bypass that verdict. After `/run N`, the default subject is `feat: issue N`; a confirmed merge comments on the still-open issue with PR URL and model ID. Otherwise supply a conventional subject and declare the GHCP model with `--model` or `AI_MODEL`. Completed seat metadata wins over the flag. |
+| `/publish [SUBJECT] [--model MODEL] [--skip-review]` | Publish with an unchanged passing REVIEW.md, or explicitly bypass that verdict. After `/run N`, the default subject is `feat: issue N`; a confirmed merge comments on the still-open issue with PR URL and model ID. Local asks default to `feat: local ask`, publish from their worktree, and never comment on an issue. Otherwise supply a conventional subject and declare the GHCP model with `--model` or `AI_MODEL`. Completed seat metadata wins over the flag. |
 | `/stats [REF]` | Summarize contracts and local AI-Run records, optionally at a Git ref. |
 | `/recommend feat\|fix\|docs\|test [--difficulty 1-5]` | Print the same read-only fleet choice as auto-model routing, including its evals/prior reason, or show insufficient data and the config default. |
 | `/vault` or `/vault list` | List vault entry names, never values. |
@@ -64,8 +65,11 @@ slice issues, then `/run` those issues; rerunning the parent only plans again.
 The slice senior-team default uses Ask, TASK outcome/scope/checks, two small
 skills, final tests/excellence, read-only review, and a human eval hint.
 Classified slices do not load research/implementation packs, even at
-feat difficulty4+. If slice scope was inferred, the first run writes a
-validated TASK handoff and stops; review it and issue `/run N` again.
+feat difficulty4+. Whether file scope is declared or inferred from named files,
+the validated TASK summary streams before coder starts and execution continues
+automatically. Use `/run N --confirm` to stop after the summary, then run
+without that flag when ready. CLI `roster run --issue N --confirm` has the same
+pause; it cannot be combined with `--publish`.
 Multiple Outcomes now take the feature PLAN path instead.
 A planning-only handoff or clarification cannot publish, even with a
 review bypass. No file scope is invented for an Ask that names no files.

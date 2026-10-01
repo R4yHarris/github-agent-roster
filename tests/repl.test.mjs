@@ -48,6 +48,10 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
         return { mode: 'draft', askPath: 'ask.md', recipePath: 'RECIPE.yml',
           taskPath: 'TASK.md', command: 'gh issue create --body-file ask.md' };
       },
+      runBuiltinAsk: async (ask) => {
+        calls.push(['local-ask', ask]);
+        return { local: true, task: 'local-test', askKind: 'slice' };
+      },
       runBuiltinIssue: async (issue, options) => {
         calls.push(['run', issue, options.publish, options.autoModel, options.config.llm.model,
           options.config.llm.effort]);
@@ -133,6 +137,7 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
     ['vault-list'],
     ['vault-set', 'ROSTER_TOKEN', 'private-value'],
     ['vault-get', 'ROSTER_TOKEN'],
+    ['local-ask', 'plain text'],
   ]);
   assert.match(output.text, /Worktree: issue-42/);
   assert.match(output.text, /Model: local-model/);
@@ -146,7 +151,7 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
   assert.ok(!output.text.includes('private-value'));
   assert.match(output.text, /ROSTER_TOKEN is stored \(value hidden/);
   assert.match(errorOutput.text, /Unknown command: \/unknown/);
-  assert.match(errorOutput.text, /Unknown command: plain/);
+  assert.doesNotMatch(errorOutput.text, /Unknown command: plain/);
 });
 
 test('/eval passes quoted feedback and actual minutes to the human-only writer', async () => {
@@ -235,12 +240,15 @@ test('/log N tails matching local logs without dispatching a run or network call
   await assert.rejects(shell.dispatch('/log invalid'), /Use \/log N/);
 });
 
-test('planning-only handoff requires another explicit run and cannot be published with a review bypass', async () => {
-  const shell = dispatcher({ services: { runBuiltinIssue: async () => ({
+test('--confirm pauses the handoff and cannot be published with a review bypass', async () => {
+  const shell = dispatcher({ services: { runBuiltinIssue: async (_issue, options) => {
+    assert.equal(options.confirm, true);
+    return {
     planningOnly: true, command: null, issue: { number: 92 }, task: 'issue-92',
-  }) } });
-  await shell.dispatch('/run 92');
-  assert.match(shell.output.text, /TASK validates[\s\S]*\/run 92 to start coder/);
+    };
+  } } });
+  await shell.dispatch('/run 92 --confirm');
+  assert.match(shell.output.text, /Paused by --confirm/);
   await assert.rejects(shell.dispatch('/publish --skip-review'), /Planning-only TASK is not code/);
 });
 
@@ -250,11 +258,77 @@ test('feature/initiative shell runs show PLAN rather than a coder handoff and ca
       askKind, planningOnly: true, planPath: 'PLAN.md', command: null, issue: { number: 92 },
     }) } });
     await shell.dispatch('/run 92');
-    assert.match(shell.output.text, /PLAN ready[\s\S]*each slice[\s\S]*will not run coder/);
+    assert.match(shell.output.text, /PLAN ready[\s\S]*bounded slices[\s\S]*No coder ran/);
     assert.doesNotMatch(shell.output.text, /TASK validates|\/run 92 to start coder|Use \/publish/);
     await assert.rejects(shell.dispatch('/publish --skip-review'), /Planning-only PLAN/);
     assert.equal(await shell.dispatch('/quit'), false);
   }
+});
+
+test('plain-text ask uses local seats, never submits an issue, and streams the task summary', async () => {
+  let shell;
+  shell = dispatcher({ services: {
+    submitAsk: () => assert.fail('Direct asks must not create issues'),
+    runBuiltinIssue: () => assert.fail('Direct asks must not fetch issues'),
+    runBuiltinAsk: async (ask, options) => {
+      assert.equal(ask, 'Add a line to README.md.');
+      assert.equal(options.publish, false);
+      options.log('Task summary:\nOutcome: Add a line\nAllowed files: README.md\nChecks: node --test\nEffort: l');
+      assert.match(shell.output.text, /Task summary:[\s\S]*Effort: l/,
+        'Summary must be visible while the run is still executing');
+      return { local: true, task: 'local-test', askKind: 'slice', repoRoot: cwd,
+        result: { resultPath: 'RESULT.md' }, review: { reviewPath: 'REVIEW.md' } };
+    },
+  } });
+  await shell.dispatch('Add a line to README.md.');
+  assert.equal(shell.state.lastRun.local, true);
+  assert.equal(shell.errorOutput.text, '');
+});
+
+test('/run accepts either flag order, auto-continues by default, and rejects duplicate or unknown flags', async () => {
+  const seen = [];
+  const shell = dispatcher({ services: {
+    runBuiltinIssue: async (_issue, options) => {
+      seen.push([options.autoModel, options.confirm]);
+      options.log('Task summary: ready');
+      assert.match(shell.output.text, /Task summary: ready/);
+      return { issue: { number: 42 }, askKind: 'slice' };
+    },
+  } });
+  for (const args of ['42', '42 --auto-model --confirm', '--issue 42 --confirm --auto-model']) {
+    await shell.dispatch(`/run ${args}`);
+  }
+  assert.deepEqual(seen, [[false, false], [true, true], [true, true]]);
+  for (const args of ['42 --auto', '42 --confirm --confirm', '42 --unknown']) {
+    await assert.rejects(shell.dispatch(`/run ${args}`), /Use \/run N/);
+  }
+});
+
+test('a local ask publishes from its worktree and does not comment on an issue', async () => {
+  const worktreePath = join(cwd, '.worktrees', 'local-test');
+  const shell = dispatcher({
+    env: { GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'key.pem' },
+    services: {
+      runBuiltinAsk: async () => ({
+        local: true, task: 'local-test', askKind: 'slice', repoRoot: cwd, worktreePath,
+        sessions: { coder: 'roster-local-0123456789abcdef-coder' }, result: { summary: 'Updated README.' },
+      }),
+      prepareBuiltinPublication: async (run) => ({
+        contractsPath: 'contracts', worktreePath: run.worktreePath, publishEnv: { AI_MODEL: 'local-model' },
+      }),
+      publisher: async (options) => {
+        assert.equal(options.cwd, worktreePath);
+        assert.match(options.message, /^feat: local ask/);
+        assert.doesNotMatch(options.message, /issue undefined/);
+        return { mergedPullRequest: 42 };
+      },
+      issueCommenter: () => assert.fail('Local asks must not comment on an issue'),
+    },
+  });
+  await shell.dispatch('Add a line to README.md.');
+  await shell.dispatch('/publish --skip-review');
+  assert.equal(shell.state.published, true);
+  assert.match(shell.output.text, /Human AI-Eval/);
 });
 
 test('clarification is visible in the shell and never offers publication', async () => {

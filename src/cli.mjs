@@ -35,7 +35,7 @@ const help = `Usage:
   roster fleet default ID
   roster fleet remove ID
   roster ask "..."
-  roster run --issue N [--runtime builtin] [--seats planner,coder,reviewer] [--auto-model] [--publish] [--skip-review]
+  roster run --issue N [--runtime builtin] [--seats planner,coder,reviewer] [--auto-model] [--publish] [--skip-review] [--confirm]
   roster run --seat coder --runtime builtin
   roster prepare --issue N
   roster run --ask-file PATH --runtime builtin
@@ -55,6 +55,7 @@ Init copies review-only examples; it never overwrites agent-policy.yml.
 Onboard configures a real vLLM model and local permissions in an interactive terminal.
 Run classifies clarify | slice | feature | initiative before seats.
 Slices run planner, coder, then reviewer; features and initiatives write PLAN.md only.
+Slices print outcome, allowed files, checks, and effort before continuing. Only --confirm pauses.
 Run --seat coder without --issue executes an existing TASK.md in the current worktree.
 Prepare creates a manual handoff without executing seats. Publishing is opt-in.
 Recipe validates strict v0 seat YAML. Stats joins contracts AI-Run history with local runs and human evals.
@@ -154,6 +155,7 @@ async function main(args) {
     else {
       const result = await runBuiltinIssue(options.issue, { publish: options.publish, seats: options.seats,
         skipReview: options.skipReview,
+        confirm: options.confirm,
         autoModel: options.autoModel, repoRoot: rosterRoot });
       if (result.failed) process.exitCode = 1;
     }
@@ -214,11 +216,11 @@ async function main(args) {
     const options = {};
     const seen = new Set();
     const usage = 'Use roster run --issue N [--runtime builtin] [--seats planner,coder,reviewer] ' +
-      '[--auto-model] [--publish] [--skip-review], ' +
+      '[--auto-model] [--publish] [--skip-review] [--confirm], ' +
       'or roster run --seat coder --runtime builtin for an existing TASK.md.';
     for (let index = 0; index < args.length; index += 1) {
       const flag = args[index];
-      if (!['--issue', '--seat', '--seats', '--runtime', '--auto-model', '--publish', '--skip-review'].includes(flag) ||
+      if (!['--issue', '--seat', '--seats', '--runtime', '--auto-model', '--publish', '--skip-review', '--confirm'].includes(flag) ||
           seen.has(flag)) {
         throw new TypeError(usage);
       }
@@ -226,6 +228,7 @@ async function main(args) {
       if (flag === '--publish') options.publish = true;
       else if (flag === '--auto-model') options.autoModel = true;
       else if (flag === '--skip-review') options.skipReview = true;
+      else if (flag === '--confirm') options.confirm = true;
       else {
         const value = args[++index];
         if (!value || value.startsWith('--')) throw new TypeError(usage);
@@ -233,7 +236,7 @@ async function main(args) {
       }
     }
     if (options.issue === undefined && options.seat === 'coder' && options.runtime === 'builtin' &&
-        options.seats === undefined && !options.autoModel && !options.publish && !options.skipReview) return options;
+        options.seats === undefined && !options.autoModel && !options.publish && !options.skipReview && !options.confirm) return options;
     if (!options.issue || (options.runtime !== undefined && options.runtime !== 'builtin') ||
         (options.seat !== undefined && options.seat !== 'coder') ||
         (options.seats !== undefined &&

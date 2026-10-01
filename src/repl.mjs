@@ -3,7 +3,7 @@ import { createInterface } from 'node:readline';
 import { Writable } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { formatAsk, submitAsk } from './lib/ask.mjs';
-import { prepareBuiltinPublication, runBuiltinIssue } from './lib/builtin.mjs';
+import { prepareBuiltinPublication, runBuiltinAsk, runBuiltinIssue } from './lib/builtin.mjs';
 import {
   commentMergedIssue, mergedPullNumber, mergedPullNumberFromFailure,
 } from './lib/issue-board.mjs';
@@ -27,10 +27,11 @@ import { readIssueLogs } from './lib/run-log.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const help = `Commands:
+  TEXT                      Run a direct local ask without creating an issue
   /ask TEXT                 Create an issue, or draft one if gh is unavailable
   /model [MODEL]            Show or persist the LLM model
   /effort [l|m|h|x|none]    Show or persist an explicit effort override
-  /run N [--auto-model]     Run builtin seats, optionally routing from human evaluations
+  /run N [--auto-model] [--confirm]  Summarize the task and continue; --confirm pauses
   /status [N] [--offline]   Show an issue, open PR, and local worktree
   /log N                   Tail local issue seat logs without network access
   /eval TARGET VERDICT 1-5 y|n [--minutes N] [--comment "TEXT"]
@@ -82,7 +83,7 @@ async function publishWithContracts({ contractsPath, cwd, env, message, model, o
 }
 
 const defaultServices = {
-  submitAsk, runBuiltinIssue, recordEvaluation, repositoryRoot, loadMetrics,
+  submitAsk, runBuiltinAsk, runBuiltinIssue, recordEvaluation, repositoryRoot, loadMetrics,
   summarizeMetrics, formatMetrics, loadAvailableMetrics, routeTask, formatRoute,
   resolveContractsPath, prepareBuiltinPublication, createFileVault,
   validateSecretName, readStatus, formatStatus, setConfigValue,
@@ -118,6 +119,32 @@ export function createDispatcher({
     ...(ref ? { ref } : {}),
   });
 
+  async function executeRun(run, options = {}) {
+    state.lastRun = { planningOnly: true, failed: true, askKind: 'clarify', command: null };
+    state.published = false;
+    try {
+      state.lastRun = await run({
+        cwd, repoRoot, config: state.config, env, publish: false, ...options,
+        log: (message) => output.write(`${message}\n`), errorOutput,
+      });
+    } catch (error) {
+      if (isLlmTimeout(error)) {
+        state.lastRun = { planningOnly: true, failed: true, timedOut: true, command: null };
+      }
+      throw error;
+    }
+    output.write(state.lastRun.askKind === 'clarify'
+      ? `${state.lastRun.clarification}\n`
+      : state.lastRun.planPath
+      ? 'PLAN ready; review the child drafts and run bounded slices. No coder ran.\n'
+      : state.lastRun.planningOnly
+      ? 'Paused by --confirm; review TASK.md before running without --confirm.\n'
+      : state.lastRun.failed
+      ? 'Planning failed; stubs are unverified and publication is disabled. Fix the endpoint output, then retry.\n'
+      : 'Use /publish to publish reviewed changes with --merge-when-green.\n');
+    return true;
+  }
+
   async function dispatch(line) {
     if (typeof line !== 'string') throw new TypeError('Shell input must be text');
     if (state.pendingSecret !== null) {
@@ -129,6 +156,7 @@ export function createDispatcher({
     }
     const text = line.trim();
     if (!text) return true;
+    if (!text.startsWith('/')) return executeRun((options) => api.runBuiltinAsk(text, options));
     const match = /^\/([a-z]+)(?:\s+(.*))?$/.exec(text);
     if (!match) {
       errorOutput.write(`Unknown command: ${text.split(/\s+/)[0]}. Type /help.\n`);
@@ -163,40 +191,15 @@ export function createDispatcher({
         return true;
       }
       case 'run': {
-        const issue = /^(?:--issue\s+)?([1-9]\d*)(?:\s+--auto-model)?$/.exec(args);
-        if (!issue) throw new TypeError('Use /run N [--auto-model] or /run --issue N [--auto-model].');
-        const autoModel = args.endsWith(' --auto-model');
-        const messages = [];
-        state.lastRun = { planningOnly: true, failed: true, askKind: 'clarify', command: null };
-        try {
-          state.lastRun = await api.runBuiltinIssue(issue[1], {
-            cwd, repoRoot, config: state.config, env, publish: false, autoModel,
-            log: (message) => messages.push(message), errorOutput,
-          });
-        } catch (error) {
-          if (isLlmTimeout(error)) {
-            state.lastRun = { planningOnly: true, failed: true, timedOut: true, command: null };
-          }
-          throw error;
+        const issue = /^(?:--issue\s+)?([1-9]\d*)((?:\s+--[a-z-]+)*)$/.exec(args);
+        const flags = issue?.[2].trim().split(/\s+/).filter(Boolean) ?? [];
+        if (!issue || flags.some((flag) => !['--auto-model', '--confirm'].includes(flag)) ||
+            new Set(flags).size !== flags.length) {
+          throw new TypeError('Use /run N [--auto-model] [--confirm] or /run --issue N [--auto-model] [--confirm].');
         }
-        state.published = false;
-        const command = state.lastRun.command;
-        for (const message of messages) {
-          output.write(`${typeof command === 'string' && command &&
-            !command.endsWith(' --merge-when-green')
-            ? message.replace(command, `${command} --merge-when-green`)
-            : message}\n`);
-        }
-        output.write(state.lastRun.askKind === 'clarify'
-          ? `${state.lastRun.clarification}\n`
-          : state.lastRun.planPath
-          ? 'PLAN ready; review and create the child issue drafts on GitHub, then /run each slice. This issue will not run coder.\n'
-          : state.lastRun.planningOnly
-          ? `TASK validates; review its outcome/scope, then /run ${state.lastRun.issue.number} to start coder.\n`
-          : state.lastRun.failed
-          ? 'Planning failed; stubs are unverified and publication is disabled. Fix the endpoint output, then retry /run.\n'
-          : 'Use /publish to publish reviewed changes with --merge-when-green.\n');
-        return true;
+        return executeRun((options) => api.runBuiltinIssue(issue[1], options), {
+          autoModel: flags.includes('--auto-model'), confirm: flags.includes('--confirm'),
+        });
       }
       case 'status': {
         const fields = args ? args.split(/\s+/) : [];
@@ -239,7 +242,8 @@ export function createDispatcher({
         const reviewBypass = skipReview || !isReviewRequired(state.config);
         const reviewLabel = skipReview ? 'gate bypassed with --skip-review'
           : !isReviewRequired(state.config) ? 'gate not required by configuration' : 'pass';
-        const subject = requestedSubject || (state.lastRun ? `feat: issue ${state.lastRun.issue.number}` : null);
+        const subject = requestedSubject || (state.lastRun
+          ? state.lastRun.local ? 'feat: local ask' : `feat: issue ${state.lastRun.issue.number}` : null);
         if (subject !== null) conventionalSubject(subject);
         const appId = Boolean(env.GITHUB_APP_ID);
         const keyPath = Boolean(env.GITHUB_APP_PRIVATE_KEY_PATH);
@@ -305,6 +309,11 @@ export function createDispatcher({
         });
         const commentOnIssue = async (pullNumber) => {
           state.published = true;
+          if (state.lastRun.local) {
+            output.write(`Human AI-Eval after merge (replace M with actual minutes):\n` +
+              `${humanEvalHint(state.lastRun.sessions.coder)}\n`);
+            return;
+          }
           await api.issueCommenter({
             issue: state.lastRun.issue, pullNumber, model,
             runLine: state.lastRun.runs?.coder?.line, run: state.lastRun.runs?.coder,
