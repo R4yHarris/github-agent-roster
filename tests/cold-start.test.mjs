@@ -84,11 +84,13 @@ test('slow Spark chat remains in flight at60s and logs each30s with seat, host a
   for (const seconds of [30, 60, 90]) {
     timer.tick(30_000);
     await waiting[seconds / 30 - 1].promise;
-    assert.ok(stderr.includes(`seat planner waiting host=192.168.1.48:8888 elapsed=${seconds}s cold-start up to 15m`));
+    assert.ok(readFileSync(logger.path, 'utf8').includes(
+      `seat planner waiting host=192.168.1.48:8888 elapsed=${seconds}s cold-start up to 15m`));
+    assert.equal((stderr.match(/Still waiting on the model\./g) ?? []).length, seconds / 30 - 1);
     assert.equal(signal.aborted, false);
     assert.equal(settled, false);
   }
-  assert.equal((stderr.match(/seat planner waiting /g) ?? []).length, 3);
+  assert.equal((stderr.match(/Still waiting on the model\./g) ?? []).length, 2);
   const tail = await readLastRunLog({ repoRoot, session: 'roster-92-coder', limit: 10, env: {} });
   assert.match(tail.lastLine, /waiting host=192\.168\.1\.48:8888 elapsed=90s cold-start/);
   reply.resolve(Response.json(completion));
@@ -97,7 +99,7 @@ test('slow Spark chat remains in flight at60s and logs each30s with seat, host a
   timer.tick(120_000);
   await Promise.resolve();
   assert.equal(stderr, before, 'Waiting timer must stop once the response completes');
-  assert.doesNotMatch(stderr, /PRIVATE_|\/v1|Authorization/);
+  assert.doesNotMatch(stderr, /PRIVATE_|\/v1|Authorization|host=|elapsed=|http|chat\.completions|\d{4}-\d\d-\d\dT/);
 });
 
 test('local deadline is20m, cloud120s, override wins, and timeout clearly identifies cold-start and retry', async (t) => {

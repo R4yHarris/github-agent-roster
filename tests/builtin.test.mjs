@@ -113,7 +113,11 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
   assert.equal(result.worktreePath, path.join(options.target, '.worktrees', 'issue-42'));
   assert.equal(result.logPath, path.join(options.target, '.roster', 'runs', 'roster-42-coder.log'));
   const liveLog = readFileSync(result.logPath, 'utf8');
-  assert.equal(liveLog, options.stderr);
+  assert.notEqual(liveLog, options.stderr);
+  assert.match(options.stderr, /^Writing the plan: outcome, allowed files, and checks\.$/m);
+  assert.match(options.stderr, /^Preparing the task summary\.$/m);
+  assert.match(options.stderr, /^Checking the diff against the task\.$/m);
+  assert.doesNotMatch(options.stderr, /start seat|http chat|model=|elapsed_ms=|\d{4}-\d\d-\d\dT/);
   assert.deepEqual([...liveLog.matchAll(/start seat (planner|coder|reviewer)/g)].map((match) => match[1]),
     ['planner', 'coder', 'reviewer']);
   for (const seat of ['planner', 'coder', 'reviewer']) {
@@ -267,8 +271,10 @@ test('a valid existing issue-92 RECIPE/TASK skips the planner and starts the sco
   assert.equal(options.calls.some(({ args }) => args[0] === 'worktree' && args[1] === 'add'), false);
   assert.deepEqual(loadLearning({ cwd: options.target }).runs.map(({ session }) => session),
     ['roster-92-coder', 'roster-92-reviewer']);
-  assert.doesNotMatch(options.stderr, /start seat planner/);
-  assert.match(options.stderr, /start seat coder/);
+  assert.doesNotMatch(readFileSync(result.logPath, 'utf8'), /start seat planner/);
+  assert.match(readFileSync(result.logPath, 'utf8'), /start seat coder/);
+  assert.doesNotMatch(options.stderr, /Writing the plan/);
+  assert.match(options.stderr, /Drafting the change/);
   assert.match(logs.join('\n'), /planner skipped artifacts valid/);
 });
 
@@ -318,7 +324,8 @@ test('cold endpoint timeout preserves a valid TASK and retry skips planner rathe
   assert.equal(readFileSync(initial.taskPath, 'utf8'), task);
   assert.equal(readFileSync(initial.recipePath, 'utf8'), recipe);
   assert.doesNotMatch(task, /Planning failure/);
-  assert.match(options.stderr, /host may still be warming[\s\S]*Retry: roster run --issue 42/);
+  assert.match(options.stderr, /The model did not answer in time\. It may still be waking\./);
+  assert.match(readFileSync(initial.logPath, 'utf8'), /host may still be warming[\s\S]*Retry: roster run --issue 42/);
   const logs = [];
   const retried = await runBuiltinIssue(42, { ...options, config: llmConfig, log: (text) => logs.push(text),
     fetchImpl: async (_url, request) => {
@@ -339,7 +346,7 @@ test('README one-liner runs the sequential slice seats with minimum pack even at
   const result = await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {},
     fetchImpl: () => assert.fail('Stub slice must not call a model') });
   assert.equal(result.askKind, 'slice');
-  assert.deepEqual([...options.stderr.matchAll(/start seat (planner|coder|reviewer)/g)].map((match) => match[1]),
+  assert.deepEqual([...readFileSync(result.logPath, 'utf8').matchAll(/start seat (planner|coder|reviewer)/g)].map((match) => match[1]),
     ['planner', 'coder', 'reviewer']);
   assert.equal(result.result.stages.includes('research'), false);
   assert.equal(existsSync(path.join(result.worktreePath, 'RESEARCH.md')), false);
@@ -379,8 +386,9 @@ test('build an orchestrator produces initiative PLAN only and cannot edit README
   assert.match(plan, /Ask kind: initiative[\s\S]*## Outcomes[\s\S]*## Waves[\s\S]*## Child issue drafts/);
   assert.match(plan, /Labels: `wave:1`/);
   assert.doesNotMatch(plan, /README\.md|\*\*\/\*/);
-  assert.match(options.stderr, /start seat planner[\s\S]*tool write_file path="PLAN\.md"[\s\S]*wrote PLAN\.md/);
-  assert.doesNotMatch(options.stderr, /start seat coder|start seat reviewer|tool run_test|build an orchestrator/);
+  assert.match(readFileSync(result.logPath, 'utf8'), /start seat planner[\s\S]*tool write_file path="PLAN\.md"[\s\S]*wrote PLAN\.md/);
+  assert.match(options.stderr, /Writing the plan:[\s\S]*Saving PLAN\.md\./);
+  assert.doesNotMatch(options.stderr, /Drafting the change|Checking the diff|Running tests|build an orchestrator/);
   assert.deepEqual(loadLearning({ cwd: options.target }).runs.map(({ session }) => session), ['roster-42-planner']);
   const status = await readStatus({ issue: 42, offline: true, repoRoot: options.target, config: stubConfig });
   assert.equal(status.artifacts['PLAN.md'], true);
@@ -414,7 +422,8 @@ test('an initiative cannot consume even a valid cached TASK and prior PLAN is ar
   assert.equal(again.planningOnly, true);
   assert.equal(readFileSync(path.join(again.archivePath, 'PLAN.md'), 'utf8'), firstPlan);
   assert.deepEqual(readFileSync(path.join(worktree, 'README.md')), before);
-  assert.doesNotMatch(options.stderr, /start seat coder|start seat reviewer/);
+  assert.doesNotMatch(options.stderr, /Drafting the change|Checking the diff/);
+  assert.doesNotMatch(readFileSync(again.logPath, 'utf8'), /start seat coder|start seat reviewer/);
 });
 
 test('feature planner writes five child issue drafts with wave labels and --publish cannot start coder', async (context) => {
@@ -454,7 +463,8 @@ test('feature planner writes five child issue drafts with wave labels and --publ
   assert.equal([...plan.matchAll(/^### Draft \d+:/gm)].length, 5);
   assert.match(plan, /Labels: `wave:5`/);
   assert.deepEqual(readFileSync(path.join(result.worktreePath, 'README.md')), before);
-  assert.doesNotMatch(options.stderr, /start seat coder|start seat reviewer|Profile outcome/);
+  assert.doesNotMatch(options.stderr, /Drafting the change|Checking the diff|Profile outcome/);
+  assert.doesNotMatch(readFileSync(result.logPath, 'utf8'), /start seat coder|start seat reviewer/);
   assert.equal(options.calls.filter(({ program }) => program === 'gh').length, 1);
 });
 
@@ -1249,7 +1259,8 @@ test('a tool-writing planner hands validated artifacts to the scoped coder and r
     fetchImpl: async (_url, request) => {
       const body = JSON.parse(request.body);
       if (body.messages[0].content.startsWith('You are the builtin planner seat.')) {
-        assert.match(options.stderr, /start seat planner[\s\S]*http chat\.completions start/);
+        assert.match(options.stderr, /^Writing the plan: outcome, allowed files, and checks\.$/m);
+        assert.doesNotMatch(options.stderr, /http chat|start seat|\d{4}-\d\d-\d\dT/);
         plannerTurns += 1;
         assert.deepEqual(body.tools.map(({ function: tool }) => tool.name), ['write_file']);
         if (plannerTurns === 1) return Response.json({
@@ -1287,7 +1298,11 @@ test('a tool-writing planner hands validated artifacts to the scoped coder and r
   assert.equal(result.result.excellence.pass, true);
   assert.equal(result.review.verdict, 'pass');
   const liveLog = readFileSync(result.logPath, 'utf8');
-  assert.equal(liveLog, options.stderr);
+  assert.notEqual(liveLog, options.stderr);
+  assert.match(options.stderr, /Reading|Saving README\.md\./);
+  assert.match(options.stderr, /^Saving README\.md\.$/m);
+  assert.match(options.stderr, /^Running tests\.$/m);
+  assert.doesNotMatch(options.stderr, /http chat|model=|host=|elapsed_ms=|\d{4}-\d\d-\d\dT/);
   assert.match(liveLog, /seat planner tool write_file path="TASK\.md"/);
   assert.match(liveLog, /seat coder tool write_file path="README\.md"/);
   assert.match(liveLog, /seat coder tool run_test/);

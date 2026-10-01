@@ -70,8 +70,16 @@ Multiple Outcomes now take the feature PLAN path instead.
 A planning-only handoff or clarification cannot publish, even with a
 review bypass. No file scope is invented for an Ask that names no files.
 
-`/run N` streams timestamped seat activity to stderr immediately, independently
-of its final summary. The same metadata is appended to the issue repository's
+`/run N` streams one plain-language stderr line per action event, independently
+of its final summary. Planner start/model request says
+`Writing the plan: outcome, allowed files, and checks.` Coder reads say
+`Reading README.md before editing.`, writes say `Saving README.md.`, model
+requests say `Drafting the change.`, and tests say `Running tests.`
+Reviewer start says `Checking the diff against the task.` These are status
+projections only: they do not add tools, checks, edits, or work. A stub coder
+says `Preparing the task summary.` rather than claiming an implementation.
+
+The existing timestamped technical metadata is appended **only** to the issue repository's
 `.roster/runs/roster-N-coder.log`: seat starts, model/endpoint host, HTTP
 phase/status/error class, tool names/paths, managed file writes, mode, and elapsed
 milliseconds. No prompts, completions, file bodies, keys, or upstream error
@@ -80,8 +88,9 @@ the last seat and last complete line; it does not contact GitHub.
 Offline status also shows the expected issue branch, last error class, whether
 TASK/RECIPE/PLAN/RESULT/REVIEW exist, and the latest matching JSONL model and prompt/
 completion counts. Unknown counts stay `-`, never invented zero. `/log N`
-reads every matching seat log with a bounded tail; builtin runs already persist
-their stderr events into those files, so no transcript reconstruction is needed.
+reads every matching seat log with a bounded tail. Model/mode/status/elapsed and
+managed-write metadata stays log-only; stderr is not a technical transcript.
+Explicit `/log` and `/status` diagnostics retain the original technical evidence.
 
 ### Local LLM cold starts
 
@@ -102,14 +111,21 @@ so Node 20 fetch's five-minute header/body deadline cannot cut short this
 configured wait. Injected transports remain supported and must honor the
 provided abort signal/deadline themselves.
 
-While an HTTP request is in flight, stderr and the live log receive a safe
-line every 30s, for example:
+While an HTTP request is in flight, the technical log still records waiting
+every 30s, for example:
 
 ```text
 2026-10-01T12:00:00.000Z seat planner waiting host=192.168.1.48:8888 elapsed=90s cold-start up to 15m
 ```
 
-Only seat, host/port, and elapsed time are included: no URL paths, credentials,
+After more than 30s, each waiting event prints only
+`Still waiting on the model. Local hardware can take minutes after idle.`
+to stderr. Timeout prints
+`The model did not answer in time. It may still be waking.`
+The detailed host/elapsed/retry metadata remains in the technical log and
+the actionable error report.
+
+Only seat, host/port, and elapsed time are included in waiting log records: no URL paths, credentials,
 prompts, completions, or file bodies. The waiting timer stops on completion,
 failure, or timeout. A local timeout says the host may still be warming and
 prints the retry command, for example `roster run --issue 92` (shell `/run 92`).
