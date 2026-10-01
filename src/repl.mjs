@@ -22,6 +22,7 @@ import { formatStatus, readStatus } from './lib/status.mjs';
 import { createFileVault, validateSecretName } from './vault/file.mjs';
 import { buildPublishEnv, resolvePublishModel } from './metrics/run.mjs';
 import { humanEvalHint } from './lib/seat-publication.mjs';
+import { readIssueLogs } from './lib/run-log.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const help = `Commands:
@@ -30,6 +31,7 @@ const help = `Commands:
   /effort [l|m|h|x]         Show or persist the effort level
   /run N [--auto-model]     Run builtin seats, optionally routing from human evaluations
   /status [N] [--offline]   Show an issue, open PR, and local worktree
+  /log N                   Tail local issue seat logs without network access
   /eval TARGET VERDICT 1-5 y|n [--minutes N] [--comment "TEXT"]
   /publish [SUBJECT] [--model MODEL] [--skip-review]  Publish reviewed seat or GHCP changes
   /stats [REF]              Show AI-Run metrics
@@ -84,6 +86,7 @@ const defaultServices = {
   resolveContractsPath, prepareBuiltinPublication, createFileVault,
   validateSecretName, readStatus, formatStatus, setConfigValue,
   publicationTask,
+  readIssueLogs,
   issueCommenter: commentMergedIssue,
   publisher: publishWithContracts,
 };
@@ -200,6 +203,14 @@ export function createDispatcher({
         const { values, options } = parseEvaluationArgs(args);
         const evaluation = await api.recordEvaluation(...values, { ...options, cwd: currentRoot(), env });
         output.write(`Recorded AI-Eval for ${evaluation.sha ?? evaluation.session}.\n`);
+        return true;
+      }
+      case 'log': {
+        if (!/^[1-9]\d*$/.test(args) || !Number.isSafeInteger(Number(args))) throw new TypeError('Use /log N.');
+        const logs = await api.readIssueLogs({ repoRoot: currentRoot(), issue: Number(args), env,
+          apiKeyEnv: state.config.llm.api_key_env, limit: 50 });
+        if (!logs.length) output.write(`No local run logs for issue #${args}.\n`);
+        for (const log of logs) output.write(`${log.path}\n${log.lines.join('\n')}\n`);
         return true;
       }
       case 'publish': {

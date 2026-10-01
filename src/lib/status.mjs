@@ -5,9 +5,10 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { loadConfig } from './config.mjs';
 import { githubRepository } from './issue.mjs';
-import { repositoryRoot } from './learn.mjs';
+import { loadLearning, repositoryRoot } from './learn.mjs';
 import { ensureLocalPath } from './paths.mjs';
-import { readLastRunLog } from './run-log.mjs';
+import { readIssueLogs } from './run-log.mjs';
+import { redactSecrets } from '../runtime/memory.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
 const execFileAsync = promisify(execFile);
@@ -94,13 +95,30 @@ export async function readStatus({
     if (error.code !== 'ENOENT') throw error;
   }
   const localIssue = worktreeExists ? await cachedIssue(worktreePath, number) : null;
-  const runLog = await readLastRunLog({
-    repoRoot: root, session: `roster-${number}-coder`, env, apiKeyEnv: config.llm.api_key_env,
-  });
+  const logs = await readIssueLogs({ repoRoot: root, issue: number, env, apiKeyEnv: config.llm.api_key_env });
+  const runLog = logs.sort((a, b) => a.lastLine.slice(0, 24).localeCompare(b.lastLine.slice(0, 24))).at(-1);
+  const artifacts = {};
+  for (const name of ['TASK.md', 'RECIPE.yml', 'RESULT.md', 'REVIEW.md']) {
+    const file = path.join(worktreePath, name);
+    await ensureLocalPath(file, root);
+    const entry = await fs.lstat(file).catch((error) => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    if (entry && (!entry.isFile() || entry.isSymbolicLink())) throw new Error('Status artifacts must be regular files');
+    artifacts[name] = Boolean(entry);
+  }
+  const record = loadLearning({ cwd: root }).runs.findLast((record) =>
+    record.task === `issue-${number}` || record.session?.startsWith(`roster-${number}-`));
+  const lastRun = record ? Object.fromEntries(['session', 'model', 'prompt_tokens', 'completion_tokens',
+    'context_used', 'context_out', 'context_max'].filter((field) => record[field] !== undefined).map((field) =>
+    [field, typeof record[field] === 'string' ? redactSecrets(record[field], { env, apiKeyEnv: config.llm.api_key_env }) : record[field]])) : null;
+  const local = { branch: `issue-${number}`, artifacts, lastRun };
   if (offline) {
     return {
       issue: localIssue ?? { number, title: null, url: null, state: 'UNKNOWN' },
       openPr: undefined, worktreePath, worktreeExists, offline: true,
+      ...local,
       ...(runLog ? { runLog } : {}),
     };
   }
@@ -142,6 +160,7 @@ export async function readStatus({
     throw new Error(`gh pr list returned invalid open PRs for issue #${number}`);
   }
   return { issue, openPr: prs[0] ?? null, worktreePath, worktreeExists, offline: false,
+    ...local,
     ...(runLog ? { runLog } : {}) };
 }
 
@@ -155,7 +174,13 @@ export function formatStatus(status) {
   const pr = status.offline ? 'unknown (offline)' : status.openPr
     ? `#${status.openPr.number} ${status.openPr.title} ${status.openPr.url}` : 'none';
   return `Issue: ${issue}\nOpen PR: ${pr}\n` +
+    `Branch: ${status.branch ?? `issue-${status.issue.number}`}\n` +
     `Worktree: ${status.worktreePath} (${status.worktreeExists ? 'present' : 'missing'})\n` +
     `Last seat: ${status.runLog?.lastSeat ?? 'unknown (no run log)'}\n` +
-    `Last log line: ${status.runLog?.lastLine ?? 'none'}\n`;
+    `Last log line: ${status.runLog?.lastLine ?? 'none'}\n` +
+    `Last error class: ${status.runLog?.lastErrorClass ?? '-'}\n` +
+    `Artifacts: ${['TASK.md', 'RECIPE.yml', 'RESULT.md', 'REVIEW.md'].map((name) =>
+      `${name}=${status.artifacts?.[name] ? 'yes' : 'no'}`).join(' ')}\n` +
+    `Last run: model=${status.lastRun?.model ?? '-'} prompt_tokens=${status.lastRun?.prompt_tokens ?? status.lastRun?.context_used ?? '-'} ` +
+    `completion_tokens=${status.lastRun?.completion_tokens ?? status.lastRun?.context_out ?? '-'} context_max=${status.lastRun?.context_max ?? '-'}\n`;
 }
