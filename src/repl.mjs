@@ -35,6 +35,7 @@ import { getFleetProfile, loadFleet, withFleetProfile } from './lib/fleet.mjs';
 import { runFleet } from './lib/fleet-cli.mjs';
 import { probeModelDetails } from './onboard/wizard.mjs';
 import { splitArguments } from './lib/arguments.mjs';
+import { formatIssueSummary, listOpenIssues, readDiffNames } from './lib/board.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const unknownCommand = 'Unknown command. /help lists commands.\n';
@@ -84,6 +85,7 @@ const defaultServices = {
   publicationTask,
   readIssueLogs,
   getFleetProfile, loadFleet, withFleetProfile, runFleet, probeModelDetails,
+  formatIssueSummary, listOpenIssues, readDiffNames,
   issueCommenter: commentMergedIssue,
   publisher: publishWithContracts,
   repositoryBranch(cwd) {
@@ -291,6 +293,39 @@ export function createDispatcher({
     const command = canonicalCommand(inputCommand);
     const args = rawArguments?.trim() ?? '';
     switch (command) {
+      case 'issues': {
+        if (args) throw new TypeError('Use /issues.');
+        const issues = await api.listOpenIssues({ cwd: currentRoot(), env });
+        if (!issues.length) output.write('No open issues.\n');
+        for (const issue of issues) {
+          const cached = state.issueCache.get(issue.number);
+          state.issueCache.set(issue.number, { ...cached, issue: { ...cached?.issue, ...issue },
+            branch: cached?.branch ?? `issue-${issue.number}` });
+          safeWrite(`#${issue.number} ${issue.title.replace(/[\x00-\x1f\x7f]/g, '?')}\n`);
+        }
+        if (issues.length === 100) output.write('Showing the first 100 open issues; use GitHub for the remaining board.\n');
+        return true;
+      }
+      case 'issue': {
+        if (!/^[1-9]\d*$/.test(args) || !Number.isSafeInteger(Number(args))) throw new TypeError('Use /issue N.');
+        const number = Number(args);
+        let cached = state.issueCache.get(number);
+        if (!cached) {
+          cached = await api.readStatus({ issue: number, cwd: currentRoot(), config: state.config, env });
+          state.issueCache.set(number, cached);
+        }
+        safeWrite(api.formatIssueSummary(cached, { env }));
+        return true;
+      }
+      case 'diff': {
+        if (args) throw new TypeError('Use /diff.');
+        const worktree = state.lastRun?.worktreePath ??
+          (/^issue-[1-9]\d*$/.test(state.display.branch) ? currentRoot() : null);
+        if (!worktree) throw new Error('No current issue worktree; run an Ask or /run N before /diff.');
+        const names = await api.readDiffNames({ cwd: worktree, env });
+        safeWrite(names.length ? `${names.map((name) => name.replace(/[\x00-\x1f\x7f]/g, '?')).join('\n')}\n` : 'No tracked diff.\n');
+        return true;
+      }
       case 'stop':
         if (args) throw new TypeError('Use /stop.');
         if (!cancel()) output.write('No active run.\n');
@@ -447,6 +482,7 @@ export function createDispatcher({
       }
       case 'log': {
         if (args === 'debug') {
+          if (!state.debug.enabled) throw new Error('Debug logging is off. Use /debug on before /log debug.');
           const log = await state.debug.tail({ limit: 50 });
           output.write(log?.lines.length ? `${log.lines.join('\n')}\n` : 'No debug events recorded in this process.\n');
           return true;

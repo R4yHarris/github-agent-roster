@@ -57,6 +57,8 @@ test('/debug toggles process logging without config changes and /log debug tails
   await shell.dispatch('/run 42');
   assert.equal(readFileSync(active.path, 'utf8'), before);
   assert.equal(shell.state.debug.enabled, false);
+  await assert.rejects(shell.dispatch('/log debug'), /Debug logging is off/);
+  await shell.dispatch('/debug on');
   await shell.dispatch('/log debug');
   assert.match(output.text, /Debug logging on\.\n/);
   assert.match(output.text, /Debug logging off\.\n/);
@@ -69,8 +71,7 @@ test('ROSTER_DEBUG=1 enables a shell process until /debug off overrides it', asy
   assert.equal(shell.state.debug.enabled, true);
   await shell.dispatch('/debug off');
   assert.equal(shell.state.debug.enabled, false);
-  await shell.dispatch('/log debug');
-  assert.match(shell.output.text, /No debug events recorded in this process/);
+  await assert.rejects(shell.dispatch('/log debug'), /Debug logging is off/);
 });
 
 test('slash dispatcher calls existing services and keeps one run in the shell', async () => {
