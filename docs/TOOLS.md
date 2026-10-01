@@ -41,6 +41,9 @@ Written tasks accept case-insensitive title, `Original Ask`/`Ask`,
 headings in any order, with other sections such as Scope retained. They must
 contain the issue Ask text and pass the
 same title, metadata, acceptance-check, allowed-path, and routed-model checks.
+Wrapped Markdown list items are joined before validating checks. Root
+RECIPE.yml, TASK.md, and ESTIMATE.md entries describe planner bookkeeping only;
+they are excluded from application scope and never writable by the coder.
 The harness finalizes the managed recipe/task/estimate through this writer;
 recipe topology and estimation evidence remain harness-owned, not model grants.
 Ask comparison uses normalized whitespace and backticks, ignoring issue

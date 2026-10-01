@@ -36,6 +36,11 @@ See [opt-in routing](ROUTING.md) for the source and context constraints.
    estimation and coder/reviewer outputs are regenerated. Failed stubs,
    mismatched Ask/recipe references, and invalid runtime recipes do not bypass
    planning. The required three-seat recipe schema is unchanged.
+   A matching model-written task-plan receipt can also be reused: its title,
+   checks, and application paths are validated against TASK.md, the receipt is
+   archived, and the harness writes the fixed builtin recipe without planner
+   HTTP. Logs say `planner skipped artifacts valid`. Listed planner bookkeeping
+   files do not become coder write permissions.
 2. The planner session `roster-N-planner` uses the deterministic stub when
    `llm.base_url` is empty. Otherwise it requests a strict JSON plan from
    the configured model. Within `planner.turn_budget` (1-64), it may use

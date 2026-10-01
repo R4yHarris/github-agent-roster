@@ -231,7 +231,7 @@ test('a valid existing issue-92 RECIPE/TASK skips the planner and starts the sco
   const worktree = path.join(options.target, '.worktrees', 'issue-92');
   git(options.target, 'worktree', 'add', '-b', 'issue-92', worktree);
   const task = readFileSync(new URL('./fixtures/planner-task-92.md', import.meta.url), 'utf8');
-  const recipe = planStub(ask, { reference: 'issue:92' }).recipe;
+  const recipe = `title: ${ask}\nacceptance_checks:\n  - node --test exits 0\nfiles_allowed:\n  - README.md\n`;
   writeFileSync(path.join(worktree, 'TASK.md'), task);
   writeFileSync(path.join(worktree, 'RECIPE.yml'), recipe);
   writeFileSync(path.join(worktree, 'ESTIMATE.md'), '# Previous estimate\n');
@@ -260,14 +260,15 @@ test('a valid existing issue-92 RECIPE/TASK skips the planner and starts the sco
   assert.equal(result.result.excellence.pass, true);
   assert.equal(result.review.verdict, 'pass');
   assert.equal(readFileSync(result.taskPath, 'utf8'), task);
-  assert.equal(readFileSync(result.recipePath, 'utf8'), recipe);
+  assert.equal(parseRecipe(readFileSync(result.recipePath, 'utf8')).ask, 'issue:92');
+  assert.equal(readFileSync(path.join(result.archivePath, 'RECIPE.yml'), 'utf8'), recipe);
   assert.equal(readFileSync(path.join(result.archivePath, 'ESTIMATE.md'), 'utf8'), '# Previous estimate\n');
   assert.equal(options.calls.some(({ args }) => args[0] === 'worktree' && args[1] === 'add'), false);
   assert.deepEqual(loadLearning({ cwd: options.target }).runs.map(({ session }) => session),
     ['roster-92-coder', 'roster-92-reviewer']);
   assert.doesNotMatch(options.stderr, /start seat planner/);
   assert.match(options.stderr, /start seat coder/);
-  assert.match(logs.join('\n'), /Planner skipped: existing RECIPE.yml and TASK.md validate/);
+  assert.match(logs.join('\n'), /planner skipped artifacts valid/);
 });
 
 test('an invalid cached recipe is preserved in the archive and replanned, not blindly reused', async (context) => {

@@ -1,5 +1,5 @@
 import { splitTaskFrontmatter } from '../runtime/skills.mjs';
-import { isForbiddenWrite } from '../runtime/tools.mjs';
+import { isForbiddenWrite, plannerArtifactFiles } from '../runtime/tools.mjs';
 
 export function oneLine(value, label) {
   if (typeof value !== 'string' || !value.trim() ||
@@ -75,18 +75,27 @@ export function taskSections(task) {
   return { frontmatter, title, header: text.slice(0, bodyStart), body: text.slice(bodyStart), sections };
 }
 
-function sectionList(section, label) {
+function sectionList(section, label, { continuations = false } = {}) {
   if (!section?.content) throw new TypeError(`TASK.md must contain ${label}`);
-  return section.content.split('\n').filter((line) => line.trim()).map((line) => {
+  const items = [];
+  for (const line of section.content.split('\n').filter((line) => line.trim())) {
     const value = line.trim().replace(/^(?:[-*+]|\d+[.)])[ \t]+/, '');
-    return value.replace(/^`([^`]+)`$/, '$1');
-  });
+    if (continuations && /^\s+\S/.test(line) && items.length) items[items.length - 1] += ` ${value}`;
+    else items.push(value.replace(/^`([^`]+)`$/, '$1'));
+  }
+  return items;
+}
+
+export function applicationFiles(items) {
+  return checkedList(items.filter((file) => !plannerArtifactFiles.some((name) =>
+    typeof file === 'string' && file.toLowerCase() === name.toLowerCase())),
+  'Files allowed', allowedFile, 32);
 }
 
 export function taskFilesAllowed(task) {
   const { sections } = taskSections(task);
-  return checkedList(sectionList(sections.find(({ name }) => name === 'files allowed'),
-    'an Allowed Files list (or Files allowed)'), 'Files allowed', allowedFile, 32);
+  return applicationFiles(sectionList(sections.find(({ name }) => name === 'files allowed'),
+    'an Allowed Files list (or Files allowed)'));
 }
 
 function askContentLines(value) {
@@ -126,6 +135,7 @@ export function parseTaskDocument(task, { expectedAsk, issueTitle, issueBody } =
     }
   }
   const acceptance_checks = checkedList(sectionList(parsed.sections.find(({ name }) => name === 'acceptance checks'),
-    'Acceptance Checks (or acceptance_checks)'), 'Acceptance checks', (line) => oneLine(line, 'Acceptance check'));
+    'Acceptance Checks (or acceptance_checks)', { continuations: true }),
+  'Acceptance checks', (line) => oneLine(line, 'Acceptance check'));
   return { title: parsed.title, ask, acceptance_checks, files_allowed: taskFilesAllowed(task) };
 }

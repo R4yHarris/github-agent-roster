@@ -284,7 +284,7 @@ export async function runBuiltinIssue(issueNumber, {
   if (existing.reason) log(existing.reason);
   const archivePath = prepared.reused ? await archiveRunArtifacts(worktreePath, {
     task: prepared.task, git: (args) => git(worktreePath, args, commandEnv),
-    preserve: existing.plan ? ['RECIPE.yml', 'TASK.md'] : [],
+    preserve: existing.plan ? existing.plan.normalizedRecipe ? ['TASK.md'] : ['RECIPE.yml', 'TASK.md'] : [],
   }) : null;
   if (archivePath) log(`Previous generated run artifacts preserved: ${archivePath}`);
   const sessions = {
@@ -309,7 +309,7 @@ export async function runBuiltinIssue(issueNumber, {
       session: sessions.planner, fetchImpl, env, vault, learningRoot: prepared.repoRoot,
       lockedModel: route?.profile.model, onEvent,
     }));
-    if (planner.reused) log('Planner skipped: existing RECIPE.yml and TASK.md validate; starting coder.');
+    if (planner.reused) log('planner skipped artifacts valid; starting coder.');
   } catch (error) {
     if (error instanceof Error && error.run) {
       await recordRun({ session: sessions.planner, task: prepared.task,
