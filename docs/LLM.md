@@ -91,9 +91,25 @@ if (chat !== null) {
 The result is `{ message, usage }` with an optional `finish_reason` of `stop`
 or `tool_calls`. `message` is the first choice's message object, including
 tool calls when present, and `usage` is the provider's usage object or
-`null` if omitted. Truncated or unsupported finish reasons are errors.
+`null` if omitted. The low-level client rejects unsupported finish reasons with
+an error that names only the reason, never the response body. Its `lastResponse`
+retains the real response model and reported usage even on that error.
 Extra non-streaming request fields, such as `temperature` and `max_tokens`,
 pass through. Streaming is not supported.
+
+The shared builtin adapter accepts `stop` and `tool_calls` and grants one
+`length` retry per chat instance (the coder keeps one instance for its run).
+It logs `Response truncated. Retrying.` in the shell and run log, discards the
+truncated completion without executing or replaying its tool calls, and asks
+for a concise complete response with half the previous completion cap.
+Builtin requests start at 4096 tokens unless the seat supplies a cap, such as
+2048 for low-difficulty docs. The reduced cap remains in effect for later
+requests; it is an output cap, not the model context capacity.
+The retry is an extra coder model turn, independent of failed-test repairs.
+A second `length` or any other unsupported reason is terminal and appears by
+name in failure evidence and review. Completed README writes are preserved;
+the invalid response cannot overwrite them. Response-backed metrics retain
+the last real model/usage, while total coder usage includes the retry.
 
 The client POSTs JSON to `{base_url}/chat/completions`. It sends
 `Authorization: Bearer ...` **only** when a non-empty key resolves, even when

@@ -137,7 +137,7 @@ test('tool-call messages survive parsing and omitted usage is null', async () =>
   assert.deepEqual(chat.lastResponse, { model: 'local-test-model', usage: null });
 });
 
-test('passes supported finish reasons through and rejects truncated completions', async () => {
+test('passes supported finish reasons through and names rejected reasons without response bodies', async () => {
   const message = { role: 'assistant', content: 'done' };
   const chat = client(async () => Response.json({
     choices: [{ message, finish_reason: 'stop' }],
@@ -149,7 +149,8 @@ test('passes supported finish reasons through and rejects truncated completions'
   const truncated = client(async () => Response.json({
     choices: [{ message, finish_reason: 'length' }],
   }));
-  await assert.rejects(truncated({ messages }), /unsupported finish reason/);
+  await assert.rejects(truncated({ messages }), /unsupported finish reason: length/);
+  assert.deepEqual(truncated.lastResponse, { model: 'local-test-model', usage: null });
 });
 
 test('429 retries once with the same payload and key after Retry-After', async () => {

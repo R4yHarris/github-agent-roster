@@ -2,6 +2,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { resolveSecret } from '../lib/secrets.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
 import { defaultRequestFetch } from './http.mjs';
+import { UnsupportedFinishReasonError } from './finish-reason.mjs';
 import { ChatError, isLocalLlmHost, LlmTimeoutError, resolveRequestTimeout, validateRetryCommand,
   withRequestTimeout } from './request.mjs';
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -40,8 +41,8 @@ function parseCompletion(payload, requestedModel) {
     throw new ChatError('The LLM response did not contain a valid message.');
   }
   if (choice.finish_reason !== undefined && choice.finish_reason !== null &&
-      !['stop', 'tool_calls'].includes(choice.finish_reason)) {
-    throw new ChatError('The LLM response had an unsupported finish reason.');
+      typeof choice.finish_reason !== 'string') {
+    throw new ChatError('The LLM response had an invalid finish reason.');
   }
   const usage = payload.usage ?? null;
   if (usage !== null && (!isObject(usage) ||
@@ -166,6 +167,13 @@ export function createChat(config = {}, {
           .map((field) => [field, response.usage[field]]),
       ));
       lastResponse = Object.freeze({ model: response.model, usage });
+      if (response.finish_reason != null && !['stop', 'tool_calls'].includes(response.finish_reason)) {
+        const rawReason = key ? response.finish_reason.split(key).join('[redacted]') : response.finish_reason;
+        const reason = redactSecrets(rawReason, {
+          env, apiKeyEnv: llm.api_key_name ?? 'OPENAI_API_KEY',
+        }).replace(/[\x00-\x1f\x7f]/g, '?').slice(0, 128) || '(empty)';
+        throw new UnsupportedFinishReasonError(reason, { truncated: response.finish_reason === 'length' });
+      }
       return response;
     } catch (error) {
       if (error?.code === 'ROSTER_RUN_LOG') throw error;
