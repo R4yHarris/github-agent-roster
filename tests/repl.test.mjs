@@ -190,7 +190,7 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
   assert.match(output.text, /Commands:\n/);
   assert.ok(!output.text.includes('private-value'));
   assert.match(output.text, /ROSTER_TOKEN is stored \(value hidden/);
-  assert.match(errorOutput.text, /Unknown command: \/unknown/);
+  assert.match(errorOutput.text, /Unknown command\. \/help lists commands\./);
   assert.doesNotMatch(errorOutput.text, /Unknown command: plain/);
 });
 
