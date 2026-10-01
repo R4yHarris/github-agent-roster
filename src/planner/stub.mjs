@@ -101,8 +101,8 @@ export function planStub(ask, { reference = 'local:draft', title, metadata } = {
   });
 }
 
-export function planFromTask(task, ask) {
-  const { title, acceptance_checks, files_allowed } = parseTaskDocument(task, { expectedAsk: ask });
+export function planFromTask(task, ask, { issueTitle, issueBody } = {}) {
+  const { title, acceptance_checks, files_allowed } = parseTaskDocument(task, { expectedAsk: ask, issueTitle, issueBody });
   const { difficulty, estimate_min, task_class, model } = readTaskMetadata(task);
   return { title, acceptance_checks, files_allowed, difficulty, estimate_min, task_class, model };
 }
@@ -210,7 +210,7 @@ export async function planAsk(ask, {
       if (taskDraft !== undefined) {
         let validated;
         try {
-          const complete = planFromTask(taskDraft, cleanAsk);
+          const complete = planFromTask(taskDraft, cleanAsk, { issueTitle: fixedTitle });
           if (lockedModel && complete.model && complete.model !== lockedModel) {
             throw new TypeError('The routed planner must keep the selected fleet model');
           }
@@ -259,7 +259,7 @@ export async function planAsk(ask, {
     let plan;
     if (taskDraft !== undefined && !/^[{\[]/.test(message.content.trimStart())) {
       try {
-        plan = planFromTask(taskDraft, cleanAsk);
+        plan = planFromTask(taskDraft, cleanAsk, { issueTitle: fixedTitle });
       } catch (error) {
         if (!(error instanceof Error)) throw error;
         failure = error.message;

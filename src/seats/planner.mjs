@@ -34,14 +34,14 @@ async function readArtifact(worktree, name) {
   return new TextDecoder('utf-8', { fatal: true }).decode(await fs.readFile(file));
 }
 
-export async function readPlannerHandoff({ worktree, reference, ask, lockedModel }) {
+export async function readPlannerHandoff({ worktree, reference, ask, issueTitle, issueBody, lockedModel }) {
   const [recipe, task] = await Promise.all([
     readArtifact(worktree, 'RECIPE.yml'), readArtifact(worktree, 'TASK.md'),
   ]);
   if (recipe === null || task === null) return { plan: null, reason: 'Existing RECIPE/TASK handoff is incomplete' };
   try {
     validateBuiltinRecipe(recipe, reference);
-    const metadata = planFromTask(task, ask);
+    const metadata = planFromTask(task, ask, { issueTitle, issueBody });
     if (taskSections(task).sections.some(({ name }) => name === 'planning failure')) {
       throw new TypeError('Existing TASK records a failed planner attempt');
     }

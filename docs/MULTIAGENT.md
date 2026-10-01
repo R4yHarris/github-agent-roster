@@ -49,6 +49,12 @@ See [opt-in routing](ROUTING.md) for the source and context constraints.
    `acceptance_checks`, and `Allowed Files` or `Files allowed`. Scope and other
    sections may appear between them. Missing Allowed Files is an error; paths
    are never inferred from the prose of a written task.
+   Ask matching collapses whitespace, removes wrapping backticks and issue
+   template boilerplate, and accepts the issue title or the first substantive
+   nonempty body line in that section; it does not require the whole templated
+   body to be repeated. `Ask (unchanged)` and `Original Ask (verbatim)` are
+   accepted heading annotations. Empty or template-only Ask sections still fail.
+   The same check applies to cached files before deciding to skip planning.
    The harness validates that task and finalizes all three managed artifacts
    through the same scoped writer, including trusted history-based estimates.
    Draft recipe/estimate text cannot add seats or replace estimation evidence.
