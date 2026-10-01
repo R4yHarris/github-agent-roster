@@ -164,7 +164,7 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
   assert.equal(await dispatch('/quit'), false);
 
   assert.deepEqual(calls, [
-    ['ask', 'Add a status section.'],
+    ['local-ask', 'Add a status section.'],
     ['set-config', 'model', 'local-model'],
     ['set-config', 'effort', 'h'],
     ['run', '42', false, false, 'local-model', 'h'],
@@ -180,7 +180,7 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
   assert.match(output.text, /Worktree: issue-42/);
   assert.match(output.text, /Model: local-model/);
   assert.match(output.text, /Effort: h/);
-  assert.match(output.text, /Next: gh issue create --body-file ask\.md/);
+  assert.doesNotMatch(output.text, /Next: gh issue create/);
   assert.match(output.text, /--message "feat: issue 42" --merge-when-green/);
   assert.doesNotMatch(output.text, /--merge-when-green --merge-when-green/);
   assert.match(output.text, /Issue: #42/);
@@ -371,13 +371,13 @@ test('a local ask publishes from its worktree and does not comment on an issue',
 
 test('clarification is visible in the shell and never offers publication', async () => {
   const shell = dispatcher({ services: {
-    submitAsk: async () => ({ mode: 'clarify', askKind: 'clarify', clarification: 'Name one outcome and allowed files.' }),
+    runBuiltinAsk: async () => ({ planningOnly: true, askKind: 'clarify', clarification: 'Name one outcome and allowed files.' }),
     runBuiltinIssue: async () => ({ planningOnly: true, askKind: 'clarify', command: null,
       clarification: 'Name one outcome and allowed files.', issue: { number: 92 } }),
   } });
   await shell.dispatch('/ask Improve things');
   await shell.dispatch('/run 92');
-  assert.match(shell.output.text, /Ask kind: clarify[\s\S]*Name one outcome/);
+  assert.match(shell.output.text, /Name one outcome/);
   assert.doesNotMatch(shell.output.text, /Use \/publish|TASK: undefined|TASK validates/);
   await assert.rejects(shell.dispatch('/publish --skip-review'), /clarification is not code/);
 });
@@ -419,15 +419,15 @@ test('/run reports a failed planner stub without throwing and leaves the shell u
   assert.equal(await shell.dispatch('/quit'), false);
 });
 
-test('slash ask prints the created issue URL when gh is available', async () => {
+test('slash ask runs a local slice and never creates a GitHub issue', async () => {
   const { dispatch, state, output } = dispatcher({
-    services: { submitAsk: async () => ({
-      mode: 'issue', number: 42, url: 'https://github.com/example/project/issues/42',
-    }) },
+    services: { submitAsk: () => assert.fail('Slash ask must not create an issue'),
+      runBuiltinAsk: async () => ({ local: true, task: 'local-test', askKind: 'slice' }) },
   });
   await dispatch('/ask Add status to README.');
-  assert.equal(state.lastAsk.number, 42);
-  assert.equal(output.text, 'Ask kind: slice\nIssue: https://github.com/example/project/issues/42\n');
+  assert.equal(state.lastRun.local, true);
+  assert.equal(state.lastRequest.kind, 'ask');
+  assert.doesNotMatch(output.text, /Issue: https:\/\//);
 });
 
 test('the display reports the configured LLM host beneath the fixed product banner', () => {

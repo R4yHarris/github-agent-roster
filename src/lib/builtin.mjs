@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { buildPublishEnv, buildRun, resolvePublishModel, RUN_ENV_NAMES } from '../metrics/run.mjs';
-import { cleanAskText, taskFilesAllowed } from '../planner/stub.mjs';
+import { cleanAskText, renderAssignment, taskFilesAllowed } from '../planner/stub.mjs';
 import { runCoder } from '../seats/coder.mjs';
 import { preparePlannerHandoff, readPlannerHandoff, readPlannerTask, readPreviousReview, runPlanner } from '../seats/planner.mjs';
 import { requirePassingReview, runReviewer } from '../seats/reviewer.mjs';
@@ -287,6 +287,47 @@ async function prepareLocalAsk(ask, { cwd, config, runCommand }) {
     issue: { title: ask.split('\n')[0], body: ask }, local: true, reused: false };
 }
 
+async function reusePreparedAssignment(run, { cwd, config, runCommand, ask, issueNumber }) {
+  const root = path.resolve((await runCommand('git', ['rev-parse', '--show-toplevel'], cwd)).trim());
+  const expectedTask = issueNumber === null ? run?.task : `issue-${issueNumber}`;
+  if (!run || typeof run.ask !== 'string' || typeof run.worktreePath !== 'string' ||
+      typeof run.repoRoot !== 'string' || !run.issue || run.task !== expectedTask ||
+      (issueNumber === null
+        ? !run.local || !/^local-[a-f0-9]{16}$/.test(run.task) || run.ask !== ask
+        : run.local || run.issue.number !== Number(issueNumber))) {
+    throw new Error('Retry requires the unchanged prepared Ask and task worktree');
+  }
+  const expectedPath = path.resolve(root, config.paths.worktrees, run.task);
+  const same = (left, right) => process.platform === 'win32'
+    ? path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase()
+    : path.resolve(left) === path.resolve(right);
+  if (!same(root, run.repoRoot) || !same(expectedPath, run.worktreePath)) {
+    throw new Error('Retry worktree does not belong to the current repository and task');
+  }
+  await ensureLocalPath(expectedPath, root);
+  const inventory = await runCommand('git', ['worktree', 'list', '--porcelain', '-z'], root);
+  const registered = inventory.split('\0\0').some((record) => {
+    const fields = record.split('\0');
+    const worktree = fields.find((field) => field.startsWith('worktree '))?.slice(9);
+    return worktree && same(worktree, expectedPath) && fields.includes(`branch refs/heads/${run.task}`);
+  });
+  if (!registered) throw new Error('Retry worktree registration or branch changed; refusing a second worktree');
+  const file = path.join(expectedPath, 'ASSIGNMENT.md');
+  await ensureLocalPath(file, root);
+  const entry = await fs.lstat(file);
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1 || entry.size > 65536) {
+    throw new Error('Retry assignment must be a regular single-link file');
+  }
+  const expected = run.local ? `# Local Ask\n\n${run.ask}\n` : renderAssignment(run.issue);
+  if ((await fs.readFile(file, 'utf8')).replaceAll('\r\n', '\n') !== expected.replaceAll('\r\n', '\n')) {
+    throw new Error('Retry assignment changed; refusing to replace the prepared Ask');
+  }
+  await initializeWorktreeSubmodules(expectedPath, runCommand);
+  return { repoRoot: root, worktreePath: expectedPath, task: run.task, ask: run.ask, issue: run.issue,
+    session: run.session, assignmentPath: file, envPath: run.envPath, metadata: run.metadata,
+    local: run.local, reused: true };
+}
+
 function taskSummary(planner, effort) {
   const document = parseTaskDocument(planner.task);
   return `Task summary:\nOutcome: ${document.title}\n` +
@@ -319,6 +360,8 @@ async function runBuiltinAssignment(issueNumber, {
   debug = createDebugLog({ env }),
   onRunEvent,
   signal,
+  preparedRun,
+  onPrepared,
 } = {}) {
   throwIfCancelled(signal);
   config = { ...config, capabilities: config.capabilities ?? await loadCapabilities({ cwd }) };
@@ -362,12 +405,15 @@ async function runBuiltinAssignment(issueNumber, {
       throw error;
     }
   };
-  const prepared = issueNumber === null ? await prepareLocalAsk(ask, { cwd, config, runCommand: issueCommand })
+  const prepared = preparedRun ? await reusePreparedAssignment(preparedRun, {
+    cwd, config, runCommand: issueCommand, ask, issueNumber,
+  }) : issueNumber === null ? await prepareLocalAsk(ask, { cwd, config, runCommand: issueCommand })
     : await runIssue(issueNumber, {
     cwd, runCommand: issueCommand, worktrees: config.paths.worktrees, log: () => {}, now, config,
     beforeWorktree: (root, worktreePath) => ensureLocalPath(worktreePath, root),
     sessionId: `roster-${issueNumber}-coder`, recordPreparation: false,
   });
+  await onPrepared?.(prepared);
   const reference = prepared.local ? `local:${prepared.task}` : `issue:${prepared.issue.number}`;
   const sessionPrefix = prepared.local ? `roster-${prepared.task}` : `roster-${prepared.issue.number}`;
   const { worktreePath } = prepared;

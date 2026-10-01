@@ -19,7 +19,7 @@ test('every registry command has usage, aliases, flags and exactly one example',
   }
   assert.match(formatHelp('run'), /--confirm/);
   assert.match(formatHelp('model'), /--save/);
-  assert.match(formatHelp('publish'), /failed or missing review/);
+  assert.match(formatHelp('publish'), /if review failed/);
 });
 
 test('group help lists only its group and root help contains all six ordered groups', () => {

@@ -16,10 +16,12 @@ agents and CI.
 | Command | Behavior |
 | --- | --- |
 | `TEXT` (no slash) | Classify a direct local ask without `gh` or issue creation. In a local Git worktree, slices print the task summary and run planner/coder/reviewer to RESULT.md and REVIEW.md; features and initiatives write PLAN.md and stop. |
-| `/ask TEXT` | Classify Ask, then create its parent issue through `gh`, or save an offline slice TASK/recipe or planning-only PLAN. A `clarify` Ask stops with outcome/file-scope guidance. |
+| `/ask TEXT` | Use the same local planner/coder/reviewer path as plain text; never create a GitHub issue. A bounded slice reaches RESULT and REVIEW, while clarify and initiative/feature planning retain their existing boundaries. CLI `roster ask` keeps its separate issue/draft behavior. |
 | `/model [MODEL]` | Show the current model or persist a new one to ignored `.roster/config.yml`. |
 | `/effort [l|m|h|x|none]` | Show effort or persist an explicit override to ignored `.roster/config.yml`; it wins over mode/retry defaults. |
-| `/run N [--auto-model] [--confirm]` or `/run --issue N [--auto-model] [--confirm]` | Classify before seats. Slices print outcome, allowed files, checks, and effort, then automatically continue through coder/read-only-reviewer in the same run. Only `--confirm` pauses after the summary; no `--auto` or second `/run` is required. Feature/initiative writes PLAN only; clarify stops. Auto-model chooses a registered fleet profile without rewriting the saved default; no eligible profile uses the deterministic stub. |
+| `/run N [--auto-model] [--confirm]` or `/run --issue N [--auto-model] [--confirm]` | Run an existing issue, initializing contracts before tests. Slices print the summary and continue. `--confirm` pauses; Enter resumes the prepared task in its worktree without another issue lookup, while `/stop` cancels. Feature/initiative writes PLAN only; clarify stops. Auto-model does not rewrite the saved default. |
+| `/retry` | Rerun the last plain or slash Ask or issue run in the same registered worktree. Preserve app changes, validate the unchanged assignment and branch, archive managed run artifacts, reuse a valid TASK/recipe, and never call worktree add for a retry. |
+| `/stop` | Immediately cancel an in-flight seat or a confirmed handoff, like one Ctrl+C. |
 | `/status [N] [--offline]` | With no number, show cached issue, branch, seat, state, model, host, effort, last finish reason, last test name, and review. Current and previously run issue snapshots use no model/GitHub request. An uncached explicit issue uses the existing status reader; `--offline` prohibits GitHub. |
 | `/history` | Show the last 20 stored safe commands, without vault or secret lines. |
 | `/statusbar on\|off` | Toggle both blue delivery-tray bars; the default is on and the setting is process-local. |
@@ -97,8 +99,9 @@ skills, final tests/excellence, read-only review, and a human eval hint.
 Classified slices do not load research/implementation packs, even at
 feat difficulty4+. Whether file scope is declared or inferred from named files,
 the validated TASK summary streams before coder starts and execution continues
-automatically. Use `/run N --confirm` to stop after the summary, then run
-without that flag when ready. CLI `roster run --issue N --confirm` has the same
+automatically. Use `/run N --confirm` to stop after the summary, then press
+Enter to continue in the same worktree or `/stop` to cancel. CLI
+`roster run --issue N --confirm` still returns a prepared handoff and has the same
 pause; it cannot be combined with `--publish`.
 Multiple Outcomes now take the feature PLAN path instead.
 A planning-only handoff or clarification cannot publish, even with a
