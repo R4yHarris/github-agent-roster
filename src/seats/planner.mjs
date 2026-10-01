@@ -14,6 +14,7 @@ import { askKinds, classifyAsk, clarificationHint } from '../planner/classify.mj
 import { planOutline } from '../planner/plan.mjs';
 import { retryCommandForTask } from '../llm/request.mjs';
 import { selectReasoning } from '../llm/reasoning.mjs';
+import { throwIfCancelled } from '../runtime/cancel.mjs';
 
 function validateBuiltinRecipe(source, reference) {
   const recipe = parseRecipe(source);
@@ -99,7 +100,9 @@ export async function runPlanner({
   session = issue ? `roster-${issue.number}-planner` : undefined,
   fetchImpl, env, vault, learningRoot = repoRoot, onEvent, askKind,
   retryCommand = retryCommandForTask(task),
+  signal,
 }) {
+  throwIfCancelled(signal);
   if (typeof repoRoot !== 'string' || !repoRoot) {
     throw new TypeError('Planner requires the roster repository root for memory');
   }
@@ -124,8 +127,8 @@ export async function runPlanner({
   const planPath = path.join(worktree, 'PLAN.md');
   try {
     const tools = await createTools({ worktree, seat: 'planner', env, apiKeyEnv: config.llm.api_key_env, onEvent,
-      ...(kind === 'slice' ? {} : { plannerArtifacts: planArtifactFiles }) });
-    const options = { config, reference, title, fetchImpl, env, vault, onEvent, retryCommand,
+      signal, ...(kind === 'slice' ? {} : { plannerArtifacts: planArtifactFiles }) });
+    const options = { config, reference, title, fetchImpl, env, vault, onEvent, retryCommand, signal,
       onResponse: (response) => { lastResponse = response; } };
     if (kind === 'slice') {
       plan = await planAsk(ask, {

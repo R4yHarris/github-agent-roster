@@ -6,6 +6,7 @@ import { parseTaskDocument } from '../planner/task.mjs';
 import { applyReadmeStatus } from './readme-status.mjs';
 import { ContractsSubmoduleError, onlyMissingContractsScripts } from '../lib/contracts.mjs';
 import { UnsupportedFinishReasonError } from '../llm/finish-reason.mjs';
+import { throwIfCancelled } from './cancel.mjs';
 
 class MalformedCoderTools extends Error {}
 export const testRepairBudget = 4;
@@ -37,7 +38,8 @@ function stubSummary(task) {
     'Deterministic stub only: no implementation or tests were run. Configure llm.base_url to run a coder.';
 }
 
-async function executeLoop({ config, context, tools, fetchImpl, env, vault, verify, onEvent, retryCommand }, progress) {
+async function executeLoop({ config, context, tools, fetchImpl, env, vault, verify, onEvent, retryCommand, signal }, progress) {
+  throwIfCancelled(signal);
   if (!config.llm.base_url) {
     const summary = stubSummary(context.task);
     return {
@@ -78,7 +80,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   if (readmeOnlyDocs && !offeredTools.has('write_file')) {
     throw new Error('README-only docs task requires write_file; enable it before running the coder');
   }
-  const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand });
+  const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand, signal });
   const usages = [];
   const ids = new Set();
   let repaired = false;
@@ -118,6 +120,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   };
   await onEvent?.({ type: 'implementation', path: 'model' });
   for (;;) {
+    throwIfCancelled(signal);
     if (attemptTurns === config.seat.turn_budget + Number(repaired)) {
       if (progress.testRepairs === 0 || finalSummaryOnly) {
         throw new Error(`Coder turn budget (${config.seat.turn_budget}) exhausted`);

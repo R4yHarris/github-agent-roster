@@ -33,7 +33,24 @@ agents and CI.
 | `/vault get NAME` | Check whether an entry exists without revealing its value; use piped `roster vault get NAME` to retrieve it. |
 | `/vault set NAME` | Read the next line with terminal echo and readline history disabled, then store it in the existing file vault. |
 | `/help` | Show slash-command help. |
-| `/quit` | Exit with status 0; Ctrl+C also exits 0. |
+| `/quit` or `/q` or `exit` | Exit with status 0. Ctrl+C cancels an active run; a second interrupt or idle Ctrl+C exits. |
+
+## Keys and history
+
+Up/Down recall entered commands without executing them until Enter. History
+keeps the last 200 safe lines in ignored `.roster/history`, written atomically
+with owner-only permissions. Vault commands and their hidden input, PEM paths,
+credential-like values, passwords, and known secret environment values are
+excluded from both saved and readline history. Consumer repositories must
+ignore `.roster/history` (and its atomic temporary files) before saving history.
+History is a protected harness artifact, not a coder-readable source file.
+
+Tab completes slash commands from the shared registry; a second Tab lists
+matches. Ctrl+C aborts the active seat/model request/test process and returns
+to the prompt. A second Ctrl+C, Ctrl+D on an empty input, `/quit`, `/q`, or
+`exit` exits with status 0. A cancelled task cannot be published as completed
+work. `/redraw` repaints the tray without clearing scrollback; `/clear` clears
+the screen and repaints it. No extra terminal dependency is used.
 
 Unknown commands report an error and leave the prompt open. Secrets are never
 accepted as part of `/vault set NAME` itself. The shell dispatches to existing

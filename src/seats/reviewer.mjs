@@ -12,6 +12,7 @@ import { redactEvidence } from '../runtime/excellence.mjs';
 import { isAllowedFile, isForbiddenRead, taskAndRepairFiles } from '../runtime/tools.mjs';
 import { loadPrincipal } from './principal.mjs';
 import { isLlmTimeout } from '../llm/request.mjs';
+import { isRunCancelled, throwIfCancelled } from '../runtime/cancel.mjs';
 
 const execute = promisify(execFile);
 const maxFileBytes = 65_536;
@@ -105,6 +106,7 @@ function formatReview({ verdict, reasons, securityNotes }) {
 export async function runReviewer({
   worktree, repoRoot, config, coderResult, env = process.env, fetchImpl, vault, onEvent, askKind,
   retryCommand,
+  signal,
 } = {}) {
   if (typeof worktree !== 'string' || typeof repoRoot !== 'string' ||
       typeof coderResult?.resultPath !== 'string' || !config?.llm || !config.seat) {
@@ -119,6 +121,7 @@ export async function runReviewer({
   let taskDigest;
   let resultDigest;
   try {
+    throwIfCancelled(signal);
     const [task, result] = await Promise.all([
       readRegularText(worktree, 'TASK.md'), readRegularText(worktree, 'RESULT.md'),
     ]);
@@ -173,7 +176,7 @@ export async function runReviewer({
       if (evidence.length + (principal?.content.length ?? 0) + instructions.length > budget) {
         throw new Error('Reviewer evidence exceeds seat.context_chars');
       }
-      const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand });
+      const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand, signal });
       queried = true;
       const response = await chat({ messages: [
         { role: 'system', content: instructions + (principal ? `\n\n${principal.content.trim()}` : '') },
@@ -190,6 +193,7 @@ export async function runReviewer({
     }
   } catch (error) {
     if (!(error instanceof Error)) throw error;
+    if (isRunCancelled(error)) throw error;
     if (error.code === 'ROSTER_RUN_LOG') throw error;
     report = {
       verdict: 'fail',

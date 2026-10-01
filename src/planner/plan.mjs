@@ -92,7 +92,7 @@ export function renderPlan(plan, { ask, title, kind, reference }) {
 }
 
 export async function planOutline(ask, {
-  kind, config, title, reference = 'local:draft', fetchImpl, env, vault, onEvent, onResponse, retryCommand,
+  kind, config, title, reference = 'local:draft', fetchImpl, env, vault, onEvent, onResponse, retryCommand, signal,
 } = {}) {
   const text = cleanAskText(ask);
   config = selectReasoning(config, { kind });
@@ -120,7 +120,7 @@ export async function planOutline(ask, {
   const usages = [];
   let response;
   for (let turn = 1; turn <= Math.min(budget, 2); turn += 1) {
-    const completion = await chatCompletion({ config, messages, fetchImpl, env, vault, onEvent, retryCommand });
+    const completion = await chatCompletion({ config, messages, fetchImpl, env, vault, onEvent, retryCommand, signal });
     response = completion.response;
     onResponse?.(response);
     usages.push(completion.usage);

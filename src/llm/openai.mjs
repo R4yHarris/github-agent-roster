@@ -3,6 +3,7 @@ import { resolveSecret } from '../lib/secrets.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
 import { defaultRequestFetch } from './http.mjs';
 import { UnsupportedFinishReasonError } from './finish-reason.mjs';
+import { isRunCancelled, throwIfCancelled } from '../runtime/cancel.mjs';
 import { ChatError, isLocalLlmHost, LlmTimeoutError, resolveRequestTimeout, validateRetryCommand,
   withRequestTimeout } from './request.mjs';
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -62,6 +63,7 @@ function parseCompletion(payload, requestedModel) {
 
 export function createChat(config = {}, {
   fetch: suppliedFetch, env = process.env, vault, onEvent, retryCommand, clock,
+  signal,
 } = {}) {
   if (!isObject(config) || (config.llm !== undefined && !isObject(config.llm))) {
     throw new TypeError('LLM configuration must be an object with an optional llm object.');
@@ -85,6 +87,7 @@ export function createChat(config = {}, {
 
   let lastResponse = null;
   const chat = async function chat(request) {
+    throwIfCancelled(signal);
     if (!isObject(request) || !Array.isArray(request.messages) || request.messages.length === 0 ||
         request.messages.some((message) => !isObject(message) || typeof message.role !== 'string' || !message.role)) {
       throw new TypeError('A chat request requires a non-empty messages array with message roles.');
@@ -160,7 +163,7 @@ export function createChat(config = {}, {
 
     try {
       const response = await withRequestTimeout(send, {
-        host, local, timeoutMs, retryCommand, clock,
+        host, local, timeoutMs, retryCommand, clock, signal,
         ...(onEvent ? { onWaiting: (event) => onEvent({ type: 'waiting', ...event }) } : {}),
       });
       const usage = response.usage === null ? null : Object.freeze(Object.fromEntries(
@@ -178,6 +181,8 @@ export function createChat(config = {}, {
       return response;
     } catch (error) {
       if (error?.code === 'ROSTER_RUN_LOG') throw error;
+      if (isRunCancelled(error)) throw error;
+      throwIfCancelled(signal);
       if (error instanceof LlmTimeoutError) {
         await onEvent?.({ type: 'timeout', host, local, timeoutMs, retryCommand });
       }

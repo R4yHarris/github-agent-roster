@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createBuiltinChat } from '../lib/llm.mjs';
+import { isRunCancelled, throwIfCancelled } from './cancel.mjs';
 import { ensureLocalPath } from '../lib/paths.mjs';
 import { taskFilesAllowed } from '../planner/stub.mjs';
 import { isAllowedFile } from './tools.mjs';
@@ -51,7 +52,7 @@ async function selectFiles(allowed, tools) {
   return { files: [...files], gaps, truncated };
 }
 
-export async function runResearch({ worktree, tools, expectedTask, config, fetchImpl, env, vault, onEvent, retryCommand }) {
+export async function runResearch({ worktree, tools, expectedTask, config, fetchImpl, env, vault, onEvent, retryCommand, signal }) {
   if (typeof tools?.read_file !== 'function' || typeof tools?.list_dir !== 'function') {
     throw new TypeError('Research requires read_file and list_dir tools');
   }
@@ -104,7 +105,7 @@ export async function runResearch({ worktree, tools, expectedTask, config, fetch
       let summary;
       turns = 1;
       try {
-        const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand });
+        const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand, signal });
         const response = await chat({ messages: [
           { role: 'system', content: instructions },
           { role: 'user', content: boundedText(report) },
@@ -120,6 +121,8 @@ export async function runResearch({ worktree, tools, expectedTask, config, fetch
         summaryStatus = 'complete';
       } catch (error) {
         if (!(error instanceof Error)) throw error;
+        if (isRunCancelled(error)) throw error;
+        throwIfCancelled(signal);
         if (error.code === 'ROSTER_RUN_LOG') throw error;
         summaryStatus = 'failed';
         warning = 'Optional LLM research summary failed; the read-only inventory was retained.';

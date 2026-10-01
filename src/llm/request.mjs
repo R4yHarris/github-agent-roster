@@ -1,5 +1,6 @@
 import { isIP } from 'node:net';
 import { performance } from 'node:perf_hooks';
+import { RunCancelledError, throwIfCancelled } from '../runtime/cancel.mjs';
 
 export const localRequestTimeoutMs = 1_200_000;
 export const cloudRequestTimeoutMs = 120_000;
@@ -72,7 +73,10 @@ export function isLlmTimeout(error) {
 
 export async function withRequestTimeout(operation, {
   host, local, timeoutMs, retryCommand, onWaiting, clock = () => performance.now(),
+  signal,
 }) {
+  if (signal !== undefined && !(signal instanceof AbortSignal)) throw new TypeError('Run signal must be an AbortSignal');
+  throwIfCancelled(signal);
   validateRequestTimeout(timeoutMs);
   validateRetryCommand(retryCommand);
   if (typeof clock !== 'function' || onWaiting !== undefined && typeof onWaiting !== 'function') {
@@ -84,6 +88,11 @@ export async function withRequestTimeout(operation, {
   let pending = Promise.resolve();
   let timer;
   let interval;
+  let abort;
+  const cancelled = new Promise((_, reject) => {
+    abort = () => { reject(new RunCancelledError()); controller.abort(); };
+    signal?.addEventListener('abort', abort, { once: true });
+  });
   const deadline = new Promise((_, reject) => {
     timer = setTimeout(() => {
       reject(new LlmTimeoutError({ host, timeoutMs, local, retryCommand }));
@@ -102,11 +111,12 @@ export async function withRequestTimeout(operation, {
     }, waitingIntervalMs);
   });
   try {
-    return await Promise.race([Promise.resolve().then(() => operation(controller.signal)), deadline, observerFailure]);
+    return await Promise.race([Promise.resolve().then(() => operation(controller.signal)), deadline, observerFailure, cancelled]);
   } finally {
     active = false;
     clearTimeout(timer);
     clearInterval(interval);
+    signal?.removeEventListener('abort', abort);
     controller.abort();
     await pending;
   }

@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { redactSecrets } from './memory.mjs';
 import { assertContractsInitialized, ContractsSubmoduleError, onlyMissingContractsScripts } from '../lib/contracts.mjs';
+import { throwIfCancelled } from './cancel.mjs';
 
 const execute = promisify(execFile);
 const managedFiles = new Set(['assignment.md', 'task.md', 'recipe.yml', 'plan.md', 'context.md', 'research.md', 'result.md', 'review.md', 'estimate.md']);
@@ -37,7 +38,7 @@ export function isForbiddenRead(file) {
 
 function isProtectedSurface(file) {
   const parts = partsOf(file);
-  return hasAmbiguousComponents(file) || isSecret(file) || isDebugLog(file) ||
+  return hasAmbiguousComponents(file) || isSecret(file) || isDebugLog(file) || isShellHistory(file) ||
     parts.includes('.git') || parts.includes('agent-policy.yml') ||
     parts.some((part, index) =>
       (part === '.github' && parts[index + 1] === 'workflows') ||
@@ -53,12 +54,17 @@ export function isForbiddenWrite(file) {
 
 export function isManagedFile(file) {
   const parts = partsOf(file);
-  return parts.length === 1 && managedFiles.has(parts[0]) || isRunLog(file) || isDebugLog(file);
+  return parts.length === 1 && managedFiles.has(parts[0]) || isRunLog(file) || isDebugLog(file) || isShellHistory(file);
 }
 
 export function isDebugLog(file) {
   const parts = partsOf(file);
   return parts[0] === '.roster' && parts[1] === 'logs';
+}
+
+export function isShellHistory(file) {
+  const parts = partsOf(file);
+  return parts[0] === '.roster' && (parts[1] === 'history' || parts[1]?.startsWith('history.'));
 }
 
 export function isRunLog(file) {
@@ -204,7 +210,7 @@ export async function createTools({
   readmeOnlyDocs = false,
   sliceReadsOnly = false,
   runCommand = execute,
-  onEvent,
+  onEvent, signal,
 } = {}) {
   if (!['planner', 'coder'].includes(seat)) throw new TypeError('Only planner and coder seats have file tools');
   if (seat === 'planner' && (!Array.isArray(plannerArtifacts) || !plannerArtifacts.length ||
@@ -244,6 +250,7 @@ export async function createTools({
   }
 
   function locate(input, { directory = false, write = false } = {}) {
+    throwIfCancelled(signal);
     if (typeof input !== 'string' || !input.trim() || input.includes('\0') ||
         path.isAbsolute(input) || path.win32.isAbsolute(input)) {
       throw new ToolAccessError('Tool path must be relative to the worktree');
@@ -402,6 +409,7 @@ export async function createTools({
     },
 
     async run_test(args = {}) {
+      throwIfCancelled(signal);
       argumentsFor(args, []);
       if (readmeOnlyDocs && !readmeWritten) {
         throw new Error('README-only docs task must write README.md before running tests or other tools');
@@ -414,10 +422,11 @@ export async function createTools({
         await assertContractsInitialized(root);
         const { stdout, stderr } = await runCommand(process.execPath, ['--test'], {
           cwd: root, timeout: 60_000, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
-          env: testEnv,
+          env: testEnv, signal,
         });
         return { exit_code: 0, stdout, stderr };
       } catch (error) {
+        throwIfCancelled(signal);
         if (error instanceof ContractsSubmoduleError) {
           await onEvent?.({ type: 'contracts-uninitialized' });
           throw error;
