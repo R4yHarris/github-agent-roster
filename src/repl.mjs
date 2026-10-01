@@ -18,6 +18,7 @@ import {
 } from './lib/publication.mjs';
 import { redactEvidence } from './runtime/excellence.mjs';
 import { requirePassingReview } from './seats/reviewer.mjs';
+import { isLlmTimeout } from './llm/request.mjs';
 import { formatStatus, readStatus } from './lib/status.mjs';
 import { createFileVault, validateSecretName } from './vault/file.mjs';
 import { buildPublishEnv, resolvePublishModel } from './metrics/run.mjs';
@@ -167,10 +168,17 @@ export function createDispatcher({
         const autoModel = args.endsWith(' --auto-model');
         const messages = [];
         state.lastRun = { planningOnly: true, failed: true, askKind: 'clarify', command: null };
-        state.lastRun = await api.runBuiltinIssue(issue[1], {
-          cwd, repoRoot, config: state.config, env, publish: false, autoModel,
-          log: (message) => messages.push(message), errorOutput,
-        });
+        try {
+          state.lastRun = await api.runBuiltinIssue(issue[1], {
+            cwd, repoRoot, config: state.config, env, publish: false, autoModel,
+            log: (message) => messages.push(message), errorOutput,
+          });
+        } catch (error) {
+          if (isLlmTimeout(error)) {
+            state.lastRun = { planningOnly: true, failed: true, timedOut: true, command: null };
+          }
+          throw error;
+        }
         state.published = false;
         const command = state.lastRun.command;
         for (const message of messages) {

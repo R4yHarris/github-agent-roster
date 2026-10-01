@@ -304,6 +304,35 @@ test('an inferred-scope Ask writes a validated TASK then stops until the next ex
   assert.equal(next.result.mode, 'stub');
 });
 
+test('cold endpoint timeout preserves a valid TASK and retry skips planner rather than marking the TASK bad', async (context) => {
+  const options = fixture(context);
+  const initial = await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {} });
+  const task = readFileSync(initial.taskPath, 'utf8');
+  const recipe = readFileSync(initial.recipePath, 'utf8');
+  const coldConfig = { ...llmConfig, llm: { ...llmConfig.llm,
+    base_url: 'http://192.168.1.48:8888/v1', request_timeout_ms: 10 } };
+  await assert.rejects(runBuiltinIssue(42, { ...options, config: coldConfig, log: () => {},
+    fetchImpl: () => new Promise(() => {}),
+    runTestCommand: () => assert.fail('Timed-out inference cannot run tests'),
+  }), /Cold-start:[\s\S]*host may still be warming[\s\S]*not a bad TASK[\s\S]*Retry: roster run --issue 42/);
+  assert.equal(readFileSync(initial.taskPath, 'utf8'), task);
+  assert.equal(readFileSync(initial.recipePath, 'utf8'), recipe);
+  assert.doesNotMatch(task, /Planning failure/);
+  assert.match(options.stderr, /host may still be warming[\s\S]*Retry: roster run --issue 42/);
+  const logs = [];
+  const retried = await runBuiltinIssue(42, { ...options, config: llmConfig, log: (text) => logs.push(text),
+    fetchImpl: async (_url, request) => {
+      assert.doesNotMatch(JSON.parse(request.body).messages[0].content, /builtin planner seat/);
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'No change needed.' } }] });
+    },
+    runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+  });
+  assert.equal(retried.planner.reused, true);
+  assert.equal(retried.failed, false);
+  assert.equal(readFileSync(initial.taskPath, 'utf8'), task);
+  assert.match(logs.join('\n'), /planner skipped artifacts valid/);
+});
+
 test('README one-liner runs the sequential slice seats with minimum pack even at feat difficulty4', async (context) => {
   const options = fixture(context);
   options.issue.body = renderIssueBody(options.issue.body, { task_class: 'feat', difficulty: 4 });

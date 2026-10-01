@@ -2,10 +2,64 @@ import { lstatSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolvePublishModel } from '../metrics/run.mjs';
-import { loadConfig } from './config.mjs';
+import { loadConfig, validateBaseUrl } from './config.mjs';
 import { resolveContractsPath, resolveProjectRoot } from './paths.mjs';
+import { resolveSecret } from './secrets.mjs';
+import { redactSecrets } from '../runtime/memory.mjs';
+import { defaultRequestFetch } from '../llm/http.mjs';
+import { ChatError, isLocalLlmHost, resolveRequestTimeout, withRequestTimeout } from '../llm/request.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
+
+export async function warmDoctor({
+  cwd = process.cwd(), installationRoot = rosterRoot, env = process.env, vault, fetchImpl, clock,
+  config = loadConfig({ repoRoot: installationRoot, cwd }),
+  errorOutput = process.stderr,
+} = {}) {
+  if (!config.llm.base_url) {
+    errorOutput.write('SKIP warming: empty LLM endpoint uses the deterministic stub\n');
+    return { skipped: true };
+  }
+  const url = new URL(validateBaseUrl(config.llm.base_url));
+  url.pathname = `${url.pathname.replace(/\/+$/, '')}/models`;
+  const host = redactSecrets(url.host, { env, apiKeyEnv: config.llm.api_key_env });
+  const local = isLocalLlmHost(url.hostname);
+  const timeoutMs = resolveRequestTimeout(config.llm);
+  const key = await resolveSecret(config.llm.api_key_env, { env, vault });
+  if (!key && config.llm.api_key_optional === false) throw new ChatError('An LLM API key is required.', 'authentication');
+  const fetch = fetchImpl === undefined ? defaultRequestFetch(timeoutMs) : fetchImpl;
+  if (typeof fetch !== 'function') throw new TypeError('A fetch implementation is required.');
+  errorOutput.write(`warming host=${host} timeout_ms=${timeoutMs}\n`);
+  const probe = async (signal) => {
+    const headers = { Accept: 'application/json' };
+    if (key) headers.Authorization = `Bearer ${key}`;
+    const response = await fetch(url.href, { method: 'GET', headers, signal, redirect: 'error' });
+    if (!Number.isInteger(response.status) || response.status < 200 || response.status > 299) {
+      await response.body?.cancel();
+      throw new ChatError(Number.isInteger(response.status)
+        ? `Warming probe failed (HTTP ${response.status}).` : 'Warming probe returned an invalid HTTP status.', 'http');
+    }
+    let payload;
+    try {
+      payload = await response.json();
+    } catch {
+      throw new ChatError('Warming probe did not return model JSON.');
+    }
+    if (!Array.isArray(payload?.data) || !payload.data.length) throw new ChatError('Warming probe returned no models.');
+    return { status: response.status };
+  };
+  let result;
+  try {
+    result = await withRequestTimeout(probe, { host, local, timeoutMs, clock, retryCommand: 'roster doctor --warm',
+      onWaiting: ({ elapsedSeconds }) => errorOutput.write(`warming host=${host} elapsed=${elapsedSeconds}s` +
+        (local ? ' cold-start up to 15m' : '') + '\n') });
+  } catch (error) {
+    if (error instanceof ChatError || error?.code === 'ROSTER_RUN_LOG') throw error;
+    throw new ChatError('Warming probe request failed. Check the endpoint and connection.', 'network');
+  }
+  errorOutput.write(`warming probe ok host=${host} status=${result.status}\n`);
+  return result;
+}
 
 function regularFile(file, inspect) {
   try {

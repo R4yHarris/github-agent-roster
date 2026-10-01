@@ -9,10 +9,12 @@ import { appendMemory, coderMemoryRecord, seatMemoryPath } from '../runtime/memo
 import { runResearch } from '../runtime/research.mjs';
 import { loadSkills, previewSkills } from '../runtime/skills.mjs';
 import { createTools } from '../runtime/tools.mjs';
+import { retryCommandForTask } from '../llm/request.mjs';
 
 export async function runCoder({
   worktree, repoRoot, config, task, session, fetchImpl, env = process.env, vault, runTestCommand,
   priorFeedback = null, onEvent, askKind,
+  retryCommand = retryCommandForTask(task),
 }) {
   const stages = [];
   const memoryPath = seatMemoryPath({
@@ -50,7 +52,7 @@ export async function runCoder({
     });
     if (!context.minimalDocs) {
       research = await runResearch({
-        worktree, tools, expectedTask: context.task, config, fetchImpl, env, vault, onEvent,
+        worktree, tools, expectedTask: context.task, config, fetchImpl, env, vault, onEvent, retryCommand,
       });
       stages.push('research');
       result.usage = research.usage;
@@ -76,7 +78,7 @@ export async function runCoder({
       },
     };
     result = await runLoop({
-      config, context, tools: trackedTools, fetchImpl, env, vault, onEvent,
+      config, context, tools: trackedTools, fetchImpl, env, vault, onEvent, retryCommand,
       verify: async (candidate) => {
         const evidence = await checkExcellence({
           worktree, task: context.task, result: candidate, baseline, memoryPath,

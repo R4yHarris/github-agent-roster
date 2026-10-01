@@ -83,6 +83,47 @@ completion counts. Unknown counts stay `-`, never invented zero. `/log N`
 reads every matching seat log with a bounded tail; builtin runs already persist
 their stderr events into those files, so no transcript reconstruction is needed.
 
+### Local LLM cold starts
+
+DGX Spark / SGLang may need 10-15 minutes for the first `chat.completions`
+after more than two hours idle. Local loopback/private-IP endpoints default
+to a **20-minute** total HTTP deadline; cloud/public endpoints use **120s**.
+Both include response JSON parsing and the bounded 429 retry. The optional
+`llm.request_timeout_ms` positive integer overrides either default:
+
+```yaml
+llm:
+  # Keep the other existing llm fields.
+  request_timeout_ms: 1200000
+```
+
+Long default requests use Node HTTP/HTTPS directly, without npm dependencies,
+so Node 20 fetch's five-minute header/body deadline cannot cut short this
+configured wait. Injected transports remain supported and must honor the
+provided abort signal/deadline themselves.
+
+While an HTTP request is in flight, stderr and the live log receive a safe
+line every 30s, for example:
+
+```text
+2026-10-01T12:00:00.000Z seat planner waiting host=192.168.1.48:8888 elapsed=90s cold-start up to 15m
+```
+
+Only seat, host/port, and elapsed time are included: no URL paths, credentials,
+prompts, completions, or file bodies. The waiting timer stops on completion,
+failure, or timeout. A local timeout says the host may still be warming and
+prints the retry command, for example `roster run --issue 92` (shell `/run 92`).
+Auto-model retries retain `--auto-model`. Timeout is an endpoint failure,
+not a bad TASK: valid TASK/recipe files are preserved and the next run reuses
+them without another planner call. No failed or unverified run may publish.
+
+`roster doctor` remains offline. For an opt-in readiness/warming probe, use
+`roster doctor --warm`; it GETs the configured `/models` (normally
+`/v1/models`) with the same timeout policy and logs `warming` host/status
+metadata. It does not write config, Task artifacts, or code. A successful
+models probe does not prove model weights are warm; the first chat may still
+need the full cold-start wait.
+
 `/model MODEL` and `/effort h` validate and atomically replace only those
 fields in the private config, keeping the other fields and comments. The
 updated values apply to the next `/run` in this shell. With no selected

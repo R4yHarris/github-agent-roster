@@ -144,6 +144,19 @@ test('named profiles select endpoints and optional-key settings without secrets'
   }
 });
 
+test('optional request timeout survives profile selection and model/effort updates without changing other settings', async (t) => {
+  const repoRoot = fixture(t);
+  mkdirSync(join(repoRoot, '.roster'));
+  const source = example.replace('profile: ""', 'profile: vllm-local')
+    .replace('  effort: m', '  request_timeout_ms: 1200000\n  effort: m');
+  writeFileSync(join(repoRoot, '.roster', 'config.yml'), source);
+  await setConfigValue('model', 'spark-model', { repoRoot });
+  const updated = await setConfigValue('effort', 'h', { repoRoot });
+  assert.equal(updated.llm.request_timeout_ms, 1_200_000);
+  assert.equal(updated.llm.base_url, 'http://127.0.0.1:8000/v1');
+  assert.equal(readFileSync(join(repoRoot, 'roster.config.example.yml'), 'utf8'), example);
+});
+
 test('vllm-local accepts a served HF model handle and explicit required keys', () => {
   const selected = parseConfig(example.replace('profile: ""', 'profile: vllm-local')
     .replace('model: ""', 'model: owner/served-model')

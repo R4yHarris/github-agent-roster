@@ -27,6 +27,7 @@ import { humanEvalHint, recordedCoderRun } from './seat-publication.mjs';
 import { formatRoute, routeTask } from './route.mjs';
 import { classifyAsk, clarificationHint } from '../planner/classify.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
+import { retryCommandForTask } from '../llm/request.mjs';
 
 const execFileAsync = promisify(execFile);
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -146,6 +147,7 @@ export async function runBuiltinTask({
   }
   resolveContractsPath({ repoRoot, cwd, env });
   const worktreePath = path.resolve(cwd);
+  const retryCommand = 'roster run --seat coder --runtime builtin';
   const taskSource = await readPlannerTask(worktreePath);
   if (taskSource === null) throw new Error('An existing TASK.md is required before executing a coder seat');
   const document = parseTaskDocument(taskSource);
@@ -174,7 +176,7 @@ export async function runBuiltinTask({
     const plannerSession = `roster-${randomBytes(8).toString('hex')}-planner`;
     const planner = await liveLog.seat('planner', plannerSession, config, (onEvent) => runPlanner({
       worktree: worktreePath, repoRoot, ask: document.ask, title: document.title, reference: `local:${task}`,
-      task, session: plannerSession, config, env, fetchImpl, vault, onEvent, askKind,
+      task, session: plannerSession, config, env, fetchImpl, vault, onEvent, askKind, retryCommand,
     }));
     if (journalEnabled) await recordRun({ task, session: plannerSession, provider: planner.run?.provider }, {
       cwd: worktreePath, env: { ...metricEnv, ...planner.run?.env }, run: planner.run,
@@ -196,7 +198,7 @@ export async function runBuiltinTask({
       model: result.mode === 'llm' ? result.model : config.llm.model } };
     const review = await liveLog.seat('reviewer', reviewerSession, reviewConfig, (onEvent) => runReviewer({
       worktree: worktreePath, repoRoot, config: reviewConfig, coderResult: result,
-      env, fetchImpl, vault, onEvent, askKind,
+      env, fetchImpl, vault, onEvent, askKind, retryCommand,
     }));
     const reviewRun = review.queried ? buildRun({
       config: reviewConfig, response: review.response, task, session: reviewerSession, env,
@@ -210,7 +212,7 @@ export async function runBuiltinTask({
   try {
     result = await liveLog.seat('coder', session, config, (onEvent) => runCoder({
       worktree: worktreePath, repoRoot, config, env, task, session,
-      fetchImpl, vault, runTestCommand, onEvent, askKind,
+      fetchImpl, vault, runTestCommand, onEvent, askKind, retryCommand,
     }));
   } catch (error) {
     if (error instanceof Error && error.result) {
@@ -254,6 +256,7 @@ export async function runBuiltinIssue(issueNumber, {
   now,
 } = {}) {
   validateIssueNumber(issueNumber);
+  const retryCommand = `${retryCommandForTask(`issue-${issueNumber}`)}${autoModel ? ' --auto-model' : ''}`;
   if (!autoModel && !config.llm.model && (env.AI_MODEL || env.ROSTER_MODEL)) {
     config = { ...config, llm: Object.freeze({ ...config.llm, model: resolvePublishModel({ config, env }) }) };
   }
@@ -353,7 +356,7 @@ export async function runBuiltinIssue(issueNumber, {
       worktree: worktreePath, repoRoot, issue: prepared.issue, config: activeConfig,
       ask: prepared.ask, metadata: prepared.metadata ?? undefined, task: prepared.task,
       session: sessions.planner, fetchImpl, env, vault, learningRoot: prepared.repoRoot,
-      lockedModel: route?.profile.model, onEvent, askKind,
+      lockedModel: route?.profile.model, onEvent, askKind, retryCommand,
     }));
     if (planner.reused) log('planner skipped artifacts valid; starting coder.');
   } catch (error) {
@@ -399,7 +402,7 @@ export async function runBuiltinIssue(issueNumber, {
     } };
     const review = await liveLog.seat('reviewer', sessions.reviewer, reviewConfig, (onEvent) => runReviewer({
       worktree: worktreePath, repoRoot, config: reviewConfig,
-      coderResult, fetchImpl, env, vault, onEvent, askKind,
+      coderResult, fetchImpl, env, vault, onEvent, askKind, retryCommand,
     }));
     const reviewerRun = review.queried ? buildRun({
       config: reviewConfig, response: review.response, session: sessions.reviewer,
@@ -412,7 +415,7 @@ export async function runBuiltinIssue(issueNumber, {
   try {
     result = await liveLog.seat('coder', sessions.coder, coderConfig, (onEvent) => runCoder({
       worktree: worktreePath, repoRoot, config: coderConfig, task: prepared.task, session: sessions.coder,
-      fetchImpl, env, vault, runTestCommand, priorFeedback: planner.feedback?.context, onEvent, askKind,
+      fetchImpl, env, vault, runTestCommand, priorFeedback: planner.feedback?.context, onEvent, askKind, retryCommand,
     }));
   } catch (error) {
     if (error instanceof Error && error.result) {
