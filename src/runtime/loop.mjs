@@ -34,7 +34,7 @@ function stubSummary(task) {
     'Deterministic stub only: no implementation or tests were run. Configure llm.base_url to run a coder.';
 }
 
-async function executeLoop({ config, context, tools, fetchImpl, env, vault, verify, onEvent }, progress) {
+async function executeLoop({ config, context, tools, fetchImpl, env, vault, verify, onEvent, retryCommand }, progress) {
   if (!config.llm.base_url) {
     const summary = stubSummary(context.task);
     return {
@@ -60,7 +60,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   const definitions = toolDefinitions.filter((tool) => config.seat.tools.includes(tool.function.name) &&
     (tool.function.name !== 'run_test' || config.tools?.run_test !== false));
   const offeredTools = new Set(definitions.map((tool) => tool.function.name));
-  const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent });
+  const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand });
   const usages = [];
   const ids = new Set();
   let repaired = false;

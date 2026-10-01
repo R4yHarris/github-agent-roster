@@ -10,6 +10,7 @@ import { parseConfig } from '../src/lib/config.mjs';
 import { buildPublishMessage } from '../src/lib/publication.mjs';
 import { createDispatcher, startRepl } from '../src/repl.mjs';
 import { buildRun } from '../src/metrics/run.mjs';
+import { LlmTimeoutError } from '../src/llm/request.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const cli = join(root, 'src', 'cli.mjs');
@@ -276,6 +277,18 @@ test('a failed new planning run cannot leave an old publishable run selected', a
   assert.equal(shell.state.lastRun.planningOnly, true);
   assert.equal(shell.state.lastRun.failed, true);
   await assert.rejects(shell.dispatch('/publish --skip-review'), /Planning-only PLAN or clarification/);
+});
+
+test('cold-start timeout stays retryable in the shell and is not classified as an unclear or bad TASK', async () => {
+  const shell = dispatcher({ services: { runBuiltinIssue: async () => {
+    throw new LlmTimeoutError({ host: '192.168.1.48:8888', timeoutMs: 1_200_000, local: true,
+      retryCommand: 'roster run --issue 92' });
+  } } });
+  await assert.rejects(shell.dispatch('/run 92'), /Cold-start:[\s\S]*warming[\s\S]*Retry: roster run --issue 92/);
+  assert.equal(shell.state.lastRun.timedOut, true);
+  assert.equal(shell.state.lastRun.askKind, undefined);
+  assert.equal(await shell.dispatch('/help'), true);
+  assert.equal(await shell.dispatch('/quit'), false);
 });
 
 test('/run reports a failed planner stub without throwing and leaves the shell usable', async () => {

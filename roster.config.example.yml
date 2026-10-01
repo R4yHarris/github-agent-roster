@@ -9,6 +9,7 @@ llm:
   effort: m             # l|m|h|x
   context_max: 0        # 0 = unknown
   profile: ""            # vllm-local|ollama|lmstudio|openai; empty uses base_url
+  # request_timeout_ms: 1200000  # optional; local defaults 20m, cloud 120s
 profiles:
   vllm-local:
     base_url: http://127.0.0.1:8000/v1

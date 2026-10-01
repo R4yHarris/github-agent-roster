@@ -103,6 +103,7 @@ function formatReview({ verdict, reasons, securityNotes }) {
 
 export async function runReviewer({
   worktree, repoRoot, config, coderResult, env = process.env, fetchImpl, vault, onEvent, askKind,
+  retryCommand,
 } = {}) {
   if (typeof worktree !== 'string' || typeof repoRoot !== 'string' ||
       typeof coderResult?.resultPath !== 'string' || !config?.llm || !config.seat) {
@@ -147,7 +148,7 @@ export async function runReviewer({
       if (evidence.length + (principal?.content.length ?? 0) + instructions.length > budget) {
         throw new Error('Reviewer evidence exceeds seat.context_chars');
       }
-      const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent });
+      const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand });
       queried = true;
       const response = await chat({ messages: [
         { role: 'system', content: instructions + (principal ? `\n\n${principal.content.trim()}` : '') },

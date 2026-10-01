@@ -51,7 +51,7 @@ async function selectFiles(allowed, tools) {
   return { files: [...files], gaps, truncated };
 }
 
-export async function runResearch({ worktree, tools, expectedTask, config, fetchImpl, env, vault, onEvent }) {
+export async function runResearch({ worktree, tools, expectedTask, config, fetchImpl, env, vault, onEvent, retryCommand }) {
   if (typeof tools?.read_file !== 'function' || typeof tools?.list_dir !== 'function') {
     throw new TypeError('Research requires read_file and list_dir tools');
   }
@@ -104,7 +104,7 @@ export async function runResearch({ worktree, tools, expectedTask, config, fetch
       let summary;
       turns = 1;
       try {
-        const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent });
+        const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand });
         const response = await chat({ messages: [
           { role: 'system', content: instructions },
           { role: 'user', content: boundedText(report) },

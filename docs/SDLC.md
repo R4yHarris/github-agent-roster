@@ -77,6 +77,12 @@ without editing the tracked example or storing credentials.
 - `llm.effort` (`l|m|h|x`) and `llm.context_max` (zero means unknown) describe
   provenance for AI-Run. They are not guessed from the endpoint or sent as a
   model-specific reasoning parameter.
+- Optional `llm.request_timeout_ms` overrides the complete HTTP request
+  deadline with a positive integer, at most 2147483647 milliseconds. Without
+  it, local loopback/private-IP hosts (`127.*`, `localhost`, `::1`,
+  `192.168.*`, `10.*`, and `172.16-31.*`) use **20 minutes**; cloud/public
+  hosts use **120 seconds**. This follows the selected endpoint, including
+  fleet routing, not a profile name. See [cold starts](REPL.md#local-llm-cold-starts).
 - `planner.turn_budget` bounds planning chat responses to 1-64 (example: 2).
   The slice planner has only artifact-scoped `write_file` for root
   `RECIPE.yml`, `TASK.md`, and `ESTIMATE.md`; no app-code tools. The harness

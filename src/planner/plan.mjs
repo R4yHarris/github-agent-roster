@@ -91,7 +91,7 @@ export function renderPlan(plan, { ask, title, kind, reference }) {
 }
 
 export async function planOutline(ask, {
-  kind, config, title, reference = 'local:draft', fetchImpl, env, vault, onEvent, onResponse,
+  kind, config, title, reference = 'local:draft', fetchImpl, env, vault, onEvent, onResponse, retryCommand,
 } = {}) {
   const text = cleanAskText(ask);
   if (!['feature', 'initiative'].includes(kind)) throw new TypeError('PLAN requires a feature or initiative Ask');
@@ -118,7 +118,7 @@ export async function planOutline(ask, {
   const usages = [];
   let response;
   for (let turn = 1; turn <= Math.min(budget, 2); turn += 1) {
-    const completion = await chatCompletion({ config, messages, fetchImpl, env, vault, onEvent });
+    const completion = await chatCompletion({ config, messages, fetchImpl, env, vault, onEvent, retryCommand });
     response = completion.response;
     onResponse?.(response);
     usages.push(completion.usage);

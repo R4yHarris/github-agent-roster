@@ -9,7 +9,7 @@ import { formatAsk, submitAsk } from './lib/ask.mjs';
 import { runBuiltinIssue, runBuiltinTask } from './lib/builtin.mjs';
 import { loadConfig } from './lib/config.mjs';
 import { runDemo } from './lib/demo.mjs';
-import { checkDoctor, formatDoctor } from './lib/doctor.mjs';
+import { checkDoctor, formatDoctor, warmDoctor } from './lib/doctor.mjs';
 import { formatInit, initializeRoster } from './lib/init.mjs';
 import { runOnboard } from './onboard/wizard.mjs';
 import { runFleet } from './lib/fleet-cli.mjs';
@@ -25,7 +25,7 @@ const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const help = `Usage:
   roster                     Open the interactive shell in a TTY
   roster --help
-  roster doctor
+  roster doctor [--warm]
   roster init
   roster onboard
   roster fleet list
@@ -50,6 +50,7 @@ const help = `Usage:
 
 Ask creates a GitHub issue when gh is available; otherwise it saves a local draft.
 Doctor checks local prerequisites without contacting GitHub or printing App env values.
+Doctor --warm additionally probes the configured LLM /models with its request timeout.
 Init copies review-only examples; it never overwrites agent-policy.yml.
 Onboard configures a real vLLM model and local permissions in an interactive terminal.
 Run classifies clarify | slice | feature | initiative before seats.
@@ -109,10 +110,14 @@ async function main(args) {
       repoRoot: rosterRoot,
     });
     process.stdout.write(formatAsk(result));
-  } else if (args.length === 1 && args[0] === 'doctor') {
+  } else if (args[0] === 'doctor') {
+    if (args.length > 2 || args.length === 2 && args[1] !== '--warm') {
+      throw new TypeError('Use roster doctor [--warm].');
+    }
     const result = checkDoctor();
     process.stdout.write(formatDoctor(result));
     if (!result.ok) process.exitCode = 1;
+    if (args[1] === '--warm') await warmDoctor();
   } else if (args.length === 1 && args[0] === 'init') {
     process.stdout.write(formatInit(await initializeRoster()));
   } else if (args.length === 1 && args[0] === 'onboard') {

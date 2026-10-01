@@ -169,6 +169,13 @@ the chosen `llm.base_url` and `llm.model`, `llm.provider: vllm`, and
 `llm.api_key_optional: true`. A custom vLLM host is not replaced with
 loopback when the config is read. Discovery is not a chat or internet-tool
 probe; no network tool is added to the coder.
+Seat HTTP requests to local/private-IP endpoints default to 20 minutes for
+Spark/SGLang cold starts, while cloud hosts use 120s. Optional
+`llm.request_timeout_ms` overrides that deadline and is preserved by onboarding
+and model/effort updates. Discovery during the wizard remains a quick probe;
+use `roster doctor --warm` for an explicit long `/v1/models` readiness check.
+It logs only warming host/status/elapsed metadata. See
+[local cold starts](REPL.md#local-llm-cold-starts).
 The wizard also seeds ignored `.roster/fleet.yml` with that single
 `default` endpoint/model, concurrency 1, and a reported or supplied token context limit
 or `0` for unknown. Other registered endpoints are kept. It asks

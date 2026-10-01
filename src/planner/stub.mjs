@@ -129,7 +129,7 @@ export function planFromTask(task, ask, { issueTitle, issueBody } = {}) {
 
 export async function planAsk(ask, {
   config, reference = 'local:draft', title, fetchImpl, env, vault, memory = [], learningRoot, metadata, lockedModel,
-  onResponse, tools, onEvent,
+  onResponse, tools, onEvent, retryCommand,
 } = {}) {
   const cleanAsk = cleanAskText(ask);
   if (!Array.isArray(memory) || memory.some((line) => typeof line !== 'string')) {
@@ -186,7 +186,7 @@ export async function planAsk(ask, {
     messages.push({ role: 'user', content: 'Emit only tool_calls for write_file with JSON string arguments.' });
   };
   for (let turn = 1; turn <= budget + Number(repairUsed); turn += 1) {
-    const response = await chatCompletion({ config, fetchImpl, env, vault, messages, onEvent,
+    const response = await chatCompletion({ config, fetchImpl, env, vault, messages, onEvent, retryCommand,
       ...(tools ? { tools: plannerToolDefinitions } : {}) });
     lastResponse = response.response;
     onResponse?.(lastResponse);

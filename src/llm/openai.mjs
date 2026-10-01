@@ -1,12 +1,9 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { resolveSecret } from '../lib/secrets.mjs';
-
-class ChatError extends Error {
-  constructor(message, category = 'response') {
-    super(message);
-    this.category = category;
-  }
-}
+import { redactSecrets } from '../runtime/memory.mjs';
+import { defaultRequestFetch } from './http.mjs';
+import { ChatError, isLocalLlmHost, LlmTimeoutError, resolveRequestTimeout, validateRetryCommand,
+  withRequestTimeout } from './request.mjs';
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 function endpointFor(baseUrl) {
@@ -63,7 +60,7 @@ function parseCompletion(payload, requestedModel) {
 }
 
 export function createChat(config = {}, {
-  fetch: fetchImpl = globalThis.fetch, env = process.env, vault, onEvent,
+  fetch: suppliedFetch, env = process.env, vault, onEvent, retryCommand, clock,
 } = {}) {
   if (!isObject(config) || (config.llm !== undefined && !isObject(config.llm))) {
     throw new TypeError('LLM configuration must be an object with an optional llm object.');
@@ -75,14 +72,15 @@ export function createChat(config = {}, {
   if (typeof llm.base_url !== 'string') throw new TypeError('llm.base_url must be a string.');
   const endpoint = endpointFor(llm.base_url);
   const optionalKey = llm.api_key_optional ?? false;
-  const timeoutMs = llm.timeout_ms ?? 30_000;
+  const timeoutMs = resolveRequestTimeout(llm);
+  const fetchImpl = suppliedFetch === undefined ? defaultRequestFetch(timeoutMs) : suppliedFetch;
   if (typeof optionalKey !== 'boolean') throw new TypeError('llm.api_key_optional must be a boolean.');
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 2_147_483_647) {
-    throw new TypeError('llm.timeout_ms must be an integer between 1 and 2147483647.');
-  }
   if (typeof fetchImpl !== 'function') throw new TypeError('A fetch implementation is required.');
   if (onEvent !== undefined && typeof onEvent !== 'function') throw new TypeError('Live chat observer must be a function.');
-  const host = new URL(endpoint).host;
+  validateRetryCommand(retryCommand);
+  const url = new URL(endpoint);
+  const host = redactSecrets(url.host, { env, apiKeyEnv: llm.api_key_name ?? 'OPENAI_API_KEY' });
+  const local = isLocalLlmHost(url.hostname);
 
   let lastResponse = null;
   const chat = async function chat(request) {
@@ -108,30 +106,21 @@ export function createChat(config = {}, {
     }
     const headers = { 'Content-Type': 'application/json' };
     if (key) headers.Authorization = `Bearer ${key}`;
-    const controller = new AbortController();
     let status;
-    let timer;
-    const deadline = new Promise((_, reject) => {
-      timer = setTimeout(() => {
-        reject(new ChatError('The LLM request timed out.', 'timeout'));
-        controller.abort();
-      }, timeoutMs);
-    });
-
-    async function send() {
+    async function send(signal) {
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        controller.signal.throwIfAborted();
+        signal.throwIfAborted();
         await onEvent?.({ type: 'model', model: key ? model.split(key).join('[redacted]') : model, host });
         await onEvent?.({ type: 'http', phase: 'start' });
-        controller.signal.throwIfAborted();
+        signal.throwIfAborted();
         const response = await fetchImpl(endpoint, {
           method: 'POST',
           headers,
           body,
-          signal: controller.signal,
+          signal,
           redirect: 'error',
         });
-        controller.signal.throwIfAborted();
+        signal.throwIfAborted();
         if (!Number.isInteger(response.status) || response.status < 100 || response.status > 599) {
           throw new ChatError('The LLM response had an invalid HTTP status.');
         }
@@ -139,7 +128,7 @@ export function createChat(config = {}, {
         if (response.status === 429 && attempt === 0) {
           await onEvent?.({ type: 'http', phase: 'error', status, errorClass: 'http' });
           await response.body?.cancel();
-          await delay(retryDelay(response, timeoutMs), undefined, { signal: controller.signal });
+          await delay(retryDelay(response, timeoutMs), undefined, { signal });
           continue;
         }
         if (response.status < 200 || response.status >= 300) {
@@ -152,7 +141,7 @@ export function createChat(config = {}, {
         } catch {
           throw new ChatError('The LLM response was not valid JSON.');
         }
-        controller.signal.throwIfAborted();
+        signal.throwIfAborted();
         const completion = parseCompletion(payload, model);
         await onEvent?.({ type: 'model',
           model: key ? completion.model.split(key).join('[redacted]') : completion.model, host });
@@ -162,7 +151,10 @@ export function createChat(config = {}, {
     }
 
     try {
-      const response = await Promise.race([send(), deadline]);
+      const response = await withRequestTimeout(send, {
+        host, local, timeoutMs, retryCommand, clock,
+        ...(onEvent ? { onWaiting: (event) => onEvent({ type: 'waiting', ...event }) } : {}),
+      });
       const usage = response.usage === null ? null : Object.freeze(Object.fromEntries(
         ['prompt_tokens', 'completion_tokens'].filter((field) => response.usage[field] !== undefined)
           .map((field) => [field, response.usage[field]]),
@@ -171,13 +163,13 @@ export function createChat(config = {}, {
       return response;
     } catch (error) {
       if (error?.code === 'ROSTER_RUN_LOG') throw error;
+      if (error instanceof LlmTimeoutError) {
+        await onEvent?.({ type: 'timeout', host, local, timeoutMs, retryCommand });
+      }
       await onEvent?.({ type: 'http', phase: 'error', ...(status === undefined ? {} : { status }),
         errorClass: error instanceof ChatError ? error.category : error?.name === 'AbortError' ? 'abort' : 'network' });
       if (error instanceof ChatError) throw error;
       throw new ChatError('The LLM request failed. Check the endpoint and connection.', 'network');
-    } finally {
-      clearTimeout(timer);
-      controller.abort();
     }
   };
   Object.defineProperty(chat, 'lastResponse', { get: () => lastResponse });

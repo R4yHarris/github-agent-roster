@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TextDecoder } from 'node:util';
 import { ensureLocalPath, resolveProjectRoot } from './paths.mjs';
+import { validateRequestTimeout } from '../llm/request.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
 const profileNames = ['vllm-local', 'ollama', 'lmstudio', 'openai'];
@@ -16,7 +17,7 @@ const defaultProfiles = {
   openai: { base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY' },
 };
 const fields = {
-  llm: ['base_url', 'model', 'api_key_env', 'effort', 'context_max', 'profile', 'api_key_optional', 'provider'],
+  llm: ['base_url', 'model', 'api_key_env', 'effort', 'context_max', 'profile', 'api_key_optional', 'provider', 'request_timeout_ms'],
   planner: ['turn_budget'],
   seat: ['id', 'principal', 'turn_budget', 'tools', 'context_chars'],
   paths: ['memory', 'skills', 'asks', 'worktrees'],
@@ -167,7 +168,7 @@ export function parseConfig(source) {
   if (!roots.has('schema') ||
       ['llm', 'seat', 'paths'].some((name) =>
         !roots.has(name) || fields[name].some((field) =>
-          !(name === 'llm' && ['profile', 'api_key_optional', 'provider'].includes(field)) &&
+          !(name === 'llm' && ['profile', 'api_key_optional', 'provider', 'request_timeout_ms'].includes(field)) &&
           !(name === 'seat' && field === 'context_chars') && !Object.hasOwn(config[name], field))) ||
       (roots.has('planner') && !Object.hasOwn(config.planner, 'turn_budget'))) {
     invalid('schema, llm, seat, paths, and optional planner must contain every documented field');
@@ -179,6 +180,15 @@ export function parseConfig(source) {
   llm.api_key_env = apiKeyName(stringValue(llm.api_key_env, 'llm.api_key_env'), 'llm.api_key_env');
   llm.effort = stringValue(llm.effort, 'llm.effort');
   llm.context_max = integerValue(llm.context_max, 'llm.context_max');
+  if (Object.hasOwn(llm, 'request_timeout_ms')) {
+    llm.request_timeout_ms = integerValue(llm.request_timeout_ms, 'llm.request_timeout_ms');
+    try {
+      validateRequestTimeout(llm.request_timeout_ms);
+    } catch (error) {
+      if (!(error instanceof TypeError)) throw error;
+      invalid(error.message);
+    }
+  }
   llm.profile = Object.hasOwn(llm, 'profile') ? stringValue(llm.profile, 'llm.profile') : '';
   if (Object.hasOwn(llm, 'api_key_optional')) {
     llm.api_key_optional = booleanValue(llm.api_key_optional, 'llm.api_key_optional');
