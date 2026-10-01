@@ -50,6 +50,16 @@ writes, `run_test` unless explicitly waived, excellence for paths/secrets/tests,
 read-only reviewer, App-only reviewed publication, and a human eval hint.
 No task metadata grants permissions or generates AI-Eval.
 
+Difficulty1 docs tasks whose application allowlist is exactly README.md have
+an additional enforced tool contract: only TASK.md and README.md may be read;
+README.md must be successfully written before tests or final completion.
+Directory listing, repository search, RESEARCH.md and planner/test fixtures
+are denied, not just omitted from the prompt. The model receives only
+read_file, write_file and permitted run_test with exact file-path schemas.
+Other classes, difficulties and broader scopes retain their existing tools.
+Allowed reads can precede the write to preserve read-before-write; disabling
+write_file or omitting the edit fails explicitly, even when tests are waived.
+
 Planner scope is limited to files explicitly listed or named by the human Ask.
 An Ask with no file scope needs clarification; it never becomes an invented
 `**/*` allowance. A slice with inferred scope creates a validated TASK-only
@@ -67,6 +77,10 @@ counts. Private before/after snapshots are in-process evidence, not source
 bodies or a persistent board.
 Once RESULT.md is written, the same-process [reviewer seat](REVIEW.md)
 checks the task and diff without coder tools and writes REVIEW.md.
+An HTTP timeout writes `Outcome: timed out (unverified)` and an unverified
+summary, never a success claim. The reviewer writes `Verdict: fail` with the
+coder HTTP timeout reason and explicitly says review was not completed; it
+does not request a model verdict for timed-out work.
 Duplicate or malformed test declarations fail during preparation rather than
 silently waiving verification; `tests: required` explicitly retains the default.
 

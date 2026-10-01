@@ -10,6 +10,13 @@ invented source edits nor a model verdict can turn an unverified coder result
 into a passing change. The coder's files and `RESULT.md` are retained on
 failure.
 
+A coder HTTP timeout is explicitly incomplete work, not a finished stub
+review. RESULT.md records `Outcome: timed out (unverified)`, failing checks
+and no verified change. REVIEW.md records `Verdict: fail` with a coder HTTP
+timeout reason and says review was not completed, even without a reviewer
+endpoint. No reviewer model call or apparent approval can override that
+timeout. Task/source evidence stays available for the explicit retry.
+
 The [reviewer principal](../principals/reviewer.md) may comment in its
 structured report but has **no model-invokable tools**. Its conduct file
 cannot grant `write_file`, source editing, publication, merge, deployment,

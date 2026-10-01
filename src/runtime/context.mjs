@@ -61,7 +61,7 @@ export async function loadContext({ worktree, memoryPath, repoRoot, config, prin
   const task = await requiredFile(path.join(worktree, 'TASK.md'), worktree);
   const files = taskFilesAllowed(task);
   const document = parseTaskDocument(task);
-  const policy = taskContextPolicy(task, { askKind });
+  const policy = taskContextPolicy(task, { askKind, files });
   const minimalDocs = policy.minimum;
   const skillNames = policy.skills;
   let agents = null;

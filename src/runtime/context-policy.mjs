@@ -1,4 +1,5 @@
 import { readTaskMetadata } from './estimate.mjs';
+import { taskFilesAllowed } from '../planner/task.mjs';
 
 export const minimumDocsSkills = Object.freeze(['read-before-write', 'small-diff']);
 
@@ -7,9 +8,12 @@ export function isMinimumDocsTask(task) {
   return metadata.task_class === 'docs' && metadata.difficulty === 1;
 }
 
-export function taskContextPolicy(task, { askKind } = {}) {
+export function taskContextPolicy(task, { askKind, files } = {}) {
   const metadata = readTaskMetadata(task);
   const research = askKind !== 'slice' && metadata.task_class === 'feat' && metadata.difficulty >= 4;
-  return { minimum: !research, research,
+  const allowed = metadata.task_class === 'docs' && metadata.difficulty === 1
+    ? files ?? taskFilesAllowed(task) : [];
+  const readmeOnlyDocs = allowed.length === 1 && allowed[0] === 'README.md';
+  return { minimum: !research, research, readmeOnlyDocs,
     skills: research ? undefined : [...minimumDocsSkills] };
 }

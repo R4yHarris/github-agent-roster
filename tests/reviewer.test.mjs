@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { parseConfig } from '../src/lib/config.mjs';
 import { requirePassingReview, runReviewer } from '../src/seats/reviewer.mjs';
+import { LlmTimeoutError } from '../src/llm/request.mjs';
 
 const example = readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8');
 const config = parseConfig(example.replace('base_url: ""', 'base_url: http://localhost:1234/v1')
@@ -88,6 +89,19 @@ test('reviewer reads the diff, RESULT, and acceptance checks without receiving a
     /RESULT\.md changed after review/);
 });
 
+test('HTTP timeout cannot become a pass or completed review even if a caller supplies passing excellence', async (context) => {
+  const options = fixture(context);
+  const review = await runReviewer({ ...options, config, env: {},
+    coderResult: { ...options.coderResult, error: new LlmTimeoutError({
+      host: '192.168.1.48:8888', local: true, timeoutMs: 1_200_000, retryCommand: 'roster run --issue 108',
+    }) },
+    fetchImpl: () => assert.fail('Coder timeout must be rejected before reviewer model inference'),
+  });
+  assert.equal(review.verdict, 'fail');
+  assert.equal(review.queried, false);
+  assert.match(readFileSync(review.reviewPath, 'utf8'), /Verdict: fail[\s\S]*HTTP timeout[\s\S]*review was not completed/);
+  await assert.rejects(requirePassingReview({ worktreePath: options.worktree, review }), /passing REVIEW\.md/);
+});
 test('reviewer refuses a model-requested write_file under src and writes a failing report', async (context) => {
   const options = fixture(context);
   const review = await runReviewer({
