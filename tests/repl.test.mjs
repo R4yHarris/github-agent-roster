@@ -139,7 +139,7 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
     },
   });
 
-  assert.equal(banner, 'roster-repl-project | seat coder | runtime builtin | llm stub');
+  assert.equal(banner, 'github-agent-roster');
   assert.equal(await dispatch('/ask Add a status section.'), true);
   await dispatch('/model local-model');
   await dispatch('/effort h');
@@ -432,15 +432,16 @@ test('slash ask prints the created issue URL when gh is available', async () => 
   assert.equal(output.text, 'Ask kind: slice\nIssue: https://github.com/example/project/issues/42\n');
 });
 
-test('banner reports the configured LLM endpoint when not using the stub', () => {
+test('the display reports the configured LLM host beneath the fixed product banner', () => {
   const llm = parseConfig(readFileSync(join(root, 'roster.config.example.yml'), 'utf8')
     .replace('base_url: ""', 'base_url: http://localhost:1234/v1')
     .replace('model: ""', 'model: local-model'));
-  const { banner } = createDispatcher({
+  const { banner, state } = createDispatcher({
     cwd, repoRoot: root, config: llm, env: {},
     services: { repositoryRoot: () => cwd },
   });
-  assert.equal(banner, 'roster-repl-project | seat coder | runtime builtin | llm http://localhost:1234/v1');
+  assert.equal(banner, 'github-agent-roster');
+  assert.equal(state.display.host, 'localhost:1234');
 });
 
 test('/publish prints the SDK command without App env and uses the reviewed worktree with App env', async () => {
@@ -785,7 +786,7 @@ test('TTY shell prints the banner and exits zero on /quit and Ctrl+C', async () 
   }
   const quit = await runLine('/quit\n');
   assert.equal(quit.code, 0);
-  assert.match(quit.text, /roster-repl-project \| seat coder \| runtime builtin \| llm stub/);
+  assert.match(quit.text, /github-agent-roster/);
   assert.match(quit.text, /roster> /);
 
   const interrupt = await runLine('\x03');

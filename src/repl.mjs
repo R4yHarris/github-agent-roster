@@ -1,4 +1,6 @@
-import { basename, join, resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { lstatSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { Writable } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -25,6 +27,7 @@ import { buildPublishEnv, resolvePublishModel } from './metrics/run.mjs';
 import { humanEvalHint } from './lib/seat-publication.mjs';
 import { readIssueLogs } from './lib/run-log.mjs';
 import { createDebugLog } from './lib/debug-log.mjs';
+import { createTray } from './shell/tray.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const help = `Commands:
@@ -37,6 +40,7 @@ const help = `Commands:
   /log N                   Tail local issue seat logs without network access
   /debug on|off             Toggle process-only testing metadata logs
   /log debug                Tail this process's debug file
+  /statusbar on|off          Toggle both delivery-tray bars for this process
   /eval TARGET VERDICT 1-5 y|n [--minutes N] [--comment "TEXT"]
   /publish [SUBJECT] [--model MODEL] [--skip-review]  Publish reviewed seat or GHCP changes
   /stats [REF]              Show AI-Run metrics
@@ -94,6 +98,13 @@ const defaultServices = {
   readIssueLogs,
   issueCommenter: commentMergedIssue,
   publisher: publishWithContracts,
+  repositoryBranch(cwd) {
+    const root = resolveProjectRoot(cwd);
+    if (!lstatSync(join(root, '.git'), { throwIfNoEntry: false })) return '-';
+    return execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
+      cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+  },
 };
 
 function conventionalSubject(value) {
@@ -113,9 +124,35 @@ export function createDispatcher({
   errorOutput = process.stderr,
   services = {},
   debug = createDebugLog({ env }),
+  onStateChange = () => {},
 } = {}) {
   const api = { ...defaultServices, ...services };
-  const state = { lastAsk: null, lastRun: null, pendingSecret: null, published: false, config, debug };
+  const state = { lastAsk: null, lastRun: null, pendingSecret: null, published: false, config, debug,
+    statusbar: true, display: {
+      issue: null, branch: api.repositoryBranch(cwd), seat: config.seat.id, state: 'idle', busy: false,
+      model: config.llm.model, host: config.llm.base_url ? new URL(config.llm.base_url).host : '',
+      effort: config.llm.effort, contextUsed: undefined, contextMax: config.llm.context_max, startedAt: null,
+    } };
+  const notify = () => onStateChange(state);
+  const receiveEvent = (event) => {
+    const display = state.display;
+    display.seat = event.seat;
+    if (event.type === 'seat-start') {
+      display.state = { planner: 'planning', coder: 'drafting', reviewer: 'reviewing' }[event.seat];
+      Object.assign(display, { model: event.model, host: event.host, effort: event.effort,
+        contextMax: event.contextMax, contextUsed: undefined });
+    } else if (event.type === 'tool' && event.name === 'run_test') display.state = 'testing';
+    else if (event.type === 'http' && event.phase === 'start') {
+      display.state = { planner: 'planning', coder: 'drafting', reviewer: 'reviewing' }[event.seat];
+      if (event.effort !== undefined) display.effort = event.effort;
+    } else if (event.type === 'seat-error') display.state = 'failed';
+    else if (event.type === 'seat-end') {
+      if (event.model) display.model = event.model;
+      display.contextUsed = event.contextUsed;
+      if (event.verdict) display.state = event.verdict === 'pass' ? 'passed' : 'failed';
+    }
+    notify();
+  };
   const currentRoot = () => state.lastRun?.repoRoot ?? api.repositoryRoot(cwd);
   const metrics = (ref) => api.loadMetrics({
     contractsPath: api.resolveContractsPath({ repoRoot, cwd, env }),
@@ -126,17 +163,31 @@ export function createDispatcher({
   async function executeRun(run, options = {}) {
     state.lastRun = { planningOnly: true, failed: true, askKind: 'clarify', command: null };
     state.published = false;
+    Object.assign(state.display, { issue: options.issue ?? null,
+      branch: options.issue ? `issue-${options.issue}` : state.display.branch,
+      seat: 'planner', state: 'planning', busy: true, startedAt: Date.now(), contextUsed: undefined });
+    notify();
     try {
       state.lastRun = await run({
         cwd, repoRoot, config: state.config, env, publish: false, debug: state.debug, ...options,
         log: (message) => output.write(`${message}\n`), errorOutput,
+        onRunEvent: receiveEvent,
       });
     } catch (error) {
       if (isLlmTimeout(error)) {
         state.lastRun = { planningOnly: true, failed: true, timedOut: true, command: null };
       }
+      state.display.state = 'failed';
       throw error;
+    } finally {
+      state.display.busy = false;
+      notify();
     }
+    if (state.lastRun.task) state.display.branch = state.lastRun.task;
+    state.display.state = state.lastRun.review
+      ? state.lastRun.review.verdict === 'pass' ? 'passed' : 'failed'
+      : state.lastRun.failed ? 'failed' : 'idle';
+    notify();
     output.write(state.lastRun.askKind === 'clarify'
       ? `${state.lastRun.clarification}\n`
       : state.lastRun.planPath
@@ -169,9 +220,16 @@ export function createDispatcher({
     const [, command, rawArguments] = match;
     const args = rawArguments?.trim() ?? '';
     switch (command) {
+      case 'statusbar':
+        if (!['on', 'off'].includes(args)) throw new TypeError('Use /statusbar on or /statusbar off.');
+        state.statusbar = args === 'on';
+        notify();
+        output.write(`Status bars ${args}.\n`);
+        return true;
       case 'debug': {
         if (!['on', 'off'].includes(args)) throw new TypeError('Use /debug on or /debug off.');
         state.debug.setEnabled(args === 'on');
+        notify();
         output.write(`Debug logging ${args}.\n`);
         return true;
       }
@@ -188,6 +246,8 @@ export function createDispatcher({
           return true;
         }
         state.config = await api.setConfigValue('model', args === 'clear' ? '' : args, { repoRoot, cwd });
+        state.display.model = state.config.llm.model;
+        notify();
         output.write(`Model: ${state.config.llm.model || '(unset)'}\n`);
         return true;
       }
@@ -197,6 +257,8 @@ export function createDispatcher({
           return true;
         }
         state.config = await api.setConfigValue('effort', args, { repoRoot, cwd });
+        state.display.effort = state.config.llm.effort;
+        notify();
         output.write(`Effort: ${state.config.llm.effort}\n`);
         return true;
       }
@@ -208,7 +270,7 @@ export function createDispatcher({
           throw new TypeError('Use /run N [--auto-model] [--confirm] or /run --issue N [--auto-model] [--confirm].');
         }
         return executeRun((options) => api.runBuiltinIssue(issue[1], options), {
-          autoModel: flags.includes('--auto-model'), confirm: flags.includes('--confirm'),
+          autoModel: flags.includes('--auto-model'), confirm: flags.includes('--confirm'), issue: Number(issue[1]),
         });
       }
       case 'status': {
@@ -410,7 +472,7 @@ export function createDispatcher({
   return {
     dispatch,
     state,
-    banner: `${basename(api.repositoryRoot(cwd))} | seat ${config.seat.id} | runtime builtin | llm ${config.llm.base_url || 'stub'}`,
+    banner: 'github-agent-roster',
   };
 }
 
@@ -420,9 +482,13 @@ export async function startRepl({
   errorOutput = process.stderr,
   ...options
 } = {}) {
-  const { dispatch, state, banner } = createDispatcher({ ...options, output, errorOutput });
-  let suppressEcho = false;
+  let tray;
   const terminal = input.isTTY === true;
+  const messages = { write(text) { if (tray) tray.write(text); else output.write(text); } };
+  const errors = { write(text) { if (tray) tray.write(text, errorOutput); else errorOutput.write(text); } };
+  const { dispatch, state, banner } = createDispatcher({ ...options, output: messages, errorOutput: errors,
+    onStateChange() { if (tray) tray.render(); } });
+  let suppressEcho = false;
   const terminalOutput = new Writable({
     write(chunk, encoding, callback) {
       if (!suppressEcho && state.pendingSecret === null) output.write(chunk, encoding);
@@ -432,14 +498,15 @@ export async function startRepl({
   terminalOutput.isTTY = terminal;
   terminalOutput.columns = output.columns ?? 80;
   const shell = createInterface({ input, output: terminalOutput, terminal, historySize: 0 });
+  if (terminal) tray = createTray({ output, state, shell });
   shell.on('SIGINT', () => shell.close());
   shell.on('line', (line) => {
+    tray?.committed();
     if (suppressEcho) suppressEcho = false;
     else if (/^\/vault set [A-Za-z_][A-Za-z0-9_]{0,63}$/.test(line.trim())) suppressEcho = true;
   });
-  output.write(`${banner}\n`);
-  shell.setPrompt('roster> ');
-  shell.prompt();
+  if (tray) { tray.banner(); tray.render(); }
+  else { output.write(`${banner}\n`); shell.setPrompt('roster> '); shell.prompt(); }
   let exitCode = 0;
   try {
     for await (const line of shell) {
@@ -449,7 +516,7 @@ export async function startRepl({
         if (!(await dispatch(line))) break;
       } catch (error) {
         if (!(error instanceof Error)) throw error;
-        errorOutput.write(`${error.message}\n`);
+        errors.write(`${error.message}\n`);
         if (error instanceof ChecksPermissionError) {
           exitCode = 1;
           break;
@@ -458,12 +525,13 @@ export async function startRepl({
         if (wasSecret) suppressEcho = false;
       }
       if (state.pendingSecret === null) {
-        shell.setPrompt('roster> ');
-        shell.prompt();
+        if (tray) tray.render();
+        else { shell.setPrompt('roster> '); shell.prompt(); }
       }
     }
   } finally {
     shell.close();
+    tray?.close();
     terminalOutput.end();
   }
   return exitCode;

@@ -40,11 +40,13 @@ export async function createRunLog({
   repoRoot, session, env = process.env, apiKeyEnv = 'ROSTER_API_KEY',
   errorOutput = process.stderr, now = () => new Date(), clock = () => performance.now(),
   debug = createDebugLog({ env }), issue = null,
+  observe,
 }) {
   if (typeof repoRoot !== 'string' || typeof errorOutput?.write !== 'function' ||
       typeof now !== 'function' || typeof clock !== 'function') {
     throw new TypeError('Run log requires a repository root, stderr writer, and clocks');
   }
+  if (observe !== undefined && typeof observe !== 'function') throw new TypeError('Seat observer must be a function');
   const safe = (value) => redactSecrets(value, { env, apiKeyEnv }).replace(/[\x00-\x1f\x7f]/g, '?');
   if (safe(session) !== session) throw new TypeError('Run log session must not contain credentials');
   const file = logPath(repoRoot, session);
@@ -186,6 +188,7 @@ export async function createRunLog({
     let modelEvent;
     const onEvent = async (event) => {
       const text = eventText(event);
+      await observe?.({ ...event, seat: name });
       await debug.record({ repoRoot, issue, seat: name, event });
       if (event.type === 'tool-result') return;
       if (event.type === 'model') {
@@ -195,6 +198,9 @@ export async function createRunLog({
       await append(`seat ${name} ${text}`, humanEventText(name, event));
     };
     const started = clock();
+    await observe?.({ type: 'seat-start', seat: name, model: mode === 'stub' ? '' : config.llm.model,
+      host: mode === 'stub' ? '' : new URL(config.llm.base_url).host,
+      effort: config.llm.effort, contextMax: config.llm.context_max });
     await debug.record({ repoRoot, issue, seat: name, event: { type: 'seat-start' } });
     await append(`start seat ${name} session=${safe(seatSession)}`,
       name === 'coder' && mode === 'stub' ? 'Preparing the task summary.' : seatActions[name]);
@@ -203,6 +209,8 @@ export async function createRunLog({
     await append(`seat ${name} mode ${mode}`);
     try {
       const result = await operation(onEvent);
+      await observe?.({ type: 'seat-end', seat: name, verdict: result?.verdict,
+        contextUsed: result?.response?.usage?.prompt_tokens, model: result?.response?.model });
       const actualMode = result?.mode ?? (typeof result?.queried === 'boolean' ? result.queried ? 'llm' : 'stub' : mode);
       if (actualMode !== mode) {
         mode = actualMode;
@@ -212,6 +220,7 @@ export async function createRunLog({
       return result;
     } catch (error) {
       mode = error?.result?.mode ?? mode;
+      await observe?.({ type: 'seat-error', seat: name });
       await debug.record({ repoRoot, issue, seat: name, event: { type: 'seat-error' } });
       await append(`seat ${name} error class=${errorClass(error)}`);
       throw error;
