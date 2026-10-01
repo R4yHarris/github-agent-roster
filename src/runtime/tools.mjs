@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
 import { redactSecrets } from './memory.mjs';
 
 const execute = promisify(execFile);
@@ -64,6 +65,39 @@ export function isAllowedFile(file, allowedFiles) {
     return allowed === '**/*' || candidate === allowed ||
       (allowed.endsWith('/**') && candidate.startsWith(allowed.slice(0, -2)));
   });
+}
+
+export function isRepairTestFile(file) {
+  return typeof file === 'string' && !file.includes('\\') && !path.isAbsolute(file) && !path.win32.isAbsolute(file) &&
+    !file.split('/').some((part) => !part || part === '.' || part === '..') &&
+    /(?:^|\/)(?:test(?:[._-][^/]+)?|[^/]+[._-]test)\.[cm]?js$/.test(file) &&
+    !isForbiddenWrite(file);
+}
+
+export function taskAndRepairFiles(allowedFiles, repairFiles = []) {
+  if (!Array.isArray(repairFiles) || repairFiles.some((file) => !isRepairTestFile(file))) {
+    throw new TypeError('Repair scope must contain only worktree-relative, unprotected test files');
+  }
+  return [...new Set([...allowedFiles, ...repairFiles])];
+}
+
+function failingTestPaths(output, root) {
+  const files = new Set();
+  let failed = false;
+  for (const line of output.split(/\r?\n/)) {
+    if (/^\s*(?:not )?ok\b/.test(line)) failed = /^\s*not ok\b/.test(line);
+    const match = /^\s*test at (.+):\d+:\d+\s*$/.exec(line) ??
+      (failed ? /^\s*location:\s*['"]?(.+?):\d+:\d+['"]?\s*$/.exec(line) : null);
+    if (!match) continue;
+    let candidate = match[1];
+    if (candidate.startsWith('file:')) {
+      try { candidate = fileURLToPath(candidate); }
+      catch { continue; }
+    }
+    const file = path.relative(root, path.resolve(root, candidate)).split(path.sep).join('/');
+    if (isRepairTestFile(file)) files.add(file);
+  }
+  return [...files];
 }
 
 function argumentsFor(value, required, optional = []) {
@@ -184,15 +218,17 @@ export async function createTools({
   }
   const canonicalRoot = await fs.realpath(root);
   let readmeWritten = false;
+  const repairFiles = new Set();
+  const scopedFiles = () => taskAndRepairFiles(allowedFiles, [...repairFiles]);
   if (seat === 'coder' && (!Array.isArray(allowedFiles) || !allowedFiles.length)) {
     throw new TypeError('TASK.md must list files allowed for writing');
   }
 
   function readable(file, directory = false) {
-    if (!sliceReadsOnly || file === 'TASK.md' || isAllowedFile(file, allowedFiles)) return true;
+    if (!sliceReadsOnly || file === 'TASK.md' || isAllowedFile(file, scopedFiles())) return true;
     if (!directory) return false;
     const candidate = process.platform === 'win32' ? file.toLowerCase() : file;
-    return !candidate || allowedFiles.some((pattern) => {
+    return !candidate || scopedFiles().some((pattern) => {
       const allowed = process.platform === 'win32' ? pattern.toLowerCase() : pattern;
       return allowed.startsWith(`${candidate}/`);
     });
@@ -213,10 +249,10 @@ export async function createTools({
       throw new Error('Tool path must stay inside the worktree');
     }
     const normalized = relative.split(path.sep).join('/');
-    if (readmeOnlyDocs && !write && !['TASK.md', 'README.md'].includes(normalized)) {
+    if (readmeOnlyDocs && !write && !['TASK.md', 'README.md'].includes(normalized) && !repairFiles.has(normalized)) {
       throw new Error('README-only docs task may read only TASK.md and README.md; other paths are denied');
     }
-    const allowed = seat === 'planner' ? plannerArtifacts.includes(input) : isAllowedFile(normalized, allowedFiles);
+    const allowed = seat === 'planner' ? plannerArtifacts.includes(input) : isAllowedFile(normalized, scopedFiles());
     if (write && (!allowed ||
         (memoryPath && path.relative(file, path.resolve(memoryPath)) === ''))) {
       throw new Error(seat === 'planner'
@@ -372,11 +408,20 @@ export async function createTools({
         });
         return { exit_code: 0, stdout, stderr };
       } catch (error) {
-        if (typeof error.code === 'number') {
-          return { exit_code: error.code, stdout: error.stdout ?? '', stderr: error.stderr ?? '' };
-        }
         if (error.code === 'ETIMEDOUT' || error.killed) {
           throw new Error('node --test timed out after 60 seconds', { cause: error });
+        }
+        if (typeof error.code === 'number') {
+          const result = { exit_code: error.code, stdout: error.stdout ?? '', stderr: error.stderr ?? '' };
+          for (const file of failingTestPaths(`${result.stdout}\n${result.stderr}`, root)) {
+            const target = path.join(root, file);
+            await checkComponents(file.split('/').join(path.sep));
+            await checkParent(target);
+            const entry = await fs.lstat(target);
+            if (!entry.isFile() || entry.nlink !== 1) throw new Error('Failing test repair requires a regular single-link file');
+            repairFiles.add(file);
+          }
+          return { ...result, ...(repairFiles.size ? { repair_files: [...repairFiles] } : {}) };
         }
         throw new Error(`node --test could not run: ${error.message}`, { cause: error });
       }

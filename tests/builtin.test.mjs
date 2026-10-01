@@ -319,6 +319,98 @@ test('an inferred-scope slice continues after the task summary without a second 
   assert.equal(next.result.mode, 'stub');
 });
 
+test('test budget exhaustion runs all four repairs, then writes failing review without reviewer inference', async (context) => {
+  const options = fixture(context);
+  let tests = 0;
+  let coderTurns = 0;
+  let failed;
+  await assert.rejects(runBuiltinIssue(42, { ...options, config: llmConfig, log: () => {},
+    fetchImpl: async (_url, request) => {
+      const system = JSON.parse(request.body).messages[0].content;
+      if (system.startsWith('You are the builtin planner seat.')) {
+        return Response.json({ choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant', content: JSON.stringify({ title: 'Add Status',
+            acceptance_checks: ['node --test exits 0'], files_allowed: ['README.md'] }),
+        } }] });
+      }
+      assert.ok(!system.startsWith('You are the builtin reviewer seat.'), 'Exhausted tests cannot request reviewer inference');
+      coderTurns += 1;
+      return Response.json({ choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant', content: 'Done.',
+      } }] });
+    },
+    runTestCommand: async () => {
+      tests += 1;
+      assert.doesNotMatch(options.stderr, /Checking the diff/);
+      throw Object.assign(new Error('tests failed'), { code: 1, stdout: 'not ok', stderr: 'assertion failed' });
+    },
+  }), (error) => {
+    failed = error.result;
+    return /Test repair budget \(4\) exhausted/.test(error.message);
+  });
+  assert.equal(tests, 5);
+  assert.equal(coderTurns, 5);
+  assert.equal(failed.repairBudgetExhausted, true);
+  assert.equal(failed.review.verdict, 'fail');
+  assert.match(readFileSync(failed.review.reviewPath, 'utf8'), /Verdict: fail[\s\S]*repair budget \(4\) exhausted/);
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
+    assert.match(options.stderr, new RegExp(`Tests failed\\. Repair ${attempt} of 4\\.`));
+  }
+});
+
+test('a repaired failing test passes excellence, read-only review, and publication staging without widening TASK', async (context) => {
+    const options = fixture(context);
+    let tests = 0;
+    let coderTurns = 0;
+    const result = await runBuiltinIssue(42, { ...options, config: llmConfig, log: () => {},
+      fetchImpl: async (_url, request) => {
+        const body = JSON.parse(request.body);
+        const system = body.messages[0].content;
+        if (system.startsWith('You are the builtin planner seat.')) {
+          return Response.json({ choices: [{ finish_reason: 'stop', message: {
+            role: 'assistant', content: JSON.stringify({ title: 'Add Status',
+              acceptance_checks: ['node --test exits 0'], files_allowed: ['README.md'] }),
+          } }] });
+        }
+        if (system.startsWith('You are the builtin reviewer seat.')) {
+          assert.equal(tests, 2);
+          assert.match(body.messages[1].content, /smoke\.test\.mjs/);
+          return Response.json({ choices: [{ finish_reason: 'stop', message: {
+            role: 'assistant', content: JSON.stringify({ verdict: 'pass',
+              reasons: ['Tests passed after the repair.'], security_notes: ['No protected paths changed.'] }),
+          } }] });
+        }
+        coderTurns += 1;
+        const call = coderTurns === 1 ? { name: 'write_file', args: { path: 'README.md',
+          content: '# Example\n\n## Status\nReady.\n' } }
+          : coderTurns === 3 ? { name: 'read_file', args: { path: 'smoke.test.mjs' } }
+            : coderTurns === 4 ? { name: 'write_file', args: { path: 'smoke.test.mjs',
+              content: "import test from 'node:test';\ntest('smoke', () => {});\n" } } : null;
+        if (coderTurns === 3) assert.match(body.messages.at(-1).content, /Repair 1 of 4[\s\S]*smoke\.test\.mjs/);
+        return Response.json({ choices: [{ finish_reason: call ? 'tool_calls' : 'stop', message: call ? {
+          role: 'assistant', tool_calls: [{ id: `code-${coderTurns}`, type: 'function', function: {
+            name: call.name, arguments: JSON.stringify(call.args),
+          } }],
+        } : { role: 'assistant', content: 'Added Status.' } }] });
+      },
+      runTestCommand: async () => {
+        tests += 1;
+        if (tests === 1) throw Object.assign(new Error('test failed'), {
+          code: 1, stdout: 'test at smoke.test.mjs:3:1', stderr: 'assertion failed',
+        });
+        return { stdout: 'pass', stderr: '' };
+      },
+    });
+    assert.equal(result.result.testRepairs, 1);
+    assert.deepEqual(result.result.repairFiles, ['smoke.test.mjs']);
+    assert.equal(result.result.excellence.pass, true);
+    assert.equal(result.review.verdict, 'pass');
+    assert.doesNotMatch(result.planner.task, /Files allowed\n[\s\S]*- `smoke\.test\.mjs`/);
+    const prepared = await prepareBuiltinPublication(result, { cwd: options.cwd, config: llmConfig,
+      env: { ...options.env, GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'test-only-key.pem' } });
+    assert.equal(git(prepared.worktreePath, 'diff', '--cached', '--name-only'), 'README.md\nsmoke.test.mjs');
+});
+
 test('--confirm is the explicit slice pause, including declared file scope', async (context) => {
   const options = fixture(context);
   const logs = [];
@@ -1364,6 +1456,8 @@ test('default planner/coder run preserves the task handoff while the coder edits
   options.issue.body = 'Add src/app.mjs.\n\n## Acceptance checks\n- node --test exits 0\n' +
     '\n## Files allowed\n- `src/app.mjs`\n';
   let completion = 0;
+  const worktreePath = path.join(options.target, '.worktrees', 'issue-42');
+  let handoff;
   const fetchImpl = async (_url, request) => {
     completion += 1;
     const body = JSON.parse(request.body);
@@ -1376,6 +1470,7 @@ test('default planner/coder run preserves the task handoff while the coder edits
       }) } }] }) };
     }
     if (completion === 2) {
+      handoff = ['RECIPE.yml', 'TASK.md'].map((name) => readFileSync(path.join(worktreePath, name), 'utf8'));
       assert.match(body.messages[0].content, /## Files allowed\n- `src\/app\.mjs`/);
       const write = (id, file, content) => ({
         id, type: 'function',
@@ -1398,18 +1493,18 @@ test('default planner/coder run preserves the task handoff while the coder edits
       choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Implemented the planned task.' } }],
     }) };
   };
-  const run = await runBuiltinIssue(42, {
+  await assert.rejects(runBuiltinIssue(42, {
     ...options, config: llmConfig, fetchImpl, log: () => {},
     vault: { get: async () => undefined },
-    runTestCommand: async () => ({ stdout: 'tests passed', stderr: '' }),
-  });
-  assert.equal(completion, 3);
-  assert.deepEqual(parseRecipe(readFileSync(run.recipePath, 'utf8')).seats.map(({ id }) => id),
+    runTestCommand: () => assert.fail('Denied writes must stop before tests'),
+  }), /Writing RECIPE\.yml is not allowed/);
+  assert.equal(completion, 2);
+  assert.deepEqual(parseRecipe(readFileSync(path.join(worktreePath, 'RECIPE.yml'), 'utf8')).seats.map(({ id }) => id),
     ['planner', 'coder', 'reviewer']);
-  assert.equal(readFileSync(path.join(run.worktreePath, 'src', 'app.mjs'), 'utf8'),
+  assert.equal(readFileSync(path.join(worktreePath, 'src', 'app.mjs'), 'utf8'),
     'export const ready = true;\n');
-  assert.equal(readFileSync(run.recipePath, 'utf8'), run.planner.recipe);
-  assert.equal(readFileSync(run.taskPath, 'utf8'), run.planner.task);
+  assert.deepEqual(['RECIPE.yml', 'TASK.md'].map((name) => readFileSync(path.join(worktreePath, name), 'utf8')), handoff);
+  assert.match(readFileSync(path.join(worktreePath, 'REVIEW.md'), 'utf8'), /Verdict: fail/);
   assert.equal(options.calls.filter(({ program, args }) =>
     program === 'git' && args[0] === 'worktree' && args[1] === 'add').length, 1);
 });

@@ -134,7 +134,7 @@ test('non-README slices send difficulty-based effort and deny fixture and harnes
     writeFileSync(join(options.worktree, 'TASK.md'),
       planStub('Fix src/widget.mjs.', { metadata: { task_class: 'fix', difficulty } }).task);
     let calls = 0;
-    const result = await runCoder({ ...options, askKind: 'slice', fetchImpl: async (_url, request) => {
+    await assert.rejects(runCoder({ ...options, askKind: 'slice', fetchImpl: async (_url, request) => {
       calls += 1;
       const body = JSON.parse(request.body);
       assert.equal(body.reasoning_effort, difficulty === 1 ? 'low' : 'high');
@@ -150,9 +150,9 @@ test('non-README slices send difficulty-based effort and deny fixture and harnes
           name: call.name, arguments: JSON.stringify(call.args),
         } }],
       } : { role: 'assistant', content: 'Fixed the widget.' } }] });
-    }, runTestCommand: async () => ({ stdout: 'pass', stderr: '' }) });
-    assert.equal(result.excellence.pass, true);
-    assert.equal(calls, 5);
+    }, runTestCommand: () => assert.fail('Denied paths must not run tests') }), /not allowed by TASK\.md slice scope/);
+    assert.equal(calls, 1);
+    assert.match(readFileSync(join(options.worktree, 'RESULT.md'), 'utf8'), /Checks: FAIL/);
   }
 });
 
@@ -162,7 +162,7 @@ test('configured docs slice cannot read planner-task fixture, offers only exact 
   writeFileSync(join(options.worktree, 'tests', 'fixtures', 'planner-task-92.md'), 'PRIVATE_FIXTURE_92');
   let calls = 0;
   let tests = 0;
-  const result = await runCoder({ ...options, fetchImpl: async (_url, request) => {
+  await assert.rejects(runCoder({ ...options, fetchImpl: async (_url, request) => {
     calls += 1;
     const body = JSON.parse(request.body);
     assert.deepEqual(body.tools.map(({ function: tool }) => tool.name), ['read_file', 'write_file', 'run_test']);
@@ -182,11 +182,10 @@ test('configured docs slice cannot read planner-task fixture, offers only exact 
     tests += 1;
     assert.match(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /## Status/);
     return { stdout: 'pass', stderr: '' };
-  } });
-  assert.equal(result.excellence.pass, true);
-  assert.equal(tests, 1);
-  assert.equal(calls, 4);
-  assert.deepEqual(result.excellence.files, ['README.md']);
+  } }), /may read only TASK\.md and README\.md/);
+  assert.equal(tests, 0);
+  assert.equal(calls, 1);
+  assert.match(readFileSync(join(options.worktree, 'RESULT.md'), 'utf8'), /Checks: FAIL/);
 });
 
 test('docs-only final completion cannot claim success without writing README, even if tests are waived', async (t) => {
@@ -240,7 +239,7 @@ test('coder HTTP timeout yields explicit unverified RESULT and failing incomplet
 test('minimum docs keeps path deny checks even when the model requests a protected write', async (t) => {
   const options = fixture(t);
   let calls = 0;
-  const result = await runCoder({
+  await assert.rejects(runCoder({
     ...options, fetchImpl: async (_url, request) => {
       calls += 1;
       if (calls === 2) assert.match(JSON.parse(request.body).messages.at(-1).content, /not allowed/);
@@ -252,10 +251,10 @@ test('minimum docs keeps path deny checks even when the model requests a protect
       } } : { finish_reason: 'stop', message: { role: 'assistant', content: 'Updated only README.' } }] });
     },
     runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
-  });
-  assert.equal(result.excellence.pass, true);
+  }), /not allowed/);
+  assert.equal(calls, 1);
   assert.equal(existsSync(join(options.worktree, '.github')), false);
-  assert.deepEqual(result.excellence.files, ['README.md']);
+  assert.match(readFileSync(join(options.worktree, 'RESULT.md'), 'utf8'), /Checks: FAIL/);
 });
 
 test('minimum docs still fails on required tests and does not hide secrets in the actual edit', async (t) => {

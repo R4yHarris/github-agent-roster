@@ -9,7 +9,7 @@ import { cleanAskText, taskFilesAllowed } from '../planner/stub.mjs';
 import { runCoder } from '../seats/coder.mjs';
 import { preparePlannerHandoff, readPlannerHandoff, readPlannerTask, readPreviousReview, runPlanner } from '../seats/planner.mjs';
 import { requirePassingReview, runReviewer } from '../seats/reviewer.mjs';
-import { isAllowedFile, isForbiddenWrite, isManagedFile } from '../runtime/tools.mjs';
+import { isAllowedFile, isForbiddenWrite, isManagedFile, taskAndRepairFiles } from '../runtime/tools.mjs';
 import { checkExcellence, redactEvidence } from '../runtime/excellence.mjs';
 import { isReviewRequired, loadConfig, requirePublicationEnabled, withoutLlmKeys } from './config.mjs';
 import { loadFleet, withFleetProfile } from './fleet.mjs';
@@ -133,7 +133,8 @@ export async function prepareBuiltinPublication(run, {
   const commandEnv = withoutLlmKeys(env, config);
   await git(run.worktreePath, ['submodule', 'update', '--init', '--recursive'], commandEnv);
   const contractsPath = resolveContractsPath({ repoRoot: run.worktreePath, cwd, env });
-  await stageReviewedFiles(run.worktreePath, taskFilesAllowed(run.planner.task), { env: commandEnv });
+  await stageReviewedFiles(run.worktreePath, taskAndRepairFiles(taskFilesAllowed(run.planner.task),
+    run.result.repairFiles), { env: commandEnv });
   publishEnv.GITHUB_APP_PRIVATE_KEY_PATH = path.resolve(cwd, env.GITHUB_APP_PRIVATE_KEY_PATH);
   return { contractsPath, worktreePath: run.worktreePath, publishEnv, model: publishEnv.AI_MODEL };
 }

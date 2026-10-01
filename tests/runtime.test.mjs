@@ -9,6 +9,7 @@ import { loadContext } from '../src/runtime/context.mjs';
 import { appendMemory, readMemory, seatMemoryPath } from '../src/runtime/memory.mjs';
 import { loadSkills } from '../src/runtime/skills.mjs';
 import { runCoder as runCoderSeat } from '../src/seats/coder.mjs';
+import { runLoop } from '../src/runtime/loop.mjs';
 import { withResearchSummary } from './helpers/research.mjs';
 
 function runCoder(options) {
@@ -364,18 +365,14 @@ test('garbage coder arguments get one repair then the scoped README Status fallb
   assert.ok(events.some((event) => event.type === 'implementation' && event.path === 'deterministic-readme'));
 });
 
-test('model-requested path escape is denied and returned as a tool error, not a file write', async (context) => {
+test('model-requested path escape is terminal, not a repairable failed test', async (context) => {
   const options = fixture(context, llmConfig);
   const outside = path.join(options.repoRoot, 'escape.md');
   let turns = 0;
-  const result = await runCoder({
+  await assert.rejects(runCoder({
     ...options, env: {},
     fetchImpl: async (_url, request) => {
       turns += 1;
-      const sent = JSON.parse(request.body);
-      if (turns === 2) {
-        assert.match(JSON.parse(sent.messages.at(-1).content).error, /inside the worktree/);
-      }
       if (turns < 3) {
         return { status: 200, json: async () => ({
           choices: [{ finish_reason: 'tool_calls', message: {
@@ -393,11 +390,11 @@ test('model-requested path escape is denied and returned as a tool error, not a 
       }) };
     },
     runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
-  });
-  assert.equal(turns, 3);
+  }), /inside the worktree/);
+  assert.equal(turns, 1);
   assert.equal(existsSync(outside), false);
-  assert.equal(result.excellence.pass, true);
-  assert.match(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), /## Status/);
+  assert.equal(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), '# Example\n');
+  assert.match(readFileSync(path.join(options.worktree, 'RESULT.md'), 'utf8'), /Checks: FAIL/);
 });
 
 test('failed final tests receive another turn before acceptance while usage and errors stay truthful', async (context) => {
@@ -451,6 +448,132 @@ test('failed final tests receive another turn before acceptance while usage and 
   assert.match(readFileSync(result.resultPath, 'utf8'), /Checks: PASS/);
 });
 
+test('first exit 1 gets a repair turn and excellence waits for green tests', async () => {
+        let turns = 0;
+        let tests = 0;
+        let verifies = 0;
+        const events = [];
+        const task = planStub('Update README.md.').task;
+        const result = await runLoop({ config: llmConfig, context: { task, pack: task },
+          tools: {
+            write_file: async () => ({ path: 'README.md', bytes: 1 }),
+            run_test: async () => ({ exit_code: ++tests === 1 ? 1 : 0, stdout: 'failing assertion', stderr: '' }),
+          },
+          onEvent: (event) => events.push(event), env: {},
+          fetchImpl: async (_url, request) => {
+            turns += 1;
+            if (turns === 2) {
+              assert.equal(verifies, 0);
+              assert.match(JSON.parse(request.body).messages.at(-1).content, /Repair 1 of 4[\s\S]*Rerun node --test/);
+              return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+                role: 'assistant', tool_calls: [{ id: 'repair', type: 'function', function: {
+                  name: 'write_file', arguments: '{"path":"README.md","content":"fixed"}',
+                } }],
+              } }] });
+            }
+            return Response.json({ choices: [{ finish_reason: 'stop', message: {
+              role: 'assistant', content: 'Done.',
+            } }] });
+          },
+          verify: (candidate) => {
+            verifies += 1;
+            assert.equal(candidate.tests.exit_code, 0);
+            return { pass: true, reasons: [] };
+          },
+        });
+        assert.equal(result.error, undefined);
+        assert.equal(result.testRepairs, 1);
+        assert.equal(tests, 2);
+        assert.equal(verifies, 1);
+        assert.deepEqual(events.filter(({ type }) => type === 'test-repair'),
+          [{ type: 'test-repair', attempt: 1, budget: 4 }]);
+});
+
+test('a failed test defers the rest of its tool batch until a repair turn reads the summary', async () => {
+          let turns = 0;
+          let writes = 0;
+          let tests = 0;
+          const task = planStub('Update README.md.').task;
+          const result = await runLoop({ config: llmConfig, context: { task, pack: task }, env: {},
+            tools: {
+              write_file: async () => { writes += 1; return { path: 'README.md', bytes: 1 }; },
+              run_test: async () => ({ exit_code: ++tests === 1 ? 1 : 0, stdout: 'not ok', stderr: '' }),
+            },
+            fetchImpl: async (_url, request) => {
+              turns += 1;
+              const call = (id, name, args) => ({ id, type: 'function',
+                function: { name, arguments: JSON.stringify(args) } });
+              if (turns === 2) {
+                assert.equal(writes, 0);
+                const messages = JSON.parse(request.body).messages;
+                assert.match(messages.at(-2).content, /Deferred after failed tests/);
+                assert.match(messages.at(-1).content, /Repair 1 of 4/);
+              }
+              const calls = turns === 1 ? [call('test', 'run_test', {}), call('deferred', 'write_file',
+                { path: 'README.md', content: 'premature' })]
+                : turns === 2 ? [call('repair', 'write_file', { path: 'README.md', content: 'fixed' })] : null;
+              return Response.json({ choices: [{ finish_reason: calls ? 'tool_calls' : 'stop', message: calls
+                ? { role: 'assistant', tool_calls: calls } : { role: 'assistant', content: 'Fixed.' } }] });
+            },
+            verify: () => ({ pass: true, reasons: [] }),
+          });
+          assert.equal(result.error, undefined);
+          assert.equal(result.testRepairs, 1);
+          assert.equal(writes, 1);
+        });
+
+test('an optional test that exits 1 cannot be waived into a successful final summary', async () => {
+          let tests = 0;
+          let turns = 0;
+          let verifies = 0;
+          const task = planStub('Update README.md.').task.replace('---\n', '---\ntests: none\n');
+          const result = await runLoop({ config: llmConfig, context: { task, pack: task }, env: {},
+            tools: { run_test: async () => ({ exit_code: 1, stdout: `failure ${++tests}`, stderr: '' }) },
+            fetchImpl: async () => {
+              turns += 1;
+              return Response.json({ choices: [{ finish_reason: turns === 1 ? 'tool_calls' : 'stop', message: turns === 1
+                ? { role: 'assistant', tool_calls: [{ id: 'test', type: 'function',
+                  function: { name: 'run_test', arguments: '{}' } }] }
+                : { role: 'assistant', content: 'Done.' } }] });
+            },
+            verify: () => { verifies += 1; return { pass: true, reasons: [] }; },
+          });
+          assert.match(result.error.message, /Test repair budget \(4\) exhausted/);
+          assert.equal(result.testRepairs, 4);
+          assert.equal(tests, 5);
+          assert.equal(verifies, 0);
+});
+
+test('repair turns can reach their tool allowance without ending on the first failed check', async () => {
+            let turns = 0;
+            let tests = 0;
+            let changed = false;
+            const task = planStub('Update README.md.').task;
+            const result = await runLoop({ config: { ...llmConfig, seat: { ...llmConfig.seat, turn_budget: 1 } },
+              context: { task, pack: task }, env: {},
+              tools: {
+                write_file: async () => { changed = true; return { path: 'README.md', bytes: 1 }; },
+                run_test: async () => { tests += 1; return { exit_code: changed ? 0 : 1, stdout: 'check', stderr: '' }; },
+              },
+              fetchImpl: async (_url, request) => {
+                turns += 1;
+                if (turns === 3) assert.match(JSON.parse(request.body).messages.at(-1).content, /Repair tests are green/);
+                return Response.json({ choices: [{ finish_reason: turns === 2 ? 'tool_calls' : 'stop', message: turns === 2
+                  ? { role: 'assistant', tool_calls: [{ id: 'repair', type: 'function',
+                    function: { name: 'write_file', arguments: '{"path":"README.md","content":"fixed"}' } }] }
+                  : { role: 'assistant', content: 'Done.' } }] });
+              },
+              verify: (candidate) => {
+                assert.equal(candidate.tests.exit_code, 0);
+                return { pass: true, reasons: [] };
+              },
+            });
+            assert.equal(result.error, undefined);
+            assert.equal(result.testRepairs, 1);
+            assert.equal(result.turns, 3);
+            assert.equal(tests, 3);
+});
+
 test('an unsafe final-test side effect stops the loop without asking the model to hide it', async (context) => {
   const options = fixture(context, llmConfig);
   let turns = 0;
@@ -488,7 +611,8 @@ test('a nonzero run_test returns captured output for the coder to fix in the nex
       }) };
     }
     if (turns === 2) {
-      assert.deepEqual(JSON.parse(sent.messages.at(-1).content), {
+      assert.match(sent.messages.at(-1).content, /Repair 1 of 4/);
+      assert.deepEqual(JSON.parse(sent.messages.at(-2).content), {
         exit_code: 1, stdout: 'not ok', stderr: 'assertion failed',
       });
       return { status: 200, json: async () => ({
@@ -562,9 +686,9 @@ test('budget exhaustion and a failed final test stop without claiming success', 
       });
     },
   }), /Final node --test failed [\s\S]*one test failed/);
-  assert.equal(finalTurns, llmConfig.seat.turn_budget);
-  assert.equal(finalTests, llmConfig.seat.turn_budget);
+  assert.equal(finalTurns, 5);
+  assert.equal(finalTests, 5);
   assert.equal(JSON.parse(readFileSync(failing.memoryPath, 'utf8')).status, 'failed');
   assert.match(readFileSync(path.join(failing.worktree, 'RESULT.md'), 'utf8'),
-    /Checks: FAIL[\s\S]*one test failed[\s\S]*Coder turn budget \(3\) exhausted/);
+    /Checks: FAIL[\s\S]*one test failed[\s\S]*Test repair budget \(4\) exhausted/);
 });

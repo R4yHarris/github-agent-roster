@@ -44,6 +44,36 @@ test('every slice denies out-of-scope file reads, including fixtures and harness
   await assert.rejects(subtree.read_file({ path: 'src/repl.mjs' }), /not allowed/);
 });
 
+test('a real failed node test grants only its regular failing-test file for repair', async (context) => {
+  const worktree = fixture(context);
+  mkdirSync(path.join(worktree, 'tests'));
+  const failing = 'tests/broken.test.mjs';
+  writeFileSync(path.join(worktree, failing),
+    "import test from 'node:test';\nimport assert from 'node:assert/strict';\n" +
+    "test('broken', () => assert.equal(1, 2));\n");
+  writeFileSync(path.join(worktree, 'tests', 'unrelated.test.mjs'),
+    "import test from 'node:test';\ntest('unrelated', () => {});\n");
+  const tools = await createTools({ worktree, allowedFiles: ['README.md'], sliceReadsOnly: true });
+  await assert.rejects(tools.read_file({ path: failing }), /not allowed/);
+  const failed = await tools.run_test();
+  assert.equal(failed.exit_code, 1);
+  assert.deepEqual(failed.repair_files, [failing]);
+  assert.match(await tools.read_file({ path: failing }), /assert.equal/);
+  await tools.write_file({ path: failing,
+    content: "import test from 'node:test';\ntest('broken', () => {});\n" });
+  await assert.rejects(tools.write_file({ path: 'tests/unrelated.test.mjs', content: '' }), /not allowed/);
+  assert.equal((await tools.run_test()).exit_code, 0);
+});
+
+test('a killed test process with numeric exit 1 is a terminal timeout, not a repairable check', async (context) => {
+  const worktree = fixture(context);
+  const tools = await createTools({ worktree, allowedFiles: ['README.md'],
+    runCommand: async () => { throw Object.assign(new Error('killed'), {
+      code: 1, killed: true, stdout: 'not ok', stderr: '',
+    }); } });
+  await assert.rejects(tools.run_test(), /timed out after 60 seconds/);
+});
+
 test('limits reading, writing, and listing to worktree files allowed by TASK.md', async (context) => {
   const worktree = fixture(context);
   const tools = await createTools({ worktree, allowedFiles: ['README.md', 'src/**'] });

@@ -9,7 +9,7 @@ import { taskFilesAllowed } from '../planner/stub.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
 import { taskContextPolicy } from '../runtime/context-policy.mjs';
 import { redactEvidence } from '../runtime/excellence.mjs';
-import { isAllowedFile, isForbiddenRead } from '../runtime/tools.mjs';
+import { isAllowedFile, isForbiddenRead, taskAndRepairFiles } from '../runtime/tools.mjs';
 import { loadPrincipal } from './principal.mjs';
 import { isLlmTimeout } from '../llm/request.mjs';
 
@@ -61,10 +61,10 @@ function parseResponse(content) {
   return report;
 }
 
-async function readDiff(worktree, task, files, budget) {
+async function readDiff(worktree, task, files, budget, repairFiles) {
   if (!Array.isArray(files) || !files.length || files.length > 32 ||
       files.some((file) => typeof file !== 'string' || isForbiddenRead(file) ||
-        !isAllowedFile(file, taskFilesAllowed(task)))) {
+        !isAllowedFile(file, taskAndRepairFiles(taskFilesAllowed(task), repairFiles)))) {
     throw new Error('Reviewer requires 1-32 task-allowed changed files');
   }
   const git = async (args) => (await execute('git', args, {
@@ -135,6 +135,12 @@ export async function runReviewer({
         reasons: ['Coder HTTP timeout: the coder timed out before verification; review was not completed.'],
         security_notes: ['No passing implementation or completed review is available.'],
       };
+    } else if (coderResult.repairBudgetExhausted === true) {
+      report = {
+        verdict: 'fail',
+        reasons: ['Coder test repair budget (4) exhausted; tests did not pass.'],
+        security_notes: ['No passing implementation or completed review is available.'],
+      };
     } else if (!coderResult.excellence?.pass || coderResult.mode !== 'llm') {
       report = {
         verdict: 'fail',
@@ -147,7 +153,7 @@ export async function runReviewer({
       if (!Number.isSafeInteger(budget) || budget < 1) {
         throw new TypeError('Reviewer requires a positive seat.context_chars budget');
       }
-      const diff = await readDiff(worktree, task, coderResult.excellence.files, budget);
+      const diff = await readDiff(worktree, task, coderResult.excellence.files, budget, coderResult.repairFiles);
       const evidence = redactEvidence(
         `## TASK.md acceptance checks\n\n${checks}\n## TASK.md\n\n${task}\n\n` +
         `## RESULT.md\n\n${result}\n\n## Diff\n\n${diff}`, redaction,

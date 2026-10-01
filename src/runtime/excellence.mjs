@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { ensureLocalPath } from '../lib/paths.mjs';
 import { taskFilesAllowed } from '../planner/stub.mjs';
 import { splitTaskFrontmatter } from './skills.mjs';
-import { isAllowedFile, isForbiddenRead, isForbiddenWrite, isManagedFile, isRunLog } from './tools.mjs';
+import { isAllowedFile, isForbiddenRead, isForbiddenWrite, isManagedFile, isRunLog, taskAndRepairFiles } from './tools.mjs';
 
 const execute = promisify(execFile);
 
@@ -94,7 +94,7 @@ async function gitChanges(worktree, memoryPath) {
 export async function checkExcellence({
   worktree, task, result, baseline, verifiedSnapshot, memoryPath, env, apiKeyEnv,
 }) {
-  const allowed = taskFilesAllowed(task);
+  const allowed = taskAndRepairFiles(taskFilesAllowed(task), result.repairFiles);
   const reasons = [];
   const options = { env, apiKeyEnv };
   if (result.error) reasons.push(redactEvidence(result.error.message, options));
@@ -155,6 +155,8 @@ export async function writeResult({ worktree, result, excellence, env, apiKeyEnv
       : excellence.reasons.map((reason, index) => `- ${index === 0 ? 'First failure: ' : ''}${reason}`).join('\n') + '\n') +
     `- ${tests}\n\n## Run\n\nModel: ${run?.metrics?.model ?? result.model}\nTool-loop turns: ${result.turns}\n` +
     `Research turns: ${result.research?.turns ?? 0}\n` +
+    (result.testRepairs === undefined ? '' : `Test repairs: ${result.testRepairs} of 4\n` +
+      `Additional failing-test scope: ${result.repairFiles?.join(', ') || '(none)'}\n`) +
     (result.implementationPath ? `Implementation path: ${result.implementationPath}\n` : '') +
     (result.stages ? `Stages: ${result.stages.join(' -> ')} -> result\n` : '') +
     (run ? `AI-Run: ${run.line}\n` : result.mode === 'stub'
