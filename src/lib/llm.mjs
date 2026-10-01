@@ -25,11 +25,17 @@ export function createBuiltinChat(config, {
   })), retryCommand, clock });
   if (transport === null) return null;
   let completionCap = config.llm.max_tokens ?? 4096;
+  const docsSlice = config.llm.task_kind === 'slice' && config.llm.task_class === 'docs';
+  let reasoningDisabled = false;
   let lengthRetried = false;
   let lastAttempts = 0;
   let lastUsage = null;
   const chat = async (request) => {
-    let current = { ...request, max_tokens: request.max_tokens ?? completionCap };
+    let current = { ...request, max_tokens: request.max_tokens ?? completionCap,
+      ...(reasoningDisabled ? { reasoning_effort: 'none',
+        ...(usesDeepseekReasoning(config.llm) ? { chat_template_kwargs: { thinking: false } } : {}),
+      } : {}),
+    };
     if (!Number.isSafeInteger(current.max_tokens) || current.max_tokens < 1 ||
         current.max_tokens === 1 && !lengthRetried) {
       throw new TypeError('Initial builtin completion cap must be an integer of at least 2');
@@ -52,13 +58,21 @@ export function createBuiltinChat(config, {
         usages.push(transport.lastResponse?.usage ?? null);
         lastUsage = mergeUsage(...usages);
         const retry = error.truncated && !lengthRetried && current.max_tokens > 1;
-        await onEvent?.({ type: 'finish-reason', reason: error.finishReason, retry });
+        await onEvent?.({ type: 'finish-reason', reason: error.finishReason, retry,
+          ...(retry && docsSlice ? { withoutReasoning: true } : {}),
+        });
         if (!retry) throw error;
         lengthRetried = true;
-        completionCap = Math.floor(current.max_tokens / 2);
-        current = { ...current, max_tokens: completionCap, messages: [
+        reasoningDisabled = docsSlice;
+        completionCap = docsSlice ? 4096 : Math.floor(current.max_tokens / 2);
+        current = { ...current, max_tokens: completionCap,
+          ...(reasoningDisabled ? { reasoning_effort: 'none',
+            ...(usesDeepseekReasoning(config.llm) ? { chat_template_kwargs: { thinking: false } } : {}),
+          } : {}),
+          messages: [
           ...current.messages, { role: 'user', content:
-            'The response was truncated. Retry concisely within the smaller completion cap. ' +
+            (docsSlice ? 'The response was truncated. Retry without reasoning within the 4096 completion cap. '
+              : 'The response was truncated. Retry concisely within the smaller completion cap. ') +
             'Return complete tool calls or a complete summary; do not repeat previously executed edits.' },
         ] };
       }

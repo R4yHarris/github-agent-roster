@@ -9,11 +9,53 @@ import { createRunLog } from '../src/lib/run-log.mjs';
 import { UnsupportedFinishReasonError } from '../src/llm/finish-reason.mjs';
 import { planStub } from '../src/planner/stub.mjs';
 import { runLoop } from '../src/runtime/loop.mjs';
+import { selectReasoning } from '../src/llm/reasoning.mjs';
 
 const config = parseConfig(readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8')
   .replace('base_url: ""', 'base_url: http://localhost:8000/v1').replace('model: ""', 'model: local-model'));
 const completion = (reason, content = 'Done.', usage) => Response.json({
   model: 'served-model', choices: [{ finish_reason: reason, message: { role: 'assistant', content } }], usage,
+});
+
+test('docs length retries once at 4096 without reasoning and logs the requested human line', async (t) => {
+  const repoRoot = mkdtempSync(path.join(tmpdir(), 'roster-docs-length-'));
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  const docs = selectReasoning({ ...config, llm: { ...config.llm, model: 'deepseek-v4.1-flash' } },
+    { kind: 'slice', taskClass: 'docs', difficulty: 1 });
+  let shell = '';
+  const requests = [];
+  const logger = await createRunLog({ repoRoot, session: 'roster-42-coder', env: {},
+    errorOutput: { write(text) { shell += text; } } });
+  await logger.seat('coder', 'roster-42-coder', docs, async (onEvent) => {
+    const chat = createBuiltinChat(docs, { env: {}, onEvent, fetchImpl: async (_url, request) => {
+      requests.push(JSON.parse(request.body));
+      return completion(requests.length === 1 ? 'length' : 'stop', 'PRIVATE_BODY');
+    } });
+    await chat({ messages: [{ role: 'user', content: 'Edit docs/guide.md.' }] });
+    await chat({ messages: [{ role: 'user', content: 'Finish.' }] });
+  });
+  assert.deepEqual(requests.map(({ max_tokens }) => max_tokens), [2048, 4096, 4096]);
+  assert.deepEqual(requests.map(({ reasoning_effort }) => reasoning_effort), ['low', 'none', 'none']);
+  assert.deepEqual(requests.map(({ chat_template_kwargs }) => chat_template_kwargs.thinking), [true, false, false]);
+  assert.match(shell, /Response truncated\. Retrying without reasoning\./);
+  assert.match(shell, /Drafting at none effort/);
+  assert.match(readFileSync(logger.path, 'utf8'), /Response truncated\. Retrying without reasoning\./);
+  assert.doesNotMatch(shell + readFileSync(logger.path, 'utf8'), /PRIVATE_BODY/);
+});
+
+test('cloud docs slices also disable reasoning on length while non-slice docs keep the existing retry', async () => {
+  for (const kind of ['slice', 'feature']) {
+    const selected = selectReasoning({ ...config, llm: { ...config.llm,
+      base_url: 'https://example.invalid/v1' } }, { kind, taskClass: 'docs', difficulty: 1 });
+    const requests = [];
+    const chat = createBuiltinChat(selected, { env: {}, fetchImpl: async (_url, request) => {
+      requests.push(JSON.parse(request.body));
+      return completion(requests.length === 1 ? 'length' : 'stop');
+    } });
+    await chat({ messages: [{ role: 'user', content: 'Docs task.' }] });
+    assert.equal(requests[1].max_tokens, kind === 'slice' ? 4096 : 2048);
+    assert.equal(requests[1].reasoning_effort, kind === 'slice' ? 'none' : requests[0].reasoning_effort);
+  }
 });
 
 test('length gets exactly one retry with a smaller cap and no truncated body replay', async () => {

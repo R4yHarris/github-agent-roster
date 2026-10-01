@@ -79,7 +79,8 @@ export async function createRunLog({
 
   function humanEventText(name, event) {
     if (event.type === 'finish-reason') return event.retry
-      ? 'Response truncated. Retrying.' : `Unsupported LLM finish reason: ${safe(event.reason)}.`;
+      ? event.withoutReasoning ? 'Response truncated. Retrying without reasoning.' : 'Response truncated. Retrying.'
+      : `Unsupported LLM finish reason: ${safe(event.reason)}.`;
     if (event.type === 'contracts-uninitialized') return 'Contracts submodule was not initialized';
     if (event.type === 'test-repair') return `Tests failed. Repair ${event.attempt} of ${event.budget}.`;
     if (event.type === 'http' && event.phase === 'start') {
@@ -111,7 +112,8 @@ export async function createRunLog({
           throw new TypeError('Invalid live finish reason');
         }
         return `finish_reason=${JSON.stringify(safe(event.reason))} retry=${event.retry}` +
-          (event.retry ? ' Response truncated. Retrying.' : '');
+          (event.retry ? event.withoutReasoning
+            ? ' Response truncated. Retrying without reasoning.' : ' Response truncated. Retrying.' : '');
       case 'contracts-uninitialized': return 'contracts submodule uninitialized';
       case 'test-repair':
         if (event.budget !== 4 || !Number.isInteger(event.attempt) || event.attempt < 1 || event.attempt > event.budget) {
