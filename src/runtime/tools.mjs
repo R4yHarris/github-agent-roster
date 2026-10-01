@@ -158,6 +158,7 @@ export async function createTools({
   apiKeyEnv = 'ROSTER_API_KEY',
   memoryPath,
   allowRunTest = true,
+  readmeOnlyDocs = false,
   runCommand = execute,
   onEvent,
 } = {}) {
@@ -167,6 +168,10 @@ export async function createTools({
     throw new TypeError('Planner scope must contain only known root planning artifacts');
   }
   if (typeof allowRunTest !== 'boolean') throw new TypeError('run_test permission must be a boolean');
+  if (typeof readmeOnlyDocs !== 'boolean' || readmeOnlyDocs &&
+      (seat !== 'coder' || !Array.isArray(allowedFiles) || allowedFiles.length !== 1 || allowedFiles[0] !== 'README.md')) {
+    throw new TypeError('README-only docs tools require coder scope limited to README.md');
+  }
   if (onEvent !== undefined && typeof onEvent !== 'function') throw new TypeError('Live tool observer must be a function');
   const root = path.resolve(worktree);
   const status = await fs.lstat(root);
@@ -174,6 +179,7 @@ export async function createTools({
     throw new Error('Worktree must be a real directory, not a symlink');
   }
   const canonicalRoot = await fs.realpath(root);
+  let readmeWritten = false;
   if (seat === 'coder' && (!Array.isArray(allowedFiles) || !allowedFiles.length)) {
     throw new TypeError('TASK.md must list files allowed for writing');
   }
@@ -193,6 +199,9 @@ export async function createTools({
       throw new Error('Tool path must stay inside the worktree');
     }
     const normalized = relative.split(path.sep).join('/');
+    if (readmeOnlyDocs && !write && !['TASK.md', 'README.md'].includes(normalized)) {
+      throw new Error('README-only docs task may read only TASK.md and README.md; other paths are denied');
+    }
     const allowed = seat === 'planner' ? plannerArtifacts.includes(input) : isAllowedFile(normalized, allowedFiles);
     if (write && (!allowed ||
         (memoryPath && path.relative(file, path.resolve(memoryPath)) === ''))) {
@@ -306,11 +315,13 @@ export async function createTools({
       } finally {
         await handle.close();
       }
+      if (readmeOnlyDocs && normalized === 'README.md') readmeWritten = true;
       return { path: normalized, bytes: Buffer.byteLength(args.content, 'utf8') };
     },
 
     async list_dir(args = {}) {
       argumentsFor(args, [], ['path']);
+      if (readmeOnlyDocs) throw new Error('README-only docs task does not allow directory listing');
       const { file, relative, normalized } = locate(args.path ?? '.', { directory: true });
       if (relative) await checkComponents(relative);
       const entry = await fs.lstat(file);
@@ -327,6 +338,9 @@ export async function createTools({
 
     async run_test(args = {}) {
       argumentsFor(args, []);
+      if (readmeOnlyDocs && !readmeWritten) {
+        throw new Error('README-only docs task must write README.md before running tests or other tools');
+      }
       if (!allowRunTest) throw new Error('run_test is disabled by tools.run_test');
       const testEnv = { ...env, ROSTER_SEAT: 'coder' };
       for (const name of [apiKeyEnv, 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH',
@@ -350,6 +364,9 @@ export async function createTools({
 
     async search_text(args) {
       argumentsFor(args, ['query'], ['path']);
+      if (readmeOnlyDocs) {
+        throw new Error('README-only docs task does not allow repository search; read README.md directly');
+      }
       if (typeof args.query !== 'string' || !args.query.length || /[\r\n\0]/.test(args.query)) {
         throw new TypeError('search_text query must be nonempty, single-line literal text');
       }

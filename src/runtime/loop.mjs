@@ -47,6 +47,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   if (config.tools?.run_test === false && !taskSkipsTests(context.task)) {
     throw new Error('run_test is disabled by tools.run_test; enable it or explicitly declare TASK.md tests: none');
   }
+  const readmeOnlyDocs = context.contextPolicy?.readmeOnlyDocs === true;
 
   const messages = [
     { role: 'system', content: context.pack },
@@ -54,12 +55,24 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       (context.minimalDocs ? 'Use only the Ask, TASK.md, allowed files, read-before-write, and small-diff. ' +
         'Read task-allowed files before edits; no principal or research pack is needed. '
         : 'Read RESEARCH.md for the pre-edit inventory and gaps. ') +
+      (readmeOnlyDocs ? 'Read only TASK.md or README.md; write README.md before tests or finishing. ' : '') +
       'Do not claim acceptance checks passed without evidence. ' +
       'Finish with a concise summary of changes, test results, and blockers.' },
   ];
   const definitions = toolDefinitions.filter((tool) => config.seat.tools.includes(tool.function.name) &&
-    (tool.function.name !== 'run_test' || config.tools?.run_test !== false));
+    (tool.function.name !== 'run_test' || config.tools?.run_test !== false) &&
+    (!readmeOnlyDocs || ['read_file', 'write_file', 'run_test'].includes(tool.function.name))).map((tool) =>
+    !readmeOnlyDocs || tool.function.name === 'run_test' ? tool : {
+      ...tool, function: { ...tool.function, parameters: { ...tool.function.parameters,
+        properties: { ...tool.function.parameters.properties,
+          path: { type: 'string', enum: tool.function.name === 'read_file' ? ['TASK.md', 'README.md'] : ['README.md'] },
+        },
+      } },
+    });
   const offeredTools = new Set(definitions.map((tool) => tool.function.name));
+  if (readmeOnlyDocs && !offeredTools.has('write_file')) {
+    throw new Error('README-only docs task requires write_file; enable it before running the coder');
+  }
   const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand });
   const usages = [];
   const ids = new Set();

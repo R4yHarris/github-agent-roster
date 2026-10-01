@@ -144,10 +144,14 @@ export async function checkExcellence({
 }
 
 export async function writeResult({ worktree, result, excellence, env, apiKeyEnv, run }) {
+  const timedOut = result.timedOut === true;
+  const passed = excellence.pass && !timedOut;
+  const summary = timedOut ? 'Coder HTTP request timed out. No change was verified; this run did not complete.' : result.summary;
   const tests = result.tests ? `node --test exited ${result.tests.exit_code}`
     : result.testsSkipped ? 'Tests explicitly waived by TASK.md (tests: none).' : 'Tests were not run.';
-  const body = `# Result\n\n## Verification\n\nChecks: ${excellence.pass ? 'PASS' : 'FAIL'}\n` +
-    (excellence.pass ? '- Operational checks passed.\n'
+  const body = '# Result\n\n' + (timedOut ? 'Outcome: timed out (unverified)\n\n' : '') +
+    `## Verification\n\nChecks: ${passed ? 'PASS' : 'FAIL'}\n` +
+    (passed ? '- Operational checks passed.\n'
       : excellence.reasons.map((reason, index) => `- ${index === 0 ? 'First failure: ' : ''}${reason}`).join('\n') + '\n') +
     `- ${tests}\n\n## Run\n\nModel: ${run?.metrics?.model ?? result.model}\nTool-loop turns: ${result.turns}\n` +
     `Research turns: ${result.research?.turns ?? 0}\n` +
@@ -156,7 +160,7 @@ export async function writeResult({ worktree, result, excellence, env, apiKeyEnv
     (run ? `AI-Run: ${run.line}\n` : result.mode === 'stub'
       ? 'AI-Run: not emitted for a deterministic stub.\n' : 'AI-Run: unavailable; metadata validation failed.\n') +
     `\n## Files changed\n\n${excellence.files.map((file) => `- ${file}`).join('\n') || '(none)'}\n` +
-    `\n## ${excellence.pass ? 'Summary' : 'Unverified summary'}\n\n${result.summary}\n`;
+    `\n## ${passed ? 'Summary' : 'Unverified summary'}\n\n${summary}\n`;
   const resultPath = path.join(worktree, 'RESULT.md');
   await ensureLocalPath(resultPath, worktree);
   await fs.writeFile(resultPath, redactEvidence(body, { env, apiKeyEnv }), {

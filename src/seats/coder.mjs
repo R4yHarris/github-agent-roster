@@ -9,7 +9,7 @@ import { appendMemory, coderMemoryRecord, seatMemoryPath } from '../runtime/memo
 import { runResearch } from '../runtime/research.mjs';
 import { loadSkills, previewSkills } from '../runtime/skills.mjs';
 import { createTools } from '../runtime/tools.mjs';
-import { retryCommandForTask } from '../llm/request.mjs';
+import { isLlmTimeout, retryCommandForTask } from '../llm/request.mjs';
 
 export async function runCoder({
   worktree, repoRoot, config, task, session, fetchImpl, env = process.env, vault, runTestCommand,
@@ -48,6 +48,7 @@ export async function runCoder({
       worktree, allowedFiles: taskFilesAllowed(context.task), memoryPath,
       apiKeyEnv: config.llm.api_key_env, env: withoutLlmKeys(env, config), runCommand: runTestCommand,
       allowRunTest: config.tools?.run_test !== false,
+      readmeOnlyDocs: context.contextPolicy.readmeOnlyDocs,
       onEvent,
     });
     if (!context.minimalDocs) {
@@ -84,6 +85,10 @@ export async function runCoder({
           worktree, task: context.task, result: candidate, baseline, memoryPath,
           env, apiKeyEnv: config.llm.api_key_env,
         });
+        if (context.contextPolicy.readmeOnlyDocs && !changedFiles.has('README.md')) {
+          evidence.pass = false;
+          evidence.reasons.unshift('README-only docs task must write README.md before finishing');
+        }
         if (evidence.pass) verifiedSnapshot = evidence.snapshot;
         return evidence;
       },
@@ -96,7 +101,11 @@ export async function runCoder({
     if (!(error instanceof Error)) throw error;
     result = { ...result, error };
   }
-  result = { ...result, research, stages };
+  const timedOut = isLlmTimeout(result.error);
+  result = { ...result, research, stages, ...(timedOut ? {
+    timedOut: true,
+    summary: 'Coder HTTP request timed out. No change was verified; this run did not complete.',
+  } : {}) };
   const remember = (result, error) => appendMemory({
     file: memoryPath, repoRoot, env, apiKeyEnv: config.llm.api_key_env,
     record: coderMemoryRecord({

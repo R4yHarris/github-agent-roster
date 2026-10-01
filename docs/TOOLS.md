@@ -70,6 +70,17 @@ written without any model calls or app-code changes.
 
 ## Coder file scope
 
+For difficulty1 `docs` with exactly README.md as application scope, the
+harness offers only `read_file`, `write_file`, and permitted `run_test`.
+The read schema/runtime guard accepts only root TASK.md and README.md;
+the write schema accepts only README.md. Reads may precede the edit, but a
+successful README write is required before tests or final completion,
+including tasks that explicitly waive tests. Directory listing and search
+are denied on this class, so requests for RESEARCH.md, tests/fixtures, or a
+repo-wide `search_text` cannot enlarge the context. A tool denial is returned
+as an error, not file content or evidence of completed work. Other task
+classes/difficulties/scopes retain the existing behavior below.
+
 Malformed coder tool-call arrays/JSON arguments get exactly one tool-only repair.
 If repair is still malformed, a deterministic edit is available only for an
 explicit Status task whose application scope is exactly README.md and whose

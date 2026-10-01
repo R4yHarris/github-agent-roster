@@ -11,6 +11,7 @@ import { taskContextPolicy } from '../runtime/context-policy.mjs';
 import { redactEvidence } from '../runtime/excellence.mjs';
 import { isAllowedFile, isForbiddenRead } from '../runtime/tools.mjs';
 import { loadPrincipal } from './principal.mjs';
+import { isLlmTimeout } from '../llm/request.mjs';
 
 const execute = promisify(execFile);
 const maxFileBytes = 65_536;
@@ -128,7 +129,13 @@ export async function runReviewer({
       throw new Error('Reviewer RESULT.md does not match the coder worktree');
     }
     const checks = parseTaskDocument(task).acceptance_checks.map((check) => `- ${check}`).join('\n') + '\n';
-    if (!coderResult.excellence?.pass || coderResult.mode !== 'llm') {
+    if (coderResult.timedOut === true || isLlmTimeout(coderResult.error)) {
+      report = {
+        verdict: 'fail',
+        reasons: ['Coder HTTP timeout: the coder timed out before verification; review was not completed.'],
+        security_notes: ['No passing implementation or completed review is available.'],
+      };
+    } else if (!coderResult.excellence?.pass || coderResult.mode !== 'llm') {
       report = {
         verdict: 'fail',
         reasons: ['Coder RESULT.md has no passing implementation and verification evidence.'],

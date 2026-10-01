@@ -320,7 +320,12 @@ test('cold endpoint timeout preserves a valid TASK and retry skips planner rathe
   await assert.rejects(runBuiltinIssue(42, { ...options, config: coldConfig, log: () => {},
     fetchImpl: () => new Promise(() => {}),
     runTestCommand: () => assert.fail('Timed-out inference cannot run tests'),
-  }), /Cold-start:[\s\S]*host may still be warming[\s\S]*not a bad TASK[\s\S]*Retry: roster run --issue 42/);
+  }), (error) => {
+    assert.equal(error.result.timedOut, true);
+    assert.equal(error.result.review.verdict, 'fail');
+    assert.match(error.result.review.content, /HTTP timeout[\s\S]*review was not completed/);
+    return /Cold-start:[\s\S]*host may still be warming[\s\S]*not a bad TASK[\s\S]*Retry: roster run --issue 42/.test(error.message);
+  });
   assert.equal(readFileSync(initial.taskPath, 'utf8'), task);
   assert.equal(readFileSync(initial.recipePath, 'utf8'), recipe);
   assert.doesNotMatch(task, /Planning failure/);
