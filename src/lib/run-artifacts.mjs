@@ -3,7 +3,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { ensureLocalPath } from './paths.mjs';
 
-const names = ['RECIPE.yml', 'TASK.md', 'ESTIMATE.md', 'CONTEXT.md', 'RESEARCH.md', 'RESULT.md', 'REVIEW.md'];
+const names = ['RECIPE.yml', 'TASK.md', 'PLAN.md', 'ESTIMATE.md', 'CONTEXT.md', 'RESEARCH.md', 'RESULT.md', 'REVIEW.md'];
 
 export async function archiveRunArtifacts(worktree, { task, git, preserve = [] }) {
   if (typeof task !== 'string' || !/^issue-[1-9]\d*$/.test(task) || typeof git !== 'function') {

@@ -52,7 +52,7 @@ function boundedPack(sections, budget, minimum = false) {
   return { pack: render(bodies), truncated };
 }
 
-export async function loadContext({ worktree, memoryPath, repoRoot, config, principal, env, priorFeedback = null }) {
+export async function loadContext({ worktree, memoryPath, repoRoot, config, principal, env, priorFeedback = null, askKind }) {
   if (priorFeedback !== null && typeof priorFeedback !== 'string') throw new TypeError('Prior feedback must be text');
   const budget = config?.seat?.context_chars ?? 8000;
   if (!Number.isSafeInteger(budget) || budget < 1) {
@@ -61,7 +61,7 @@ export async function loadContext({ worktree, memoryPath, repoRoot, config, prin
   const task = await requiredFile(path.join(worktree, 'TASK.md'), worktree);
   const files = taskFilesAllowed(task);
   const document = parseTaskDocument(task);
-  const policy = taskContextPolicy(task);
+  const policy = taskContextPolicy(task, { askKind });
   const minimalDocs = policy.minimum;
   const skillNames = policy.skills;
   let agents = null;

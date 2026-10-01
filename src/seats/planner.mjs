@@ -6,10 +6,12 @@ import { planAsk, planFromTask, runtimeRecipe as canonicalRecipe } from '../plan
 import { appendMemory, readMemory, seatMemoryPath } from '../runtime/memory.mjs';
 import { writeEstimate } from '../runtime/estimate.mjs';
 import { buildRun } from '../metrics/run.mjs';
-import { createTools } from '../runtime/tools.mjs';
+import { createTools, planArtifactFiles } from '../runtime/tools.mjs';
 import { ensureLocalPath } from '../lib/paths.mjs';
 import { parseTaskDocument, taskSections } from '../planner/task.mjs';
 import { validatePlanningReceipt } from '../planner/receipt.mjs';
+import { askKinds, classifyAsk, clarificationHint } from '../planner/classify.mjs';
+import { planOutline } from '../planner/plan.mjs';
 
 function validateBuiltinRecipe(source, reference) {
   const recipe = parseRecipe(source);
@@ -33,6 +35,10 @@ async function readArtifact(worktree, name) {
     throw new Error('Existing planning artifacts must be regular, single-link files of at most 64 KiB');
   }
   return new TextDecoder('utf-8', { fatal: true }).decode(await fs.readFile(file));
+}
+
+export function readPlannerTask(worktree) {
+  return readArtifact(worktree, 'TASK.md');
 }
 
 export async function readPlannerHandoff({ worktree, reference, ask, issueTitle, issueBody, lockedModel }) {
@@ -85,7 +91,7 @@ export async function runPlanner({
   reference = issue ? `issue:${issue.number}` : undefined, config, metadata, lockedModel,
   task = issue ? `issue-${issue.number}` : undefined,
   session = issue ? `roster-${issue.number}-planner` : undefined,
-  fetchImpl, env, vault, learningRoot = repoRoot, onEvent,
+  fetchImpl, env, vault, learningRoot = repoRoot, onEvent, askKind,
 }) {
   if (typeof repoRoot !== 'string' || !repoRoot) {
     throw new TypeError('Planner requires the roster repository root for memory');
@@ -94,6 +100,9 @@ export async function runPlanner({
       typeof task !== 'string' || typeof session !== 'string') {
     throw new TypeError('Planner requires an issue or a complete local Ask assignment');
   }
+  const kind = askKind ?? classifyAsk(ask, { title }).kind;
+  if (!askKinds.includes(kind)) throw new TypeError('Unknown Ask kind');
+  if (kind === 'clarify') throw new TypeError(clarificationHint);
   const memoryPath = seatMemoryPath({
     repoRoot, memoryPath: config.paths.memory, seat: 'planner',
   });
@@ -104,20 +113,27 @@ export async function runPlanner({
   let lastResponse = null;
   const recipePath = path.join(worktree, 'RECIPE.yml');
   const taskPath = path.join(worktree, 'TASK.md');
+  const planPath = path.join(worktree, 'PLAN.md');
   try {
-    const tools = await createTools({ worktree, seat: 'planner', env, apiKeyEnv: config.llm.api_key_env, onEvent });
-    plan = await planAsk(ask, {
-      config, reference, title, fetchImpl, env, vault, memory, learningRoot, metadata, lockedModel,
-      tools, onEvent,
-      onResponse: (response) => { lastResponse = response; },
-    });
-    validateBuiltinRecipe(plan.recipe, reference);
-    plan = { ...plan, ...await writeEstimate(plan.task, {
-      worktree, learningRoot, config, env, recommendation: plan.feedback?.recommendation,
-      writeArtifact: tools.write_file,
-    }) };
-    await tools.write_file({ path: 'RECIPE.yml', content: plan.recipe });
-    await tools.write_file({ path: 'TASK.md', content: plan.task });
+    const tools = await createTools({ worktree, seat: 'planner', env, apiKeyEnv: config.llm.api_key_env, onEvent,
+      ...(kind === 'slice' ? {} : { plannerArtifacts: planArtifactFiles }) });
+    const options = { config, reference, title, fetchImpl, env, vault, onEvent,
+      onResponse: (response) => { lastResponse = response; } };
+    if (kind === 'slice') {
+      plan = await planAsk(ask, {
+        ...options, memory, learningRoot, metadata, lockedModel, tools,
+      });
+      validateBuiltinRecipe(plan.recipe, reference);
+      plan = { ...plan, ...await writeEstimate(plan.task, {
+        worktree, learningRoot, config, env, recommendation: plan.feedback?.recommendation,
+        writeArtifact: tools.write_file,
+      }) };
+      await tools.write_file({ path: 'RECIPE.yml', content: plan.recipe });
+      await tools.write_file({ path: 'TASK.md', content: plan.task });
+    } else {
+      plan = await planOutline(ask, { ...options, kind });
+      await tools.write_file({ path: 'PLAN.md', content: plan.plan });
+    }
   } catch (error) {
     if (!(error instanceof Error)) throw error;
     if (config.llm.base_url && lastResponse) {
@@ -131,9 +147,9 @@ export async function runPlanner({
   await appendMemory({ file: memoryPath, repoRoot, env, apiKeyEnv: config.llm.api_key_env, record: {
     task, session, status: plan.error ? 'failed' : config.llm.base_url ? 'llm' : 'stub',
     summary: plan.error ? 'Prepared unverified RECIPE.yml and TASK.md stubs after planning failure'
-      : 'Prepared RECIPE.yml and TASK.md',
+      : kind === 'slice' ? 'Prepared RECIPE.yml and TASK.md' : `Prepared ${kind} PLAN.md; no implementation`,
     ...(plan.error ? { error: plan.error } : {}),
   } });
   const run = config.llm.base_url ? buildRun({ config, response: lastResponse, task, session, env }) : null;
-  return { ...plan, recipePath, taskPath, run };
+  return { ...plan, askKind: kind, ...(kind === 'slice' ? { recipePath, taskPath } : { planPath }), run };
 }

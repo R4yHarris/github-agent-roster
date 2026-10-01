@@ -243,6 +243,41 @@ test('planning-only handoff requires another explicit run and cannot be publishe
   await assert.rejects(shell.dispatch('/publish --skip-review'), /Planning-only TASK is not code/);
 });
 
+test('feature/initiative shell runs show PLAN rather than a coder handoff and cannot bypass publication', async () => {
+  for (const askKind of ['feature', 'initiative']) {
+    const shell = dispatcher({ services: { runBuiltinIssue: async () => ({
+      askKind, planningOnly: true, planPath: 'PLAN.md', command: null, issue: { number: 92 },
+    }) } });
+    await shell.dispatch('/run 92');
+    assert.match(shell.output.text, /PLAN ready[\s\S]*each slice[\s\S]*will not run coder/);
+    assert.doesNotMatch(shell.output.text, /TASK validates|\/run 92 to start coder|Use \/publish/);
+    await assert.rejects(shell.dispatch('/publish --skip-review'), /Planning-only PLAN/);
+    assert.equal(await shell.dispatch('/quit'), false);
+  }
+});
+
+test('clarification is visible in the shell and never offers publication', async () => {
+  const shell = dispatcher({ services: {
+    submitAsk: async () => ({ mode: 'clarify', askKind: 'clarify', clarification: 'Name one outcome and allowed files.' }),
+    runBuiltinIssue: async () => ({ planningOnly: true, askKind: 'clarify', command: null,
+      clarification: 'Name one outcome and allowed files.', issue: { number: 92 } }),
+  } });
+  await shell.dispatch('/ask Improve things');
+  await shell.dispatch('/run 92');
+  assert.match(shell.output.text, /Ask kind: clarify[\s\S]*Name one outcome/);
+  assert.doesNotMatch(shell.output.text, /Use \/publish|TASK: undefined|TASK validates/);
+  await assert.rejects(shell.dispatch('/publish --skip-review'), /clarification is not code/);
+});
+
+test('a failed new planning run cannot leave an old publishable run selected', async () => {
+  const shell = dispatcher({ services: { runBuiltinIssue: async () => { throw new Error('PLAN validation failed'); } } });
+  shell.state.lastRun = { issue: { number: 41 }, command: 'previous publish command' };
+  await assert.rejects(shell.dispatch('/run 92'), /PLAN validation failed/);
+  assert.equal(shell.state.lastRun.planningOnly, true);
+  assert.equal(shell.state.lastRun.failed, true);
+  await assert.rejects(shell.dispatch('/publish --skip-review'), /Planning-only PLAN or clarification/);
+});
+
 test('/run reports a failed planner stub without throwing and leaves the shell usable', async () => {
   const shell = dispatcher({
     services: { runBuiltinIssue: async (_issue, { log }) => {
@@ -267,7 +302,7 @@ test('slash ask prints the created issue URL when gh is available', async () => 
   });
   await dispatch('/ask Add status to README.');
   assert.equal(state.lastAsk.number, 42);
-  assert.equal(output.text, 'Issue: https://github.com/example/project/issues/42\n');
+  assert.equal(output.text, 'Ask kind: slice\nIssue: https://github.com/example/project/issues/42\n');
 });
 
 test('banner reports the configured LLM endpoint when not using the stub', () => {

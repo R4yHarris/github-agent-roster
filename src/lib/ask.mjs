@@ -10,6 +10,9 @@ import { ensureLocalPath } from './paths.mjs';
 import { askRequirements, cleanAskText, planAsk } from '../planner/stub.mjs';
 import { readTaskMetadata } from '../runtime/estimate.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
+import { classifyAsk, clarificationHint } from '../planner/classify.mjs';
+import { planOutline } from '../planner/plan.mjs';
+import { createTools, planArtifactFiles } from '../runtime/tools.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
 const execFileAsync = promisify(execFile);
@@ -32,8 +35,12 @@ export async function writeAsk(ask, {
   if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
     throw new TypeError('Ask ID must be an opaque local identifier');
   }
-  const plan = await planAsk(ask, { config, reference: `local:${id}`, fetchImpl, env, vault, learningRoot: repoRoot });
-  parseTaskDocument(plan.task, { expectedAsk: ask });
+  const askKind = classifyAsk(ask).kind;
+  if (askKind === 'clarify') return { mode: 'clarify', askKind, clarification: clarificationHint };
+  const options = { config, reference: `local:${id}`, fetchImpl, env, vault };
+  const plan = askKind === 'slice' ? await planAsk(ask, { ...options, learningRoot: repoRoot })
+    : await planOutline(ask, { ...options, kind: askKind });
+  if (askKind === 'slice') parseTaskDocument(plan.task, { expectedAsk: ask });
   const directory = path.join(repoRoot, config.paths.asks);
   const draft = path.join(directory, id);
   const askPath = path.join(directory, `${id}.md`);
@@ -44,12 +51,28 @@ export async function writeAsk(ask, {
   await fs.mkdir(directory, { recursive: true });
   await fs.mkdir(draft);
   await ensureLocalPath(draft, repoRoot);
-  await fs.writeFile(askPath, renderIssueBody(ask, readTaskMetadata(plan.task)), {
+  await fs.writeFile(askPath, renderIssueBody(ask, askKind === 'slice' ? readTaskMetadata(plan.task) : {}), {
     encoding: 'utf8', flag: 'wx',
   });
+  if (askKind !== 'slice') {
+    const tools = await createTools({ worktree: draft, seat: 'planner', plannerArtifacts: planArtifactFiles,
+      env, apiKeyEnv: config.llm.api_key_env });
+    await tools.write_file({ path: 'PLAN.md', content: plan.plan });
+    return { id, askPath, planPath: path.join(draft, 'PLAN.md'), askKind, usage: plan.usage };
+  }
   await fs.writeFile(recipePath, plan.recipe, { encoding: 'utf8', flag: 'wx' });
   await fs.writeFile(taskPath, plan.task, { encoding: 'utf8', flag: 'wx' });
-  return { id, askPath, recipePath, taskPath, usage: plan.usage };
+  return { id, askPath, recipePath, taskPath, askKind, usage: plan.usage };
+}
+
+export function formatAsk(result) {
+  const kind = `Ask kind: ${result.askKind ?? 'slice'}\n`;
+  if (result.mode === 'clarify') return kind + `${result.clarification}\n`;
+  if (result.mode === 'issue') return kind + `Issue: ${result.url}\n`;
+  return kind + `Ask: ${result.askPath}\n` +
+    (result.planPath ? `PLAN: ${result.planPath}\n`
+      : `RECIPE: ${result.recipePath}\nTASK: ${result.taskPath}\n`) +
+    `Next: ${result.command}\n`;
 }
 
 export async function submitAsk(ask, {
@@ -63,10 +86,12 @@ export async function submitAsk(ask, {
   vault,
 } = {}) {
   const text = cleanAskText(ask);
-  askRequirements(text);
   const title = text.split('\n')[0];
   if (title.length > 240) throw new TypeError('Issue title must be at most 240 characters');
   const body = renderIssueBody(text);
+  const askKind = classifyAsk(text).kind;
+  if (askKind === 'clarify') return { mode: 'clarify', askKind, clarification: clarificationHint };
+  if (askKind === 'slice') askRequirements(text);
   const commandEnv = { ...env, GH_PROMPT_DISABLED: '1' };
   try {
     await runCommand('gh', ['--version'], cwd, commandEnv);
@@ -101,5 +126,5 @@ export async function submitAsk(ask, {
       !/^[1-9]\d*$/.test(number) || !Number.isSafeInteger(Number(number))) {
     throw new Error('gh issue create did not return an issue URL for the current repository');
   }
-  return { mode: 'issue', url, number: Number(number), title };
+  return { mode: 'issue', url, number: Number(number), title, askKind };
 }

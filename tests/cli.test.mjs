@@ -91,7 +91,8 @@ test("ask CLI creates an offline draft with a create command when gh is missing"
       join(fixtureRoot, "src", "cli.mjs"));
     assert.ifError(result.error);
     assert.equal(result.status, 0, result.stderr);
-    const [ask, recipe, task, command] = result.stdout.trim().split(/\r?\n/);
+    const [kind, ask, recipe, task, command] = result.stdout.trim().split(/\r?\n/);
+    assert.equal(kind, 'Ask kind: slice');
     assert.match(ask, /^Ask: .*\.roster[\\/]asks[\\/].+\.md$/);
     assert.match(recipe, /^RECIPE: .*RECIPE\.yml$/);
     assert.match(task, /^TASK: .*TASK\.md$/);

@@ -83,6 +83,21 @@ test('raw fixture Ask works, while path escapes fail before creating a worktree'
   assert.equal(readdirSync(tempRoot).length, 1);
 });
 
+test('initiative Ask-file demo writes only PLAN and leaves its README fixture untouched', async (t) => {
+  const { repoRoot, tempRoot } = fixture(t);
+  const askFile = path.join(repoRoot, 'initiative-ask.md');
+  writeFileSync(askFile, 'build an orchestrator\n');
+  const result = await runDemo({ repoRoot, tempRoot, askFile });
+  assert.equal(result.askKind, 'initiative');
+  assert.equal(result.planningOnly, true);
+  assert.equal(result.taskPath, undefined);
+  assert.equal(result.resultPath, undefined);
+  assert.deepEqual(readdirSync(result.worktreePath).sort(), ['AGENTS.md', 'PLAN.md', 'README.md']);
+  assert.equal(readFileSync(path.join(result.worktreePath, 'README.md'), 'utf8'),
+    readFileSync(path.join(repoRoot, 'fixtures', 'demo-task', 'README.md'), 'utf8'));
+  assert.match(readFileSync(result.planPath, 'utf8'), /Ask kind: initiative[\s\S]*## Waves/);
+});
+
 test('the exact CLI template command runs without GitHub and leaves inspectable stub output', (t) => {
   const { repoRoot } = fixture(t);
   cpSync(path.join(sourceRoot, 'src'), path.join(repoRoot, 'src'), { recursive: true });

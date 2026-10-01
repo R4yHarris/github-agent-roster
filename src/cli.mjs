@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { runIssue } from './lib/issue.mjs';
 import { parseEvaluationArgs, recordEvaluation } from './lib/eval.mjs';
 import { parseRecommendationArgs, repositoryRoot } from './lib/learn.mjs';
-import { submitAsk } from './lib/ask.mjs';
+import { formatAsk, submitAsk } from './lib/ask.mjs';
 import { runBuiltinIssue, runBuiltinTask } from './lib/builtin.mjs';
 import { loadConfig } from './lib/config.mjs';
 import { runDemo } from './lib/demo.mjs';
@@ -52,7 +52,8 @@ Ask creates a GitHub issue when gh is available; otherwise it saves a local draf
 Doctor checks local prerequisites without contacting GitHub or printing App env values.
 Init copies review-only examples; it never overwrites agent-policy.yml.
 Onboard configures a real vLLM model and local permissions in an interactive terminal.
-Run executes planner, coder, then reviewer in one worktree by default.
+Run classifies clarify | slice | feature | initiative before seats.
+Slices run planner, coder, then reviewer; features and initiatives write PLAN.md only.
 Run --seat coder without --issue executes an existing TASK.md in the current worktree.
 Prepare creates a manual handoff without executing seats. Publishing is opt-in.
 Recipe validates strict v0 seat YAML. Stats joins contracts AI-Run history with local runs and human evals.
@@ -107,9 +108,7 @@ async function main(args) {
     const result = await submitAsk(args[1], {
       repoRoot: rosterRoot,
     });
-    process.stdout.write(result.mode === 'issue'
-      ? `Issue: ${result.url}\n`
-      : `Ask: ${result.askPath}\nRECIPE: ${result.recipePath}\nTASK: ${result.taskPath}\nNext: ${result.command}\n`);
+    process.stdout.write(formatAsk(result));
   } else if (args.length === 1 && args[0] === 'doctor') {
     const result = checkDoctor();
     process.stdout.write(formatDoctor(result));
@@ -139,8 +138,11 @@ async function main(args) {
       throw new TypeError('Use roster run --ask-file PATH --runtime builtin');
     }
     const demo = await runDemo({ askFile: options['--ask-file'], repoRoot: rosterRoot });
-    process.stdout.write(`Worktree: ${demo.worktreePath}\nRECIPE: ${demo.recipePath}\n` +
-      `TASK: ${demo.taskPath}\nRESULT: ${demo.resultPath}\nREVIEW: ${demo.reviewPath}\nMode: ${demo.mode}\n`);
+    process.stdout.write(`Ask kind: ${demo.askKind}\n` +
+      (demo.clarification ? `${demo.clarification}\n`
+        : `Worktree: ${demo.worktreePath}\n` + (demo.planPath ? `PLAN: ${demo.planPath}\n`
+          : `RECIPE: ${demo.recipePath}\nTASK: ${demo.taskPath}\nRESULT: ${demo.resultPath}\nREVIEW: ${demo.reviewPath}\n`)) +
+      `Mode: ${demo.mode}\n`);
   } else if (args[0] === 'run') {
     const options = runOptions(args.slice(1));
     if (options.issue === undefined) await runBuiltinTask({ repoRoot: rosterRoot });

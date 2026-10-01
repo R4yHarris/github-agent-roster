@@ -39,20 +39,21 @@ function fixture(context) {
     vault: { get: async () => undefined } };
 }
 
-test('standalone stub follows all stages without a planner, source diff, test, or publication', async (context) => {
+test('standalone slice stub uses minimum stages without a planner, source diff, test, or publication', async (context) => {
   const options = fixture(context);
   const result = await runBuiltinTask({
     ...options, cwd: options.worktree, config: stub, log: () => {},
     fetchImpl: () => assert.fail('Stub must not contact a model'),
     runTestCommand: () => assert.fail('Stub must not run tests'),
   });
-  assert.deepEqual(result.result.stages, sequence);
+  assert.equal(result.askKind, 'slice');
+  assert.deepEqual(result.result.stages, ['context', 'skills', 'tool_loop', 'memory', 'excellence', 'result']);
   assert.equal(result.result.mode, 'stub');
   assert.equal(result.result.excellence.pass, false);
   assert.equal(readFileSync(path.join(options.worktree, 'TASK.md'), 'utf8'), options.taskText);
   assert.equal(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), '# Before\n');
   assert.deepEqual(readdirSync(options.worktree).sort(),
-    ['.roster', 'AGENTS.md', 'CONTEXT.md', 'README.md', 'RESEARCH.md', 'RESULT.md', 'REVIEW.md', 'TASK.md']);
+    ['.roster', 'AGENTS.md', 'CONTEXT.md', 'README.md', 'RESULT.md', 'REVIEW.md', 'TASK.md']);
   const liveLog = readFileSync(result.logPath, 'utf8');
   assert.match(liveLog, /start seat coder[\s\S]*mode stub[\s\S]*wrote RESULT\.md/);
   assert.match(liveLog, /start seat reviewer[\s\S]*wrote REVIEW\.md[\s\S]*elapsed_ms=\d+ mode=stub/);
@@ -60,7 +61,7 @@ test('standalone stub follows all stages without a planner, source diff, test, o
   assert.equal(result.review.verdict, 'fail');
   assert.match(readFileSync(result.review.reviewPath, 'utf8'), /Verdict: fail/);
   assert.match(readFileSync(result.result.resultPath, 'utf8'), /Add a Status section/);
-  assert.match(readFileSync(result.result.resultPath, 'utf8'), /Stages: principal -> context -> research -> skills -> tool_loop -> memory -> excellence -> result/);
+  assert.match(readFileSync(result.result.resultPath, 'utf8'), /Stages: context -> skills -> tool_loop -> memory -> excellence -> result/);
   assert.equal(existsSync(path.join(options.repoRoot, '.roster', 'memory', 'planner.jsonl')), false);
 });
 
@@ -115,7 +116,7 @@ test('the exact standalone CLI command consumes TASK.md in cwd with no GitHub de
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /Mode: stub/);
   assert.match(result.stdout, /CONTEXT: .+CONTEXT\.md/);
-  assert.match(result.stdout, /RESEARCH: .+RESEARCH\.md/);
+  assert.doesNotMatch(result.stdout, /RESEARCH:|undefined/);
   assert.match(result.stderr, /\d{4}-\d\d-\d\dT.* start seat coder/);
   assert.match(result.stderr, /seat coder wrote RESULT\.md/);
   assert.equal(readFileSync(path.join(options.worktree, '.roster', 'runs', 'single-seat-test.log'), 'utf8'), result.stderr);
@@ -128,6 +129,24 @@ test('the exact standalone CLI command consumes TASK.md in cwd with no GitHub de
     assert.equal(invalid.status, 1);
     assert.match(invalid.stderr, /Use roster run/);
   }
+});
+
+test('standalone broad TASK is classified before coder and produces PLAN without changing README or TASK', async (context) => {
+  const options = fixture(context);
+  const task = planStub('build an orchestrator.\n\n## Allowed files\n- `README.md`').task;
+  writeFileSync(path.join(options.worktree, 'TASK.md'), task);
+  const result = await runBuiltinTask({ ...options, cwd: options.worktree, config: stub, log: () => {},
+    fetchImpl: () => assert.fail('Initiative stub cannot call a model'),
+    runTestCommand: () => assert.fail('Initiative must not call coder tests'),
+  });
+  assert.equal(result.askKind, 'initiative');
+  assert.equal(result.planningOnly, true);
+  assert.equal(result.result, undefined);
+  assert.equal(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), '# Before\n');
+  assert.equal(readFileSync(path.join(options.worktree, 'TASK.md'), 'utf8'), task);
+  assert.match(readFileSync(result.planPath, 'utf8'), /Ask kind: initiative[\s\S]*## Waves/);
+  assert.doesNotMatch(readFileSync(result.logPath, 'utf8'), /start seat coder|start seat reviewer/);
+  assert.equal(existsSync(path.join(options.worktree, 'RESULT.md')), false);
 });
 
 test('configured seat respects the task model and materializes artifacts before edits and memory', async (context) => {

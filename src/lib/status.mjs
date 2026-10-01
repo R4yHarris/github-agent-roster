@@ -98,7 +98,7 @@ export async function readStatus({
   const logs = await readIssueLogs({ repoRoot: root, issue: number, env, apiKeyEnv: config.llm.api_key_env });
   const runLog = logs.sort((a, b) => a.lastLine.slice(0, 24).localeCompare(b.lastLine.slice(0, 24))).at(-1);
   const artifacts = {};
-  for (const name of ['TASK.md', 'RECIPE.yml', 'RESULT.md', 'REVIEW.md']) {
+  for (const name of ['TASK.md', 'RECIPE.yml', 'PLAN.md', 'RESULT.md', 'REVIEW.md']) {
     const file = path.join(worktreePath, name);
     await ensureLocalPath(file, root);
     const entry = await fs.lstat(file).catch((error) => {
@@ -179,7 +179,7 @@ export function formatStatus(status) {
     `Last seat: ${status.runLog?.lastSeat ?? 'unknown (no run log)'}\n` +
     `Last log line: ${status.runLog?.lastLine ?? 'none'}\n` +
     `Last error class: ${status.runLog?.lastErrorClass ?? '-'}\n` +
-    `Artifacts: ${['TASK.md', 'RECIPE.yml', 'RESULT.md', 'REVIEW.md'].map((name) =>
+    `Artifacts: ${['TASK.md', 'RECIPE.yml', 'PLAN.md', 'RESULT.md', 'REVIEW.md'].map((name) =>
       `${name}=${status.artifacts?.[name] ? 'yes' : 'no'}`).join(' ')}\n` +
     `Last run: model=${status.lastRun?.model ?? '-'} prompt_tokens=${status.lastRun?.prompt_tokens ?? status.lastRun?.context_used ?? '-'} ` +
     `completion_tokens=${status.lastRun?.completion_tokens ?? status.lastRun?.context_out ?? '-'} context_max=${status.lastRun?.context_max ?? '-'}\n`;

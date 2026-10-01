@@ -7,9 +7,9 @@ export function isMinimumDocsTask(task) {
   return metadata.task_class === 'docs' && metadata.difficulty === 1;
 }
 
-export function taskContextPolicy(task) {
+export function taskContextPolicy(task, { askKind } = {}) {
   const metadata = readTaskMetadata(task);
-  const research = metadata.task_class === 'feat' && metadata.difficulty >= 4;
+  const research = askKind !== 'slice' && metadata.task_class === 'feat' && metadata.difficulty >= 4;
   return { minimum: !research, research,
     skills: research ? undefined : [...minimumDocsSkills] };
 }

@@ -42,6 +42,8 @@ AGENTS/memory/feedback inputs do not enlarge it. No RESEARCH file or research
 model request is generated. Memory output remains factual. Only `feat` tasks
 with difficulty >=4 may use RESEARCH and requested implementation skills,
 including `implement-task`; other classes do not unlock that path.
+Classified slices always use the minimum pack, even at feat difficulty4+;
+feature and initiative runs plan without invoking this coder at all.
 
 The team contract is enforced by code, not a longer role prompt: scoped reads/
 writes, `run_test` unless explicitly waived, excellence for paths/secrets/tests,
@@ -50,9 +52,12 @@ No task metadata grants permissions or generates AI-Eval.
 
 Planner scope is limited to files explicitly listed or named by the human Ask.
 An Ask with no file scope needs clarification; it never becomes an invented
-`**/*` allowance. Inferred scope or multiple explicitly stated Outcomes creates
-a validated TASK-only planning handoff, then stops for another explicit `/run`.
-An already valid cached TASK/recipe bypasses the planner and starts coder.
+`**/*` allowance. A slice with inferred scope creates a validated TASK-only
+planning handoff, then stops for another explicit `/run`. Multiple explicitly
+stated Outcomes classify as a feature and produce child issue drafts in
+PLAN.md instead. An already valid cached slice TASK/recipe bypasses the
+planner and starts coder; a feature/initiative cannot reuse it to bypass
+planning-only execution. See [Ask classification](SDLC.md#agile-mapping).
 
 The result exposes `stages`, paths to the context/research/result artifacts,
 `tests`, `testsSkipped`, `turns`, `model`, `usage`, `research`, and `excellence`.
@@ -73,8 +78,10 @@ From the prepared worktree root, with TASK.md and AGENTS.md already present:
 roster run --seat coder --runtime builtin
 ```
 
-This command does not contact GitHub for an issue, invoke a planner, create
-a worktree, rewrite TASK.md, or create RECIPE.yml. It uses the roster
+For a classified slice, this command does not contact GitHub for an issue,
+invoke a planner, create a worktree, rewrite TASK.md, or create RECIPE.yml.
+A broad feature/initiative TASK is classified before coder and produces only
+PLAN.md; its existing TASK and source files stay unchanged. It uses the roster
 project private config when available, then installation settings; principal,
 skills, and memory still come from the roster installation. The pinned
 [contracts dependency](DEPENDENCY.md) must resolve. Do not read an `.env`
@@ -87,8 +94,9 @@ runs to [feedback-based routing](ROUTING.md).
 on the standalone command. Review a passing run before the explicit App SDK
 handoff. The command never creates a draft PR or publishes by itself.
 
-The existing `roster run --issue N` and shell `/run N` run planner, coder,
-then reviewer. For compatibility, `--issue N --seat coder` still aliases the
+For slices, `roster run --issue N` and shell `/run N` run planner, coder,
+then reviewer. Feature/initiative runs stop after PLAN.md, and `clarify`
+stops before any seat. For compatibility, `--issue N --seat coder` still aliases the
 full sequence;
 only the **no-issue** form above runs an already-planned coder alone.
 
