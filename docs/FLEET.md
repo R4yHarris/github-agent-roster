@@ -100,6 +100,33 @@ refuses the last profile and the currently configured endpoint; choose
 another default first. Missing IDs are errors, never a model fallback.
 Read-only list/probe operations do not silently alter the default config.
 No command invokes an App publisher, adds a queue, or launches a worker.
+
+## Local Ollama beside a Spark default
+
+Keep the Spark endpoint selected by `roster onboard` as the `default` profile.
+To register a second local Ollama server, first ensure its OpenAI-compatible API
+is running on loopback and that the desired model is installed. Then use a TTY:
+
+```sh
+roster fleet list
+roster fleet add --id ollama-local --base-url http://127.0.0.1:11434/v1 --hardware local-host --task-class docs,test
+roster fleet probe ollama-local
+roster fleet list
+```
+
+Choose an actual ID returned by `GET http://127.0.0.1:11434/v1/models`, not a
+made-up model name. If that model reports a positive `max_model_len`, Roster
+stores it as `context_max` without another question. Servers that omit context
+metadata still require your declared model context limit in tokens.
+For non-TTY setup, also pass `--model ACTUAL_SERVED_ID` and, when discovery
+does not report capacity, `--context ACTUAL_CONTEXT_TOKENS`; replace both
+placeholders with verified values.
+
+Registration leaves the Spark private config and default unchanged. Only an
+explicit `roster fleet default ollama-local` changes the default. This uses the
+existing compatible fleet/client path, not another runtime, gateway, scan, or
+hosted service. The schema's existing provider family label remains unchanged.
+
 First-run routing uses explicitly labeled [capability priors](CAPABILITIES.md),
 not scraped scores. Qualifying local human evaluations take precedence;
 a prior cannot nominate a model that is absent from the private catalog.
