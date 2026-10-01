@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { loadConfig } from './config.mjs';
-import { githubRepository } from './issue.mjs';
+import { githubRepository } from './github-repository.mjs';
 import { loadLearning, repositoryRoot } from './learn.mjs';
 import { ensureLocalPath } from './paths.mjs';
 import { readIssueLogs } from './run-log.mjs';

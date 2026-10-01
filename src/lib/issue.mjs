@@ -9,6 +9,8 @@ import { buildPublishEnv } from '../metrics/run.mjs';
 import { cleanAskText, renderAssignment } from '../planner/stub.mjs';
 import { estimateTask } from '../runtime/estimate.mjs';
 import { initializeWorktreeSubmodules } from './contracts.mjs';
+import { githubRepository } from './github-repository.mjs';
+export { githubRepository } from './github-repository.mjs';
 
 const execFileAsync = promisify(execFile);
 const metadataMarker = '\n\n## Task metadata\n\n';
@@ -16,25 +18,6 @@ const metadataMarker = '\n\n## Task metadata\n\n';
 async function execute(program, args, cwd) {
   const { stdout } = await execFileAsync(program, args, { cwd, encoding: 'utf8' });
   return stdout;
-}
-
-export function githubRepository(origin) {
-  let url;
-  try {
-    url = new URL(origin.startsWith('git@github.com:')
-      ? `ssh://git@github.com/${origin.slice('git@github.com:'.length)}`
-      : origin);
-  } catch {
-    throw new Error('origin must be a GitHub HTTPS or SSH repository URL');
-  }
-  const match = /^\/([A-Za-z0-9-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?$/.exec(url.pathname);
-  if (url.hostname !== 'github.com' || !['https:', 'ssh:'].includes(url.protocol) ||
-      url.port || url.search || url.hash || url.password ||
-      (url.protocol === 'https:' ? url.username : url.username !== 'git') ||
-      !match || ['.', '..'].includes(match[2])) {
-    throw new Error('origin must be a GitHub HTTPS or SSH repository URL');
-  }
-  return `${match[1]}/${match[2]}`;
 }
 
 export function renderIssueBody(ask, metadata = {}) {

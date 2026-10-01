@@ -5,8 +5,6 @@ import { formatFleet, getFleetProfile, normalizeFleetBaseUrl, parseFleet, valida
   validateFleetId, validateFleetProfile, withFleetProfile, writeFleet } from './fleet.mjs';
 import { resolveProjectRoot } from './paths.mjs';
 import { ensurePrivateFilesIgnored, readPrivateFile, writePrivateDocuments } from './private-files.mjs';
-import { probeModelDetails } from '../onboard/wizard.mjs';
-import { runFleetAssist } from '../onboard/fleet-assist.mjs';
 
 const installation = fileURLToPath(new URL('../../', import.meta.url));
 const usage = 'Use roster fleet list, add --id NAME --base-url URL [--model MODEL] [--context N] ' +
@@ -67,6 +65,7 @@ export async function runFleet(args, {
 } = {}) {
   const options = argumentsFor(args);
   if (options.command === 'assist') {
+    const { runFleetAssist } = await import('../onboard/fleet-assist.mjs');
     return runFleetAssist({ cwd, installationRoot, env, input, output, errorOutput, fetchImpl, vault, question });
   }
   const tty = Boolean(input.isTTY && output.isTTY);
@@ -115,6 +114,7 @@ export async function runFleet(args, {
     }
     if (options.command === 'add') {
       if (fleet.profiles.some(({ id }) => id === options.id)) throw new Error('Fleet profile ID already exists');
+      const { probeModelDetails } = await import('../onboard/wizard.mjs');
       const { config } = await currentConfig(repoRoot, cwd, installationRoot);
       const models = await probeModelDetails(options.baseUrl, { fetchImpl, env, apiKeyEnv: config.llm.api_key_env });
       const ids = models.map(({ id }) => id);
@@ -144,6 +144,7 @@ export async function runFleet(args, {
     }
     const profile = getFleetProfile(fleet, options.id);
     if (options.command === 'probe') {
+      const { probeModelDetails } = await import('../onboard/wizard.mjs');
       const { config, source: previousConfig } = await currentConfig(repoRoot, cwd, installationRoot);
       const models = await probeModelDetails(profile.base_url, { fetchImpl, env, apiKeyEnv: config.llm.api_key_env });
       const ids = models.map(({ id }) => id);

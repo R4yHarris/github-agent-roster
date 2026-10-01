@@ -2,13 +2,7 @@ import { basename, join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { Writable } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { formatAsk, submitAsk } from './lib/ask.mjs';
-import { prepareBuiltinPublication, runBuiltinAsk, runBuiltinIssue } from './lib/builtin.mjs';
-import {
-  commentMergedIssue, mergedPullNumber, mergedPullNumberFromFailure,
-} from './lib/issue-board.mjs';
 import { isReviewRequired, loadConfig, requirePublicationEnabled, setConfigValue } from './lib/config.mjs';
-import { parseEvaluationArgs, recordEvaluation } from './lib/eval.mjs';
 import { parseRecommendationArgs, repositoryRoot } from './lib/learn.mjs';
 import { formatMetrics, loadAvailableMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
 import { resolveContractsPath, resolveProjectRoot } from './lib/paths.mjs';
@@ -16,9 +10,9 @@ import { formatRoute, routeTask } from './lib/route.mjs';
 import {
   buildPublishMessage, formatPublishCommand, formatPublishEnvironment, parsePublishArgs, publicationTask,
 } from './lib/publication.mjs';
-import { redactEvidence } from './runtime/excellence.mjs';
-import { requirePassingReview } from './seats/reviewer.mjs';
+import { redactEvidence } from './lib/redaction.mjs';
 import { isLlmTimeout } from './llm/request.mjs';
+import { readDiffStatus } from './lib/diff.mjs';
 import { formatStatus, readStatus } from './lib/status.mjs';
 import { createFileVault, validateSecretName } from './vault/file.mjs';
 import { buildPublishEnv, resolvePublishModel } from './metrics/run.mjs';
@@ -26,6 +20,19 @@ import { humanEvalHint } from './lib/seat-publication.mjs';
 import { readIssueLogs } from './lib/run-log.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
+export const commandRegistry = Object.freeze([
+  'ask', 'model', 'effort', 'run', 'status', 'diff', 'log', 'eval', 'publish',
+  'stats', 'recommend', 'vault', 'help', 'quit',
+]);
+
+export function completeCommand(line) {
+  const match = /^\/([a-z]*)$/.exec(line);
+  if (!match) return [[], line];
+  const choices = commandRegistry.filter((command) => command.startsWith(match[1]))
+    .map((command) => `/${command}`);
+  return [choices, line];
+}
+
 const help = `Commands:
   TEXT                      Run a direct local ask without creating an issue
   /ask TEXT                 Create an issue, or draft one if gh is unavailable
@@ -33,6 +40,7 @@ const help = `Commands:
   /effort [l|m|h|x|none]    Show or persist an explicit effort override
   /run N [--auto-model] [--confirm]  Summarize the task and continue; --confirm pauses
   /status [N] [--offline]   Show an issue, open PR, and local worktree
+  /diff [--untracked]       Show tracked changes; include untracked files on request
   /log N                   Tail local issue seat logs without network access
   /eval TARGET VERDICT 1-5 y|n [--minutes N] [--comment "TEXT"]
   /publish [SUBJECT] [--model MODEL] [--skip-review]  Publish reviewed seat or GHCP changes
@@ -66,6 +74,7 @@ async function publishWithContracts({ contractsPath, cwd, env, message, model, o
   const code = await main(['--message', message, '--model', model, '--merge-when-green'], {
     cwd, env, stdout, stderr,
   });
+  const { mergedPullNumber, mergedPullNumberFromFailure } = await import('./lib/issue-board.mjs');
   if (code === 0) {
     return { mergedPullRequest: /^Merged PR #/m.test(successText)
       ? mergedPullNumber(successText) : null };
@@ -83,15 +92,36 @@ async function publishWithContracts({ contractsPath, cwd, env, message, model, o
 }
 
 const defaultServices = {
-  submitAsk, runBuiltinAsk, runBuiltinIssue, recordEvaluation, repositoryRoot, loadMetrics,
+  async submitAsk(...args) {
+    return (await import('./lib/ask.mjs')).submitAsk(...args);
+  },
+  async runBuiltinAsk(...args) {
+    return (await import('./lib/builtin.mjs')).runBuiltinAsk(...args);
+  },
+  async runBuiltinIssue(...args) {
+    return (await import('./lib/builtin.mjs')).runBuiltinIssue(...args);
+  },
+  async prepareBuiltinPublication(...args) {
+    return (await import('./lib/builtin.mjs')).prepareBuiltinPublication(...args);
+  },
+  async issueCommenter(...args) {
+    return (await import('./lib/issue-board.mjs')).commentMergedIssue(...args);
+  },
+  async recordEvaluation(...args) {
+    return (await import('./lib/eval.mjs')).recordEvaluation(...args);
+  },
+  repositoryRoot, loadMetrics,
   summarizeMetrics, formatMetrics, loadAvailableMetrics, routeTask, formatRoute,
-  resolveContractsPath, prepareBuiltinPublication, createFileVault,
+  resolveContractsPath, createFileVault,
   validateSecretName, readStatus, formatStatus, setConfigValue,
-  publicationTask,
+  publicationTask, readDiffStatus,
   readIssueLogs,
-  issueCommenter: commentMergedIssue,
   publisher: publishWithContracts,
 };
+
+async function requirePassingReview(...args) {
+  return (await import('./seats/reviewer.mjs')).requirePassingReview(...args);
+}
 
 function conventionalSubject(value) {
   if (!/^[a-z]+(?:\([A-Za-z0-9_.-]+\))?!?: [^\r\n]+$/.test(value) ||
@@ -169,7 +199,7 @@ export function createDispatcher({
         if (!args) throw new TypeError('Use /ask TEXT.');
         const ask = await api.submitAsk(args, { cwd, repoRoot, config: state.config, env });
         state.lastAsk = ask;
-        output.write(formatAsk(ask));
+        output.write((await import('./lib/ask.mjs')).formatAsk(ask));
         return true;
       }
       case 'model': {
@@ -215,7 +245,19 @@ export function createDispatcher({
         })));
         return true;
       }
+      case 'diff': {
+        const fields = args ? args.split(/\s+/) : [];
+        if (fields.length > 1 || fields.some((field) => field !== '--untracked')) {
+          throw new TypeError('Use /diff [--untracked].');
+        }
+        const diff = await api.readDiffStatus({
+          cwd: currentRoot(), untracked: fields.includes('--untracked'),
+        });
+        output.write(diff || 'No tracked changes.\n');
+        return true;
+      }
       case 'eval': {
+        const { parseEvaluationArgs } = await import('./lib/eval.mjs');
         const { values, options } = parseEvaluationArgs(args);
         const evaluation = await api.recordEvaluation(...values, { ...options, cwd: currentRoot(), env });
         output.write(`Recorded AI-Eval for ${evaluation.sha ?? evaluation.session}.\n`);
@@ -416,7 +458,10 @@ export async function startRepl({
   });
   terminalOutput.isTTY = terminal;
   terminalOutput.columns = output.columns ?? 80;
-  const shell = createInterface({ input, output: terminalOutput, terminal, historySize: 0 });
+  const shell = createInterface({
+    input, output: terminalOutput, terminal, historySize: 0,
+    completer: completeCommand,
+  });
   shell.on('SIGINT', () => shell.close());
   shell.on('line', (line) => {
     if (suppressEcho) suppressEcho = false;

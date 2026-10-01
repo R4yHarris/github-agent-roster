@@ -37,6 +37,26 @@ test('worktree initialization runs recursive submodule update at its root and ve
   await assertContractsInitialized(worktree);
 });
 
+test('worktree initialization skips submodule update when the publisher is already present', async (t) => {
+  const worktree = fixture(t);
+  const publisher = path.join(worktree, 'vendor', 'github-agent-contracts', 'scripts', 'agent-pr.mjs');
+  mkdirSync(path.dirname(publisher), { recursive: true });
+  writeFileSync(publisher, 'export {};\n');
+  const calls = [];
+  const initialized = await initializeWorktreeSubmodules(worktree, async (...args) => calls.push(args));
+  assert.equal(initialized, false);
+  assert.deepEqual(calls, []);
+});
+
+test('worktree submodule initialization executes at most once when no publisher is declared', async (t) => {
+  const worktree = fixture(t);
+  let calls = 0;
+  const runCommand = async () => { calls += 1; return ''; };
+  assert.equal(await initializeWorktreeSubmodules(worktree, runCommand), true);
+  assert.equal(await initializeWorktreeSubmodules(worktree, runCommand), false);
+  assert.equal(calls, 1);
+});
+
 test('dependency-only errors are distinguished from real or mixed test failures', () => {
   assert.equal(onlyMissingContractsScripts({ exit_code: 1, stderr: missing }), true);
   assert.equal(onlyMissingContractsScripts({ exit_code: 1, stderr: missing.replaceAll('/', '\\\\') }), true);

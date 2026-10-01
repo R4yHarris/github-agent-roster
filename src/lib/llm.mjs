@@ -56,7 +56,7 @@ export function createBuiltinChat(config, {
         if (!retry) throw error;
         lengthRetried = true;
         completionCap = Math.floor(current.max_tokens / 2);
-        current = { ...current, max_tokens: completionCap, messages: [
+        current = { ...current, max_tokens: completionCap, reasoning_effort: 'none', messages: [
           ...current.messages, { role: 'user', content:
             'The response was truncated. Retry concisely within the smaller completion cap. ' +
             'Return complete tool calls or a complete summary; do not repeat previously executed edits.' },

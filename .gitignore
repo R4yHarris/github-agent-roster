@@ -2,6 +2,7 @@
 node_modules/
 .worktrees/
 .roster/runs/
+.roster/bench.json
 .roster/evals.jsonl
 .roster/config.yml
 .roster/config.yml.*

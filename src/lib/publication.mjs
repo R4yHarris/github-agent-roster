@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { resolvePublishModel, RUN_ENV_NAMES } from '../metrics/run.mjs';
-import { issueMergeMessage } from './issue-board.mjs';
+import { issueMergeMessage } from './issue-reference.mjs';
 
 export function parsePublishArgs(args) {
   if (typeof args !== 'string') throw new TypeError('Publish arguments must be text');
