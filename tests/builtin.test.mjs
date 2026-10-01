@@ -225,8 +225,8 @@ test('a valid existing issue-92 RECIPE/TASK skips the planner and starts the sco
   const options = fixture(context);
   const ask = 'Add a one-line Status section to README.md';
   options.issue.number = 92;
-  options.issue.title = ask;
-  options.issue.body = ask;
+  options.issue.title = 'Add a one-line Status section to `README.md`';
+  options.issue.body = renderIssueBody('Different body lead; the issue title identifies the request.');
   options.issue.url = 'https://github.com/example/project/issues/92';
   const worktree = path.join(options.target, '.worktrees', 'issue-92');
   git(options.target, 'worktree', 'add', '-b', 'issue-92', worktree);

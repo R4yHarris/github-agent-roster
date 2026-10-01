@@ -43,6 +43,11 @@ contain the issue Ask text and pass the
 same title, metadata, acceptance-check, allowed-path, and routed-model checks.
 The harness finalizes the managed recipe/task/estimate through this writer;
 recipe topology and estimation evidence remain harness-owned, not model grants.
+Ask comparison uses normalized whitespace and backticks, ignoring issue
+template headings/comments and task-metadata boilerplate. A nonempty Ask
+section may contain the human issue title or first substantive body line rather
+than the entire issue template. Annotated `Ask (unchanged)` headings work too.
+Missing/empty Ask and explicit file-scope or routed-model violations still fail.
 Coder context, estimation, file allowlists, and reviewer evidence use the same
 task section parser. A validated cached recipe/task can be handed directly
 to the coder without giving the planner an app-code tool.

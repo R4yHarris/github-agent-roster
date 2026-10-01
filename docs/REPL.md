@@ -44,6 +44,9 @@ Heading case and the `Original Ask`, `Acceptance Checks`/`acceptance_checks`,
 and `Allowed Files` aliases are accepted by all task consumers. Allowed Files
 must be explicit, and cached recipes must still match the builtin runtime
 schema; a model's task-plan YAML is not a runtime seat recipe.
+Cached Ask matching uses the issue title or first substantive body line after
+whitespace/backtick/template normalization. A valid cached handoff makes no
+planner/model request; an empty Original Ask never qualifies.
 
 `/run N` streams timestamped seat activity to stderr immediately, independently
 of its final summary. The same metadata is appended to the issue repository's

@@ -26,7 +26,8 @@ export function checkedList(items, label, check, limit = 8) {
 }
 
 function sectionName(heading) {
-  const name = heading.toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').replace(/:$/, '').trim();
+  const name = heading.toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').replace(/:$/, '').trim()
+    .replace(/^(ask|original ask)\s*\([^)]*\)$/, '$1');
   if (name === 'original ask') return 'ask';
   if (name === 'allowed files') return 'files allowed';
   return name;
@@ -59,7 +60,7 @@ export function taskSections(task) {
             known.has(name)) throw new TypeError(`TASK.md has duplicate ${name} sections`);
         known.add(name);
         starts.push({ name, start: offset, contentStart: offset + line.length + 1 });
-        if (name === 'ask' && !/^original[ _-]+ask:?$/i.test(heading[2]) &&
+        if (name === 'ask' && !/^original[ _-]+ask\b/i.test(heading[2]) &&
             known.has('acceptance checks') && known.has('files allowed')) break;
       }
     }
@@ -88,12 +89,41 @@ export function taskFilesAllowed(task) {
     'an Allowed Files list (or Files allowed)'), 'Files allowed', allowedFile, 32);
 }
 
-export function parseTaskDocument(task, { expectedAsk } = {}) {
+function askContentLines(value) {
+  if (typeof value !== 'string') throw new TypeError('Ask comparison requires text');
+  const lines = [];
+  for (const line of value.replace(/<!--[\s\S]*?-->/g, '').split(/\r?\n/)) {
+    const text = line.trim();
+    if (/^#{1,6}\s+task[ _-]+metadata\s*:?$/i.test(text)) break;
+    if (/^(?:`{3,}|~{3,})[A-Za-z0-9_-]*$/.test(text)) continue;
+    const normalized = text.replace(/^#{1,6}\s+/, '').replace(/`+/g, '')
+      .replace(/\s+/g, ' ').trim();
+    if (!normalized || /^(?:original[ _-]+ask|ask|description|summary|details|title)(?:\s*\([^)]*\))?\s*:?$/i.test(normalized) ||
+        /^(?:task_class|difficulty|estimate_min):/i.test(normalized)) continue;
+    lines.push(normalized);
+  }
+  return lines;
+}
+
+export function normalizeAsk(value) {
+  return askContentLines(value).join(' ');
+}
+
+export function parseTaskDocument(task, { expectedAsk, issueTitle, issueBody } = {}) {
   const parsed = taskSections(task);
   const ask = parsed.sections.find(({ name }) => name === 'ask')?.content;
-  if (!ask || expectedAsk !== undefined && (typeof expectedAsk !== 'string' ||
-      !expectedAsk.trim() || !ask.replace(/\s+/g, ' ').includes(expectedAsk.trim().replace(/\s+/g, ' ')))) {
-    throw new TypeError('Planner TASK.md must contain the unchanged Ask in Original Ask (or Ask)');
+  const normalized = ask ? normalizeAsk(ask) : '';
+  if (!normalized) {
+    throw new TypeError('Planner TASK.md must contain a nonempty Original Ask (or Ask)');
+  }
+  if (expectedAsk !== undefined || issueTitle !== undefined || issueBody !== undefined) {
+    const candidates = [
+      issueTitle === undefined ? '' : normalizeAsk(issueTitle),
+      askContentLines(issueBody ?? expectedAsk ?? '')[0] ?? '',
+    ].filter(Boolean);
+    if (!candidates.some((candidate) => normalized.includes(candidate))) {
+      throw new TypeError('Planner TASK.md must contain the unchanged Ask title or first issue body line in Original Ask (or Ask)');
+    }
   }
   const acceptance_checks = checkedList(sectionList(parsed.sections.find(({ name }) => name === 'acceptance checks'),
     'Acceptance Checks (or acceptance_checks)'), 'Acceptance checks', (line) => oneLine(line, 'Acceptance check'));

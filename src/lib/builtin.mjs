@@ -279,6 +279,7 @@ export async function runBuiltinIssue(issueNumber, {
   }
   const existing = prepared.reused ? await readPlannerHandoff({
     worktree: worktreePath, reference: `issue:${prepared.issue.number}`, ask: prepared.ask, lockedModel: route?.profile.model,
+    issueTitle: prepared.issue.title, issueBody: prepared.issue.body,
   }) : { plan: null };
   if (existing.reason) log(existing.reason);
   const archivePath = prepared.reused ? await archiveRunArtifacts(worktreePath, {
