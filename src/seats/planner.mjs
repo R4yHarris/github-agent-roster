@@ -13,6 +13,7 @@ import { validatePlanningReceipt } from '../planner/receipt.mjs';
 import { askKinds, classifyAsk, clarificationHint } from '../planner/classify.mjs';
 import { planOutline } from '../planner/plan.mjs';
 import { retryCommandForTask } from '../llm/request.mjs';
+import { selectReasoning } from '../llm/reasoning.mjs';
 
 function validateBuiltinRecipe(source, reference) {
   const recipe = parseRecipe(source);
@@ -40,6 +41,10 @@ async function readArtifact(worktree, name) {
 
 export function readPlannerTask(worktree) {
   return readArtifact(worktree, 'TASK.md');
+}
+
+export function readPreviousReview(worktree) {
+  return readArtifact(worktree, 'REVIEW.md');
 }
 
 export async function readPlannerHandoff({ worktree, reference, ask, issueTitle, issueBody, lockedModel }) {
@@ -105,6 +110,7 @@ export async function runPlanner({
   const kind = askKind ?? classifyAsk(ask, { title }).kind;
   if (!askKinds.includes(kind)) throw new TypeError('Unknown Ask kind');
   if (kind === 'clarify') throw new TypeError(clarificationHint);
+  config = selectReasoning(config, { kind, taskClass: metadata?.task_class, difficulty: metadata?.difficulty });
   const memoryPath = seatMemoryPath({
     repoRoot, memoryPath: config.paths.memory, seat: 'planner',
   });

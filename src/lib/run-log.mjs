@@ -76,7 +76,9 @@ export async function createRunLog({
   }
 
   function humanEventText(name, event) {
-    if (event.type === 'http' && event.phase === 'start') return seatActions[name];
+    if (event.type === 'http' && event.phase === 'start') {
+      return name === 'coder' && event.effort ? `Drafting the change at ${event.effort} effort.` : seatActions[name];
+    }
     if (event.type === 'waiting' && event.elapsedSeconds > 30) {
       return 'Still waiting on the model. Local hardware can take minutes after idle.';
     }
@@ -118,6 +120,9 @@ export async function createRunLog({
         return `model=${JSON.stringify(model)} host=${JSON.stringify(host)}`;
       }
       case 'http': {
+        if (event.effort !== undefined && !['low', 'medium', 'high', 'max', 'xhigh', 'none'].includes(event.effort)) {
+          throw new TypeError('Invalid live reasoning effort');
+        }
         if (!['start', 'ok', 'error'].includes(event.phase) ||
             event.phase === 'ok' && (!Number.isInteger(event.status) || event.status < 200 || event.status > 299) ||
             event.phase === 'error' && !httpErrors.includes(event.errorClass)) {

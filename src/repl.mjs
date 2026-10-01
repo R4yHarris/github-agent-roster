@@ -29,7 +29,7 @@ const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const help = `Commands:
   /ask TEXT                 Create an issue, or draft one if gh is unavailable
   /model [MODEL]            Show or persist the LLM model
-  /effort [l|m|h|x]         Show or persist the effort level
+  /effort [l|m|h|x|none]    Show or persist an explicit effort override
   /run N [--auto-model]     Run builtin seats, optionally routing from human evaluations
   /status [N] [--offline]   Show an issue, open PR, and local worktree
   /log N                   Tail local issue seat logs without network access

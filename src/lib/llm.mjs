@@ -1,4 +1,5 @@
 import { createChat } from '../llm/openai.mjs';
+import { mappedEffort, usesDeepseekReasoning } from '../llm/reasoning.mjs';
 
 export function createBuiltinChat(config, {
   fetchImpl, env = process.env, vault, onEvent, retryCommand, clock,
@@ -9,6 +10,11 @@ export function createBuiltinChat(config, {
     api_key_name: config.llm.api_key_env,
     api_key_optional: config.llm.api_key_optional ?? true,
     request_timeout_ms: config.llm.request_timeout_ms,
+    reasoning_effort: mappedEffort(config.llm),
+    max_tokens: config.llm.max_tokens,
+    ...(usesDeepseekReasoning(config.llm) ? {
+      chat_template_kwargs: { thinking: config.llm.effort !== 'none' },
+    } : {}),
   } }, { fetch: fetchImpl, env, vault, onEvent, retryCommand, clock });
 }
 

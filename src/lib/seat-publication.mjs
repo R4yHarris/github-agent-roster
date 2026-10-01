@@ -6,7 +6,7 @@ export function recordedCoderRun({ repoRoot, run }) {
   const record = loadLearning({ cwd: repoRoot }).runs.findLast((record) =>
     record.session === run.metrics.session && record.task === run.metrics.task);
   if (!record) throw new Error('Coder run is missing from .roster/runs JSONL; publication is refused');
-  const measured = materializeRun(record, run.version);
+  const measured = materializeRun({ ...record, effort: record.effort ?? '-' }, run.version);
   if (JSON.stringify(measured.metrics) !== JSON.stringify(materializeRun(run.metrics, run.version).metrics)) {
     throw new Error('Recorded coder metrics differ from the reviewed run; rerun before publication');
   }

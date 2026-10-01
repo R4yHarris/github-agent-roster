@@ -6,7 +6,8 @@ llm:
   base_url: ""          # empty = deterministic stub
   model: ""
   api_key_env: ROSTER_API_KEY
-  effort: m             # l|m|h|x
+  effort: m             # fallback l|m|h|x|none; mode selects defaults
+  # effort_override: x   # optional explicit choice; /effort writes this
   context_max: 0        # 0 = unknown
   profile: ""            # vllm-local|ollama|lmstudio|openai; empty uses base_url
   # request_timeout_ms: 1200000  # optional; local defaults 20m, cloud 120s

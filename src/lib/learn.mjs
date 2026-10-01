@@ -248,7 +248,7 @@ export async function recordRun(record, {
     ...completed?.metrics,
   };
   const stored = Object.fromEntries(RUN_FIELDS
-    .filter((field) => supplied[field] != null)
+    .filter((field) => supplied[field] != null && !(field === 'effort' && supplied[field] === '-'))
     .map((field) => [field, supplied[field]]));
   const file = resolve(directory, 'runs.jsonl');
   validateLocalRun(stored, file);

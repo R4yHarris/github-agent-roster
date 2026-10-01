@@ -17,7 +17,7 @@ const defaultProfiles = {
   openai: { base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY' },
 };
 const fields = {
-  llm: ['base_url', 'model', 'api_key_env', 'effort', 'context_max', 'profile', 'api_key_optional', 'provider', 'request_timeout_ms'],
+  llm: ['base_url', 'model', 'api_key_env', 'effort', 'effort_override', 'context_max', 'profile', 'api_key_optional', 'provider', 'request_timeout_ms'],
   planner: ['turn_budget'],
   seat: ['id', 'principal', 'turn_budget', 'tools', 'context_chars'],
   paths: ['memory', 'skills', 'asks', 'worktrees'],
@@ -168,7 +168,7 @@ export function parseConfig(source) {
   if (!roots.has('schema') ||
       ['llm', 'seat', 'paths'].some((name) =>
         !roots.has(name) || fields[name].some((field) =>
-          !(name === 'llm' && ['profile', 'api_key_optional', 'provider', 'request_timeout_ms'].includes(field)) &&
+          !(name === 'llm' && ['profile', 'api_key_optional', 'provider', 'request_timeout_ms', 'effort_override'].includes(field)) &&
           !(name === 'seat' && field === 'context_chars') && !Object.hasOwn(config[name], field))) ||
       (roots.has('planner') && !Object.hasOwn(config.planner, 'turn_budget'))) {
     invalid('schema, llm, seat, paths, and optional planner must contain every documented field');
@@ -179,6 +179,10 @@ export function parseConfig(source) {
   llm.model = stringValue(llm.model, 'llm.model');
   llm.api_key_env = apiKeyName(stringValue(llm.api_key_env, 'llm.api_key_env'), 'llm.api_key_env');
   llm.effort = stringValue(llm.effort, 'llm.effort');
+  if (Object.hasOwn(llm, 'effort_override')) {
+    llm.effort_override = stringValue(llm.effort_override, 'llm.effort_override');
+    if (!['l', 'm', 'h', 'x', 'none'].includes(llm.effort_override)) invalid('llm.effort_override must be l, m, h, x, or none');
+  }
   llm.context_max = integerValue(llm.context_max, 'llm.context_max');
   if (Object.hasOwn(llm, 'request_timeout_ms')) {
     llm.request_timeout_ms = integerValue(llm.request_timeout_ms, 'llm.request_timeout_ms');
@@ -233,7 +237,7 @@ export function parseConfig(source) {
       llm.api_key_optional = profiles[llm.profile].api_key_optional;
     }
   }
-  if (!['l', 'm', 'h', 'x'].includes(llm.effort)) invalid('llm.effort must be l, m, h, or x');
+  if (!['l', 'm', 'h', 'x', 'none'].includes(llm.effort)) invalid('llm.effort must be l, m, h, x, or none');
   if (llm.model && !/^[A-Za-z0-9._:/-]+$/.test(llm.model)) invalid('llm.model must be a model name without whitespace');
   if (llm.base_url) {
     validateBaseUrl(llm.base_url, 'llm.base_url');
@@ -398,7 +402,12 @@ export async function setConfigValue(field, value, { repoRoot = rosterRoot, cwd 
   const text = source.replace(/\r\n/g, '\n');
   const line = new RegExp(`^  ${field}: [^\\n]*$`, 'm');
   if (!line.test(text)) invalid(`llm.${field} is missing`);
-  const next = text.replace(line, `  ${field}: ${field === 'model' ? JSON.stringify(value) : value}`);
+  let next = text.replace(line, `  ${field}: ${field === 'model' ? JSON.stringify(value) : value}`);
+  if (field === 'effort') {
+    const override = /^  effort_override: [^\n]*$/m;
+    next = override.test(next) ? next.replace(override, `  effort_override: ${value}`)
+      : next.replace(/^  effort: [^\n]*$/m, (entry) => `${entry}\n  effort_override: ${value}`);
+  }
   return writePrivateConfig(next, { repoRoot: configRoot });
 }
 

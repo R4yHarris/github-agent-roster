@@ -21,7 +21,11 @@ runtime is created.
   estimate stays 15 minutes until timing evidence qualifies. Rejected or
   excellence-failed deliveries cannot seed that baseline.
 
-The coder uses the selected model and known effort; the planner's own model and
+The coder uses the selected model; mode-based effort takes precedence for
+docs slices and feature/initiative plans, and explicit `/effort` overrides
+all automatic choices. Review retries step up one supported tier, capped
+at the backend maximum. Other tasks retain the recommended fallback effort.
+The planner's own model and
 AI-Run identity do not change retroactively. An empty endpoint remains a stub:
 history does not enable hosted inference, model calls, edits, tests, or
 publication. The upfront [fleet `--auto-model` path](ROUTING.md) instead

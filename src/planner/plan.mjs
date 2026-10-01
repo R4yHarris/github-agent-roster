@@ -4,6 +4,7 @@ import { isAllowedFile } from '../runtime/tools.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
 import { askRequirements, cleanAskText } from './stub.mjs';
 import { allowedFile, checkedList, oneLine } from './task.mjs';
+import { selectReasoning } from '../llm/reasoning.mjs';
 
 function object(value, required, optional = []) {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
@@ -94,6 +95,7 @@ export async function planOutline(ask, {
   kind, config, title, reference = 'local:draft', fetchImpl, env, vault, onEvent, onResponse, retryCommand,
 } = {}) {
   const text = cleanAskText(ask);
+  config = selectReasoning(config, { kind });
   if (!['feature', 'initiative'].includes(kind)) throw new TypeError('PLAN requires a feature or initiative Ask');
   const filesAllowed = askRequirements(title ? `${title}\n${text}` : text, { allowMissing: true }).files;
   const finish = (plan, evidence) => ({
