@@ -11,11 +11,13 @@ import { loadSkills, previewSkills } from '../runtime/skills.mjs';
 import { createTools } from '../runtime/tools.mjs';
 import { isLlmTimeout, retryCommandForTask } from '../llm/request.mjs';
 import { selectReasoning } from '../llm/reasoning.mjs';
+import { throwIfCancelled } from '../runtime/cancel.mjs';
 
 export async function runCoder({
   worktree, repoRoot, config, task, session, fetchImpl, env = process.env, vault, runTestCommand,
   priorFeedback = null, onEvent, askKind,
   retryCommand = retryCommandForTask(task),
+  signal,
 }) {
   const stages = [];
   const memoryPath = seatMemoryPath({
@@ -34,6 +36,7 @@ export async function runCoder({
     turns: 0, usage: null, response: null, summary: 'Coder preparation stopped before implementation.',
   };
   try {
+    throwIfCancelled(signal);
     context = await loadContext({ worktree, memoryPath, repoRoot, config, env, priorFeedback, askKind });
     if (!context.minimalDocs) stages.push('principal');
     stages.push('context');
@@ -52,11 +55,12 @@ export async function runCoder({
       allowRunTest: config.tools?.run_test !== false,
       readmeOnlyDocs: context.contextPolicy.readmeOnlyDocs,
       sliceReadsOnly: context.contextPolicy.sliceReadsOnly,
+      signal,
       onEvent,
     });
     if (!context.minimalDocs) {
       research = await runResearch({
-        worktree, tools, expectedTask: context.task, config, fetchImpl, env, vault, onEvent, retryCommand,
+        worktree, tools, expectedTask: context.task, config, fetchImpl, env, vault, onEvent, retryCommand, signal,
       });
       stages.push('research');
       result.usage = research.usage;
@@ -82,7 +86,7 @@ export async function runCoder({
       },
     };
     result = await runLoop({
-      config, context, tools: trackedTools, fetchImpl, env, vault, onEvent, retryCommand,
+      config, context, tools: trackedTools, fetchImpl, env, vault, onEvent, retryCommand, signal,
       verify: async (candidate) => {
         const evidence = await checkExcellence({
           worktree, task: context.task, result: candidate, baseline, memoryPath,

@@ -5,7 +5,7 @@ import { UnsupportedFinishReasonError } from '../llm/finish-reason.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
 
 export function createBuiltinChat(config, {
-  fetchImpl, env = process.env, vault, onEvent, retryCommand, clock,
+  fetchImpl, env = process.env, vault, onEvent, retryCommand, clock, signal,
 } = {}) {
   const transport = createChat({ llm: {
     base_url: config.llm.base_url,
@@ -22,7 +22,7 @@ export function createBuiltinChat(config, {
     ...event, ...(event.type === 'http' ? {
       modelPrior: config.llm.model_prior ?? modelCapabilityPrior(config.llm.model).strength,
     } : {}),
-  })), retryCommand, clock });
+  })), retryCommand, clock, signal });
   if (transport === null) return null;
   let completionCap = config.llm.max_tokens ?? 4096;
   const docsSlice = config.llm.task_kind === 'slice' && config.llm.task_class === 'docs';
@@ -86,8 +86,8 @@ export function createBuiltinChat(config, {
   return chat;
 }
 
-export async function chatCompletion({ config, messages, tools, env, fetchImpl, vault, onEvent, retryCommand }) {
-  const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand });
+export async function chatCompletion({ config, messages, tools, env, fetchImpl, vault, onEvent, retryCommand, signal }) {
+  const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand, signal });
   if (chat === null) throw new Error('An LLM base_url is required for chat completion');
   const response = await chat({ messages, ...(tools ? { tools } : {}) });
   return {

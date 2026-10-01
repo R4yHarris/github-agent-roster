@@ -3,6 +3,8 @@ node_modules/
 .worktrees/
 .roster/runs/
 .roster/logs/
+.roster/history
+.roster/history.*
 .roster/evals.jsonl
 .roster/config.yml
 .roster/config.yml.*

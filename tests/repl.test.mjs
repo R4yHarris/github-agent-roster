@@ -776,7 +776,7 @@ test('TTY shell prints the banner and exits zero on /quit and Ctrl+C', async () 
     let text = '';
     output.on('data', (chunk) => { text += chunk.toString('utf8'); });
     const done = startRepl({
-      input, output, errorOutput, cwd, repoRoot: root, config,
+      input, output, errorOutput, cwd, repoRoot: root, config, historyRoot: root,
       env: {}, services: { repositoryRoot: () => cwd },
     });
     input.write(line);
@@ -820,7 +820,7 @@ test('TTY vault entry hides the secret while storing it through the vault librar
     });
   }
   const done = startRepl({
-    input, output, cwd, repoRoot: root, config, env: {},
+    input, output, cwd, repoRoot: root, config, env: {}, historyRoot: root,
     services: {
       repositoryRoot: () => cwd,
       createFileVault: () => ({
@@ -850,7 +850,7 @@ test('pasting a vault command and secret together still hides the secret', async
   let stored;
   output.on('data', (chunk) => { text += chunk.toString('utf8'); });
   const done = startRepl({
-    input, output, cwd, repoRoot: root, config, env: {},
+    input, output, cwd, repoRoot: root, config, env: {}, historyRoot: root,
     services: {
       repositoryRoot: () => cwd,
       createFileVault: () => ({

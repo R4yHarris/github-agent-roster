@@ -28,6 +28,9 @@ import { humanEvalHint } from './lib/seat-publication.mjs';
 import { readIssueLogs } from './lib/run-log.mjs';
 import { createDebugLog } from './lib/debug-log.mjs';
 import { createTray } from './shell/tray.mjs';
+import { canonicalCommand, completeCommand } from './shell/commands.mjs';
+import { createHistory, safeHistoryLine } from './shell/history.mjs';
+import { isRunCancelled, RunCancelledError } from './runtime/cancel.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const help = `Commands:
@@ -41,6 +44,8 @@ const help = `Commands:
   /debug on|off             Toggle process-only testing metadata logs
   /log debug                Tail this process's debug file
   /statusbar on|off          Toggle both delivery-tray bars for this process
+  /redraw                   Repaint the tray without clearing scrollback
+  /clear                    Clear the screen and repaint the tray
   /eval TARGET VERDICT 1-5 y|n [--minutes N] [--comment "TEXT"]
   /publish [SUBJECT] [--model MODEL] [--skip-review]  Publish reviewed seat or GHCP changes
   /stats [REF]              Show AI-Run metrics
@@ -125,10 +130,11 @@ export function createDispatcher({
   services = {},
   debug = createDebugLog({ env }),
   onStateChange = () => {},
+  onUiAction = () => {},
 } = {}) {
   const api = { ...defaultServices, ...services };
   const state = { lastAsk: null, lastRun: null, pendingSecret: null, published: false, config, debug,
-    statusbar: true, display: {
+    statusbar: true, controller: null, history: [], display: {
       issue: null, branch: api.repositoryBranch(cwd), seat: config.seat.id, state: 'idle', busy: false,
       model: config.llm.model, host: config.llm.base_url ? new URL(config.llm.base_url).host : '',
       effort: config.llm.effort, contextUsed: undefined, contextMax: config.llm.context_max, startedAt: null,
@@ -161,6 +167,9 @@ export function createDispatcher({
   });
 
   async function executeRun(run, options = {}) {
+    if (state.controller !== null) throw new Error('A seat is already running; cancel it before starting another.');
+    const controller = new AbortController();
+    state.controller = controller;
     state.lastRun = { planningOnly: true, failed: true, askKind: 'clarify', command: null };
     state.published = false;
     Object.assign(state.display, { issue: options.issue ?? null,
@@ -172,15 +181,17 @@ export function createDispatcher({
         cwd, repoRoot, config: state.config, env, publish: false, debug: state.debug, ...options,
         log: (message) => output.write(`${message}\n`), errorOutput,
         onRunEvent: receiveEvent,
+        signal: controller.signal,
       });
     } catch (error) {
       if (isLlmTimeout(error)) {
         state.lastRun = { planningOnly: true, failed: true, timedOut: true, command: null };
       }
-      state.display.state = 'failed';
+      state.display.state = isRunCancelled(error) ? 'idle' : 'failed';
       throw error;
     } finally {
       state.display.busy = false;
+      state.controller = null;
       notify();
     }
     if (state.lastRun.task) state.display.branch = state.lastRun.task;
@@ -211,15 +222,23 @@ export function createDispatcher({
     }
     const text = line.trim();
     if (!text) return true;
+    if (text === 'exit') return false;
     if (!text.startsWith('/')) return executeRun((options) => api.runBuiltinAsk(text, options));
     const match = /^\/([a-z]+)(?:\s+(.*))?$/.exec(text);
     if (!match) {
       errorOutput.write(`Unknown command: ${text.split(/\s+/)[0]}. Type /help.\n`);
       return true;
     }
-    const [, command, rawArguments] = match;
+    const [, inputCommand, rawArguments] = match;
+    const command = canonicalCommand(inputCommand);
     const args = rawArguments?.trim() ?? '';
     switch (command) {
+      case 'redraw':
+      case 'clear':
+        if (args) throw new TypeError(`Use /${command}.`);
+        onUiAction(command);
+        notify();
+        return true;
       case 'statusbar':
         if (!['on', 'off'].includes(args)) throw new TypeError('Use /statusbar on or /statusbar off.');
         state.statusbar = args === 'on';
@@ -473,6 +492,11 @@ export function createDispatcher({
     dispatch,
     state,
     banner: 'github-agent-roster',
+    cancel() {
+      if (state.controller === null || state.controller.signal.aborted) return false;
+      state.controller.abort(new RunCancelledError());
+      return true;
+    },
   };
 }
 
@@ -480,14 +504,23 @@ export async function startRepl({
   input = process.stdin,
   output = process.stdout,
   errorOutput = process.stderr,
+  historyRoot,
+  historyStore,
   ...options
 } = {}) {
   let tray;
   const terminal = input.isTTY === true;
   const messages = { write(text) { if (tray) tray.write(text); else output.write(text); } };
   const errors = { write(text) { if (tray) tray.write(text, errorOutput); else errorOutput.write(text); } };
-  const { dispatch, state, banner } = createDispatcher({ ...options, output: messages, errorOutput: errors,
-    onStateChange() { if (tray) tray.render(); } });
+  const { dispatch, state, banner, cancel } = createDispatcher({ ...options, output: messages, errorOutput: errors,
+    onStateChange() { if (tray) tray.render(); },
+    onUiAction(command) { if (command === 'clear') { tray?.erase(); output.write('\x1b[2J\x1b[H'); } },
+  });
+  const history = historyStore ?? createHistory({
+    repoRoot: historyRoot ?? resolveProjectRoot(options.cwd ?? process.cwd()), env: options.env ?? process.env,
+  });
+  state.history = await history.load();
+  let historyError;
   let suppressEcho = false;
   const terminalOutput = new Writable({
     write(chunk, encoding, callback) {
@@ -497,11 +530,24 @@ export async function startRepl({
   });
   terminalOutput.isTTY = terminal;
   terminalOutput.columns = output.columns ?? 80;
-  const shell = createInterface({ input, output: terminalOutput, terminal, historySize: 0 });
+  const shell = createInterface({ input, output: terminalOutput, terminal, historySize: 200,
+    history: [...state.history].reverse(), removeHistoryDuplicates: true, completer: completeCommand });
   if (terminal) tray = createTray({ output, state, shell });
-  shell.on('SIGINT', () => shell.close());
+  shell.on('SIGINT', () => { if (!cancel()) shell.close(); });
+  shell.on('close', () => cancel());
+  shell.on('history', (entries) => {
+    const secret = suppressEcho || state.pendingSecret !== null;
+    const safe = entries.filter((line, index) => !(secret && index === 0) &&
+      safeHistoryLine(line, { env: options.env ?? process.env }));
+    entries.splice(0, entries.length, ...safe);
+  });
   shell.on('line', (line) => {
     tray?.committed();
+    const secret = suppressEcho || state.pendingSecret !== null;
+    history.record(line, { secret }).then(() => { state.history = history.lines; }).catch((error) => {
+      historyError ??= error;
+      errors.write(`${error.message}\n`);
+    });
     if (suppressEcho) suppressEcho = false;
     else if (/^\/vault set [A-Za-z_][A-Za-z0-9_]{0,63}$/.test(line.trim())) suppressEcho = true;
   });
@@ -533,6 +579,8 @@ export async function startRepl({
     shell.close();
     tray?.close();
     terminalOutput.end();
+    await history.flush().catch((error) => { historyError ??= error; });
   }
+  if (historyError) exitCode = 1;
   return exitCode;
 }

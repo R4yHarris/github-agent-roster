@@ -33,6 +33,7 @@ import { readTaskMetadata } from '../runtime/estimate.mjs';
 import { loadCapabilities } from './capabilities.mjs';
 import { initializeWorktreeSubmodules } from './contracts.mjs';
 import { createDebugLog } from './debug-log.mjs';
+import { isRunCancelled, throwIfCancelled } from '../runtime/cancel.mjs';
 
 const execFileAsync = promisify(execFile);
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -148,7 +149,9 @@ export async function runBuiltinTask({
   log = console.log, errorOutput = process.stderr, fetchImpl, vault, runTestCommand,
   debug = createDebugLog({ env }),
   onRunEvent,
+  signal,
 } = {}) {
+  throwIfCancelled(signal);
   config = { ...config, capabilities: config.capabilities ?? await loadCapabilities({ cwd }) };
   if (typeof task !== 'string' || !IDENTIFIER.test(task) ||
       typeof session !== 'string' || !IDENTIFIER.test(session)) {
@@ -197,7 +200,7 @@ export async function runBuiltinTask({
     const plannerSession = `roster-${randomBytes(8).toString('hex')}-planner`;
     const planner = await liveLog.seat('planner', plannerSession, config, (onEvent) => runPlanner({
       worktree: worktreePath, repoRoot, ask: document.ask, title: document.title, reference: `local:${task}`,
-      task, session: plannerSession, config, env, fetchImpl, vault, onEvent, askKind, retryCommand,
+      task, session: plannerSession, config, env, fetchImpl, vault, onEvent, askKind, retryCommand, signal,
     }));
     if (journalEnabled) await recordRun({ task, session: plannerSession, provider: planner.run?.provider }, {
       cwd: worktreePath, env: { ...metricEnv, ...planner.run?.env }, run: planner.run,
@@ -219,7 +222,7 @@ export async function runBuiltinTask({
       model: result.mode === 'llm' ? result.model : config.llm.model } };
     const review = await liveLog.seat('reviewer', reviewerSession, reviewConfig, (onEvent) => runReviewer({
       worktree: worktreePath, repoRoot, config: reviewConfig, coderResult: result,
-      env, fetchImpl, vault, onEvent, askKind, retryCommand,
+      env, fetchImpl, vault, onEvent, askKind, retryCommand, signal,
     }));
     const reviewRun = review.queried ? buildRun({
       config: reviewConfig, response: review.response, task, session: reviewerSession, env,
@@ -233,12 +236,12 @@ export async function runBuiltinTask({
   try {
     result = await liveLog.seat('coder', session, config, (onEvent) => runCoder({
       worktree: worktreePath, repoRoot, config, env, task, session,
-      fetchImpl, vault, runTestCommand, onEvent, askKind, retryCommand,
+      fetchImpl, vault, runTestCommand, onEvent, askKind, retryCommand, signal,
     }));
   } catch (error) {
     if (error instanceof Error && error.result) {
       await record(error.result);
-      error.result.review = (await reviewSeat(error.result)).review;
+      if (!isRunCancelled(error)) error.result.review = (await reviewSeat(error.result)).review;
     }
     throw error;
   }
@@ -315,7 +318,9 @@ async function runBuiltinAssignment(issueNumber, {
   now,
   debug = createDebugLog({ env }),
   onRunEvent,
+  signal,
 } = {}) {
+  throwIfCancelled(signal);
   config = { ...config, capabilities: config.capabilities ?? await loadCapabilities({ cwd }) };
   const retryCommand = issueNumber === null ? retryCommandForTask(null) :
     `${retryCommandForTask(`issue-${issueNumber}`)}${autoModel ? ' --auto-model' : ''}`;
@@ -345,8 +350,18 @@ async function runBuiltinAssignment(issueNumber, {
   }
   const commandEnv = withoutLlmKeys(env, config);
   const contractsPath = resolveContractsPath({ repoRoot, cwd, env });
-  const issueCommand = runCommand ?? (async (program, args, workingDirectory) =>
-    (await execFileAsync(program, args, { cwd: workingDirectory, env: commandEnv, encoding: 'utf8' })).stdout);
+  const issueCommand = async (program, args, workingDirectory) => {
+    throwIfCancelled(signal);
+    try {
+      const result = runCommand ? await runCommand(program, args, workingDirectory)
+        : (await execFileAsync(program, args, { cwd: workingDirectory, env: commandEnv, encoding: 'utf8', signal })).stdout;
+      throwIfCancelled(signal);
+      return result;
+    } catch (error) {
+      throwIfCancelled(signal);
+      throw error;
+    }
+  };
   const prepared = issueNumber === null ? await prepareLocalAsk(ask, { cwd, config, runCommand: issueCommand })
     : await runIssue(issueNumber, {
     cwd, runCommand: issueCommand, worktrees: config.paths.worktrees, log: () => {}, now, config,
@@ -434,7 +449,7 @@ async function runBuiltinAssignment(issueNumber, {
       worktree: worktreePath, repoRoot, issue: prepared.issue, config: activeConfig,
       ask: prepared.ask, reference, metadata: prepared.metadata ?? undefined, task: prepared.task,
       session: sessions.planner, fetchImpl, env, vault, learningRoot: prepared.repoRoot,
-      lockedModel: route?.profile.model, onEvent, askKind, retryCommand,
+      lockedModel: route?.profile.model, onEvent, askKind, retryCommand, signal,
     }));
     if (planner.reused) log('planner skipped artifacts valid; starting coder.');
   } catch (error) {
@@ -483,7 +498,7 @@ async function runBuiltinAssignment(issueNumber, {
     } };
     const review = await liveLog.seat('reviewer', sessions.reviewer, reviewConfig, (onEvent) => runReviewer({
       worktree: worktreePath, repoRoot, config: reviewConfig,
-      coderResult, fetchImpl, env, vault, onEvent, askKind, retryCommand,
+      coderResult, fetchImpl, env, vault, onEvent, askKind, retryCommand, signal,
     }));
     const reviewerRun = review.queried ? buildRun({
       config: reviewConfig, response: review.response, session: sessions.reviewer,
@@ -496,12 +511,12 @@ async function runBuiltinAssignment(issueNumber, {
   try {
     result = await liveLog.seat('coder', sessions.coder, coderConfig, (onEvent) => runCoder({
       worktree: worktreePath, repoRoot, config: coderConfig, task: prepared.task, session: sessions.coder,
-      fetchImpl, env, vault, runTestCommand, priorFeedback: planner.feedback?.context, onEvent, askKind, retryCommand,
+      fetchImpl, env, vault, runTestCommand, priorFeedback: planner.feedback?.context, onEvent, askKind, retryCommand, signal,
     }));
   } catch (error) {
     if (error instanceof Error && error.result) {
       await recordSeat(sessions.coder, error.result.run, error.result.excellence);
-      error.result.review = (await reviewSeat(error.result)).review;
+      if (!isRunCancelled(error)) error.result.review = (await reviewSeat(error.result)).review;
     }
     throw error;
   }
