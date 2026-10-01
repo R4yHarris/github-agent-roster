@@ -9,7 +9,6 @@ import { appendMemory, coderMemoryRecord, seatMemoryPath } from '../runtime/memo
 import { runResearch } from '../runtime/research.mjs';
 import { loadSkills, previewSkills } from '../runtime/skills.mjs';
 import { createTools } from '../runtime/tools.mjs';
-import { loadPrincipal } from './principal.mjs';
 
 export async function runCoder({
   worktree, repoRoot, config, task, session, fetchImpl, env = process.env, vault, runTestCommand,
@@ -32,9 +31,8 @@ export async function runCoder({
     turns: 0, usage: null, response: null, summary: 'Coder preparation stopped before implementation.',
   };
   try {
-    const principal = await loadPrincipal({ repoRoot, id: config.seat.principal });
-    stages.push('principal');
-    context = await loadContext({ worktree, memoryPath, repoRoot, config, principal, env, priorFeedback });
+    context = await loadContext({ worktree, memoryPath, repoRoot, config, env, priorFeedback });
+    if (!context.minimalDocs) stages.push('principal');
     stages.push('context');
     const skipsTests = taskSkipsTests(context.task);
     if (config.llm.base_url && !skipsTests && config.tools?.run_test === false) {
@@ -50,13 +48,15 @@ export async function runCoder({
       allowRunTest: config.tools?.run_test !== false,
       onEvent,
     });
-    research = await runResearch({
-      worktree, tools, expectedTask: context.task, config, fetchImpl, env, vault, onEvent,
-    });
-    stages.push('research');
-    result.usage = research.usage;
-    result.response = research.response;
-    const skills = await loadSkills({ repoRoot, skillsPath: config.paths.skills, task: context.task });
+    if (!context.minimalDocs) {
+      research = await runResearch({
+        worktree, tools, expectedTask: context.task, config, fetchImpl, env, vault, onEvent,
+      });
+      stages.push('research');
+      result.usage = research.usage;
+      result.response = research.response;
+    }
+    const skills = await loadSkills({ repoRoot, skillsPath: config.paths.skills, task: context.task, names: context.skillNames });
     if (JSON.stringify(previewSkills(skills)) !== JSON.stringify(context.skills)) {
       throw new Error('Task skills changed after the context pack; refusing coder edits');
     }
@@ -88,8 +88,8 @@ export async function runCoder({
     });
     stages.push('tool_loop');
     result = { ...result, tests: result.tests ?? tests,
-      response: result.response ?? research.response ?? null,
-      usage: research.turns ? mergeUsage(research.usage, result.usage) : result.usage };
+      response: result.response ?? research?.response ?? null,
+      usage: research?.turns ? mergeUsage(research.usage, result.usage) : result.usage };
   } catch (error) {
     if (!(error instanceof Error)) throw error;
     result = { ...result, error };

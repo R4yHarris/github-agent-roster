@@ -51,7 +51,9 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   const messages = [
     { role: 'system', content: context.pack },
     { role: 'user', content: 'Complete this task using only the offered tools. ' +
-      'Read RESEARCH.md for the pre-edit inventory and gaps. ' +
+      (context.minimalDocs ? 'Use only TASK.md, allowed files, read-before-write, and small-diff. ' +
+        'Read task-allowed files before edits; no principal or research pack is needed. '
+        : 'Read RESEARCH.md for the pre-edit inventory and gaps. ') +
       'Do not claim acceptance checks passed without evidence. ' +
       'Finish with a concise summary of changes, test results, and blockers.' },
   ];

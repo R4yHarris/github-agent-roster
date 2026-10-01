@@ -6,6 +6,7 @@ import { parseTaskDocument } from '../planner/task.mjs';
 import { loadPrincipal } from '../seats/principal.mjs';
 import { readMemory, redactSecrets } from './memory.mjs';
 import { loadSkills, previewSkills } from './skills.mjs';
+import { isMinimumDocsTask, minimumDocsSkills } from './context-policy.mjs';
 
 async function requiredFile(file, worktree) {
   await ensureLocalPath(file, worktree);
@@ -16,14 +17,18 @@ async function requiredFile(file, worktree) {
   return (await fs.readFile(file, 'utf8')).replace(/\r\n/g, '\n');
 }
 
-function boundedPack(sections, budget) {
+function boundedPack(sections, budget, minimum = false) {
   const omitted = '[Omitted by context budget]';
   const render = (bodies) => '# Coder context\n\n' +
+    (minimum ? 'Minimum docs context: use only this task, allowed files, and the two supplied skills. ' +
+      'Do not load principals, RESEARCH.md, AGENTS.md, memory, or extra skills for this task.\n\n' : '') +
     sections.map(({ heading }, index) => `## ${heading}\n\n${bodies[index]}`).join('\n\n') + '\n';
   const bodies = sections.map(({ body, required }) =>
     required || body.length <= omitted.length ? body : omitted);
   if (render(bodies).length > budget) {
-    throw new Error('Principal, TASK.md, AGENTS.md, prior feedback, and relevant paths exceed seat.context_chars; increase the context budget');
+    throw new Error(minimum
+      ? 'Minimum TASK, allowed files, and two skills exceed seat.context_chars; increase the context budget'
+      : 'Principal, TASK.md, AGENTS.md, prior feedback, and relevant paths exceed seat.context_chars; increase the context budget');
   }
   let truncated = false;
   for (const [index, section] of sections.entries()) {
@@ -49,20 +54,30 @@ function boundedPack(sections, budget) {
 
 export async function loadContext({ worktree, memoryPath, repoRoot, config, principal, env, priorFeedback = null }) {
   if (priorFeedback !== null && typeof priorFeedback !== 'string') throw new TypeError('Prior feedback must be text');
-  principal ??= await loadPrincipal({ repoRoot });
   const budget = config?.seat?.context_chars ?? 8000;
   if (!Number.isSafeInteger(budget) || budget < 1) {
     throw new TypeError('seat.context_chars must be a positive safe integer');
   }
-  const [agents, task, memory] = await Promise.all([
-    requiredFile(path.join(worktree, 'AGENTS.md'), worktree),
-    requiredFile(path.join(worktree, 'TASK.md'), worktree),
-    readMemory({ file: memoryPath, repoRoot, limit: 20, env, apiKeyEnv: config?.llm?.api_key_env }),
-  ]);
+  const task = await requiredFile(path.join(worktree, 'TASK.md'), worktree);
   const files = taskFilesAllowed(task);
   parseTaskDocument(task);
-  const skills = previewSkills(await loadSkills({ repoRoot, skillsPath: config?.paths?.skills, task }));
-  const { pack, truncated } = boundedPack([
+  const minimalDocs = isMinimumDocsTask(task);
+  const skillNames = minimalDocs ? [...minimumDocsSkills] : undefined;
+  let agents = null;
+  let memory = [];
+  if (!minimalDocs) {
+    principal ??= await loadPrincipal({ repoRoot });
+    [agents, memory] = await Promise.all([
+      requiredFile(path.join(worktree, 'AGENTS.md'), worktree),
+      readMemory({ file: memoryPath, repoRoot, limit: 20, env, apiKeyEnv: config?.llm?.api_key_env }),
+    ]);
+  }
+  const skills = previewSkills(await loadSkills({ repoRoot, skillsPath: config?.paths?.skills, task, names: skillNames }));
+  const sections = minimalDocs ? [
+    { heading: 'TASK.md', body: task.trim(), required: true },
+    { heading: 'Allowed files', body: files.map((file) => `- \`${file}\``).join('\n'), required: true },
+    ...skills.map(({ name, content }) => ({ heading: name, body: content, required: true })),
+  ] : [
     { heading: `Principal ${principal.id}:`, body: principal.content.trim(), required: true },
     { heading: 'TASK.md', body: task.trim(), required: true },
     { heading: 'AGENTS.md', body: agents.trim(), required: true },
@@ -74,9 +89,10 @@ export async function loadContext({ worktree, memoryPath, repoRoot, config, prin
       recent: true },
     { heading: 'Relevant file list from TASK.md',
       body: files.map((file) => `- \`${file}\``).join('\n'), required: true },
-  ], budget);
+  ];
+  const { pack, truncated } = boundedPack(sections, budget, minimalDocs);
   const contextPath = path.join(worktree, 'CONTEXT.md');
   await ensureLocalPath(contextPath, worktree);
   await fs.writeFile(contextPath, pack, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
-  return { agents, task, memory, files, skills, pack, contextPath, truncated };
+  return { agents, task, memory, files, skills, pack, contextPath, truncated, minimalDocs, skillNames };
 }
