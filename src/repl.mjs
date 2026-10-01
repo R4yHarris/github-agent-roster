@@ -9,8 +9,8 @@ import {
   commentMergedIssue, mergedPullNumber, mergedPullNumberFromFailure,
 } from './lib/issue-board.mjs';
 import { isReviewRequired, loadConfig, requirePublicationEnabled, setConfigValue } from './lib/config.mjs';
-import { parseEvaluationArgs, recordEvaluation } from './lib/eval.mjs';
-import { parseRecommendationArgs, repositoryRoot } from './lib/learn.mjs';
+import { recordEvaluation } from './lib/eval.mjs';
+import { inferTaskClass, parseRecommendationArgs, repositoryRoot } from './lib/learn.mjs';
 import { formatMetrics, loadAvailableMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
 import { resolveContractsPath, resolveProjectRoot } from './lib/paths.mjs';
 import { formatRoute, routeTask } from './lib/route.mjs';
@@ -36,6 +36,9 @@ import { runFleet } from './lib/fleet-cli.mjs';
 import { probeModelDetails } from './onboard/wizard.mjs';
 import { splitArguments } from './lib/arguments.mjs';
 import { formatIssueSummary, listOpenIssues, readDiffNames } from './lib/board.mjs';
+import { checkDoctor, formatDoctor, warmDoctor } from './lib/doctor.mjs';
+import { configSetting, privateConfigPath, publicConfig } from './shell/settings.mjs';
+import { parseShellEvaluationArgs } from './shell/evaluation.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const unknownCommand = 'Unknown command. /help lists commands.\n';
@@ -86,6 +89,7 @@ const defaultServices = {
   readIssueLogs,
   getFleetProfile, loadFleet, withFleetProfile, runFleet, probeModelDetails,
   formatIssueSummary, listOpenIssues, readDiffNames,
+  checkDoctor, formatDoctor, warmDoctor, privateConfigPath, publicConfig,
   issueCommenter: commentMergedIssue,
   publisher: publishWithContracts,
   repositoryBranch(cwd) {
@@ -475,7 +479,8 @@ export function createDispatcher({
         return true;
       }
       case 'eval': {
-        const { values, options } = parseEvaluationArgs(args);
+        if (env.ROSTER_SEAT) throw new Error('AI-Eval is human-only; an agent seat cannot record an evaluation.');
+        const { values, options } = parseShellEvaluationArgs(args);
         const evaluation = await api.recordEvaluation(...values, { ...options, cwd: currentRoot(), env });
         output.write(`Recorded AI-Eval for ${evaluation.sha ?? evaluation.session}.\n`);
         return true;
@@ -616,11 +621,65 @@ export function createDispatcher({
         return true;
       }
       case 'recommend': {
-        const { taskClass, difficulty } = parseRecommendationArgs(['--task-class', ...args.split(/\s+/)]);
+        const metadata = state.lastRun?.planner?.metadata ?? state.lastRun?.result?.taskMetadata;
+        const { taskClass, difficulty } = args
+          ? parseRecommendationArgs(['--task-class', ...args.split(/\s+/)])
+          : { taskClass: metadata?.task_class ?? inferTaskClass(state.lastRun?.issue?.title ?? '') ?? 'feat',
+            difficulty: metadata?.difficulty ?? 2 };
         const root = state.lastRun?.repoRoot ?? resolveProjectRoot(cwd);
         const route = await api.routeTask({ cwd: root, installationRoot: repoRoot, taskClass,
           difficulty: difficulty ?? 2, records: api.loadAvailableMetrics({ cwd: root }) });
         output.write(api.formatRoute(route, taskClass, state.config, env));
+        return true;
+      }
+      case 'doctor': {
+        if (!args) {
+          const result = await api.checkDoctor({ cwd: currentRoot(), installationRoot: repoRoot, env });
+          safeWrite(api.formatDoctor(result));
+          return true;
+        }
+        if (args !== 'warm') throw new TypeError('Use /doctor or /doctor warm.');
+        if (state.controller !== null) throw new Error('A seat is already running; cancel it before warming.');
+        const controller = new AbortController();
+        state.controller = controller;
+        state.display.busy = true;
+        notify();
+        try {
+          const result = await api.warmDoctor({ cwd: currentRoot(), installationRoot: repoRoot, env,
+            config: state.config, signal: controller.signal, errorOutput: { write() {} } });
+          if (result?.skipped !== true && !Number.isInteger(result?.status)) throw new Error('Warm probe returned no status.');
+          safeWrite(`Warm probe: host=${host()} status=${result.skipped ? 'skipped' : result.status}\n`);
+        } finally {
+          state.controller = null;
+          state.display.busy = false;
+          notify();
+        }
+        return true;
+      }
+      case 'config': {
+        const words = splitArguments(args);
+        if (!words.length) {
+          safeWrite(api.publicConfig({ repoRoot, cwd, env }));
+          return true;
+        }
+        if (words[0] === 'path' && words.length === 1) {
+          output.write(`${api.privateConfigPath({ repoRoot, cwd })}\n`);
+          return true;
+        }
+        if (words[0] !== 'set' || words.length !== 3) throw new TypeError('Use /config, /config path, or /config set KEY VALUE.');
+        const setting = configSetting(words[1], words[2], { env, apiKeyEnv: state.config.llm.api_key_env });
+        if (setting.field === 'statusbar') state.statusbar = setting.value;
+        else if (setting.field === 'debug') state.debug.setEnabled(setting.value);
+        else {
+          const saved = await api.setConfigValue(setting.field, setting.value, { repoRoot, cwd });
+          state.config = setting.field === 'effort'
+            ? { ...state.config, llm: { ...state.config.llm, effort: saved.llm.effort, effort_override: saved.llm.effort_override } }
+            : { ...state.config, seat: { ...state.config.seat, context_chars: saved.seat.context_chars },
+              ...(state.config.context ? { context: { ...state.config.context, budget: saved.seat.context_chars } } : {}) };
+          syncModelDisplay();
+        }
+        notify();
+        output.write(`Config ${setting.field} set${['statusbar', 'debug'].includes(setting.field) ? ' for this process' : ''}.\n`);
         return true;
       }
       case 'vault': {

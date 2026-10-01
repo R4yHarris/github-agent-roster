@@ -36,10 +36,14 @@ agents and CI.
 | `/issues` | Print up to 100 current-repository open issue numbers and titles only, with a notice at the retrieval limit. Never print bodies. |
 | `/issue N` | Print cached title, state, branch and PR URL. Reuse cached metadata from runs/listings/status; use GitHub only when that issue is missing from cache. Unknown cached PR state stays unknown. |
 | `/diff` | Run filename-only Git diff in the current issue worktree; print tracked changed names, never file bodies. |
-| `/eval TARGET accept\|reject\|rework 1-5 y\|n [--minutes N] [--comment "TEXT"]` | Record the [human retrospective](RETRO.md), including actual minutes and local feedback. |
+| `/eval TARGET accept\|reject\|rework --minutes N --difficulty 1-5 "TEXT"` | Invoke the existing human-only evaluation writer with actual minutes, difficulty and feedback. The compact spelling records `again: n`; legacy positional difficulty/again and `--comment` remain supported. Agent seats cannot invoke the writer. |
 | `/publish [SUBJECT] [--model MODEL] [--skip-review]` | Publish with an unchanged passing REVIEW.md, or explicitly bypass that verdict. After `/run N`, the default subject is `feat: issue N`; a confirmed merge comments on the still-open issue with PR URL and model ID. Local asks default to `feat: local ask`, publish from their worktree, and never comment on an issue. Otherwise supply a conventional subject and declare the GHCP model with `--model` or `AI_MODEL`. Completed seat metadata wins over the flag. |
 | `/stats [REF]` | Summarize contracts and local AI-Run records, optionally at a Git ref. |
-| `/recommend feat\|fix\|docs\|test [--difficulty 1-5]` | Print the same read-only fleet choice as auto-model routing, including its evals/prior reason, or show insufficient data and the config default. |
+| `/recommend [feat\|fix\|docs\|test] [--difficulty 1-5]` | Read a route without changing any model/default. With no args use the last task class/difficulty, otherwise default to feat/difficulty2. Print its evals/prior reason or insufficient data. |
+| `/doctor` | Run the existing six offline prerequisite checks without printing secret values. |
+| `/doctor warm` | Run the existing read-only models warm probe using the session endpoint; print only host and status. Ctrl+C cancels it. |
+| `/config` or `/config path` | Show validated private config with secret material and PEM paths redacted, or only its resolved path. An absent private file is explicitly identified before showing installed defaults. |
+| `/config set KEY VALUE` | Save only effort or positive context budget (character budget, not model token capacity). Supported context aliases include `context.budget` and `seat.context_chars`. Debug/statusbar changes are process-only. Endpoint keys, model selection, PEM paths, secrets and policy are refused; use dedicated model/fleet commands for their deliberate actions. |
 | `/vault` or `/vault list` | List vault entry names, never values. |
 | `/vault get NAME` | Check whether an entry exists without revealing its value; use piped `roster vault get NAME` to retrieve it. |
 | `/vault set NAME` | Read the next line with terminal echo and readline history disabled, then store it in the existing file vault. |
