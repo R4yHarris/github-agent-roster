@@ -151,9 +151,11 @@ export async function writeResult({ worktree, result, excellence, env, apiKeyEnv
       : excellence.reasons.map((reason, index) => `- ${index === 0 ? 'First failure: ' : ''}${reason}`).join('\n') + '\n') +
     `- ${tests}\n\n## Run\n\nModel: ${run?.metrics?.model ?? result.model}\nTool-loop turns: ${result.turns}\n` +
     `Research turns: ${result.research?.turns ?? 0}\n` +
+    (result.implementationPath ? `Implementation path: ${result.implementationPath}\n` : '') +
     (result.stages ? `Stages: ${result.stages.join(' -> ')} -> result\n` : '') +
     (run ? `AI-Run: ${run.line}\n` : result.mode === 'stub'
       ? 'AI-Run: not emitted for a deterministic stub.\n' : 'AI-Run: unavailable; metadata validation failed.\n') +
+    `\n## Files changed\n\n${excellence.files.map((file) => `- ${file}`).join('\n') || '(none)'}\n` +
     `\n## ${excellence.pass ? 'Summary' : 'Unverified summary'}\n\n${result.summary}\n`;
   const resultPath = path.join(worktree, 'RESULT.md');
   await ensureLocalPath(resultPath, worktree);
