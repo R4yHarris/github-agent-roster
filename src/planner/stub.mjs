@@ -76,7 +76,7 @@ function checkAskScope(files, requirements) {
   }
 }
 
-function buildPlan(ask, { reference, title, acceptanceChecks, filesAllowed, metadata = {}, scope }) {
+export function buildPlan(ask, { reference, title, acceptanceChecks, filesAllowed, metadata = {}, scope }) {
   const cleanAsk = cleanAskText(ask);
   const checks = checkedList(acceptanceChecks, 'Acceptance checks',
     (check) => oneLine(check, 'Acceptance check'));

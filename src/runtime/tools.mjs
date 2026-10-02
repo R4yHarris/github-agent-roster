@@ -203,6 +203,7 @@ export async function createTools({
   allowedFiles,
   seat = 'coder',
   plannerArtifacts = plannerArtifactFiles,
+  plannerReads = false,
   env = process.env,
   apiKeyEnv = 'ROSTER_API_KEY',
   memoryPath,
@@ -218,6 +219,10 @@ export async function createTools({
     throw new TypeError('Planner scope must contain only known root planning artifacts');
   }
   if (typeof allowRunTest !== 'boolean') throw new TypeError('run_test permission must be a boolean');
+  if (typeof plannerReads !== 'boolean' || plannerReads &&
+      (seat !== 'planner' || plannerArtifacts.length !== 1 || plannerArtifacts[0] !== 'PLAN.md')) {
+    throw new TypeError('Planner exploration requires PLAN.md-only write scope');
+  }
   if (typeof sliceReadsOnly !== 'boolean' || sliceReadsOnly && seat !== 'coder') {
     throw new TypeError('Slice read scope requires a coder seat and a boolean permission');
   }
@@ -265,6 +270,9 @@ export async function createTools({
       throw new ToolAccessError('Tool path must stay inside the worktree');
     }
     const normalized = relative.split(path.sep).join('/');
+    if (plannerReads && partsOf(normalized).includes('.roster')) {
+      throw new ToolAccessError('Plan exploration cannot read private .roster artifacts');
+    }
     if (readmeOnlyDocs && !write && !['TASK.md', 'README.md'].includes(normalized) && !repairFiles.has(normalized)) {
       throw new ToolAccessError('README-only docs task may read only TASK.md and README.md; other paths are denied');
     }
@@ -399,7 +407,8 @@ export async function createTools({
       const entries = await fs.readdir(file, { withFileTypes: true });
       return entries.filter((item) => {
         const child = path.posix.join(normalized, item.name);
-        return !isProtectedSurface(child) && readable(child, item.isDirectory());
+        return !isProtectedSurface(child) && (!plannerReads || !partsOf(child).includes('.roster')) &&
+          readable(child, item.isDirectory());
       })
         .map((item) => ({
         name: item.name,
@@ -490,7 +499,9 @@ export async function createTools({
       return { matches: matches.slice(0, 50), truncated: matches.length > 50 };
     },
   };
-  const selected = seat === 'planner' ? { write_file: tools.write_file } : tools;
+  const selected = seat === 'planner' ? plannerReads
+    ? { read_file: tools.read_file, list_dir: tools.list_dir, search_text: tools.search_text, write_file: tools.write_file }
+    : { write_file: tools.write_file } : tools;
   if (!onEvent) return selected;
   return Object.fromEntries(Object.entries(selected).map(([name, execute]) => [name, async (args) => {
     const location = args?.path ?? (['list_dir', 'search_text'].includes(name) ? '.' : undefined);

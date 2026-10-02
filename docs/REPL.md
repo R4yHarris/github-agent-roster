@@ -17,6 +17,7 @@ agents and CI.
 | --- | --- |
 | `TEXT` (no slash) | Classify a direct local ask without `gh` or issue creation. In a local Git worktree, slices print the task summary and run planner/coder/reviewer to RESULT.md and REVIEW.md; features and initiatives write PLAN.md and stop. |
 | `/ask TEXT` | Use the same local planner/coder/reviewer path as plain text; never create a GitHub issue. A bounded slice reaches RESULT and REVIEW, while clarify and initiative/feature planning retain their existing boundaries. CLI `roster ask` keeps its separate issue/draft behavior. |
+| `/plan TEXT` or `/run N --plan` | Enter opt-in plan mode: explore with read-only source tools and write only PLAN.md. The tray remains planning and shows plan mode. Enter accepts a bounded slice, validates its original Ask/file scope, creates the normal TASK/recipe handoff and starts coder in the same worktree. `/stop` keeps the plan and starts no coder. Feature/initiative plans remain planning-only. |
 | `/model [ID\|clear] [--save]` | Show the session model and host, or change only this process. `--save` explicitly writes the private model setting; `clear` lets the next run route. |
 | `/effort [l|m|h|x|none|status]` | Show or select session effort without writing config; docs still cap at high and their truncation retry drops reasoning. |
 | `/provider` | Show the selected profile name and host, never a key. |
@@ -53,6 +54,12 @@ agents and CI.
 | `/quit` or `/q` or `exit` | Exit with status 0. Ctrl+C cancels an active run; a second interrupt or idle Ctrl+C exits. |
 
 ## Keys and history
+
+Plan mode never offers tests or publication and cannot write TASK.md, RECIPE.yml
+or product files before acceptance. Exploration excludes secrets and private
+Roster artifacts. Acceptance preserves PLAN.md and does not widen the human
+Ask's allowed-file scope. `/retry` is not implicit plan acceptance; use Enter.
+CLI `roster run --issue N --plan` returns the PLAN-only handoff.
 
 Up/Down recall entered commands without executing them until Enter. History
 keeps the last 200 safe lines in ignored `.roster/history`, written atomically
