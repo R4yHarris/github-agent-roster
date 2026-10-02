@@ -34,6 +34,8 @@ import { loadCapabilities } from './capabilities.mjs';
 import { initializeWorktreeSubmodules } from './contracts.mjs';
 import { createDebugLog } from './debug-log.mjs';
 import { isRunCancelled, throwIfCancelled } from '../runtime/cancel.mjs';
+import { issueWave, requireEarlierWavesClosed } from './waves.mjs';
+import { githubRepository } from './issue.mjs';
 
 const execFileAsync = promisify(execFile);
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -414,9 +416,16 @@ async function runBuiltinAssignment(issueNumber, {
   }) : issueNumber === null ? await prepareLocalAsk(ask, { cwd, config, runCommand: issueCommand })
     : await runIssue(issueNumber, {
     cwd, runCommand: issueCommand, worktrees: config.paths.worktrees, log: () => {}, now, config,
-    beforeWorktree: (root, worktreePath) => ensureLocalPath(worktreePath, root),
+    beforeWorktree: async (root, worktreePath, issue, repository) => {
+      await ensureLocalPath(worktreePath, root);
+      await requireEarlierWavesClosed({ issue, repository, cwd: root, runCommand: issueCommand });
+    },
     sessionId: `roster-${issueNumber}-coder`, recordPreparation: false,
   });
+  if (preparedRun && !prepared.local && issueWave(prepared.issue) > 1) {
+    const repository = githubRepository((await issueCommand('git', ['remote', 'get-url', 'origin'], prepared.repoRoot)).trim());
+    await requireEarlierWavesClosed({ issue: prepared.issue, repository, cwd: prepared.repoRoot, runCommand: issueCommand });
+  }
   await onPrepared?.(prepared);
   const reference = prepared.local ? `local:${prepared.task}` : `issue:${prepared.issue.number}`;
   const sessionPrefix = prepared.local ? `roster-${prepared.task}` : `roster-${prepared.issue.number}`;

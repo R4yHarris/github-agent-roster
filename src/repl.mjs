@@ -48,6 +48,7 @@ import { askSideQuestion } from './lib/side-question.mjs';
 import { formatContext } from './shell/context.mjs';
 import { listIssueWorktrees } from './lib/worktrees.mjs';
 import { runOnlyReview } from './lib/review.mjs';
+import { waveBoard } from './lib/waves.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const unknownCommand = 'Unknown command. /help lists commands.\n';
@@ -104,6 +105,7 @@ const defaultServices = {
   askSideQuestion,
   listIssueWorktrees,
   runOnlyReview,
+  waveBoard,
   issueCommenter: commentMergedIssue,
   publisher: publishWithContracts,
   repositoryBranch(cwd) {
@@ -331,6 +333,16 @@ export function createDispatcher({
     const command = canonicalCommand(inputCommand);
     const args = rawArguments?.trim() ?? '';
     switch (command) {
+      case 'waves': {
+        if (args && args !== 'open') throw new TypeError('Use /waves or /waves open.');
+        if (!state.lastRun?.worktreePath) throw new Error('Run or resume a plan worktree before /waves.');
+        const rows = await api.waveBoard({ worktree: state.lastRun.worktreePath, cwd: currentRoot(), env,
+          apiKeyEnv: state.config.llm.api_key_env, open: args === 'open',
+          activeIssue: state.display.issue, activeState: state.display.state });
+        safeWrite(rows.map((row) => `wave:${row.wave} | ${row.title} | ${row.state}` +
+          (row.issue ? ` | #${row.issue}` : '')).join('\n') + '\n');
+        return true;
+      }
       case 'review': {
         if (args && args !== '--again') throw new TypeError('Use /review [--again].');
         if (state.controller !== null) throw new Error('Stop the active seat before starting an explicit review.');

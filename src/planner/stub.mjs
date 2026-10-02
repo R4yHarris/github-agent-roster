@@ -10,6 +10,7 @@ import { applyFeedback } from './feedback.mjs';
 import { parsePlannerToolCalls } from './tool-calls.mjs';
 import { allowedFile, checkedList, oneLine, parseTaskDocument } from './task.mjs';
 import { selectReasoning } from '../llm/reasoning.mjs';
+import { issueWave } from '../lib/wave-labels.mjs';
 
 export { taskFilesAllowed } from './task.mjs';
 
@@ -341,10 +342,12 @@ export function renderAsk(ask) {
 }
 
 export function renderAssignment(issue) {
-  return render(template('ASSIGNMENT'), {
+  const assignment = render(template('ASSIGNMENT'), {
     ISSUE_URL: issue.url,
     ISSUE_NUMBER: String(issue.number),
     TITLE: issue.title,
     ASK: issue.body,
   });
+  const wave = issueWave(issue);
+  return wave === null ? assignment : assignment.replace(/^## Ask$/m, `- Wave: ${wave}\n\n## Ask`);
 }

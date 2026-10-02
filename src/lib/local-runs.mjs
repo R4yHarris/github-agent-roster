@@ -46,11 +46,12 @@ export async function readLocalRun({ number, cwd = process.cwd(), config, env = 
   const registered = (await registeredWorktrees(root)).find((entry) => entry.path && samePath(entry.path, worktreePath));
   if (!registered || registered.branch !== task) throw new Error('The requested issue worktree is not registered on its isolated branch');
   const assignment = await artifact(worktreePath, 'ASSIGNMENT.md');
-  const match = assignment && /^# Assignment\n\n- Issue URL: (https:\/\/github\.com\/[^\s]+\/issues\/([1-9]\d*))\n- Issue number: ([1-9]\d*)\n- Title: ([^\n]+)\n\n## Ask\n\n([\s\S]+)$/.exec(assignment);
+  const match = assignment && /^# Assignment\n\n- Issue URL: (https:\/\/github\.com\/[^\s]+\/issues\/([1-9]\d*))\n- Issue number: ([1-9]\d*)\n- Title: ([^\n]+)\n\n(?:- Wave: ([1-8])\n\n)?## Ask\n\n([\s\S]+)$/.exec(assignment);
   if (!match || Number(match[2]) !== number || Number(match[3]) !== number) throw new Error('Local assignment does not match the requested issue');
-  const body = match[5].replace(/\n$/, '');
+  const body = match[6].replace(/\n$/, '');
   const { ask, metadata } = parseIssueBody(body);
-  const issue = { number, title: match[4], body, url: match[1], state: 'UNKNOWN' };
+  const issue = { number, title: match[4], body, url: match[1], state: 'UNKNOWN',
+    ...(match[5] ? { labels: [{ name: `wave:${match[5]}` }] } : {}) };
   const local = await readStatus({ issue: number, offline: true, repoRoot: root, cwd: root, config, env });
   const review = await readPreviousReview(worktreePath);
   const result = await artifact(worktreePath, 'RESULT.md');

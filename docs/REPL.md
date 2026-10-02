@@ -43,6 +43,7 @@ agents and CI.
 | `/debug on` or `/debug off` or `/debug status` | Enable, stop or show testing metadata logging for this process only; never write config or change environment variables. |
 | `/log debug` | Tail up to 50 validated JSONL events from this process's most recent debug file. Fail closed while debug is off; reenable explicitly before reading. |
 | `/issues` | Print up to 100 current-repository open issue numbers and titles only, with a notice at the retrieval limit. Never print bodies. |
+| `/waves` or `/waves open` | Validate PLAN child drafts and display wave/title with GitHub-derived todo/running/review/done/blocked states. Plain waves is read-only. Only explicit human `open` creates missing drafts and their planned wave labels; GitHub body markers link them without another board file or local queue. Repeated open does not duplicate linked drafts. |
 | `/issue N` | Print cached title, state, branch and PR URL. Reuse cached metadata from runs/listings/status; use GitHub only when that issue is missing from cache. Unknown cached PR state stays unknown. |
 | `/diff` | Run filename-only Git diff in the current issue worktree; print tracked changed names, never file bodies. |
 | `/eval TARGET accept\|reject\|rework --minutes N --difficulty 1-5 "TEXT"` | Invoke the existing human-only evaluation writer with actual minutes, difficulty and feedback. The compact spelling records `again: n`; legacy positional difficulty/again and `--comment` remain supported. Agent seats cannot invoke the writer. |
@@ -63,6 +64,12 @@ agents and CI.
 | `/quit` or `/q` or `exit` | Exit with status 0. Ctrl+C cancels an active run; a second interrupt or idle Ctrl+C exits. |
 
 ## Keys and history
+
+Wave-labelled issue runs are gated before worktree creation/coding: any earlier
+open wave blocks a later wave. Explicitly opened plans use their GitHub marker
+to isolate the gate to that plan; manual wave-labelled issues conservatively
+use repository-wide earlier labels. Failed readiness lookup blocks execution.
+Assignments retain wave metadata so local resume cannot bypass this gate.
 
 Before each configured coder write in a Git worktree, the harness snapshots
 task-allowed products (including explicitly granted failing-test repair scope)
