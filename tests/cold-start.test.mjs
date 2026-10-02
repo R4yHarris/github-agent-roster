@@ -86,11 +86,11 @@ test('slow Spark chat remains in flight at60s and logs each30s with seat, host a
     await waiting[seconds / 30 - 1].promise;
     assert.ok(readFileSync(logger.path, 'utf8').includes(
       `seat planner waiting host=192.168.1.48:8888 elapsed=${seconds}s cold-start up to 15m`));
-    assert.equal((stderr.match(/Still waiting on the model\./g) ?? []).length, seconds / 30 - 1);
+    assert.equal((stderr.match(/Still waiting on the model\./g) ?? []).length, 0);
     assert.equal(signal.aborted, false);
     assert.equal(settled, false);
   }
-  assert.equal((stderr.match(/Still waiting on the model\./g) ?? []).length, 2);
+  assert.equal((stderr.match(/Still waiting on the model\./g) ?? []).length, 0);
   const tail = await readLastRunLog({ repoRoot, session: 'roster-92-coder', limit: 10, env: {} });
   assert.match(tail.lastLine, /waiting host=192\.168\.1\.48:8888 elapsed=90s cold-start/);
   reply.resolve(Response.json(completion));

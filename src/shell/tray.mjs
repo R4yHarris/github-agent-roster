@@ -6,8 +6,6 @@ const colors = { label: '\x1b[96m', white: '\x1b[97m', yellow: '\x1b[93m',
   orange: '\x1b[38;5;208m', red: '\x1b[91m', green: '\x1b[92m', reset: '\x1b[0m' };
 const phases = { idle: 'idle', planning: 'plan', drafting: 'draft', testing: 'test',
   reviewing: 'review', passed: 'pass', failed: 'fail', published: 'done' };
-const families = { deepseek: 'ds', qwen: 'qwen', llama: 'llama', mistral: 'mstrl',
-  gemma: 'gemma', claude: 'claude', gpt: 'gpt', phi: 'phi', kimi: 'kimi', glm: 'glm' };
 const BAR_CELLS = 10;
 const RULE = '\u2500';
 const SEPARATOR = ' \u2502 ';
@@ -16,13 +14,17 @@ const clean = (value) => stripVTControlCharacters(String(value ?? '-')).replace(
 const paint = (value, color, enabled) => (enabled ? `${colors[color]}${value}${colors.reset}` : String(value));
 const length = (value) => stripVTControlCharacters(value).length;
 
-export function shortModel(model) {
-  const id = clean(model).trim().toLowerCase();
-  if (!id || id === '-') return '-';
-  const parts = id.split(/[-_/]/).filter(Boolean);
-  const family = families[parts[0]] ?? parts[0].slice(0, 6);
-  const version = parts.slice(1).find((part) => /^v?\d/.test(part));
-  return version ? `${family}-${version}` : family;
+export function formatTokens(value) {
+  if (!Number.isSafeInteger(value) || value < 0) return '-';
+  if (value >= 1e6) return `${(value / 1e6).toFixed(1)}m`;
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
+  return String(value);
+}
+
+export function formatContext(used, max, { color = true } = {}) {
+  const known = Number.isSafeInteger(used) && used >= 0 && Number.isSafeInteger(max) && max > 0;
+  const text = `${known ? formatTokens(used) : '-'} / ${formatTokens(max)}`;
+  return known ? `${formatContextBar(used, max, { color })} ${text}` : text;
 }
 
 export function formatElapsed(startedAt, now) {
@@ -49,14 +51,15 @@ export function formatTray(display = {}, { columns = 80, color = true, now = Dat
   const issue = display.issue === null || display.issue === undefined ? 'local' : `#${display.issue}`;
   const where = state === 'idle' ? 'idle' : `${issue} ${phase}`;
   const effort = clean(display.effort ?? '-').trim() || '-';
-  const model = `${shortModel(display.model)} ${effort === '-' ? '-' : effort[0]}`;
+  const id = clean(display.model).trim() || '-';
+  const model = `${id} ${effort === '-' ? '-' : effort[0]}`;
   const failed = state === 'failed';
   const tail = failed && display.lastFinishReason ? clean(display.lastFinishReason)
     : state === 'idle' ? '-' : formatElapsed(display.startedAt, now);
   const fields = [
     paint(where, failed ? 'red' : state === 'passed' ? 'green' : 'white', color),
     paint(model, 'white', color),
-    formatContextBar(display.contextUsed, display.contextMax, { color }),
+    formatContext(display.contextUsed, display.contextMax, { color }),
     paint(tail, failed ? 'red' : 'white', color) + (debug ? paint('*', 'label', color) : ''),
   ];
   let rail = fields.join(SEPARATOR);

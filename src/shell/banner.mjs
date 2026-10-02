@@ -14,8 +14,12 @@ const paint = (value, color, enabled) => (enabled ? `${colors[color]}${value}${c
 
 function packageVersion(root) {
   const parsed = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
-  if (typeof parsed?.version !== 'string' || !parsed.version.trim()) throw new TypeError('package.json has no version');
-  return parsed.version.trim();
+  const declared = typeof parsed?.version === 'string' ? parsed.version.trim() : '';
+  if (declared && declared !== '0.0.0') return declared;
+  const described = execFileSync('git', ['describe', '--tags', '--always'],
+    { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1000 }).trim();
+  if (!described) throw new TypeError('package.json has no version and git describe returned nothing');
+  return described;
 }
 
 export function shellName(env = process.env) {  if (typeof env.SHELL === 'string' && env.SHELL.trim()) return basename(env.SHELL).replace(/\.exe$/i, '').toLowerCase();
@@ -60,13 +64,18 @@ export async function collectBannerFacts({
     model: await check(warnings, 'model', () => llm.model),
     host: await check(warnings, 'host', () => (llm.base_url ? new URL(llm.base_url).host : undefined)),
     contracts: await check(warnings, 'contracts', () => contractsVersion({ env, cwd })),
-    endpoint: '-',
+    endpoint: llm.base_url ? 'configured' : '-',
     update: 'skipped',
   };
   if (typeof services.probeEndpoint === 'function' || env.ROSTER_BANNER_CHECKS === 'on') {
     facts.endpoint = await check(warnings, 'endpoint', async () => {
       const probe = services.probeEndpoint ?? defaultProbeEndpoint;
-      return (await probe({ llm, env })) ? 'ok' : 'unreachable';
+      try {
+        return (await probe({ llm, env })) ? 'ok' : 'down';
+      } catch (error) {
+        warnings.push(`endpoint check failed: ${clean(error?.message)}`);
+        return 'down';
+      }
     });
   }
   if (typeof services.latestRelease === 'function' || env.ROSTER_BANNER_CHECKS === 'on') {

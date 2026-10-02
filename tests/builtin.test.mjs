@@ -280,9 +280,7 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
   assert.equal(result.logPath, path.join(options.target, '.roster', 'runs', 'roster-42-coder.log'));
   const liveLog = readFileSync(result.logPath, 'utf8');
   assert.notEqual(liveLog, options.stderr);
-  assert.match(options.stderr, /^Writing the plan: outcome, allowed files, and checks\.$/m);
-  assert.match(options.stderr, /^Preparing the task summary\.$/m);
-  assert.match(options.stderr, /^Checking the diff against the task\.$/m);
+  assert.equal(options.stderr, '');
   assert.doesNotMatch(options.stderr, /start seat|http chat|model=|elapsed_ms=|\d{4}-\d\d-\d\dT/);
   assert.deepEqual([...liveLog.matchAll(/start seat (planner|coder|reviewer)/g)].map((match) => match[1]),
     ['planner', 'coder', 'reviewer']);
@@ -439,8 +437,7 @@ test('a valid existing issue-92 RECIPE/TASK skips the planner and starts the sco
     ['roster-92-coder', 'roster-92-reviewer']);
   assert.doesNotMatch(readFileSync(result.logPath, 'utf8'), /start seat planner/);
   assert.match(readFileSync(result.logPath, 'utf8'), /start seat coder/);
-  assert.doesNotMatch(options.stderr, /Writing the plan/);
-  assert.match(options.stderr, /Drafting the change/);
+  assert.doesNotMatch(options.stderr, /Writing the plan|Drafting the change/);
   assert.match(logs.join('\n'), /planner skipped artifacts valid/);
 });
 
@@ -721,7 +718,7 @@ test('docs slice retry after failed review remains reasoning-free at 2048', asyn
     assert.equal(result.review.verdict, 'fail');
     assert.equal(result.runs.coder.metrics.effort, { low: 'l', high: 'h', max: 'x', none: '-' }[effort]);
     assert.equal(recordedCoderRun({ repoRoot: options.target, run: result.runs.coder }).line, result.runs.coder.line);
-    assert.match(options.stderr, new RegExp(`Drafting at ${effort} effort\\. Model prior: strong\\.`));
+    assert.doesNotMatch(options.stderr, new RegExp(`Drafting at ${effort} effort`));
     assert.doesNotMatch(readFileSync(path.join(options.repoRoot, '.roster', 'memory', 'coder.jsonl'), 'utf8'),
       /PRIVATE_CODER_THINKING|reasoning_content/);
   }
@@ -809,7 +806,7 @@ test('build an orchestrator produces initiative PLAN only and cannot edit README
   assert.match(plan, /Labels: `wave:1`/);
   assert.doesNotMatch(plan, /README\.md|\*\*\/\*/);
   assert.match(readFileSync(result.logPath, 'utf8'), /start seat planner[\s\S]*tool write_file path="PLAN\.md"[\s\S]*wrote PLAN\.md/);
-  assert.match(options.stderr, /Writing the plan:[\s\S]*Saving PLAN\.md\./);
+  assert.doesNotMatch(options.stderr, /Writing the plan|Saving PLAN\.md\./);
   assert.doesNotMatch(options.stderr, /Drafting the change|Checking the diff|Running tests|build an orchestrator/);
   assert.deepEqual(loadLearning({ cwd: options.target }).runs.map(({ session }) => session), ['roster-42-planner']);
   const status = await readStatus({ issue: 42, offline: true, repoRoot: options.target, config: stubConfig });
@@ -1684,7 +1681,7 @@ test('a tool-writing planner hands validated artifacts to the scoped coder and r
     fetchImpl: async (_url, request) => {
       const body = JSON.parse(request.body);
       if (body.messages[0].content.startsWith('You are the builtin planner seat.')) {
-        assert.match(options.stderr, /^Writing the plan: outcome, allowed files, and checks\.$/m);
+        assert.doesNotMatch(options.stderr, /Writing the plan/);
         assert.doesNotMatch(options.stderr, /http chat|start seat|\d{4}-\d\d-\d\dT/);
         plannerTurns += 1;
         assert.deepEqual(body.tools.map(({ function: tool }) => tool.name), ['write_file']);
@@ -1724,9 +1721,7 @@ test('a tool-writing planner hands validated artifacts to the scoped coder and r
   assert.equal(result.review.verdict, 'pass');
   const liveLog = readFileSync(result.logPath, 'utf8');
   assert.notEqual(liveLog, options.stderr);
-  assert.match(options.stderr, /Reading|Saving README\.md\./);
-  assert.match(options.stderr, /^Saving README\.md\.$/m);
-  assert.match(options.stderr, /^Running tests\.$/m);
+  assert.doesNotMatch(options.stderr, /Reading|Saving README\.md\.|Running tests\./);
   assert.doesNotMatch(options.stderr, /http chat|model=|host=|elapsed_ms=|\d{4}-\d\d-\d\dT/);
   assert.match(liveLog, /seat planner tool write_file path="TASK\.md"/);
   assert.match(liveLog, /seat coder tool write_file path="README\.md"/);

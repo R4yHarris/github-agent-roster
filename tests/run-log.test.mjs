@@ -42,13 +42,13 @@ test('missing contracts prints the dependency diagnostic without listing vendor'
   assert.doesNotMatch(options.text, /vendor\/|Listing/);
 });
 
-test('planner start streams one human action while timestamps and elapsed metadata remain only in the log', async (t) => {
+test('planner start streams no human sentence while timestamps and elapsed metadata remain only in the log', async (t) => {
   const options = fixture(t);
   let elapsed = 100;
   const logger = await createRunLog({ ...options,
     now: () => new Date('2026-09-30T22:00:00.000Z'), clock: () => elapsed });
   await logger.seat('planner', 'roster-42-planner', config, async (onEvent) => {
-    assert.equal(options.text, 'Writing the plan: outcome, allowed files, and checks.\n');
+    assert.equal(options.text, '');
     assert.match(readFileSync(logger.path, 'utf8'), /2026-09-30T22:00:00.000Z start seat planner session=roster-42-planner/);
     await onEvent({ type: 'wrote', path: 'RECIPE.yml' });
     await onEvent({ type: 'wrote', path: 'TASK.md' });
@@ -56,7 +56,7 @@ test('planner start streams one human action while timestamps and elapsed metada
     return { mode: 'stub' };
   });
   const log = readFileSync(logger.path, 'utf8');
-  assert.equal(options.text, 'Writing the plan: outcome, allowed files, and checks.\n');
+  assert.equal(options.text, '');
   assert.match(log, /seat planner elapsed_ms=25 mode=stub\n$/);
   assert.ok(log.trimEnd().split('\n').every((line) => line.startsWith('2026-09-30T22:00:00.000Z ')));
   assert.doesNotMatch(log, /Writing the plan:/);
@@ -79,7 +79,7 @@ test('only metadata fields are logged, known secrets are redacted, and newline i
   });
   const contents = readFileSync(logger.path, 'utf8');
   assert.notEqual(contents, options.text);
-  assert.equal(options.text, 'Drafting the change.\nSaving src/[redacted]?file.mjs.\n');
+  assert.equal(options.text, '');
   assert.match(contents, /model="served-model" host="example\.test:8000"/);
   assert.match(contents, /tool write_file path="src\/\[redacted\]\?file\.mjs"/);
   for (const value of [secret, '/private-path', 'PRIVATE_FILE_BODY', 'PRIVATE_PROMPT', 'PRIVATE_COMPLETION', 'PRIVATE_BODY', 'Authorization']) {
@@ -97,67 +97,69 @@ test('failed seats retain a class and elapsed time without persisting an excepti
   const contents = readFileSync(logger.path, 'utf8');
   assert.match(contents, /seat planner error class=TypeError/);
   assert.match(contents, /seat planner elapsed_ms=\d+ mode=stub/);
-  assert.equal(options.text, 'Writing the plan: outcome, allowed files, and checks.\n');
+  assert.equal(options.text, '');
   assert.doesNotMatch(options.text, /PRIVATE_ERROR_WITH_PROMPT/);
 });
 
-test('coder write_file prints exactly one human saving line, and technical HTTP/model/tool records stay log-only', async (t) => {
+test('coder write_file stays log-only, with HTTP/model/tool records never reaching the human stream', async (t) => {
   const options = fixture(t);
   const logger = await createRunLog(options);
   await logger.seat('coder', options.session, {
     llm: { base_url: 'http://192.168.1.48:8888/v1', model: 'served-model' },
   }, async (onEvent) => {
-    const before = options.text;
     await onEvent({ type: 'tool', name: 'write_file', path: 'README.md', content: 'PRIVATE_BODY' });
-    assert.equal(options.text.slice(before.length), 'Saving README.md.\n');
+    assert.equal(options.text, '');
     await onEvent({ type: 'http', phase: 'ok', status: 200 });
     await onEvent({ type: 'wrote', path: 'RESULT.md' });
     return { mode: 'llm' };
   });
-  assert.equal(options.text, 'Drafting the change.\nSaving README.md.\n');
+  assert.equal(options.text, '');
   const log = readFileSync(logger.path, 'utf8');
   assert.match(log, /seat coder tool write_file path="README\.md"/);
   assert.match(log, /http chat\.completions ok status=200/);
   assert.match(log, /model="served-model" host="192\.168\.1\.48:8888"/);
-  assert.doesNotMatch(options.text, /\d{4}-\d\d-\d\dT|http|chat\.completions|model=|host=|elapsed_ms|PRIVATE_BODY/);
 });
 
-test('HTTP starts, reads and tests describe only the actual event, one human line each', async (t) => {
+test('HTTP starts, reads, tests and waits leave the shell to the tray and stay in the log', async (t) => {
   const options = fixture(t);
   const logger = await createRunLog(options);
   const llm = { llm: { base_url: 'http://localhost:8000/v1', model: 'model' } };
   await logger.seat('planner', 'roster-42-planner', llm, async (onEvent) => {
-    const before = options.text;
     await onEvent({ type: 'http', phase: 'start' });
-    assert.equal(options.text.slice(before.length), 'Writing the plan: outcome, allowed files, and checks.\n');
     return {};
   });
   await logger.seat('coder', options.session, llm, async (onEvent) => {
-    const before = options.text;
-    await onEvent({ type: 'http', phase: 'start' });
+    await onEvent({ type: 'http', phase: 'start', effort: 'low', modelPrior: 'strong' });
     await onEvent({ type: 'tool', name: 'read_file', path: 'README.md' });
+    await onEvent({ type: 'tool', name: 'list_dir', path: 'src' });
     await onEvent({ type: 'tool', name: 'run_test' });
-    assert.equal(options.text.slice(before.length),
-      'Drafting the change.\nReading README.md before editing.\nRunning tests.\n');
     return {};
   });
-  const before = options.text;
   await logger.seat('reviewer', 'roster-42-reviewer', llm, async () => ({ queried: false }));
-  assert.equal(options.text.slice(before.length), 'Checking the diff against the task.\n');
+  assert.equal(options.text, '');
+  const log = readFileSync(logger.path, 'utf8');
+  assert.match(log, /seat coder tool read_file path="README\.md"/);
+  assert.match(log, /seat coder tool run_test/);
 });
 
-test('waiting after30s and timeout use exact human hints while the technical tail retains host, elapsed and retry', async (t) => {
+test('an unknown tool name is still rejected before anything is appended', async (t) => {
+  const options = fixture(t);
+  const logger = await createRunLog(options);
+  await assert.rejects(logger.seat('coder', options.session, config, async (onEvent) => {
+    await onEvent({ type: 'tool', name: 'delete_everything', path: 'README.md' });
+    return {};
+  }), /Invalid live tool event/);
+});
+
+test('waiting stays log-only while timeout keeps its human hint and the technical tail retains host, elapsed and retry', async (t) => {
   const options = fixture(t);
   const logger = await createRunLog(options);
   await logger.seat('planner', 'roster-42-planner', {
     llm: { base_url: 'http://192.168.1.48:8888/v1', model: 'model' },
   }, async (onEvent) => {
-    const before = options.text;
     await onEvent({ type: 'waiting', host: '192.168.1.48:8888', local: true, elapsedSeconds: 30 });
-    assert.equal(options.text, before);
     await onEvent({ type: 'waiting', host: '192.168.1.48:8888', local: true, elapsedSeconds: 31 });
-    assert.equal(options.text.slice(before.length),
-      'Still waiting on the model. Local hardware can take minutes after idle.\n');
+    assert.equal(options.text, '');
     const waiting = await readLastRunLog(options);
     assert.match(waiting.lastLine, /waiting host=192\.168\.1\.48:8888 elapsed=31s cold-start up to 15m/);
     const timeoutStart = options.text.length;
