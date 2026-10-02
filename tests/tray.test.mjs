@@ -186,6 +186,25 @@ test('redraw repaints elapsed without reprinting the banner or clearing scrollba
   tray.close();
 });
 
+test('a rail tick flushes and prompts without waiting for input', (t) => {
+  t.mock.timers.enable(['setInterval']);
+  const terminal = fakeTerminal();
+  const state = { display: { ...display, startedAt: Date.now() }, config,
+    pendingSecret: null, pendingQuestion: false, statusbar: true, debug: { enabled: false } };
+  const tray = createTray({ ...terminal, state, env: {}, cwd: process.cwd() });
+  tray.render();
+  terminal.calls.length = 0;
+  t.mock.timers.tick(1000);
+  assert.ok(terminal.calls.includes('flush'));
+  assert.ok(terminal.calls.includes('prompt:true'));
+  const firstTickCalls = terminal.calls.length;
+  t.mock.timers.tick(1000);
+  assert.ok(terminal.calls.length > firstTickCalls);
+  assert.ok(terminal.calls.slice(firstTickCalls).includes('flush'));
+  assert.ok(terminal.calls.slice(firstTickCalls).includes('prompt:true'));
+  tray.close();
+});
+
 test('the writer pauses, flushes and repaints the rail around transcript output', () => {
   const terminal = fakeTerminal();
   const state = { display: { ...display, startedAt: Date.now() - 130000 }, config,
@@ -198,12 +217,24 @@ test('the writer pauses, flushes and repaints the rail around transcript output'
   assert.deepEqual(terminal.calls.slice(0, 3), ['pause', 'write', 'flush']);
   assert.ok(terminal.calls.includes('setPrompt:roster> '));
   assert.ok(terminal.calls.includes('prompt:true'));
-  assert.equal(terminal.calls.at(-1), 'resume');
+  assert.equal(terminal.calls.at(-1), 'flush');
   state.statusbar = false;
   terminal.calls.length = 0;
   tray.write('read README.md\n');
   assert.doesNotMatch(stripVTControlCharacters(terminal.text.split('read README.md')[2] ?? ''), /\u2500{10}/);
   assert.equal(formatUsage({}, null).includes('Model: -'), true);
+  tray.close();
+});
+
+test('a transcript append without a newline still prompts after flushing', () => {
+  const terminal = fakeTerminal();
+  const state = { display: { ...display, startedAt: Date.now() - 130000 }, config,
+    pendingSecret: null, pendingQuestion: false, statusbar: true, debug: { enabled: false } };
+  const tray = createTray({ ...terminal, state, env: {}, cwd: process.cwd() });
+  tray.write('partial transcript');
+  assert.ok(terminal.calls.includes('flush'));
+  assert.ok(terminal.calls.includes('prompt:true'));
+  assert.equal(terminal.calls.at(-1), 'flush');
   tray.close();
 });
 
