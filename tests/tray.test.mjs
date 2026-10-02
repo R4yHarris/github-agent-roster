@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
@@ -265,6 +266,7 @@ function fakeScreen({ columns = 120 } = {}) {
       if (kind === 'A') row = Math.max(0, row - (count || 1));
       else if (kind === 'B') row += count || 1;
       else if (kind === 'G') col = Math.max(0, (count || 1) - 1);
+      else if (kind === 'H') { row = 0; col = 0; }
       else if (kind === 'K') rows[row] = args === '2' ? '' : rows[row].slice(0, col);
       else if (kind === 'J') { rows[row] = rows[row].slice(0, col); rows.length = row + 1; }
       rest = rest.slice(index + sequence.length);
@@ -321,5 +323,33 @@ test('a rewritten waiting tick never consumes a line the user already submitted'
   const lines = screen.lines;
   assert.equal(lines.filter((line) => line.includes('/debug on')).length, 1);
   assert.match(lines.join('\n'), /waiting \u00b7 46s/);
+  tray.close();
+});
+
+test('a resize clears from the banner down and later ticks keep one rail at the new width', async (t) => {
+  t.mock.timers.enable(['setInterval']);
+  const screen = fakeScreen({ columns: 40 });
+  const output = Object.assign(new EventEmitter(), {
+    columns: 40,
+    write: (value) => screen.write(value),
+    flush() {},
+  });
+  const { shell } = fakeReadline(screen);
+  const state = { display: { ...display, startedAt: Date.now() - 130000 }, config,
+    pendingSecret: null, pendingQuestion: false, statusbar: true, debug: { enabled: false } };
+  const tray = createTray({ output, shell, state, env: {}, cwd: process.cwd() });
+  await tray.banner();
+  tray.render();
+  assert.equal(screen.lines.filter((line) => line === '\u2500'.repeat(39)).length, 2);
+
+  output.columns = 80;
+  output.emit('resize');
+  assert.equal(screen.lines.filter((line) => line === '\u2500'.repeat(39)).length, 0);
+  assert.equal(screen.lines.filter((line) => line === '\u2500'.repeat(79)).length, 2);
+  assert.equal(screen.lines.filter((line) => line.startsWith('github-agent-roster')).length, 1);
+
+  t.mock.timers.tick(1000);
+  assert.equal(screen.lines.filter((line) => line === '\u2500'.repeat(39)).length, 0);
+  assert.equal(screen.lines.filter((line) => line === '\u2500'.repeat(79)).length, 2);
   tray.close();
 });

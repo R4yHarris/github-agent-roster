@@ -79,6 +79,7 @@ export function createTray({ output, state, shell, env = process.env, cwd = proc
   let visible = false;
   let barLines = 0;
   let bannerPrinted = false;
+  let bannerText = '';
   let refreshTimer;
   const frame = () => formatTray(state.display, { columns: output.columns ?? 80, debug: state.debug.enabled });
 
@@ -134,6 +135,18 @@ export function createTray({ output, state, shell, env = process.env, cwd = proc
     redraw();
   }
 
+  function resize() {
+    if (state.pendingSecret !== null || state.pendingQuestion || shell.closed) return;
+    pause();
+    cursorTo(output, 0, 0);
+    clearScreenDown(output);
+    visible = false;
+    if (bannerText) output.write(bannerText);
+    redraw();
+  }
+
+  output.on?.('resize', resize);
+
   return {
     render,
     erase,
@@ -143,7 +156,8 @@ export function createTray({ output, state, shell, env = process.env, cwd = proc
       pause();
       const facts = await collectBannerFacts({ env, cwd, branch: state.display.branch,
         llm: state.config?.llm ?? {}, services });
-      output.write(formatBanner(facts));
+      bannerText = formatBanner(facts);
+      output.write(bannerText);
       flush();
       shell.resume();
     },
@@ -173,6 +187,7 @@ export function createTray({ output, state, shell, env = process.env, cwd = proc
       }
     },
     close() {
+      output.off?.('resize', resize);
       if (refreshTimer !== undefined) clearInterval(refreshTimer);
       refreshTimer = undefined;
       if (visible) {
