@@ -12,17 +12,23 @@ const display = { issue: 108, branch: 'issue-108', seat: 'coder', state: 'drafti
   contextUsed: undefined, contextMax: 1048576, startedAt: 0, busy: true };
 const config = parseConfig(readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8'));
 
-test('tray formats blue prompt, task state, unknown usage and declared context without inventing counts', () => {
+test('tray uses bright cyan labels and white values without blue or dim text', () => {
   const frame = formatTray(display, { columns: 120, now: 130000 });
   assert.equal(stripVTControlCharacters(frame.top), 'roster | #108 | coder | drafting | issue-108');
   assert.equal(stripVTControlCharacters(frame.bottom),
     'deepseek-v4.1 | 192.168.1.48:8888 | effort low | ctx - / 1.0m | 2m 10s | debug off');
   assert.equal(stripVTControlCharacters(frame.prompt), '* roster> ');
-  assert.match(frame.prompt, /\x1b\[36m\*/);
-  assert.match(frame.prompt, /\x1b\[94mroster> /);
-  assert.match(frame.bottom, /\x1b\[2;34mctx/);
-  assert.match(formatTray({ ...display, state: 'failed' }).top, /\x1b\[31mfailed/);
-  assert.match(formatTray({ ...display, state: 'passed' }).top, /\x1b\[32mpassed/);
+  const fixture = `${frame.top}\n${frame.bottom}\n${frame.prompt}`;
+  assert.match(fixture, /\x1b\[96m/);
+  assert.match(fixture, /\x1b\[97m/);
+  assert.doesNotMatch(fixture, /\x1b\[34/);
+  assert.doesNotMatch(fixture, /\x1b\[2m/);
+  assert.match(frame.prompt, /\x1b\[96m\*/);
+  assert.match(frame.prompt, /\x1b\[96mroster> /);
+  assert.match(frame.bottom, /\x1b\[96mctx/);
+  assert.match(frame.bottom, /\x1b\[97m- \/ 1\.0m/);
+  assert.match(formatTray({ ...display, state: 'failed' }).top, /\x1b\[91mfailed/);
+  assert.match(formatTray({ ...display, state: 'passed' }).top, /\x1b\[92mpassed/);
 });
 
 test('narrow trays drop elapsed then host and keep every bar within the terminal width', () => {
@@ -42,7 +48,9 @@ test('narrow trays drop elapsed then host and keep every bar within the terminal
 
 test('seat and test events update the cached display without running another seat', async () => {
   const updates = [];
-  const shell = createDispatcher({ config, cwd: process.cwd(), env: {}, output: { write() {} },
+  let messages = '';
+  const shell = createDispatcher({ config, cwd: process.cwd(), env: {},
+    output: { write(text) { messages += text; } },
     errorOutput: { write() {} }, onStateChange: (state) => updates.push({ ...state.display }),
     services: { repositoryBranch: () => 'main', runBuiltinIssue: async (issue, options) => {
       await options.onRunEvent({ type: 'seat-start', seat: 'coder', model: 'served', host: 'localhost',
@@ -59,11 +67,13 @@ test('seat and test events update the cached display without running another sea
   assert.equal(shell.state.display.branch, 'issue-108');
   await shell.dispatch('/statusbar off');
   assert.equal(shell.state.statusbar, false);
+  assert.match(messages, /Status bars off\.\n/);
+  assert.doesNotMatch(messages, /\x1b\[/);
   await shell.dispatch('/statusbar on');
   assert.equal(shell.state.statusbar, true);
 });
 
-test('TTY shell contains the banner once, top bar, bottom bar and blue input', async () => {
+test('TTY shell contains the banner once, top bar, bottom bar and bright cyan input', async () => {
   const input = new PassThrough();
   input.isTTY = true;
   input.setRawMode = () => {};

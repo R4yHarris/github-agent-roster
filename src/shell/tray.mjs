@@ -1,8 +1,8 @@
 import { clearLine, clearScreenDown, cursorTo, moveCursor } from 'node:readline';
 import { stripVTControlCharacters } from 'node:util';
 
-const colors = { blue: '\x1b[94m', label: '\x1b[2;34m', white: '\x1b[37m',
-  cyan: '\x1b[36m', red: '\x1b[31m', green: '\x1b[32m', reset: '\x1b[0m' };
+const colors = { label: '\x1b[96m', white: '\x1b[97m',
+  red: '\x1b[91m', green: '\x1b[92m', reset: '\x1b[0m' };
 const efforts = { l: 'low', m: 'medium', h: 'high', x: 'max', none: 'none' };
 const clean = (value) => stripVTControlCharacters(String(value ?? '-')).replace(/[\x00-\x1f\x7f]/g, '');
 const paint = (value, color, enabled) => enabled ? `${colors[color]}${value}${colors.reset}` : value;
@@ -33,8 +33,9 @@ export function formatTray(display, { columns = 80, color = true, now = Date.now
   const stateColor = state === 'failed' ? 'red' : state === 'passed' ? 'green' : 'white';
   const prefix = `roster | ${issue} | ${clean(display.seat)} | ${state} | `;
   const branch = fit(display.branch || '-', Math.max(1, width - prefix.length));
-  let top = `${paint('roster', 'blue', color)} | ${issue} | ${clean(display.seat)} | ` +
-    `${paint(state, stateColor, color)} | ${branch}`;
+  let top = `${paint('roster', 'label', color)} | ${paint(issue, 'white', color)} | ` +
+    `${paint(clean(display.seat), 'white', color)} | ${paint(state, stateColor, color)} | ` +
+    paint(branch, 'white', color);
   if (length(top) > width) top = paint(fit(`${prefix}${branch}`, width), stateColor, color);
   const field = (label, value) => (label ? `${paint(label, 'label', color)} ` : '') + paint(clean(value), 'white', color);
   const base = [
@@ -55,7 +56,7 @@ export function formatTray(display, { columns = 80, color = true, now = Date.now
     bottom = base.join(' | ');
   }
   if (length(bottom) > width) bottom = paint(fit(bottom, width), 'white', color);
-  const prompt = `${display.busy ? `${paint('*', 'cyan', color)} ` : ''}${paint('roster> ', 'blue', color)}`;
+  const prompt = `${display.busy ? `${paint('*', 'label', color)} ` : ''}${paint('roster> ', 'label', color)}`;
   return { top, bottom, prompt };
 }
 
@@ -86,7 +87,7 @@ export function createTray({ output, state, shell }) {
 
   return {
     render, erase,
-    banner() { output.write(`${paint('github-agent-roster', 'blue', true)}\n`); },
+    banner() { output.write(`${paint('github-agent-roster', 'label', true)}\n`); },
     committed() { visible = false; },
     write(text, target = output) {
       erase();
