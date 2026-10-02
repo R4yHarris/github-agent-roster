@@ -31,7 +31,7 @@ test('difficulty versus model prior selects effort for every task class and ask 
     assert.equal(selected.llm.effort, 'l');
     assert.equal(selected.llm.max_tokens, 4096);
   }
-  assert.equal(selectReasoning(config, { kind: 'slice', taskClass: 'docs', difficulty: 1 }).llm.max_tokens, 2048);
+  assert.equal(selectReasoning(config, { kind: 'slice', taskClass: 'docs', difficulty: 1 }).llm.max_tokens, 8192);
   const unknown = selectReasoning({ ...config, llm: { ...config.llm, model: 'unrated' } },
     { kind: 'slice', taskClass: 'fix', difficulty: 1 });
   assert.equal(unknown.llm.effort, 'm');
@@ -53,12 +53,12 @@ test('SGLang DeepSeek4.1 maps medium to high and caps at max; cloud retains four
   assert.equal(nextEffort(cloud, 'x'), 'x');
 });
 
-test('selected docs request disables reasoning at 2048 and drops reasoning_content from all returned evidence', async () => {
+test('selected docs request disables reasoning at 8192 and drops reasoning_content from all returned evidence', async () => {
   const selected = selectReasoning(config, { kind: 'slice', taskClass: 'docs', difficulty: 1 });
   const chat = createBuiltinChat(selected, { env: {}, fetchImpl: async (_url, request) => {
     const body = JSON.parse(request.body);
     assert.equal(body.reasoning_effort, 'none');
-    assert.equal(body.max_tokens, 2048);
+    assert.equal(body.max_tokens, 8192);
     assert.equal(body.chat_template_kwargs.thinking, false);
     return Response.json({ choices: [{ message: { role: 'assistant', content: 'Done.',
       reasoning_content: 'PRIVATE_THINKING' } }] });
