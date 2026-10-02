@@ -122,6 +122,7 @@ export function createTray({ output, state, shell, env = process.env, cwd = proc
     shell.prompt(true);
     flush();
     shell.resume();
+    flush();
     visible = true;
     updateRefreshTimer();
   }
@@ -164,7 +165,12 @@ export function createTray({ output, state, shell, env = process.env, cwd = proc
       target.write(text);
       flush(target);
       if (String(text).endsWith('\n') && state.pendingSecret === null && !state.pendingQuestion) redraw();
-      else shell.resume();
+      else {
+        shell.prompt(true);
+        flush();
+        shell.resume();
+        flush();
+      }
     },
     close() {
       if (refreshTimer !== undefined) clearInterval(refreshTimer);
