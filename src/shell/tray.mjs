@@ -38,7 +38,7 @@ export function formatTray(display, { columns = 80, color = true, now = Date.now
   if (length(top) > width) top = paint(fit(`${prefix}${branch}`, width), stateColor, color);
   const field = (label, value) => (label ? `${paint(label, 'label', color)} ` : '') + paint(clean(value), 'white', color);
   const base = [
-    field('', display.model || '-'),
+    field(display.mode === 'plan' ? 'plan' : '', display.model || '-'),
     field('', display.host || '-'),
     field('effort', efforts[display.effort] ?? display.effort ?? '-'),
     field('ctx', `${count(display.contextUsed)} / ${count(display.contextMax, true)}`),

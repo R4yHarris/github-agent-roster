@@ -160,6 +160,24 @@ test('a confirmed issue resumes its prepared handoff without another gh view or 
   assert.equal(options.calls.filter(({ args }) => args[0] === 'worktree' && args[1] === 'add').length, 1);
 });
 
+test('plan mode stays PLAN-only until a human accepts and resumes the same slice worktree', async (context) => {
+  const options = fixture(context);
+  const ask = 'Add a Status section to README.md.';
+  const first = await runBuiltinAsk(ask, { ...options, config: stubConfig, planMode: true, log: () => {} });
+  assert.equal(first.planMode, true);
+  assert.equal(first.planningOnly, true);
+  assert.equal(existsSync(path.join(first.worktreePath, 'TASK.md')), false);
+  assert.equal(existsSync(path.join(first.worktreePath, 'RECIPE.yml')), false);
+  assert.equal(existsSync(path.join(first.worktreePath, 'RESULT.md')), false);
+  const second = await runBuiltinAsk(ask, { ...options, config: stubConfig, preparedRun: first,
+    acceptPlan: true, log: () => {} });
+  assert.equal(second.worktreePath, first.worktreePath);
+  assert.equal(second.planner.acceptedPlan, true);
+  assert.equal(second.planningOnly, undefined);
+  assert.equal(existsSync(first.planPath), true);
+  assert.equal(second.result.mode, 'stub');
+});
+
 test('roster ask writes a local draft ask, recipe, and executable task without network', async (context) => {
   const { repoRoot } = fixture(context);
   const result = await writeAsk('Add a Status section to README.md.', {

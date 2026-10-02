@@ -37,7 +37,7 @@ const help = `Usage:
   roster fleet default ID
   roster fleet remove ID
   roster ask "..."
-  roster run --issue N [--runtime builtin] [--seats planner,coder,reviewer] [--auto-model] [--publish] [--skip-review] [--confirm]
+  roster run --issue N [--runtime builtin] [--seats planner,coder,reviewer] [--auto-model] [--publish] [--skip-review] [--confirm] [--plan]
   roster run --seat coder --runtime builtin
   roster prepare --issue N
   roster run --ask-file PATH --runtime builtin
@@ -161,6 +161,7 @@ async function main(args) {
       const result = await runBuiltinIssue(options.issue, { publish: options.publish, seats: options.seats,
         skipReview: options.skipReview,
         confirm: options.confirm,
+        planMode: options.plan,
         autoModel: options.autoModel, repoRoot: rosterRoot, debug });
       if (result.failed) process.exitCode = 1;
     }
@@ -221,11 +222,11 @@ async function main(args) {
     const options = {};
     const seen = new Set();
     const usage = 'Use roster run --issue N [--runtime builtin] [--seats planner,coder,reviewer] ' +
-      '[--auto-model] [--publish] [--skip-review] [--confirm], ' +
+      '[--auto-model] [--publish] [--skip-review] [--confirm] [--plan], ' +
       'or roster run --seat coder --runtime builtin for an existing TASK.md.';
     for (let index = 0; index < args.length; index += 1) {
       const flag = args[index];
-      if (!['--issue', '--seat', '--seats', '--runtime', '--auto-model', '--publish', '--skip-review', '--confirm'].includes(flag) ||
+      if (!['--issue', '--seat', '--seats', '--runtime', '--auto-model', '--publish', '--skip-review', '--confirm', '--plan'].includes(flag) ||
           seen.has(flag)) {
         throw new TypeError(usage);
       }
@@ -234,6 +235,7 @@ async function main(args) {
       else if (flag === '--auto-model') options.autoModel = true;
       else if (flag === '--skip-review') options.skipReview = true;
       else if (flag === '--confirm') options.confirm = true;
+      else if (flag === '--plan') options.plan = true;
       else {
         const value = args[++index];
         if (!value || value.startsWith('--')) throw new TypeError(usage);
@@ -241,7 +243,7 @@ async function main(args) {
       }
     }
     if (options.issue === undefined && options.seat === 'coder' && options.runtime === 'builtin' &&
-        options.seats === undefined && !options.autoModel && !options.publish && !options.skipReview && !options.confirm) return options;
+        options.seats === undefined && !options.autoModel && !options.publish && !options.skipReview && !options.confirm && !options.plan) return options;
     if (!options.issue || (options.runtime !== undefined && options.runtime !== 'builtin') ||
         (options.seat !== undefined && options.seat !== 'coder') ||
         (options.seats !== undefined &&

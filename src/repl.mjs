@@ -186,6 +186,7 @@ export function createDispatcher({
     if (state.pendingConfirm !== null) {
       state.pendingConfirm = null;
       state.display.state = 'idle';
+      state.display.mode = null;
       notify();
       output.write('Run cancelled.\n');
       return true;
@@ -207,6 +208,7 @@ export function createDispatcher({
       branch: options.issue ? `issue-${options.issue}` : state.display.branch,
       seat: 'planner', state: 'planning', busy: true, startedAt: Date.now(), contextUsed: undefined,
       lastFinishReason: null, lastTestName: null, review: null });
+    state.display.mode = options.planMode ? 'plan' : null;
     notify();
     try {
       state.lastRun = await run({
@@ -235,9 +237,11 @@ export function createDispatcher({
     if (state.lastRun.task) state.display.branch = state.lastRun.task;
     if (request) request.prepared = state.lastRun;
     if (state.lastRun.confirmedPause && request) state.pendingConfirm = request;
+    if (state.lastRun.planMode && state.lastRun.askKind === 'slice' && request) state.pendingConfirm = request;
     state.display.state = state.lastRun.review
       ? state.lastRun.review.verdict === 'pass' ? 'passed' : 'failed'
       : state.lastRun.failed ? 'failed' : 'idle';
+    if (state.lastRun.planMode) state.display.state = 'planning';
     state.display.review = state.lastRun.review?.verdict ?? null;
     if (state.lastRun.issue?.number) state.issueCache.set(state.lastRun.issue.number, {
       issue: state.lastRun.issue, branch: state.lastRun.task, openPr: undefined, worktreePath: state.lastRun.worktreePath,
@@ -246,6 +250,8 @@ export function createDispatcher({
     notify();
     output.write(state.lastRun.askKind === 'clarify'
       ? `${state.lastRun.clarification}\n`
+      : state.lastRun.planMode
+      ? 'Plan ready. Press Enter to accept and continue, or /stop to keep the plan without coding.\n'
       : state.lastRun.planPath
       ? 'PLAN ready; review the child drafts and run bounded slices. No coder ran.\n'
       : state.lastRun.planningOnly
@@ -264,8 +270,10 @@ export function createDispatcher({
       ...(state.routeNext ? { autoModel: true } : {}),
       ...(request.kind === 'run' ? { issue: Number(request.issue) } : {}),
       ...(retry ? { preparedRun: request.prepared } : {}),
-      ...(continueConfirmed ? { confirm: false } : {}),
+      ...(continueConfirmed ? { confirm: false,
+        ...(request.options.planMode ? { planMode: false, acceptPlan: true } : {}) } : {}),
     };
+    if (continueConfirmed && request.options.planMode) request.options = { ...request.options, planMode: false };
     const run = request.kind === 'ask' ? (options) => api.runBuiltinAsk(request.text, options)
       : (options) => api.runBuiltinIssue(request.issue, options);
     return executeRun(run, options, request);
@@ -297,6 +305,9 @@ export function createDispatcher({
     const command = canonicalCommand(inputCommand);
     const args = rawArguments?.trim() ?? '';
     switch (command) {
+      case 'plan':
+        if (!args) throw new TypeError('Use /plan TEXT, or /run N --plan.');
+        return runRequest({ kind: 'ask', text: args, options: { planMode: true } });
       case 'issues': {
         if (args) throw new TypeError('Use /issues.');
         const issues = await api.listOpenIssues({ cwd: currentRoot(), env });
@@ -337,6 +348,7 @@ export function createDispatcher({
       case 'retry':
         if (args) throw new TypeError('Use /retry.');
         if (!state.lastRequest) throw new Error('No Ask or issue run is available to retry.');
+        if (state.lastRequest.options.planMode) throw new Error('Press Enter to accept the plan, or /stop to leave it unchanged.');
         return runRequest(state.lastRequest, { retry: true, continueConfirmed: true });
       case 'redraw':
       case 'clear':
@@ -445,12 +457,13 @@ export function createDispatcher({
       case 'run': {
         const issue = /^(?:--issue\s+)?([1-9]\d*)((?:\s+--[a-z-]+)*)$/.exec(args);
         const flags = issue?.[2].trim().split(/\s+/).filter(Boolean) ?? [];
-        if (!issue || flags.some((flag) => !['--auto-model', '--confirm'].includes(flag)) ||
+        if (!issue || flags.some((flag) => !['--auto-model', '--confirm', '--plan'].includes(flag)) ||
             new Set(flags).size !== flags.length) {
-          throw new TypeError('Use /run N [--auto-model] [--confirm] or /run --issue N [--auto-model] [--confirm].');
+          throw new TypeError('Use /run N [--auto-model] [--confirm|--plan] or /run --issue N [--auto-model] [--confirm|--plan].');
         }
         return runRequest({ kind: 'run', issue: issue[1], options: {
           autoModel: flags.includes('--auto-model'), confirm: flags.includes('--confirm'),
+          planMode: flags.includes('--plan'),
         } });
       }
       case 'status': {

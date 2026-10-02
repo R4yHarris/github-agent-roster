@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { buildPublishEnv, buildRun, resolvePublishModel, RUN_ENV_NAMES } from '../metrics/run.mjs';
 import { cleanAskText, renderAssignment, taskFilesAllowed } from '../planner/stub.mjs';
 import { runCoder } from '../seats/coder.mjs';
-import { preparePlannerHandoff, readPlannerHandoff, readPlannerTask, readPreviousReview, runPlanner } from '../seats/planner.mjs';
+import { acceptPlannerPlan, preparePlannerHandoff, readPlannerHandoff, readPlannerTask, readPreviousReview, runPlanner } from '../seats/planner.mjs';
 import { requirePassingReview, runReviewer } from '../seats/reviewer.mjs';
 import { isAllowedFile, isForbiddenWrite, isManagedFile, taskAndRepairFiles } from '../runtime/tools.mjs';
 import { checkExcellence, redactEvidence } from '../runtime/excellence.mjs';
@@ -362,6 +362,8 @@ async function runBuiltinAssignment(issueNumber, {
   signal,
   preparedRun,
   onPrepared,
+  planMode = false,
+  acceptPlan = false,
 } = {}) {
   throwIfCancelled(signal);
   config = { ...config, capabilities: config.capabilities ?? await loadCapabilities({ cwd }) };
@@ -376,6 +378,8 @@ async function runBuiltinAssignment(issueNumber, {
   if (typeof autoModel !== 'boolean') throw new TypeError('--auto-model must be a boolean');
   if (typeof skipReview !== 'boolean') throw new TypeError('--skip-review must be a boolean');
   if (typeof confirm !== 'boolean') throw new TypeError('--confirm must be a boolean');
+  if (typeof planMode !== 'boolean' || typeof acceptPlan !== 'boolean') throw new TypeError('Plan mode must be a boolean');
+  if (planMode && (publish || confirm || acceptPlan)) throw new TypeError('--plan cannot combine with --publish, --confirm, or plan acceptance');
   if (confirm && publish) throw new TypeError('--confirm cannot be combined with --publish');
   if (publish) requirePublicationEnabled(config);
   const reviewBypass = skipReview || !isReviewRequired(config);
@@ -442,7 +446,7 @@ async function runBuiltinAssignment(issueNumber, {
       log(`Auto-model: ${taskClass ? 'no eligible fleet profile or evidence' : 'no recognized task class'}; deterministic stub`);
     }
   }
-  const existing = prepared.reused && ['slice', 'clarify'].includes(classification.kind) ? await readPlannerHandoff({
+  const existing = !planMode && !acceptPlan && prepared.reused && ['slice', 'clarify'].includes(classification.kind) ? await readPlannerHandoff({
     worktree: worktreePath, reference, ask: prepared.ask, lockedModel: route?.profile.model,
     issueTitle: prepared.issue.title, issueBody: prepared.issue.body,
   }) : { plan: null };
@@ -475,7 +479,8 @@ async function runBuiltinAssignment(issueNumber, {
   if (existing.reason) log(existing.reason);
   const archivePath = prepared.reused ? await archiveRunArtifacts(worktreePath, {
     task: prepared.task, git: (args) => git(worktreePath, args, commandEnv),
-    preserve: existing.plan ? existing.plan.normalizedRecipe ? ['TASK.md'] : ['RECIPE.yml', 'TASK.md'] : [],
+    preserve: acceptPlan ? ['PLAN.md'] : existing.plan
+      ? existing.plan.normalizedRecipe ? ['TASK.md'] : ['RECIPE.yml', 'TASK.md'] : [],
   }) : null;
   if (archivePath) log(`Previous generated run artifacts preserved: ${archivePath}`);
   const liveLog = await createRunLog({
@@ -489,13 +494,16 @@ async function runBuiltinAssignment(issueNumber, {
     'GH_TOKEN', 'GITHUB_TOKEN']) delete metricEnv[name];
   let planner;
   try {
-    planner = existing.plan ? await preparePlannerHandoff(existing.plan, {
+    planner = acceptPlan ? await acceptPlannerPlan({ worktree: worktreePath, ask: prepared.ask,
+      title: prepared.issue.title, reference, learningRoot: prepared.repoRoot, config: activeConfig, env, signal,
+      lockedModel: route?.profile.model })
+      : existing.plan ? await preparePlannerHandoff(existing.plan, {
       worktree: worktreePath, learningRoot: prepared.repoRoot, config: activeConfig, env,
     }) : await liveLog.seat('planner', sessions.planner, activeConfig, (onEvent) => runPlanner({
       worktree: worktreePath, repoRoot, issue: prepared.issue, config: activeConfig,
       ask: prepared.ask, reference, metadata: prepared.metadata ?? undefined, task: prepared.task,
       session: sessions.planner, fetchImpl, env, vault, learningRoot: prepared.repoRoot,
-      lockedModel: route?.profile.model, onEvent, askKind, retryCommand, signal,
+      lockedModel: route?.profile.model, onEvent, askKind, retryCommand, signal, planMode,
     }));
     if (planner.reused) log('planner skipped artifacts valid; starting coder.');
   } catch (error) {
@@ -507,7 +515,7 @@ async function runBuiltinAssignment(issueNumber, {
     }
     throw error;
   }
-  const taskClass = askKind === 'slice' ? planner.metadata.task_class
+  const taskClass = askKind === 'slice' && !planMode ? planner.metadata.task_class
     : prepared.metadata?.task_class ?? inferTaskClass(prepared.issue.title) ?? 'feat';
   const recordSeat = async (session, run, excellence) => recordRun({
     session, task: prepared.task, task_class: taskClass, provider: run?.provider,
@@ -515,6 +523,12 @@ async function runBuiltinAssignment(issueNumber, {
   }, { cwd: prepared.repoRoot, env: { ...metricEnv, ...run?.env }, createDirectory: true, run });
   const plannerRun = planner.run;
   if (!planner.reused) await recordSeat(sessions.planner, plannerRun);
+  if (planMode && askKind === 'slice') {
+    log(`PLAN: ${planner.planPath}\nPlan mode: no TASK, recipe, product edits, coder, tests, reviewer, or publisher ran.`);
+    return { ...prepared, askKind, classification, planner, planPath: planner.planPath, planMode: true,
+      planningOnly: true, failed: false, sessions, runs: { planner: plannerRun, coder: null, reviewer: null },
+      run: null, command: null, logPath: liveLog.path, logSession: liveLog.session };
+  }
   if (askKind !== 'slice') {
     log(`PLAN: ${planner.planPath}\nReview the ${askKind} child issue drafts and wave labels on GitHub, ` +
       'then run each bounded slice separately. No coder, reviewer, tests, or publisher ran.');

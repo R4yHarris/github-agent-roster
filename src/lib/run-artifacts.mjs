@@ -9,8 +9,8 @@ export async function archiveRunArtifacts(worktree, { task, git, preserve = [] }
   if (typeof task !== 'string' || !/^(?:issue-[1-9]\d*|local-[a-f0-9]{16})$/.test(task) || typeof git !== 'function') {
     throw new TypeError('Run archive requires an issue or local task identifier and Git helper');
   }
-  if (!Array.isArray(preserve) || preserve.some((name) => !['RECIPE.yml', 'TASK.md'].includes(name))) {
-    throw new TypeError('Run archive may preserve only validated recipe/task artifacts');
+  if (!Array.isArray(preserve) || preserve.some((name) => !['RECIPE.yml', 'TASK.md', 'PLAN.md'].includes(name))) {
+    throw new TypeError('Run archive may preserve only validated recipe/task/plan artifacts');
   }
   const files = [];
   for (const name of names) {

@@ -15,6 +15,8 @@ import { planOutline } from '../planner/plan.mjs';
 import { retryCommandForTask } from '../llm/request.mjs';
 import { selectReasoning } from '../llm/reasoning.mjs';
 import { throwIfCancelled } from '../runtime/cancel.mjs';
+import { planSlice, validatedPlanTask } from '../planner/plan-mode.mjs';
+import { runtimeRecipe } from '../planner/stub.mjs';
 
 function validateBuiltinRecipe(source, reference) {
   const recipe = parseRecipe(source);
@@ -85,12 +87,28 @@ export async function preparePlannerHandoff(plan, { worktree, learningRoot, conf
       await readArtifact(worktree, 'TASK.md') !== plan.task) {
     throw new Error('Existing RECIPE/TASK changed after validation; refusing the cached handoff');
   }
+
   if (plan.normalizedRecipe) {
     const tools = await createTools({ worktree, seat: 'planner', env, apiKeyEnv: config.llm.api_key_env });
     await tools.write_file({ path: 'RECIPE.yml', content: plan.recipe });
   }
   const { task: _updatedTask, ...estimated } = await writeEstimate(plan.task, { worktree, learningRoot, config, env });
   return { ...plan, ...estimated };
+}
+
+export async function acceptPlannerPlan({ worktree, ask, title, reference, learningRoot, config, env, signal, lockedModel }) {
+  throwIfCancelled(signal);
+  const source = await readArtifact(worktree, 'PLAN.md');
+  if (source === null) throw new Error('An accepted plan requires PLAN.md in the prepared worktree');
+  const task = validatedPlanTask(source, ask, title, lockedModel);
+  const recipe = runtimeRecipe(reference);
+  const tools = await createTools({ worktree, seat: 'planner', env, apiKeyEnv: config.llm.api_key_env, signal });
+  await tools.write_file({ path: 'RECIPE.yml', content: recipe });
+  await tools.write_file({ path: 'TASK.md', content: task });
+  const estimate = await writeEstimate(task, { worktree, learningRoot, config, env, writeArtifact: tools.write_file });
+  await tools.write_file({ path: 'TASK.md', content: estimate.task });
+  return { task, recipe, ...estimate, recipePath: path.join(worktree, 'RECIPE.yml'),
+    taskPath: path.join(worktree, 'TASK.md'), acceptedPlan: true, run: null, turns: 0, usage: null };
 }
 
 export async function runPlanner({
@@ -101,6 +119,7 @@ export async function runPlanner({
   fetchImpl, env, vault, learningRoot = repoRoot, onEvent, askKind,
   retryCommand = retryCommandForTask(task),
   signal,
+  planMode = false,
 }) {
   throwIfCancelled(signal);
   if (typeof repoRoot !== 'string' || !repoRoot) {
@@ -127,10 +146,15 @@ export async function runPlanner({
   const planPath = path.join(worktree, 'PLAN.md');
   try {
     const tools = await createTools({ worktree, seat: 'planner', env, apiKeyEnv: config.llm.api_key_env, onEvent,
-      signal, ...(kind === 'slice' ? {} : { plannerArtifacts: planArtifactFiles }) });
+      signal, ...(planMode || kind !== 'slice' ? { plannerArtifacts: planArtifactFiles } : {}),
+      plannerReads: planMode && kind === 'slice' });
     const options = { config, reference, title, fetchImpl, env, vault, onEvent, retryCommand, signal,
       onResponse: (response) => { lastResponse = response; } };
-    if (kind === 'slice') {
+    if (planMode && kind === 'slice') {
+      plan = await planSlice(ask, { ...options, metadata, lockedModel, tools });
+      lastResponse = plan.response;
+      await tools.write_file({ path: 'PLAN.md', content: plan.plan });
+    } else if (kind === 'slice') {
       plan = await planAsk(ask, {
         ...options, memory, learningRoot, metadata, lockedModel, tools,
       });
@@ -158,9 +182,9 @@ export async function runPlanner({
   await appendMemory({ file: memoryPath, repoRoot, env, apiKeyEnv: config.llm.api_key_env, record: {
     task, session, status: plan.error ? 'failed' : config.llm.base_url ? 'llm' : 'stub',
     summary: plan.error ? 'Prepared unverified RECIPE.yml and TASK.md stubs after planning failure'
-      : kind === 'slice' ? 'Prepared RECIPE.yml and TASK.md' : `Prepared ${kind} PLAN.md; no implementation`,
+      : kind === 'slice' && !planMode ? 'Prepared RECIPE.yml and TASK.md' : `Prepared ${kind} PLAN.md; no implementation`,
     ...(plan.error ? { error: plan.error } : {}),
   } });
   const run = config.llm.base_url ? buildRun({ config, response: lastResponse, task, session, env }) : null;
-  return { ...plan, askKind: kind, ...(kind === 'slice' ? { recipePath, taskPath } : { planPath }), run };
+  return { ...plan, askKind: kind, ...(kind === 'slice' && !planMode ? { recipePath, taskPath } : { planPath }), run };
 }
