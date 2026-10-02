@@ -67,7 +67,9 @@ export function formatTray(display = {}, { columns = 80, color = true, now = Dat
   }
   const rule = paint(RULE.repeat(width), 'label', color);
   const prompt = paint('roster> ', 'label', color);
-  return { rule, rail, prompt };
+  const detail = debug ? paint(`thinking ${display.thinking === undefined ? '-' : display.thinking ? 'on' : 'off'}` +
+    `${SEPARATOR}max_tokens ${Number.isSafeInteger(display.maxTokens) ? display.maxTokens : '-'}`, 'white', color) : null;
+  return { rule, rail, detail, prompt };
 }
 
 export function createTray({ output, state, shell, env = process.env, cwd = process.cwd(), services = {} }) {
@@ -105,9 +107,9 @@ export function createTray({ output, state, shell, env = process.env, cwd = proc
   }
 
   function redraw() {
-    const { rule, rail, prompt } = frame();
-    barLines = state.statusbar ? 3 : 0;
-    if (barLines) output.write(`${rule}\n${rail}\n${rule}\n`);
+    const { rule, rail, detail, prompt } = frame();
+    barLines = state.statusbar ? detail === null ? 3 : 4 : 0;
+    if (barLines) output.write(`${rule}\n${rail}\n${rule}\n${detail === null ? '' : `${detail}\n`}`);
     flush();
     shell.setPrompt(prompt);
     shell.prompt(true);

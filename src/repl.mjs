@@ -23,6 +23,7 @@ import { readIssueLogs } from './lib/run-log.mjs';
 import { createDebugLog } from './lib/debug-log.mjs';
 import { createTray } from './shell/tray.mjs';
 import { createTranscript } from './shell/transcript.mjs';
+import { createEventSink, createShellPainter } from './shell/events.mjs';
 import { canonicalCommand, completeCommand, formatHelp } from './shell/commands.mjs';
 import { createHistory, safeHistoryLine } from './shell/history.mjs';
 import { isRunCancelled, RunCancelledError } from './runtime/cancel.mjs';
@@ -160,10 +161,13 @@ export function createDispatcher({
       effort: config.llm.effort, contextUsed: undefined, contextMax: config.llm.context_max, startedAt: null,
       lastFinishReason: null, lastTestName: null, review: null,
       outputTokens: undefined, toolCount: undefined, thinking: undefined, maxTokens: undefined,
-    } };
+    }, transcript: null };
   const notify = () => onStateChange(state);
+  const sink = createEventSink({ issue: () => state.display.issue,
+    emit: createShellPainter({ transcript: () => state.transcript, display: state.display, notify }) });
   const receiveEvent = (event) => {
     const display = state.display;
+    sink.receive(event);
     if (event.type === 'seat-measurement') {
       state.lastMeasuredSeat = Object.fromEntries(['seat', 'provider', 'model', 'effort', 'input', 'output',
         'contextMax', 'finishReason', 'packBudgetChars', 'priorFeedbackIncluded'].map((key) => [key, event[key]]));
