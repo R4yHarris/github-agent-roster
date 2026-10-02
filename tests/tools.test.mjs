@@ -260,6 +260,23 @@ test('every tool refuses "..", vendor, and absolute paths before it runs', async
   assert.ok(!listed.some(({ name }) => name === 'vendor'), 'vendor must not appear in a listing');
 });
 
+test('empty and multiline searches are denied before a tool-start event', async (context) => {
+  const worktree = fixture(context);
+  const events = [];
+  const tools = await createTools({
+    worktree,
+    allowedFiles: ['README.md'],
+    onEvent: async (event) => { events.push(event); },
+  });
+  for (const query of ['', 'Status\nPrivate']) {
+    await assert.rejects(tools.search_text({ query, path: 'README.md' }),
+      /search_text query must be nonempty, single-line literal text/);
+  }
+  assert.ok(!events.some((event) => event.type === 'tool' && event.name === 'search_text'));
+  assert.equal(events.filter((event) =>
+    event.type === 'tool-result' && event.name === 'search_text' && event.status === 'denied').length, 2);
+});
+
 test('a disabled run_test permission refuses execution even for direct harness calls', async (context) => {
   const worktree = fixture(context);
   const tools = await createTools({
