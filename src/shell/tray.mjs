@@ -92,9 +92,11 @@ export function createTray({ output, state, shell, env = process.env, cwd = proc
 
   function erase() {
     if (!visible) return;
-    const position = shell.getCursorPos();
+    const position = shell.getCursorPos?.() ?? {};
+    const rows = Number.isSafeInteger(position.rows) && position.rows > 0 ? position.rows : 0;
     cursorTo(output, 0);
-    moveCursor(output, 0, -(position.rows + barLines));
+    clearLine(output, 0);
+    if (rows + barLines > 0) moveCursor(output, 0, -(rows + barLines));
     clearScreenDown(output);
     visible = false;
   }
@@ -113,6 +115,8 @@ export function createTray({ output, state, shell, env = process.env, cwd = proc
     const { rule, rail, detail, prompt } = frame();
     barLines = state.statusbar ? detail === null ? 3 : 4 : 0;
     if (barLines) output.write(`${rule}\n${rail}\n${rule}\n${detail === null ? '' : `${detail}\n`}`);
+    cursorTo(output, 0);
+    clearLine(output, 0);
     flush();
     shell.setPrompt(prompt);
     shell.prompt(true);
@@ -150,8 +154,9 @@ export function createTray({ output, state, shell, env = process.env, cwd = proc
         return;
       }
       pause();
+      const erased = visible;
       erase();
-      if (replace) {
+      if (replace && erased) {
         moveCursor(output, 0, -1);
         cursorTo(output, 0);
         clearLine(output, 0);

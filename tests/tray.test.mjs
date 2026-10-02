@@ -206,3 +206,89 @@ test('the writer pauses, flushes and repaints the rail around transcript output'
   assert.equal(formatUsage({}, null).includes('Model: -'), true);
   tray.close();
 });
+
+function fakeScreen({ columns = 120 } = {}) {
+  const rows = [''];
+  let row = 0;
+  let col = 0;
+  const put = (text) => {
+    for (const character of text) {
+      while (rows.length <= row) rows.push('');
+      if (character === '\n') { row += 1; col = 0; while (rows.length <= row) rows.push(''); continue; }
+      if (character === '\r') { col = 0; continue; }
+      const line = rows[row].padEnd(col, ' ');
+      rows[row] = line.slice(0, col) + character + line.slice(col + 1);
+      col += 1;
+    }
+  };
+  const write = (value) => {
+    let rest = String(value);
+    while (rest.length > 0) {
+      const index = rest.indexOf('\x1b[');
+      if (index === -1) { put(rest); return; }
+      put(rest.slice(0, index));
+      const match = /^\x1b\[([0-9;]*)([A-Za-z])/.exec(rest.slice(index));
+      if (match === null) { put('\x1b'); rest = rest.slice(index + 1); continue; }
+      const [sequence, args, kind] = match;
+      const count = Number.parseInt(args, 10);
+      if (kind === 'A') row = Math.max(0, row - (count || 1));
+      else if (kind === 'B') row += count || 1;
+      else if (kind === 'G') col = Math.max(0, (count || 1) - 1);
+      else if (kind === 'K') rows[row] = args === '2' ? '' : rows[row].slice(0, col);
+      else if (kind === 'J') { rows[row] = rows[row].slice(0, col); rows.length = row + 1; }
+      rest = rest.slice(index + sequence.length);
+    }
+  };
+  return { rows, write, columns, get lines() { return rows.map((line) => line.trimEnd()); } };
+}
+
+function fakeReadline(screen) {
+  let promptText = 'roster> ';
+  let line = '';
+  const shell = { closed: false, pause() {}, resume() {},
+    setPrompt(value) { promptText = value; },
+    prompt() { screen.write(`\x1b[1G\x1b[2K${promptText}${line}`); },
+    getCursorPos() { return { rows: 0, cols: stripVTControlCharacters(promptText + line).length } } };
+  return { shell, type(text) { line = text; shell.prompt(true); }, submit() { line = ''; screen.write('\n'); } };
+}
+
+test('a rail redraw repaints above the input row and never joins the rule to a typed command', () => {
+  const screen = fakeScreen();
+  const output = { columns: screen.columns, write: (value) => screen.write(value), flush() {} };
+  const { shell, type } = fakeReadline(screen);
+  const state = { display: { ...display, startedAt: Date.now() - 130000 }, config,
+    pendingSecret: null, pendingQuestion: false, statusbar: true, debug: { enabled: true } };
+  const tray = createTray({ output, shell, state, env: {}, cwd: process.cwd() });
+  tray.render();
+  type('/run 108');
+  tray.render();
+  tray.render();
+  const lines = screen.lines;
+  assert.equal(lines.filter((line) => line.includes('/run 108')).length, 1);
+  assert.equal(lines.find((line) => line.includes('/run 108')), 'roster> /run 108');
+  assert.doesNotMatch(screen.lines.join('\n'), /\u2500.*\/run 108|\/run 108.*\u2500/);
+  assert.equal(lines.filter((line) => line.startsWith('\u2500')).length, 2);
+  assert.equal(lines.filter((line) => line.includes('#108 draft')).length, 1);
+  assert.equal(lines.at(-1), 'roster> /run 108');
+  assert.ok(!screen.rows.join('\n').includes('\x1b[34'));
+  assert.ok(!screen.rows.join('\n').includes('\x1b[2m'));
+  tray.close();
+});
+
+test('a rewritten waiting tick never consumes a line the user already submitted', () => {
+  const screen = fakeScreen();
+  const output = { columns: screen.columns, write: (value) => screen.write(value), flush() {} };
+  const { shell, type, submit } = fakeReadline(screen);
+  const state = { display: { ...display, startedAt: Date.now() - 130000 }, config,
+    pendingSecret: null, pendingQuestion: false, statusbar: true, debug: { enabled: false } };
+  const tray = createTray({ output, shell, state, env: {}, cwd: process.cwd() });
+  tray.render();
+  type('/debug on');
+  submit();
+  tray.committed();
+  tray.write('waiting \u00b7 46s\n', output, { replace: true });
+  const lines = screen.lines;
+  assert.equal(lines.filter((line) => line.includes('/debug on')).length, 1);
+  assert.match(lines.join('\n'), /waiting \u00b7 46s/);
+  tray.close();
+});
