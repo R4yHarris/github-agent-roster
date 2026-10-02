@@ -390,7 +390,7 @@ test('model-requested path escape is terminal, not a repairable failed test', as
       }) };
     },
     runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
-  }), /inside the worktree/);
+  }), /outside the worktree/);
   assert.equal(turns, 1);
   assert.equal(existsSync(outside), false);
   assert.equal(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), '# Example\n');
@@ -634,7 +634,7 @@ test('a nonzero run_test returns captured output for the coder to fix in the nex
     ...options, env: { ROSTER_API_KEY: 'test-only-key' }, fetchImpl,
     runTestCommand: async (_program, _args, { timeout }) => {
       testRuns += 1;
-      assert.equal(timeout, 60_000);
+      assert.equal(timeout, 300_000);
       if (testRuns === 1) throw Object.assign(new Error('tests failed'), {
         code: 1, stdout: 'not ok', stderr: 'assertion failed',
       });

@@ -3,6 +3,11 @@ node_modules/
 .worktrees/
 .roster/runs/
 .roster/bench.json
+.roster/logs/
+.roster/history
+.roster/history.*
+.roster/checkpoints/
+.roster/map.md
 .roster/evals.jsonl
 .roster/config.yml
 .roster/config.yml.*

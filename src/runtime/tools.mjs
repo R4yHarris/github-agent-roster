@@ -6,9 +6,39 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { redactSecrets } from './memory.mjs';
 import { assertContractsInitialized, ContractsSubmoduleError, onlyMissingContractsScripts } from '../lib/contracts.mjs';
+import { throwIfCancelled } from './cancel.mjs';
+import { readTaskMetadata } from './estimate.mjs';
 
 const execute = promisify(execFile);
 const managedFiles = new Set(['assignment.md', 'task.md', 'recipe.yml', 'plan.md', 'context.md', 'research.md', 'result.md', 'review.md', 'estimate.md']);
+export class ToolAccessError extends Error {
+  code = 'ROSTER_TOOL_DENIED';
+}
+export const outsideWorktreeMessage = 'Refused: outside the worktree.';
+export class OutsideWorktreeError extends ToolAccessError {
+  constructor() { super(outsideWorktreeMessage); }
+}
+export const docsTestFiles = Object.freeze(['tests/repl.test.mjs']);
+export const docsTestTimeoutMs = 60_000;
+export const fullTestTimeoutMs = 300_000;
+
+export function isOutsideWorktreePath(input) {
+  if (typeof input !== 'string') return false;
+  if (path.isAbsolute(input) || path.win32.isAbsolute(input) || /^[a-z]:/i.test(input)) return true;
+  const parts = partsOf(input).filter((part) => part && part !== '.');
+  return parts.includes('..') || parts[0] === 'vendor';
+}
+
+export function isReadmeOnlyScope(allowedFiles) {
+  return Array.isArray(allowedFiles) && allowedFiles.length === 1 && allowedFiles[0] === 'README.md';
+}
+
+export function testCommandFor(allowedFiles) {
+  return isReadmeOnlyScope(allowedFiles)
+    ? { args: ['--test', ...docsTestFiles], timeoutMs: docsTestTimeoutMs, label: `node --test ${docsTestFiles.join(' ')}` }
+    : { args: ['--test'], timeoutMs: fullTestTimeoutMs, label: 'node --test' };
+}
+
 export const plannerArtifactFiles = Object.freeze(['RECIPE.yml', 'TASK.md', 'ESTIMATE.md']);
 export const planArtifactFiles = Object.freeze(['PLAN.md']);
 
@@ -34,8 +64,8 @@ export function isForbiddenRead(file) {
 
 function isProtectedSurface(file) {
   const parts = partsOf(file);
-  return hasAmbiguousComponents(file) || isSecret(file) ||
-    parts.includes('.git') || parts.includes('agent-policy.yml') ||
+  return hasAmbiguousComponents(file) || isSecret(file) || isDebugLog(file) || isShellHistory(file) || isCheckpoint(file) || isRepoMap(file) ||
+    parts.includes('.git') || parts.includes('agent-policy.yml') || parts[0] === 'vendor' ||
     parts.some((part, index) =>
       (part === '.github' && parts[index + 1] === 'workflows') ||
       (part === 'vendor' && parts[index + 1] === 'github-agent-contracts'));
@@ -50,7 +80,26 @@ export function isForbiddenWrite(file) {
 
 export function isManagedFile(file) {
   const parts = partsOf(file);
-  return parts.length === 1 && managedFiles.has(parts[0]) || isRunLog(file);
+  return parts.length === 1 && managedFiles.has(parts[0]) || isRunLog(file) || isDebugLog(file) || isShellHistory(file) || isCheckpoint(file) || isRepoMap(file);
+}
+
+export function isDebugLog(file) {
+  const parts = partsOf(file);
+  return parts[0] === '.roster' && parts[1] === 'logs';
+}
+
+export function isShellHistory(file) {
+  const parts = partsOf(file);
+  return parts[0] === '.roster' && (parts[1] === 'history' || parts[1]?.startsWith('history.'));
+}
+
+export function isCheckpoint(file) {
+  const parts = partsOf(file);
+  return parts[0] === '.roster' && parts[1] === 'checkpoints';
+}
+
+export function isRepoMap(file) {
+  return partsOf(file).join('/') === '.roster/map.md';
 }
 
 export function isRunLog(file) {
@@ -189,6 +238,7 @@ export async function createTools({
   allowedFiles,
   seat = 'coder',
   plannerArtifacts = plannerArtifactFiles,
+  plannerReads = false,
   env = process.env,
   apiKeyEnv = 'ROSTER_API_KEY',
   memoryPath,
@@ -196,7 +246,9 @@ export async function createTools({
   readmeOnlyDocs = false,
   sliceReadsOnly = false,
   runCommand = execute,
-  onEvent,
+  onEvent, signal,
+  beforeWrite,
+  allowRepoMap = false,
 } = {}) {
   if (!['planner', 'coder'].includes(seat)) throw new TypeError('Only planner and coder seats have file tools');
   if (seat === 'planner' && (!Array.isArray(plannerArtifacts) || !plannerArtifacts.length ||
@@ -204,6 +256,11 @@ export async function createTools({
     throw new TypeError('Planner scope must contain only known root planning artifacts');
   }
   if (typeof allowRunTest !== 'boolean') throw new TypeError('run_test permission must be a boolean');
+  if (typeof allowRepoMap !== 'boolean' || allowRepoMap && seat !== 'coder') throw new TypeError('Repo map access requires a coder policy');
+  if (typeof plannerReads !== 'boolean' || plannerReads &&
+      (seat !== 'planner' || plannerArtifacts.length !== 1 || plannerArtifacts[0] !== 'PLAN.md')) {
+    throw new TypeError('Planner exploration requires PLAN.md-only write scope');
+  }
   if (typeof sliceReadsOnly !== 'boolean' || sliceReadsOnly && seat !== 'coder') {
     throw new TypeError('Slice read scope requires a coder seat and a boolean permission');
   }
@@ -212,12 +269,22 @@ export async function createTools({
     throw new TypeError('README-only docs tools require coder scope limited to README.md');
   }
   if (onEvent !== undefined && typeof onEvent !== 'function') throw new TypeError('Live tool observer must be a function');
+  if (beforeWrite !== undefined && typeof beforeWrite !== 'function') throw new TypeError('Pre-write checkpoint hook must be a function');
   const root = path.resolve(worktree);
   const status = await fs.lstat(root);
   if (!status.isDirectory() || status.isSymbolicLink()) {
     throw new Error('Worktree must be a real directory, not a symlink');
   }
   const canonicalRoot = await fs.realpath(root);
+  if (allowRepoMap) {
+    const file = path.join(root, 'TASK.md');
+    const taskEntry = await fs.lstat(file);
+    if (!taskEntry.isFile() || taskEntry.isSymbolicLink() || taskEntry.nlink !== 1 || taskEntry.size > 65536) {
+      throw new Error('Repo map access requires a valid regular TASK.md');
+    }
+    const metadata = readTaskMetadata(await fs.readFile(file, 'utf8'));
+    if (metadata.difficulty < 4 || metadata.task_class === 'docs') throw new Error('Repo map access requires difficulty 4+ and a non-docs task');
+  }
   let readmeWritten = false;
   const repairFiles = new Set();
   const scopedFiles = () => taskAndRepairFiles(allowedFiles, [...repairFiles]);
@@ -236,35 +303,41 @@ export async function createTools({
   }
 
   function locate(input, { directory = false, write = false } = {}) {
+    throwIfCancelled(signal);
+    if (isOutsideWorktreePath(input)) throw new OutsideWorktreeError();
     if (typeof input !== 'string' || !input.trim() || input.includes('\0') ||
         path.isAbsolute(input) || path.win32.isAbsolute(input)) {
-      throw new Error('Tool path must be relative to the worktree');
+      throw new ToolAccessError('Tool path must be relative to the worktree');
     }
     if (hasAmbiguousComponents(input)) {
-      throw new Error('Tool path must not contain ambiguous Windows components or alternate data streams');
+      throw new ToolAccessError('Tool path must not contain ambiguous Windows components or alternate data streams');
     }
     const file = path.resolve(root, input);
     const relative = path.relative(root, file);
     if ((!directory && !relative) || relative === '..' ||
         relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-      throw new Error('Tool path must stay inside the worktree');
+      throw new OutsideWorktreeError();
     }
     const normalized = relative.split(path.sep).join('/');
+    const mapRead = !write && allowRepoMap && isRepoMap(normalized);
+    if (plannerReads && partsOf(normalized).includes('.roster')) {
+      throw new ToolAccessError('Plan exploration cannot read private .roster artifacts');
+    }
     if (readmeOnlyDocs && !write && !['TASK.md', 'README.md'].includes(normalized) && !repairFiles.has(normalized)) {
-      throw new Error('README-only docs task may read only TASK.md and README.md; other paths are denied');
+      throw new ToolAccessError('README-only docs task may read only TASK.md and README.md; other paths are denied');
     }
     const allowed = seat === 'planner' ? plannerArtifacts.includes(input) : isAllowedFile(normalized, scopedFiles());
     if (write && (!allowed ||
         (memoryPath && path.relative(file, path.resolve(memoryPath)) === ''))) {
-      throw new Error(seat === 'planner'
+      throw new ToolAccessError(seat === 'planner'
         ? `Planner write_file allows only root ${plannerArtifacts.join(', ').replace(/, ([^,]+)$/, ', and $1')}`
         : `Writing ${normalized} is not allowed by TASK.md or worktree policy`);
     }
-    if (isForbiddenRead(normalized)) {
-      throw new Error('Tool access to secrets, Git metadata, policy, workflows, or contracts is refused');
+    if (isForbiddenRead(normalized) && !mapRead) {
+      throw new ToolAccessError('Tool access to secrets, Git metadata, policy, workflows, contracts, or debug logs is refused');
     }
-    if (!write && !readable(normalized, directory)) {
-      throw new Error(`Reading ${normalized} is not allowed by TASK.md slice scope`);
+    if (!write && !mapRead && !readable(normalized, directory)) {
+      throw new ToolAccessError(`Reading ${normalized} is not allowed by TASK.md slice scope`);
     }
     return { file, relative, normalized };
   }
@@ -281,7 +354,7 @@ export async function createTools({
         if (error.code === 'ENOENT') return;
         throw error;
       }
-      if (entry.isSymbolicLink()) throw new Error('Tool paths may not traverse symlinks');
+      if (entry.isSymbolicLink()) throw new ToolAccessError('Tool paths may not traverse symlinks');
       if (index < parts.length - 1 && !entry.isDirectory()) {
         throw new Error('A parent of the tool path is not a directory');
       }
@@ -292,7 +365,7 @@ export async function createTools({
     const canonicalParent = await fs.realpath(path.dirname(file));
     const relative = path.relative(canonicalRoot, canonicalParent);
     if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-      throw new Error('Tool path resolves outside the worktree');
+      throw new OutsideWorktreeError();
     }
   }
 
@@ -308,6 +381,7 @@ export async function createTools({
       await checkComponents(relative);
       const entry = await fs.lstat(file);
       if (!entry.isFile()) throw new Error('read_file requires a regular file');
+      if (isRepoMap(relative.split(path.sep).join('/')) && entry.nlink !== 1) throw new Error('Repo map must be a single-link file');
       await checkParent(file);
       const text = await fs.readFile(file, 'utf8');
       return args.max_lines === undefined ? text : text.split(/\r?\n/).slice(0, args.max_lines).join('\n');
@@ -333,6 +407,7 @@ export async function createTools({
         throw error;
       });
       if (existing && !existing.isFile()) throw new Error('write_file requires a regular file');
+      if (seat === 'coder') await beforeWrite?.({ path: normalized, allowedFiles: scopedFiles() });
       const previous = plannerWrites.get(normalized);
       if (seat === 'planner' && (existing && !previous || !existing && previous)) {
         throw new Error('Planner cannot overwrite pre-existing or externally replaced artifacts');
@@ -375,7 +450,7 @@ export async function createTools({
 
     async list_dir(args = {}) {
       argumentsFor(args, [], ['path']);
-      if (readmeOnlyDocs) throw new Error('README-only docs task does not allow directory listing');
+      if (readmeOnlyDocs) throw new ToolAccessError('README-only docs task does not allow directory listing');
       const { file, relative, normalized } = locate(args.path ?? '.', { directory: true });
       if (relative) await checkComponents(relative);
       const entry = await fs.lstat(file);
@@ -384,7 +459,8 @@ export async function createTools({
       const entries = await fs.readdir(file, { withFileTypes: true });
       return entries.filter((item) => {
         const child = path.posix.join(normalized, item.name);
-        return !isProtectedSurface(child) && readable(child, item.isDirectory());
+        return !isProtectedSurface(child) && (!plannerReads || !partsOf(child).includes('.roster')) &&
+          readable(child, item.isDirectory());
       })
         .map((item) => ({
         name: item.name,
@@ -394,28 +470,35 @@ export async function createTools({
     },
 
     async run_test(args = {}) {
+      throwIfCancelled(signal);
       argumentsFor(args, []);
       if (readmeOnlyDocs && !readmeWritten) {
         throw new Error('README-only docs task must write README.md before running tests or other tools');
       }
-      if (!allowRunTest) throw new Error('run_test is disabled by tools.run_test');
+      if (!allowRunTest) throw new ToolAccessError('run_test is disabled by tools.run_test');
       const testEnv = { ...env, ROSTER_SEAT: 'coder' };
       for (const name of [apiKeyEnv, 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH',
         'GH_TOKEN', 'GITHUB_TOKEN', 'NODE_TEST_CONTEXT']) delete testEnv[name];
+      let command = testCommandFor(seat === 'coder' ? allowedFiles : []);
+      if (command.args.length > 1) {
+        const docsCheck = await fs.lstat(path.join(root, ...docsTestFiles[0].split('/'))).catch(() => null);
+        if (!docsCheck?.isFile()) command = testCommandFor([]);
+      }
       try {
         await assertContractsInitialized(root);
-        const { stdout, stderr } = await runCommand(process.execPath, ['--test'], {
-          cwd: root, timeout: 60_000, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
-          env: testEnv,
+        const { stdout, stderr } = await runCommand(process.execPath, command.args, {
+          cwd: root, timeout: command.timeoutMs, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
+          env: testEnv, signal,
         });
         return { exit_code: 0, stdout, stderr };
       } catch (error) {
+        throwIfCancelled(signal);
         if (error instanceof ContractsSubmoduleError) {
           await onEvent?.({ type: 'contracts-uninitialized' });
           throw error;
         }
         if (error.code === 'ETIMEDOUT' || error.killed) {
-          throw new Error('node --test timed out after 60 seconds', { cause: error });
+          throw new Error(`${command.label} timed out after ${command.timeoutMs / 1000} seconds`, { cause: error });
         }
         if (typeof error.code === 'number') {
           const result = { exit_code: error.code, stdout: error.stdout ?? '', stderr: error.stderr ?? '' };
@@ -440,7 +523,7 @@ export async function createTools({
     async search_text(args) {
       argumentsFor(args, ['query'], ['path']);
       if (readmeOnlyDocs) {
-        throw new Error('README-only docs task does not allow repository search; read README.md directly');
+        throw new ToolAccessError('README-only docs task does not allow repository search; read README.md directly');
       }
       if (typeof args.query !== 'string' || !args.query.length || /[\r\n\0]/.test(args.query)) {
         throw new TypeError('search_text query must be nonempty, single-line literal text');
@@ -473,12 +556,34 @@ export async function createTools({
       return { matches: matches.slice(0, 50), truncated: matches.length > 50 };
     },
   };
-  const selected = seat === 'planner' ? { write_file: tools.write_file } : tools;
+  const guarded = Object.fromEntries(Object.entries(tools).map(([name, execute]) => [name, async (args) => {
+    if (isOutsideWorktreePath(args?.path)) throw new OutsideWorktreeError();
+    return execute(args);
+  }]));
+  const selected = seat === 'planner' ? plannerReads
+    ? { read_file: guarded.read_file, list_dir: guarded.list_dir, search_text: guarded.search_text, write_file: guarded.write_file }
+    : { write_file: guarded.write_file } : guarded;
   if (!onEvent) return selected;
   return Object.fromEntries(Object.entries(selected).map(([name, execute]) => [name, async (args) => {
     const location = args?.path ?? (['list_dir', 'search_text'].includes(name) ? '.' : undefined);
+    if (isOutsideWorktreePath(location)) {
+      await onEvent({ type: 'tool-refused', name });
+      await onEvent({ type: 'tool-result', name, path: location, status: 'denied' });
+      throw new OutsideWorktreeError();
+    }
     await onEvent({ type: 'tool', name, ...(location === undefined ? {} : { path: location }) });
-    const result = await execute(args);
+    let result;
+    try {
+      result = await execute(args);
+    } catch (error) {
+      if (error?.code === 'ROSTER_RUN_LOG') throw error;
+      await onEvent({ type: 'tool-result', name, ...(location === undefined ? {} : { path: location }),
+        status: error instanceof ToolAccessError ? 'denied' : 'error',
+        ...(error?.tests?.exit_code === undefined ? {} : { exit_code: error.tests.exit_code }) });
+      throw error;
+    }
+    await onEvent({ type: 'tool-result', name, ...(location === undefined ? {} : { path: location }),
+      status: 'ok', ...(result?.exit_code === undefined ? {} : { exit_code: result.exit_code }) });
     if (name === 'write_file' && [...plannerArtifactFiles, ...planArtifactFiles].includes(result.path)) {
       await onEvent({ type: 'wrote', path: result.path });
     }

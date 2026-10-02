@@ -33,6 +33,47 @@ function dispatcher({ env = {}, services = {}, config: activeConfig = config } =
   return { ...commands, output, errorOutput };
 }
 
+test('/debug toggles process logging without config changes and /log debug tails its file', async (t) => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'roster-repl-debug-'));
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  const output = capture();
+  let active;
+  const shell = createDispatcher({ cwd: repoRoot, repoRoot: root, config, env: {},
+    output, errorOutput: capture(), services: {
+      repositoryRoot: () => repoRoot,
+      setConfigValue: () => assert.fail('Debug must not persist config'),
+      runBuiltinIssue: async (issue, options) => {
+        active = options.debug;
+        await options.debug.record({ repoRoot, issue: Number(issue), seat: 'coder', event: { type: 'seat-start' } });
+        return { issue: { number: Number(issue) }, repoRoot, askKind: 'slice' };
+      },
+    } });
+  await shell.dispatch('/run 42');
+  assert.equal(active.path, null);
+  await shell.dispatch('/debug on');
+  await shell.dispatch('/run 42');
+  const before = readFileSync(active.path, 'utf8');
+  await shell.dispatch('/debug off');
+  await shell.dispatch('/run 42');
+  assert.equal(readFileSync(active.path, 'utf8'), before);
+  assert.equal(shell.state.debug.enabled, false);
+  await assert.rejects(shell.dispatch('/log debug'), /Debug logging is off/);
+  await shell.dispatch('/debug on');
+  await shell.dispatch('/log debug');
+  assert.match(output.text, /Debug logging on\.\n/);
+  assert.match(output.text, /Debug logging off\.\n/);
+  assert.match(output.text, /"phase":"seat-start"/);
+  await assert.rejects(shell.dispatch('/debug true'), /Use \/debug on, \/debug off, or \/debug status/);
+});
+
+test('ROSTER_DEBUG=1 enables a shell process until /debug off overrides it', async () => {
+  const shell = dispatcher({ env: { ROSTER_DEBUG: '1' } });
+  assert.equal(shell.state.debug.enabled, true);
+  await shell.dispatch('/debug off');
+  assert.equal(shell.state.debug.enabled, false);
+  await assert.rejects(shell.dispatch('/log debug'), /Debug logging is off/);
+});
+
 test('slash dispatcher calls existing services and keeps one run in the shell', async () => {
   const calls = [];
   let activeConfig = config;
@@ -68,10 +109,6 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
         return { issue: { number: 42 }, openPr: null, offline: options.offline,
           worktreePath: join(cwd, '.worktrees', 'issue-42'), worktreeExists: true };
       },
-      readDiffStatus: async (options) => {
-        calls.push(['diff', options.cwd, options.untracked]);
-        return options.untracked ? '?? notes.txt\n' : '';
-      },
       formatStatus: (status) => `Issue: #${status.issue.number}\nOpen PR: none\n` +
         `Worktree: ${status.worktreePath}\n`,
       recordEvaluation: async (target, verdict, difficulty, again, options) => {
@@ -103,7 +140,7 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
     },
   });
 
-  assert.equal(banner, 'roster-repl-project | seat coder | runtime builtin | llm stub');
+  assert.equal(banner, 'github-agent-roster');
   assert.equal(await dispatch('/ask Add a status section.'), true);
   await dispatch('/model local-model');
   await dispatch('/effort h');
@@ -113,8 +150,6 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
   assert.equal(state.lastRun.task, 'issue-42');
   await dispatch('/status');
   await dispatch('/status --offline');
-  await dispatch('/diff');
-  await dispatch('/diff --untracked');
   await dispatch('/eval roster-42-coder accept 3 n');
   await dispatch('/stats HEAD');
   await dispatch('/recommend feat');
@@ -130,14 +165,8 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
   assert.equal(await dispatch('/quit'), false);
 
   assert.deepEqual(calls, [
-    ['ask', 'Add a status section.'],
-    ['set-config', 'model', 'local-model'],
-    ['set-config', 'effort', 'h'],
+    ['local-ask', 'Add a status section.'],
     ['run', '42', false, false, 'local-model', 'h'],
-    ['status', 42, false],
-    ['status', 42, true],
-    ['diff', cwd, false],
-    ['diff', cwd, true],
     ['eval', 'roster-42-coder', 'accept', '3', 'n', cwd],
     ['stats', 'HEAD'],
     ['recommend-metrics'],
@@ -150,17 +179,15 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
   assert.match(output.text, /Worktree: issue-42/);
   assert.match(output.text, /Model: local-model/);
   assert.match(output.text, /Effort: h/);
-  assert.match(output.text, /Next: gh issue create --body-file ask\.md/);
+  assert.doesNotMatch(output.text, /Next: gh issue create/);
   assert.match(output.text, /--message "feat: issue 42" --merge-when-green/);
   assert.doesNotMatch(output.text, /--merge-when-green --merge-when-green/);
   assert.match(output.text, /Issue: #42/);
   assert.match(output.text, /Worktree: .+issue-42/);
-  assert.match(output.text, /No tracked changes/);
-  assert.match(output.text, /\?\? notes\.txt/);
   assert.match(output.text, /Commands:\n/);
   assert.ok(!output.text.includes('private-value'));
   assert.match(output.text, /ROSTER_TOKEN is stored \(value hidden/);
-  assert.match(errorOutput.text, /Unknown command: \/unknown/);
+  assert.match(errorOutput.text, /Unknown command\. \/help lists commands\./);
   assert.doesNotMatch(errorOutput.text, /Unknown command: plain/);
 });
 
@@ -212,7 +239,7 @@ test('/model clear and /run --auto-model opt into routing without persisting a s
   });
   await shell.dispatch('/model clear');
   await shell.dispatch('/run 42 --auto-model');
-  assert.deepEqual(calls, [['set', 'model', ''], ['run', '42', true, '']]);
+  assert.deepEqual(calls, [['run', '42', true, '']]);
   assert.match(shell.output.text, /Model: \(unset\)/);
 });
 
@@ -343,13 +370,13 @@ test('a local ask publishes from its worktree and does not comment on an issue',
 
 test('clarification is visible in the shell and never offers publication', async () => {
   const shell = dispatcher({ services: {
-    submitAsk: async () => ({ mode: 'clarify', askKind: 'clarify', clarification: 'Name one outcome and allowed files.' }),
+    runBuiltinAsk: async () => ({ planningOnly: true, askKind: 'clarify', clarification: 'Name one outcome and allowed files.' }),
     runBuiltinIssue: async () => ({ planningOnly: true, askKind: 'clarify', command: null,
       clarification: 'Name one outcome and allowed files.', issue: { number: 92 } }),
   } });
   await shell.dispatch('/ask Improve things');
   await shell.dispatch('/run 92');
-  assert.match(shell.output.text, /Ask kind: clarify[\s\S]*Name one outcome/);
+  assert.match(shell.output.text, /Name one outcome/);
   assert.doesNotMatch(shell.output.text, /Use \/publish|TASK: undefined|TASK validates/);
   await assert.rejects(shell.dispatch('/publish --skip-review'), /clarification is not code/);
 });
@@ -391,26 +418,27 @@ test('/run reports a failed planner stub without throwing and leaves the shell u
   assert.equal(await shell.dispatch('/quit'), false);
 });
 
-test('slash ask prints the created issue URL when gh is available', async () => {
+test('slash ask runs a local slice and never creates a GitHub issue', async () => {
   const { dispatch, state, output } = dispatcher({
-    services: { submitAsk: async () => ({
-      mode: 'issue', number: 42, url: 'https://github.com/example/project/issues/42',
-    }) },
+    services: { submitAsk: () => assert.fail('Slash ask must not create an issue'),
+      runBuiltinAsk: async () => ({ local: true, task: 'local-test', askKind: 'slice' }) },
   });
   await dispatch('/ask Add status to README.');
-  assert.equal(state.lastAsk.number, 42);
-  assert.equal(output.text, 'Ask kind: slice\nIssue: https://github.com/example/project/issues/42\n');
+  assert.equal(state.lastRun.local, true);
+  assert.equal(state.lastRequest.kind, 'ask');
+  assert.doesNotMatch(output.text, /Issue: https:\/\//);
 });
 
-test('banner reports the configured LLM endpoint when not using the stub', () => {
+test('the display reports the configured LLM host beneath the fixed product banner', () => {
   const llm = parseConfig(readFileSync(join(root, 'roster.config.example.yml'), 'utf8')
     .replace('base_url: ""', 'base_url: http://localhost:1234/v1')
     .replace('model: ""', 'model: local-model'));
-  const { banner } = createDispatcher({
+  const { banner, state } = createDispatcher({
     cwd, repoRoot: root, config: llm, env: {},
     services: { repositoryRoot: () => cwd },
   });
-  assert.equal(banner, 'roster-repl-project | seat coder | runtime builtin | llm http://localhost:1234/v1');
+  assert.equal(banner, 'github-agent-roster');
+  assert.equal(state.display.host, 'localhost:1234');
 });
 
 test('/publish prints the SDK command without App env and uses the reviewed worktree with App env', async () => {
@@ -745,7 +773,7 @@ test('TTY shell prints the banner and exits zero on /quit and Ctrl+C', async () 
     let text = '';
     output.on('data', (chunk) => { text += chunk.toString('utf8'); });
     const done = startRepl({
-      input, output, errorOutput, cwd, repoRoot: root, config,
+      input, output, errorOutput, cwd, repoRoot: root, config, historyRoot: root,
       env: {}, services: { repositoryRoot: () => cwd },
     });
     input.write(line);
@@ -755,7 +783,7 @@ test('TTY shell prints the banner and exits zero on /quit and Ctrl+C', async () 
   }
   const quit = await runLine('/quit\n');
   assert.equal(quit.code, 0);
-  assert.match(quit.text, /roster-repl-project \| seat coder \| runtime builtin \| llm stub/);
+  assert.match(quit.text, /github-agent-roster/);
   assert.match(quit.text, /roster> /);
 
   const interrupt = await runLine('\x03');
@@ -789,7 +817,7 @@ test('TTY vault entry hides the secret while storing it through the vault librar
     });
   }
   const done = startRepl({
-    input, output, cwd, repoRoot: root, config, env: {},
+    input, output, cwd, repoRoot: root, config, env: {}, historyRoot: root,
     services: {
       repositoryRoot: () => cwd,
       createFileVault: () => ({
@@ -819,7 +847,7 @@ test('pasting a vault command and secret together still hides the secret', async
   let stored;
   output.on('data', (chunk) => { text += chunk.toString('utf8'); });
   const done = startRepl({
-    input, output, cwd, repoRoot: root, config, env: {},
+    input, output, cwd, repoRoot: root, config, env: {}, historyRoot: root,
     services: {
       repositoryRoot: () => cwd,
       createFileVault: () => ({

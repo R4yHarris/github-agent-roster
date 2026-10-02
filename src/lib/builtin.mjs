@@ -5,9 +5,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { buildPublishEnv, buildRun, resolvePublishModel, RUN_ENV_NAMES } from '../metrics/run.mjs';
-import { cleanAskText, taskFilesAllowed } from '../planner/stub.mjs';
+import { cleanAskText, renderAssignment, taskFilesAllowed } from '../planner/stub.mjs';
 import { runCoder } from '../seats/coder.mjs';
-import { preparePlannerHandoff, readPlannerHandoff, readPlannerTask, readPreviousReview, runPlanner } from '../seats/planner.mjs';
+import { acceptPlannerPlan, preparePlannerHandoff, readPlannerHandoff, readPlannerTask, readPreviousReview, runPlanner } from '../seats/planner.mjs';
 import { requirePassingReview, runReviewer } from '../seats/reviewer.mjs';
 import { isAllowedFile, isForbiddenWrite, isManagedFile, taskAndRepairFiles } from '../runtime/tools.mjs';
 import { checkExcellence, redactEvidence } from '../runtime/excellence.mjs';
@@ -32,6 +32,10 @@ import { selectReasoning } from '../llm/reasoning.mjs';
 import { readTaskMetadata } from '../runtime/estimate.mjs';
 import { loadCapabilities } from './capabilities.mjs';
 import { initializeWorktreeSubmodules } from './contracts.mjs';
+import { createDebugLog } from './debug-log.mjs';
+import { isRunCancelled, throwIfCancelled } from '../runtime/cancel.mjs';
+import { issueWave, requireEarlierWavesClosed } from './waves.mjs';
+import { githubRepository } from './issue.mjs';
 
 const execFileAsync = promisify(execFile);
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -146,7 +150,12 @@ export async function runBuiltinTask({
   task = env.AI_TASK || `local-${randomBytes(8).toString('hex')}`,
   session = env.AI_SESSION || `roster-${randomBytes(8).toString('hex')}-coder`,
   log = console.log, errorOutput = process.stderr, fetchImpl, vault, runTestCommand,
+  debug = createDebugLog({ env }),
+  onRunEvent,
+  signal,
+  steeringControl,
 } = {}) {
+  throwIfCancelled(signal);
   config = { ...config, capabilities: config.capabilities ?? await loadCapabilities({ cwd }) };
   if (typeof task !== 'string' || !IDENTIFIER.test(task) ||
       typeof session !== 'string' || !IDENTIFIER.test(session)) {
@@ -184,6 +193,9 @@ export async function runBuiltinTask({
     (!existingRuns.length || existingRuns.some((file) => file.endsWith('.jsonl')));
   const liveLog = await createRunLog({
     repoRoot: worktreePath, session, env, apiKeyEnv: config.llm.api_key_env, errorOutput,
+    debug, issue: /^issue-([1-9]\d*)$/.test(task) && Number.isSafeInteger(Number(task.slice(6)))
+      ? Number(task.slice(6)) : null,
+    observe: onRunEvent,
   });
   const metricEnv = { ...env };
   for (const name of [...RUN_ENV_NAMES, config.llm.api_key_env,
@@ -192,7 +204,7 @@ export async function runBuiltinTask({
     const plannerSession = `roster-${randomBytes(8).toString('hex')}-planner`;
     const planner = await liveLog.seat('planner', plannerSession, config, (onEvent) => runPlanner({
       worktree: worktreePath, repoRoot, ask: document.ask, title: document.title, reference: `local:${task}`,
-      task, session: plannerSession, config, env, fetchImpl, vault, onEvent, askKind, retryCommand,
+      task, session: plannerSession, config, env, fetchImpl, vault, onEvent, askKind, retryCommand, signal,
     }));
     if (journalEnabled) await recordRun({ task, session: plannerSession, provider: planner.run?.provider }, {
       cwd: worktreePath, env: { ...metricEnv, ...planner.run?.env }, run: planner.run,
@@ -214,7 +226,7 @@ export async function runBuiltinTask({
       model: result.mode === 'llm' ? result.model : config.llm.model } };
     const review = await liveLog.seat('reviewer', reviewerSession, reviewConfig, (onEvent) => runReviewer({
       worktree: worktreePath, repoRoot, config: reviewConfig, coderResult: result,
-      env, fetchImpl, vault, onEvent, askKind, retryCommand,
+      env, fetchImpl, vault, onEvent, askKind, retryCommand, signal,
     }));
     const reviewRun = review.queried ? buildRun({
       config: reviewConfig, response: review.response, task, session: reviewerSession, env,
@@ -228,12 +240,12 @@ export async function runBuiltinTask({
   try {
     result = await liveLog.seat('coder', session, config, (onEvent) => runCoder({
       worktree: worktreePath, repoRoot, config, env, task, session,
-      fetchImpl, vault, runTestCommand, onEvent, askKind, retryCommand,
+      fetchImpl, vault, runTestCommand, onEvent, askKind, retryCommand, signal, steeringControl,
     }));
   } catch (error) {
     if (error instanceof Error && error.result) {
       await record(error.result);
-      error.result.review = (await reviewSeat(error.result)).review;
+      if (!isRunCancelled(error)) error.result.review = (await reviewSeat(error.result)).review;
     }
     throw error;
   }
@@ -279,6 +291,47 @@ async function prepareLocalAsk(ask, { cwd, config, runCommand }) {
     issue: { title: ask.split('\n')[0], body: ask }, local: true, reused: false };
 }
 
+async function reusePreparedAssignment(run, { cwd, config, runCommand, ask, issueNumber }) {
+  const root = path.resolve((await runCommand('git', ['rev-parse', '--show-toplevel'], cwd)).trim());
+  const expectedTask = issueNumber === null ? run?.task : `issue-${issueNumber}`;
+  if (!run || typeof run.ask !== 'string' || typeof run.worktreePath !== 'string' ||
+      typeof run.repoRoot !== 'string' || !run.issue || run.task !== expectedTask ||
+      (issueNumber === null
+        ? !run.local || !/^local-[a-f0-9]{16}$/.test(run.task) || run.ask !== ask
+        : run.local || run.issue.number !== Number(issueNumber))) {
+    throw new Error('Retry requires the unchanged prepared Ask and task worktree');
+  }
+  const expectedPath = path.resolve(root, config.paths.worktrees, run.task);
+  const same = (left, right) => process.platform === 'win32'
+    ? path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase()
+    : path.resolve(left) === path.resolve(right);
+  if (!same(root, run.repoRoot) || !same(expectedPath, run.worktreePath)) {
+    throw new Error('Retry worktree does not belong to the current repository and task');
+  }
+  await ensureLocalPath(expectedPath, root);
+  const inventory = await runCommand('git', ['worktree', 'list', '--porcelain', '-z'], root);
+  const registered = inventory.split('\0\0').some((record) => {
+    const fields = record.split('\0');
+    const worktree = fields.find((field) => field.startsWith('worktree '))?.slice(9);
+    return worktree && same(worktree, expectedPath) && fields.includes(`branch refs/heads/${run.task}`);
+  });
+  if (!registered) throw new Error('Retry worktree registration or branch changed; refusing a second worktree');
+  const file = path.join(expectedPath, 'ASSIGNMENT.md');
+  await ensureLocalPath(file, root);
+  const entry = await fs.lstat(file);
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1 || entry.size > 65536) {
+    throw new Error('Retry assignment must be a regular single-link file');
+  }
+  const expected = run.local ? `# Local Ask\n\n${run.ask}\n` : renderAssignment(run.issue);
+  if ((await fs.readFile(file, 'utf8')).replaceAll('\r\n', '\n') !== expected.replaceAll('\r\n', '\n')) {
+    throw new Error('Retry assignment changed; refusing to replace the prepared Ask');
+  }
+  await initializeWorktreeSubmodules(expectedPath, runCommand);
+  return { repoRoot: root, worktreePath: expectedPath, task: run.task, ask: run.ask, issue: run.issue,
+    session: run.session, assignmentPath: file, envPath: run.envPath, metadata: run.metadata,
+    local: run.local, reused: true };
+}
+
 function taskSummary(planner, effort) {
   const document = parseTaskDocument(planner.task);
   return `Task summary:\nOutcome: ${document.title}\n` +
@@ -308,7 +361,16 @@ async function runBuiltinAssignment(issueNumber, {
   issueCommenter = commentMergedIssue,
   metricsLoader = loadMetrics,
   now,
+  debug = createDebugLog({ env }),
+  onRunEvent,
+  signal,
+  preparedRun,
+  onPrepared,
+  planMode = false,
+  acceptPlan = false,
+  steeringControl,
 } = {}) {
+  throwIfCancelled(signal);
   config = { ...config, capabilities: config.capabilities ?? await loadCapabilities({ cwd }) };
   const retryCommand = issueNumber === null ? retryCommandForTask(null) :
     `${retryCommandForTask(`issue-${issueNumber}`)}${autoModel ? ' --auto-model' : ''}`;
@@ -321,6 +383,8 @@ async function runBuiltinAssignment(issueNumber, {
   if (typeof autoModel !== 'boolean') throw new TypeError('--auto-model must be a boolean');
   if (typeof skipReview !== 'boolean') throw new TypeError('--skip-review must be a boolean');
   if (typeof confirm !== 'boolean') throw new TypeError('--confirm must be a boolean');
+  if (typeof planMode !== 'boolean' || typeof acceptPlan !== 'boolean') throw new TypeError('Plan mode must be a boolean');
+  if (planMode && (publish || confirm || acceptPlan)) throw new TypeError('--plan cannot combine with --publish, --confirm, or plan acceptance');
   if (confirm && publish) throw new TypeError('--confirm cannot be combined with --publish');
   if (publish) requirePublicationEnabled(config);
   const reviewBypass = skipReview || !isReviewRequired(config);
@@ -338,14 +402,34 @@ async function runBuiltinAssignment(issueNumber, {
   }
   const commandEnv = withoutLlmKeys(env, config);
   const contractsPath = resolveContractsPath({ repoRoot, cwd, env });
-  const issueCommand = runCommand ?? (async (program, args, workingDirectory) =>
-    (await execFileAsync(program, args, { cwd: workingDirectory, env: commandEnv, encoding: 'utf8' })).stdout);
-  const prepared = issueNumber === null ? await prepareLocalAsk(ask, { cwd, config, runCommand: issueCommand })
+  const issueCommand = async (program, args, workingDirectory) => {
+    throwIfCancelled(signal);
+    try {
+      const result = runCommand ? await runCommand(program, args, workingDirectory)
+        : (await execFileAsync(program, args, { cwd: workingDirectory, env: commandEnv, encoding: 'utf8', signal })).stdout;
+      throwIfCancelled(signal);
+      return result;
+    } catch (error) {
+      throwIfCancelled(signal);
+      throw error;
+    }
+  };
+  const prepared = preparedRun ? await reusePreparedAssignment(preparedRun, {
+    cwd, config, runCommand: issueCommand, ask, issueNumber,
+  }) : issueNumber === null ? await prepareLocalAsk(ask, { cwd, config, runCommand: issueCommand })
     : await runIssue(issueNumber, {
     cwd, runCommand: issueCommand, worktrees: config.paths.worktrees, log: () => {}, now, config,
-    beforeWorktree: (root, worktreePath) => ensureLocalPath(worktreePath, root),
+    beforeWorktree: async (root, worktreePath, issue, repository) => {
+      await ensureLocalPath(worktreePath, root);
+      await requireEarlierWavesClosed({ issue, repository, cwd: root, runCommand: issueCommand });
+    },
     sessionId: `roster-${issueNumber}-coder`, recordPreparation: false,
   });
+  if (preparedRun && !prepared.local && issueWave(prepared.issue) > 1) {
+    const repository = githubRepository((await issueCommand('git', ['remote', 'get-url', 'origin'], prepared.repoRoot)).trim());
+    await requireEarlierWavesClosed({ issue: prepared.issue, repository, cwd: prepared.repoRoot, runCommand: issueCommand });
+  }
+  await onPrepared?.(prepared);
   const reference = prepared.local ? `local:${prepared.task}` : `issue:${prepared.issue.number}`;
   const sessionPrefix = prepared.local ? `roster-${prepared.task}` : `roster-${prepared.issue.number}`;
   const { worktreePath } = prepared;
@@ -374,7 +458,7 @@ async function runBuiltinAssignment(issueNumber, {
       log(`Auto-model: ${taskClass ? 'no eligible fleet profile or evidence' : 'no recognized task class'}; deterministic stub`);
     }
   }
-  const existing = prepared.reused && ['slice', 'clarify'].includes(classification.kind) ? await readPlannerHandoff({
+  const existing = !planMode && !acceptPlan && prepared.reused && ['slice', 'clarify'].includes(classification.kind) ? await readPlannerHandoff({
     worktree: worktreePath, reference, ask: prepared.ask, lockedModel: route?.profile.model,
     issueTitle: prepared.issue.title, issueBody: prepared.issue.body,
   }) : { plan: null };
@@ -407,25 +491,31 @@ async function runBuiltinAssignment(issueNumber, {
   if (existing.reason) log(existing.reason);
   const archivePath = prepared.reused ? await archiveRunArtifacts(worktreePath, {
     task: prepared.task, git: (args) => git(worktreePath, args, commandEnv),
-    preserve: existing.plan ? existing.plan.normalizedRecipe ? ['TASK.md'] : ['RECIPE.yml', 'TASK.md'] : [],
+    preserve: acceptPlan ? ['PLAN.md'] : existing.plan
+      ? existing.plan.normalizedRecipe ? ['TASK.md'] : ['RECIPE.yml', 'TASK.md'] : [],
   }) : null;
   if (archivePath) log(`Previous generated run artifacts preserved: ${archivePath}`);
   const liveLog = await createRunLog({
     repoRoot: prepared.repoRoot, session: prepared.session, env,
     apiKeyEnv: activeConfig.llm.api_key_env, errorOutput, now,
+    debug, issue: prepared.issue.number ?? null,
+    observe: onRunEvent,
   });
   const metricEnv = { ...commandEnv };
   for (const name of [...RUN_ENV_NAMES, 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH',
     'GH_TOKEN', 'GITHUB_TOKEN']) delete metricEnv[name];
   let planner;
   try {
-    planner = existing.plan ? await preparePlannerHandoff(existing.plan, {
+    planner = acceptPlan ? await acceptPlannerPlan({ worktree: worktreePath, ask: prepared.ask,
+      title: prepared.issue.title, reference, learningRoot: prepared.repoRoot, config: activeConfig, env, signal,
+      lockedModel: route?.profile.model })
+      : existing.plan ? await preparePlannerHandoff(existing.plan, {
       worktree: worktreePath, learningRoot: prepared.repoRoot, config: activeConfig, env,
     }) : await liveLog.seat('planner', sessions.planner, activeConfig, (onEvent) => runPlanner({
       worktree: worktreePath, repoRoot, issue: prepared.issue, config: activeConfig,
       ask: prepared.ask, reference, metadata: prepared.metadata ?? undefined, task: prepared.task,
       session: sessions.planner, fetchImpl, env, vault, learningRoot: prepared.repoRoot,
-      lockedModel: route?.profile.model, onEvent, askKind, retryCommand,
+      lockedModel: route?.profile.model, onEvent, askKind, retryCommand, signal, planMode,
     }));
     if (planner.reused) log('planner skipped artifacts valid; starting coder.');
   } catch (error) {
@@ -437,7 +527,7 @@ async function runBuiltinAssignment(issueNumber, {
     }
     throw error;
   }
-  const taskClass = askKind === 'slice' ? planner.metadata.task_class
+  const taskClass = askKind === 'slice' && !planMode ? planner.metadata.task_class
     : prepared.metadata?.task_class ?? inferTaskClass(prepared.issue.title) ?? 'feat';
   const recordSeat = async (session, run, excellence) => recordRun({
     session, task: prepared.task, task_class: taskClass, provider: run?.provider,
@@ -445,6 +535,12 @@ async function runBuiltinAssignment(issueNumber, {
   }, { cwd: prepared.repoRoot, env: { ...metricEnv, ...run?.env }, createDirectory: true, run });
   const plannerRun = planner.run;
   if (!planner.reused) await recordSeat(sessions.planner, plannerRun);
+  if (planMode && askKind === 'slice') {
+    log(`PLAN: ${planner.planPath}\nPlan mode: no TASK, recipe, product edits, coder, tests, reviewer, or publisher ran.`);
+    return { ...prepared, askKind, classification, planner, planPath: planner.planPath, planMode: true,
+      planningOnly: true, failed: false, sessions, runs: { planner: plannerRun, coder: null, reviewer: null },
+      run: null, command: null, logPath: liveLog.path, logSession: liveLog.session };
+  }
   if (askKind !== 'slice') {
     log(`PLAN: ${planner.planPath}\nReview the ${askKind} child issue drafts and wave labels on GitHub, ` +
       'then run each bounded slice separately. No coder, reviewer, tests, or publisher ran.');
@@ -474,7 +570,7 @@ async function runBuiltinAssignment(issueNumber, {
     } };
     const review = await liveLog.seat('reviewer', sessions.reviewer, reviewConfig, (onEvent) => runReviewer({
       worktree: worktreePath, repoRoot, config: reviewConfig,
-      coderResult, fetchImpl, env, vault, onEvent, askKind, retryCommand,
+      coderResult, fetchImpl, env, vault, onEvent, askKind, retryCommand, signal,
     }));
     const reviewerRun = review.queried ? buildRun({
       config: reviewConfig, response: review.response, session: sessions.reviewer,
@@ -487,12 +583,12 @@ async function runBuiltinAssignment(issueNumber, {
   try {
     result = await liveLog.seat('coder', sessions.coder, coderConfig, (onEvent) => runCoder({
       worktree: worktreePath, repoRoot, config: coderConfig, task: prepared.task, session: sessions.coder,
-      fetchImpl, env, vault, runTestCommand, priorFeedback: planner.feedback?.context, onEvent, askKind, retryCommand,
+      fetchImpl, env, vault, runTestCommand, priorFeedback: planner.feedback?.context, onEvent, askKind, retryCommand, signal, steeringControl,
     }));
   } catch (error) {
     if (error instanceof Error && error.result) {
       await recordSeat(sessions.coder, error.result.run, error.result.excellence);
-      error.result.review = (await reviewSeat(error.result)).review;
+      if (!isRunCancelled(error)) error.result.review = (await reviewSeat(error.result)).review;
     }
     throw error;
   }

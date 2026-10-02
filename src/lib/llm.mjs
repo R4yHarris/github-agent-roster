@@ -5,8 +5,10 @@ import { UnsupportedFinishReasonError } from '../llm/finish-reason.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
 
 export function createBuiltinChat(config, {
-  fetchImpl, env = process.env, vault, onEvent, retryCommand, clock,
+  fetchImpl, env = process.env, vault, onEvent, retryCommand, clock, signal,
+  retryLength = true,
 } = {}) {
+  if (typeof retryLength !== 'boolean') throw new TypeError('Length retry permission must be a boolean');
   const transport = createChat({ llm: {
     base_url: config.llm.base_url,
     model: config.llm.model,
@@ -22,14 +24,20 @@ export function createBuiltinChat(config, {
     ...event, ...(event.type === 'http' ? {
       modelPrior: config.llm.model_prior ?? modelCapabilityPrior(config.llm.model).strength,
     } : {}),
-  })), retryCommand, clock });
+  })), retryCommand, clock, signal });
   if (transport === null) return null;
   let completionCap = config.llm.max_tokens ?? 4096;
+  const docsSlice = config.llm.task_kind === 'slice' && config.llm.task_class === 'docs';
+  let reasoningDisabled = false;
   let lengthRetried = false;
   let lastAttempts = 0;
   let lastUsage = null;
-  const chat = async (request) => {
-    let current = { ...request, max_tokens: request.max_tokens ?? completionCap };
+  const chat = async (request, { signal: requestSignal = signal } = {}) => {
+    let current = { ...request, max_tokens: request.max_tokens ?? completionCap,
+      ...(reasoningDisabled ? { reasoning_effort: 'none',
+        ...(usesDeepseekReasoning(config.llm) ? { chat_template_kwargs: { thinking: false } } : {}),
+      } : {}),
+    };
     if (!Number.isSafeInteger(current.max_tokens) || current.max_tokens < 1 ||
         current.max_tokens === 1 && !lengthRetried) {
       throw new TypeError('Initial builtin completion cap must be an integer of at least 2');
@@ -40,7 +48,8 @@ export function createBuiltinChat(config, {
     for (;;) {
       lastAttempts += 1;
       try {
-        const response = await transport(current);
+        const response = await transport(current, { signal: requestSignal });
+        await onEvent?.({ type: 'completion', reason: response.finish_reason ?? null });
         usages.push(response.usage);
         lastUsage = usages.length === 1 ? response.usage : mergeUsage(...usages);
         return { ...response, usage: lastUsage };
@@ -51,14 +60,22 @@ export function createBuiltinChat(config, {
         }
         usages.push(transport.lastResponse?.usage ?? null);
         lastUsage = mergeUsage(...usages);
-        const retry = error.truncated && !lengthRetried && current.max_tokens > 1;
-        await onEvent?.({ type: 'finish-reason', reason: error.finishReason, retry });
+        const retry = retryLength && error.truncated && !lengthRetried && current.max_tokens > 1;
+        await onEvent?.({ type: 'finish-reason', reason: error.finishReason, retry,
+          ...(retry && docsSlice ? { withoutReasoning: true } : {}),
+        });
         if (!retry) throw error;
         lengthRetried = true;
-        completionCap = Math.floor(current.max_tokens / 2);
-        current = { ...current, max_tokens: completionCap, reasoning_effort: 'none', messages: [
+        reasoningDisabled = docsSlice;
+        completionCap = docsSlice ? 4096 : Math.floor(current.max_tokens / 2);
+        current = { ...current, max_tokens: completionCap,
+          ...(reasoningDisabled ? { reasoning_effort: 'none',
+            ...(usesDeepseekReasoning(config.llm) ? { chat_template_kwargs: { thinking: false } } : {}),
+          } : {}),
+          messages: [
           ...current.messages, { role: 'user', content:
-            'The response was truncated. Retry concisely within the smaller completion cap. ' +
+            (docsSlice ? 'The response was truncated. Retry without reasoning within the 4096 completion cap. '
+              : 'The response was truncated. Retry concisely within the smaller completion cap. ') +
             'Return complete tool calls or a complete summary; do not repeat previously executed edits.' },
         ] };
       }
@@ -72,8 +89,8 @@ export function createBuiltinChat(config, {
   return chat;
 }
 
-export async function chatCompletion({ config, messages, tools, env, fetchImpl, vault, onEvent, retryCommand }) {
-  const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand });
+export async function chatCompletion({ config, messages, tools, env, fetchImpl, vault, onEvent, retryCommand, signal }) {
+  const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand, signal });
   if (chat === null) throw new Error('An LLM base_url is required for chat completion');
   const response = await chat({ messages, ...(tools ? { tools } : {}) });
   return {

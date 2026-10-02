@@ -4,6 +4,10 @@ The configured builtin coder can use only the function tools listed in
 `seat.tools` in the [Roster config](../roster.config.example.yml). The builtin
 planner has only the artifact-scoped writer described below; reviewer has no
 model-invokable tools. The offline stub makes no model tool calls or test runs.
+The opt-in [testing log](REPL.md#opt-in-testing-log) records tool start/result
+metadata, including refused path classes and test exit codes, without arguments
+or output bodies. Result events add no human status lines. Debug log files are
+managed and protected from coder reads/writes, even with broad TASK scope.
 The [tool implementation](../src/runtime/tools.mjs) offers the coder exactly
 five functions:
 
@@ -133,7 +137,11 @@ storage under `.roster/vault`, Git metadata,
 `RECIPE.yml`, `TASK.md`, `PLAN.md`, `CONTEXT.md`, `RESEARCH.md`, `ESTIMATE.md`,
 `RESULT.md`, and `REVIEW.md` are managed files that the coder
 cannot rewrite. `list_dir` refuses protected paths and hides their names
-when listing a parent. Policy and workflow bodies are no longer readable
+when listing a parent. Before any tool runs, a path containing `..`, an
+absolute path, or anything under `vendor/` is refused; the shell prints
+`Refused: outside the worktree.` and the run log records only the tool name.
+A diff that touches a `vendor/` path, including the contracts submodule
+gitlink, fails the excellence gate and review even when tests pass. Policy and workflow bodies are no longer readable
 as task context; both reads and writes are denied.
 The human evaluation ledger `.roster/evals.jsonl` and seat notebooks under
 `.roster/memory` are also write-protected,
@@ -161,7 +169,11 @@ is required.
 `run_test` accepts no arbitrary command or shell arguments. It strips the
 configured model API key and App/GitHub credentials from the child
 environment, marks the child as `ROSTER_SEAT=coder` to preserve the human-only
-evaluation boundary, applies a 60-second timeout, and captures test output.
+evaluation boundary, and captures test output. A docs slice whose only allowed
+file is `README.md` runs `node --test tests/repl.test.mjs` with a 60-second
+cap and never spawns the full suite; a repository without that file falls back
+to the full suite. Every other (code) slice runs the full `node --test` suite
+with a 5-minute cap.
 A nonzero Node exit is a failed tool result rather than completion,
 so the coder receives its summary and a fresh repair attempt. A timeout is an explicit
 error. Final verification must pass before a configured run reports

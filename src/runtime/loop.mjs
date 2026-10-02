@@ -6,6 +6,8 @@ import { parseTaskDocument } from '../planner/task.mjs';
 import { applyReadmeStatus } from './readme-status.mjs';
 import { ContractsSubmoduleError, onlyMissingContractsScripts } from '../lib/contracts.mjs';
 import { UnsupportedFinishReasonError } from '../llm/finish-reason.mjs';
+import { throwIfCancelled } from './cancel.mjs';
+import { SteeringInterrupt } from './steering.mjs';
 
 class MalformedCoderTools extends Error {}
 export const testRepairBudget = 4;
@@ -37,7 +39,8 @@ function stubSummary(task) {
     'Deterministic stub only: no implementation or tests were run. Configure llm.base_url to run a coder.';
 }
 
-async function executeLoop({ config, context, tools, fetchImpl, env, vault, verify, onEvent, retryCommand }, progress) {
+async function executeLoop({ config, context, tools, fetchImpl, env, vault, verify, onEvent, retryCommand, signal, steeringControl }, progress) {
+  throwIfCancelled(signal);
   if (!config.llm.base_url) {
     const summary = stubSummary(context.task);
     return {
@@ -78,13 +81,14 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   if (readmeOnlyDocs && !offeredTools.has('write_file')) {
     throw new Error('README-only docs task requires write_file; enable it before running the coder');
   }
-  const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand });
+  const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand, signal });
   const usages = [];
   const ids = new Set();
   let repaired = false;
   let needsTools = false;
   let attemptTurns = 0;
   let finalSummaryOnly = false;
+  let steeringMessage;
   progress.testRepairs = 0;
   progress.repairFiles = [];
   const repairTests = async (tests) => {
@@ -118,6 +122,19 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   };
   await onEvent?.({ type: 'implementation', path: 'model' });
   for (;;) {
+    throwIfCancelled(signal);
+    const instruction = steeringControl?.take();
+    if (instruction) {
+      const previous = steeringMessage ? messages.indexOf(steeringMessage) : -1;
+      if (previous >= 0) messages.splice(previous, 1);
+      steeringMessage = { role: 'user', content: `Human steering (task scope is unchanged):\n${instruction}\n` +
+        'Do not change TASK.md or Allowed Files. Use only the existing offered tools and allowed paths. ' +
+        'Any earlier summary-only instruction is withdrawn; read allowed files before edits and rerun required tests.' };
+      messages.push(steeringMessage);
+      finalSummaryOnly = false;
+      needsTools = false;
+      await onEvent?.({ type: 'steering' });
+    }
     if (attemptTurns === config.seat.turn_budget + Number(repaired)) {
       if (progress.testRepairs === 0 || finalSummaryOnly) {
         throw new Error(`Coder turn budget (${config.seat.turn_budget}) exhausted`);
@@ -145,11 +162,18 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       } : tool) : definitions;
     let response;
     try {
-      response = await chat({ messages, tools: currentDefinitions });
+      response = steeringControl ? await steeringControl.request((requestSignal) =>
+        chat({ messages, tools: currentDefinitions }, { signal: requestSignal }))
+        : await chat({ messages, tools: currentDefinitions });
     } catch (error) {
       progress.turns += Math.max(0, chat.lastAttempts - 1);
       progress.response = chat.lastResponse ?? progress.response;
       progress.usage = mergeUsage(...usages, chat.lastUsage);
+      if (error instanceof SteeringInterrupt) {
+        usages.push(chat.lastUsage);
+        attemptTurns = Math.max(0, attemptTurns - 1);
+        continue;
+      }
       throw error;
     }
     progress.turns += chat.lastAttempts - 1;

@@ -7,6 +7,7 @@ import { loadPrincipal } from '../seats/principal.mjs';
 import { readMemory, redactSecrets } from './memory.mjs';
 import { loadSkills, previewSkills } from './skills.mjs';
 import { taskContextPolicy } from './context-policy.mjs';
+import { readRepoMap } from '../lib/repo-map.mjs';
 
 async function requiredFile(file, worktree) {
   await ensureLocalPath(file, worktree);
@@ -97,10 +98,13 @@ export async function loadContext({ worktree, memoryPath, repoRoot, config, prin
     { heading: 'Relevant file list from TASK.md',
       body: files.map((file) => `- \`${file}\``).join('\n'), required: true },
   ];
+  const repoMap = policy.repoMap ? await readRepoMap(worktree, { env, apiKeyEnv: config?.llm?.api_key_env }) : null;
+  if (repoMap) sections.push({ heading: 'Repo map (filenames only)', body: repoMap.trim(), required: false });
   const { pack, truncated } = boundedPack(sections, budget, minimalDocs);
   const contextPath = path.join(worktree, 'CONTEXT.md');
   await ensureLocalPath(contextPath, worktree);
   await fs.writeFile(contextPath, pack, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
   return { agents, task, memory, files, skills, pack, contextPath, truncated, minimalDocs, skillNames,
-    contextPolicy: policy };
+    contextPolicy: policy, packBudgetChars: budget,
+    priorFeedbackIncluded: sections.some(({ heading }) => heading === 'Prior feedback') };
 }

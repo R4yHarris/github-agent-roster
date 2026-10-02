@@ -115,7 +115,7 @@ export async function runIssue(issueNumber, {
   const origin = await command('git', ['remote', 'get-url', 'origin'], repoRoot);
   const repository = githubRepository(origin);
   const rawIssue = await command('gh', [
-    'issue', 'view', String(number), '--repo', repository, '--json', 'number,title,body,url',
+    'issue', 'view', String(number), '--repo', repository, '--json', 'number,title,body,url,labels',
   ], repoRoot);
   let issue;
   try {
@@ -181,7 +181,7 @@ export async function runIssue(issueNumber, {
   }
   if (reused && !entry) throw new Error('Registered issue worktree is missing; repair its Git registration before running');
   if (!reused && entry) throw new Error('Issue worktree path exists without matching Git registration; refusing to overwrite it');
-  await beforeWorktree(repoRoot, worktreePath);
+  await beforeWorktree(repoRoot, worktreePath, issue, repository);
   if (!reused) {
     const knownBranch = await command('git', ['for-each-ref', '--format=%(refname)', branch], repoRoot);
     await fileSystem.mkdir(path.dirname(worktreePath), { recursive: true });

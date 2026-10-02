@@ -7,7 +7,7 @@ import { ensureLocalPath } from '../lib/paths.mjs';
 import { redactEvidence } from '../lib/redaction.mjs';
 import { taskFilesAllowed } from '../planner/stub.mjs';
 import { splitTaskFrontmatter } from './skills.mjs';
-import { isAllowedFile, isForbiddenRead, isForbiddenWrite, isManagedFile, isRunLog, taskAndRepairFiles } from './tools.mjs';
+import { isAllowedFile, isForbiddenRead, isForbiddenWrite, isManagedFile, isRunLog, isDebugLog, isShellHistory, isCheckpoint, isRepoMap, taskAndRepairFiles } from './tools.mjs';
 
 const execute = promisify(execFile);
 export { redactEvidence } from '../lib/redaction.mjs';
@@ -23,7 +23,7 @@ export function taskSkipsTests(task) {
 }
 
 function ignoredNotebook(file, worktree, memoryPath) {
-  return isRunLog(file) || file === '.roster/memory' || file.startsWith('.roster/memory/') ||
+  return isRunLog(file) || isDebugLog(file) || isShellHistory(file) || isCheckpoint(file) || isRepoMap(file) || file === '.roster/memory' || file.startsWith('.roster/memory/') ||
     (memoryPath && path.relative(path.resolve(worktree, file), path.resolve(memoryPath)) === '');
 }
 
@@ -106,6 +106,10 @@ export async function checkExcellence({
     .filter((file) => baseline.get(file) !== current.get(file)) : [];
   const files = [...new Set([...changed, ...git.files])].sort();
   for (const file of files) {
+    if (file.replaceAll('\\', '/').split('/')[0].toLowerCase() === 'vendor') {
+      reasons.push(`Diff touches a vendor path, which the coder must never change: ${file}`);
+      continue;
+    }
     if (isForbiddenWrite(file) || !isAllowedFile(file, allowed)) {
       reasons.push(`Diff path is protected or outside TASK.md allowed paths: ${file}`);
       continue;

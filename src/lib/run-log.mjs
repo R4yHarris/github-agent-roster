@@ -4,6 +4,8 @@ import { performance } from 'node:perf_hooks';
 import { ensureLocalPath } from './paths.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
 import { timeoutHint, validateRequestTimeout, validateRetryCommand } from '../llm/request.mjs';
+import { createDebugLog } from './debug-log.mjs';
+import { buildRun } from '../metrics/run.mjs';
 
 const seats = ['planner', 'coder', 'reviewer'];
 const tools = ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text'];
@@ -38,11 +40,14 @@ function errorClass(error) {
 export async function createRunLog({
   repoRoot, session, env = process.env, apiKeyEnv = 'ROSTER_API_KEY',
   errorOutput = process.stderr, now = () => new Date(), clock = () => performance.now(),
+  debug = createDebugLog({ env }), issue = null,
+  observe,
 }) {
   if (typeof repoRoot !== 'string' || typeof errorOutput?.write !== 'function' ||
       typeof now !== 'function' || typeof clock !== 'function') {
     throw new TypeError('Run log requires a repository root, stderr writer, and clocks');
   }
+  if (observe !== undefined && typeof observe !== 'function') throw new TypeError('Seat observer must be a function');
   const safe = (value) => redactSecrets(value, { env, apiKeyEnv }).replace(/[\x00-\x1f\x7f]/g, '?');
   if (safe(session) !== session) throw new TypeError('Run log session must not contain credentials');
   const file = logPath(repoRoot, session);
@@ -77,8 +82,10 @@ export async function createRunLog({
 
   function humanEventText(name, event) {
     if (event.type === 'finish-reason') return event.retry
-      ? 'Response truncated. Retrying.' : `Unsupported LLM finish reason: ${safe(event.reason)}.`;
+      ? event.withoutReasoning ? 'Response truncated. Retrying without reasoning.' : 'Response truncated. Retrying.'
+      : `Unsupported LLM finish reason: ${safe(event.reason)}.`;
     if (event.type === 'contracts-uninitialized') return 'Contracts submodule was not initialized';
+    if (event.type === 'tool-refused') return 'Refused: outside the worktree.';
     if (event.type === 'test-repair') return `Tests failed. Repair ${event.attempt} of ${event.budget}.`;
     if (event.type === 'http' && event.phase === 'start') {
       return name === 'coder' && event.effort
@@ -103,14 +110,22 @@ export async function createRunLog({
 
   function eventText(event) {
     switch (event.type) {
+      case 'steering': return 'steering coder';
+      case 'completion':
+        if (![null, 'stop', 'tool_calls'].includes(event.reason)) throw new TypeError('Invalid live completion reason');
+        return `completion finish_reason=${JSON.stringify(event.reason)}`;
       case 'finish-reason':
         if (typeof event.reason !== 'string' || !event.reason || event.reason.length > 128 ||
             /[\x00-\x1f\x7f]/.test(event.reason) || typeof event.retry !== 'boolean') {
           throw new TypeError('Invalid live finish reason');
         }
         return `finish_reason=${JSON.stringify(safe(event.reason))} retry=${event.retry}` +
-          (event.retry ? ' Response truncated. Retrying.' : '');
+          (event.retry ? event.withoutReasoning
+            ? ' Response truncated. Retrying without reasoning.' : ' Response truncated. Retrying.' : '');
       case 'contracts-uninitialized': return 'contracts submodule uninitialized';
+      case 'tool-refused':
+        if (!tools.includes(event.name)) throw new TypeError('Invalid live tool refusal event');
+        return `tool refused ${event.name} outside-worktree`;
       case 'test-repair':
         if (event.budget !== 4 || !Number.isInteger(event.attempt) || event.attempt < 1 || event.attempt > event.budget) {
           throw new TypeError('Invalid live test repair event');
@@ -159,6 +174,11 @@ export async function createRunLog({
         const location = typeof event.path === 'string' ? safe(event.path).slice(0, 512) : '[invalid]';
         return `tool ${event.name}` + (event.path === undefined ? '' : ` path=${JSON.stringify(location)}`);
       }
+      case 'tool-result':
+        if (!tools.includes(event.name) || !['ok', 'error', 'denied'].includes(event.status)) {
+          throw new TypeError('Invalid live tool result event');
+        }
+        return `tool result ${event.name} ${event.status}`;
       case 'wrote':
         if (!artifacts.includes(event.path)) throw new TypeError('Invalid live artifact event');
         return `wrote ${event.path}`;
@@ -175,8 +195,15 @@ export async function createRunLog({
     logPath(repoRoot, seatSession);
     let mode = config.llm.base_url ? 'llm' : 'stub';
     let modelEvent;
+    let effort;
+    let finishReason;
     const onEvent = async (event) => {
       const text = eventText(event);
+      if (event.type === 'http' && event.phase === 'start') effort = event.effort;
+      if (['completion', 'finish-reason'].includes(event.type)) finishReason = event.reason;
+      await observe?.({ ...event, seat: name });
+      await debug.record({ repoRoot, issue, seat: name, event });
+      if (event.type === 'tool-result') return;
       if (event.type === 'model') {
         if (text === modelEvent) return;
         modelEvent = text;
@@ -184,6 +211,20 @@ export async function createRunLog({
       await append(`seat ${name} ${text}`, humanEventText(name, event));
     };
     const started = clock();
+    const measured = async (result) => {
+      if (!result?.response) return;
+      const run = buildRun({ config, response: result.response, session: seatSession, env: {} });
+      if (!run) return;
+      await observe?.({ type: 'seat-measurement', seat: name, provider: run.metrics.provider,
+        model: run.metrics.model, effort: effort ?? run.metrics.effort,
+        input: run.metrics.prompt_tokens, output: run.metrics.completion_tokens, contextMax: run.metrics.context_max,
+        finishReason, packBudgetChars: result.packBudgetChars ?? config.seat?.context_chars,
+        priorFeedbackIncluded: result.priorFeedbackIncluded ?? false });
+    };
+    await observe?.({ type: 'seat-start', seat: name, model: mode === 'stub' ? '' : config.llm.model,
+      host: mode === 'stub' ? '' : new URL(config.llm.base_url).host,
+      effort: config.llm.effort, contextMax: config.llm.context_max });
+    await debug.record({ repoRoot, issue, seat: name, event: { type: 'seat-start' } });
     await append(`start seat ${name} session=${safe(seatSession)}`,
       name === 'coder' && mode === 'stub' ? 'Preparing the task summary.' : seatActions[name]);
     await onEvent({ type: 'model', model: mode === 'stub' ? 'builtin-stub' : config.llm.model,
@@ -191,6 +232,9 @@ export async function createRunLog({
     await append(`seat ${name} mode ${mode}`);
     try {
       const result = await operation(onEvent);
+      await measured(result);
+      await observe?.({ type: 'seat-end', seat: name, verdict: result?.verdict,
+        contextUsed: result?.response?.usage?.prompt_tokens, model: result?.response?.model });
       const actualMode = result?.mode ?? (typeof result?.queried === 'boolean' ? result.queried ? 'llm' : 'stub' : mode);
       if (actualMode !== mode) {
         mode = actualMode;
@@ -200,9 +244,13 @@ export async function createRunLog({
       return result;
     } catch (error) {
       mode = error?.result?.mode ?? mode;
+      await measured(error?.result);
+      await observe?.({ type: 'seat-error', seat: name });
+      await debug.record({ repoRoot, issue, seat: name, event: { type: 'seat-error' } });
       await append(`seat ${name} error class=${errorClass(error)}`);
       throw error;
     } finally {
+      await debug.record({ repoRoot, issue, seat: name, event: { type: 'seat-end' } });
       await append(`seat ${name} elapsed_ms=${Math.max(0, Math.round(clock() - started))} mode=${mode}`);
     }
   }
@@ -236,13 +284,16 @@ export async function readLastRunLog({
     if (!lastLine) return null;
     const parsed = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z (?:start seat|seat) (planner|coder|reviewer) (.+)$/.exec(lastLine);
     const metadata = /^(?:session=[A-Za-z0-9._[\]-]{1,128}|model="(?:[^"\\]|\\.)*" host="(?:[^"\\]|\\.)*"|mode (?:stub|llm)|waiting host=[A-Za-z0-9.:[\]-]{1,255} elapsed=\d+s(?: cold-start up to 15m)?|The LLM request timed out after \d+(?:\.\d+)?s at host=[A-Za-z0-9.:[\]-]{1,255}\. (?:Cold-start: the host may still be warming; Spark\/SGLang can take up to 15m\. )?This is an endpoint timeout, not a bad TASK\. (?:Retry: (?:roster run --issue [1-9]\d*(?: --auto-model)?|roster run --seat coder --runtime builtin|roster doctor --warm)|Retry the same request\.)|implementation (?:model|deterministic-readme)|http chat\.completions (?:start|ok status=2\d\d|error(?: status=[1-5]\d\d)? class=(?:authentication|network|timeout|http|response|abort))|tool (?:read_file|write_file|list_dir|run_test|search_text)(?: path="(?:[^"\\]|\\.)*")?|wrote (?:RECIPE\.yml|TASK\.md|PLAN\.md|ESTIMATE\.md|RESULT\.md|REVIEW\.md)|error class=(?:Error|TypeError|RangeError|AbortError|RunLogError)|elapsed_ms=\d+ mode=(?:stub|llm))$/;
-    if (!parsed || !metadata.test(parsed[2]) || /[\x00-\x1f\x7f]/.test(lastLine) ||
+    const validMetadata = (value) => metadata.test(value) || value === 'steering coder' ||
+      /^tool refused (?:read_file|write_file|list_dir|run_test|search_text) outside-worktree$/.test(value) ||
+      /^completion finish_reason=(?:null|"stop"|"tool_calls")$/.test(value);
+    if (!parsed || !validMetadata(parsed[2]) || /[\x00-\x1f\x7f]/.test(lastLine) ||
         Buffer.byteLength(lastLine) > maximumLineBytes) {
       throw new RunLogError('Last live run log line has invalid metadata');
     }
     const valid = lines.filter((line) => {
       const match = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z (?:start seat|seat) (planner|coder|reviewer) (.+)$/.exec(line);
-      return match && metadata.test(match[2]) && !/[\x00-\x1f\x7f]/.test(line) && Buffer.byteLength(line) <= maximumLineBytes;
+      return match && validMetadata(match[2]) && !/[\x00-\x1f\x7f]/.test(line) && Buffer.byteLength(line) <= maximumLineBytes;
     });
     const lastErrorClass = valid.findLast((line) => /\bclass=/.test(line))?.match(/\bclass=([A-Za-z]+)/)?.[1] ?? null;
     return { path: file, session, lastSeat: parsed[1], lastLine: redactSecrets(lastLine, { env, apiKeyEnv }),

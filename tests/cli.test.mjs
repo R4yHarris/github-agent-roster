@@ -44,7 +44,7 @@ test("help lists every prompt's command", () => {
   assert.match(result.stdout, /roster\s+eval/);
   assert.match(result.stdout, /roster\s+recommend\s+--task-class/);
   assert.match(result.stdout, /roster\s+ask/);
-  assert.match(result.stdout, /^  roster run --issue N \[--runtime builtin\] \[--seats planner,coder,reviewer\] \[--auto-model\] \[--publish\] \[--skip-review\] \[--confirm\]$/m);
+  assert.match(result.stdout, /^  roster run --issue N \[--runtime builtin\] \[--seats planner,coder,reviewer\] \[--auto-model\] \[--publish\] \[--skip-review\] \[--confirm\] \[--plan\]$/m);
   assert.match(result.stdout, /--auto-model/);
   assert.match(result.stdout, /^  roster prepare --issue N$/m);
 });
@@ -135,6 +135,16 @@ test("builtin CLI defaults to paired seats, rejects unsupported selections, and 
     { ...process.env, AI_MODEL: "", ROSTER_MODEL: "" });
   assert.notEqual(noPublish.status, 0);
   assert.match(noPublish.stderr, /set model/);
+});
+
+test("the leading --debug flag enables the process without changing non-TTY shell behavior", () => {
+  const help = run(["--debug", "--help"]);
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /roster --debug \[COMMAND\]/);
+  const shell = run(["--debug"]);
+  assert.equal(shell.status, 2);
+  assert.match(shell.stdout, /Usage:/);
+  assert.doesNotMatch(shell.stderr, /Unknown arguments/);
 });
 
 test("bare run uses the builtin planner and coder while prepare keeps manual handoff explicit", (t) => {

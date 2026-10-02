@@ -36,9 +36,7 @@ test('truncated tool calls are not executed and the complete tool_calls retry is
   const caps = [];
   const result = await runCoder({ ...options, fetchImpl: async (_url, request) => {
     calls += 1;
-    const body = JSON.parse(request.body);
-    caps.push(body.max_tokens);
-    assert.equal(body.reasoning_effort, calls === 2 ? 'none' : 'low');
+    caps.push(JSON.parse(request.body).max_tokens);
     if (calls === 2) {
       assert.equal(readFileSync(join(options.worktree, 'README.md'), 'utf8'), '# Project\n');
       assert.ok(!request.body.includes('PRIVATE_TRUNCATED_BODY'));
@@ -52,11 +50,11 @@ test('truncated tool calls are not executed and the complete tool_calls retry is
   }, runTestCommand: async () => ({ stdout: 'pass', stderr: '' }) });
   assert.equal(result.excellence.pass, true);
   assert.equal(result.turns, 3);
-  assert.deepEqual(caps, [2048, 1024, 1024]);
+  assert.deepEqual(caps, [2048, 4096, 4096]);
   assert.doesNotMatch(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /PRIVATE_TRUNCATED_BODY/);
 });
 
-test('a README write survives one length retry and completes with a smaller cap', async (t) => {
+test('a README write survives one docs length retry without reasoning at 4096', async (t) => {
   const options = fixture(t);
   const caps = [];
   let calls = 0;
@@ -65,6 +63,7 @@ test('a README write survives one length retry and completes with a smaller cap'
     const body = JSON.parse(request.body);
     caps.push(body.max_tokens);
     assert.equal(body.reasoning_effort, calls === 3 ? 'none' : 'low');
+    assert.equal(body.chat_template_kwargs.thinking, calls !== 3);
     if (calls === 1) return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
       role: 'assistant', tool_calls: [{ id: 'readme', type: 'function', function: {
         name: 'write_file', arguments: JSON.stringify({ path: 'README.md', content: '# Project\n\n## Status\nActive.\n' }),
@@ -77,8 +76,39 @@ test('a README write survives one length retry and completes with a smaller cap'
   }, runTestCommand: async () => ({ stdout: 'pass', stderr: '' }) });
   assert.equal(result.excellence.pass, true);
   assert.equal(result.turns, 3);
-  assert.deepEqual(caps, [2048, 2048, 1024]);
+  assert.deepEqual(caps, [2048, 2048, 4096]);
   assert.match(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /## Status/);
+});
+
+test('a second docs length fails review after one no-reasoning retry without losing the README edit', async (t) => {
+  const options = fixture(t);
+  let calls = 0;
+  let failed;
+  await assert.rejects(runCoder({ ...options, fetchImpl: async (_url, request) => {
+    calls += 1;
+    const body = JSON.parse(request.body);
+    if (calls === 1) return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+      role: 'assistant', tool_calls: [{ id: 'readme', type: 'function', function: {
+        name: 'write_file', arguments: JSON.stringify({ path: 'README.md', content: '# Project\n\n## Status\nActive.\n' }),
+      } }],
+    } }] });
+    assert.equal(body.max_tokens, calls === 2 ? 2048 : 4096);
+    assert.equal(body.reasoning_effort, calls === 2 ? 'low' : 'none');
+    assert.equal(body.chat_template_kwargs.thinking, calls === 2);
+    return Response.json({ choices: [{ finish_reason: 'length',
+      message: { role: 'assistant', content: 'PRIVATE_BODY' } }] });
+  }, runTestCommand: () => assert.fail('Repeated length must not reach tests') }), (error) => {
+    failed = error.result;
+    return /finish reason: length/.test(error.message);
+  });
+  assert.equal(calls, 3);
+  assert.equal(failed.finishReason, 'length');
+  assert.match(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /## Status/);
+  const review = await runReviewer({ ...options, coderResult: failed,
+    fetchImpl: () => assert.fail('Repeated length must not request reviewer inference') });
+  assert.equal(review.verdict, 'fail');
+  assert.match(review.content, /finish reason: length/);
+  assert.doesNotMatch(readFileSync(failed.resultPath, 'utf8') + review.content, /PRIVATE_BODY/);
 });
 
 test('an unknown finish reason after a README write fails review by name without printing its response', async (t) => {

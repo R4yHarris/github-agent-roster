@@ -385,9 +385,9 @@ export function isReviewRequired(config) {
 }
 
 export async function setConfigValue(field, value, { repoRoot = rosterRoot, cwd } = {}) {
-  if (!['model', 'effort'].includes(field) || typeof value !== 'string' ||
-      (field === 'effort' && !value) || /[\r\n\0]/.test(value)) {
-    throw new TypeError('Set a single-line llm.model or llm.effort value');
+  if (!['model', 'effort', 'context_budget'].includes(field) || typeof value !== 'string' ||
+      (field !== 'model' && !value) || /[\r\n\0]/.test(value)) {
+    throw new TypeError('Set a single-line model, effort, or context budget value');
   }
   const configRoot = resolveConfigRoot({ repoRoot, cwd });
   const file = path.join(configRoot, '.roster', 'config.yml');
@@ -400,6 +400,16 @@ export async function setConfigValue(field, value, { repoRoot = rosterRoot, cwd 
     source = readConfigFile(path.join(repoRoot, 'roster.config.example.yml'));
   }
   const text = source.replace(/\r\n/g, '\n');
+  if (field === 'context_budget') {
+    if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) {
+      throw new TypeError('Context budget must be a positive safe integer');
+    }
+    let next = /^  context_chars: [^\n]*$/m.test(text)
+      ? text.replace(/^  context_chars: [^\n]*$/m, `  context_chars: ${value}`)
+      : text.replace(/^seat:\n/m, `seat:\n  context_chars: ${value}\n`);
+    if (/^context:\n/m.test(next)) next = next.replace(/^  budget: [^\n]*$/m, `  budget: ${value}`);
+    return writePrivateConfig(next, { repoRoot: configRoot });
+  }
   const line = new RegExp(`^  ${field}: [^\\n]*$`, 'm');
   if (!line.test(text)) invalid(`llm.${field} is missing`);
   let next = text.replace(line, `  ${field}: ${field === 'model' ? JSON.stringify(value) : value}`);

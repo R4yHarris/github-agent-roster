@@ -1,5 +1,4 @@
 import { readFileSync } from 'node:fs';
-import { chatCompletion } from '../lib/llm.mjs';
 import { parseRecipe } from '../lib/recipe.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
 import { inferTaskClass } from '../lib/learn.mjs';
@@ -10,6 +9,7 @@ import { applyFeedback } from './feedback.mjs';
 import { parsePlannerToolCalls } from './tool-calls.mjs';
 import { allowedFile, checkedList, oneLine, parseTaskDocument } from './task.mjs';
 import { selectReasoning } from '../llm/reasoning.mjs';
+import { issueWave } from '../lib/wave-labels.mjs';
 
 export { taskFilesAllowed } from './task.mjs';
 
@@ -76,7 +76,7 @@ function checkAskScope(files, requirements) {
   }
 }
 
-function buildPlan(ask, { reference, title, acceptanceChecks, filesAllowed, metadata = {}, scope }) {
+export function buildPlan(ask, { reference, title, acceptanceChecks, filesAllowed, metadata = {}, scope }) {
   const cleanAsk = cleanAskText(ask);
   const checks = checkedList(acceptanceChecks, 'Acceptance checks',
     (check) => oneLine(check, 'Acceptance check'));
@@ -130,7 +130,7 @@ export function planFromTask(task, ask, { issueTitle, issueBody } = {}) {
 
 export async function planAsk(ask, {
   config, reference = 'local:draft', title, fetchImpl, env, vault, memory = [], learningRoot, metadata, lockedModel,
-  onResponse, tools, onEvent, retryCommand,
+  onResponse, tools, onEvent, retryCommand, signal,
 } = {}) {
   const cleanAsk = cleanAskText(ask);
   if (!Array.isArray(memory) || memory.some((line) => typeof line !== 'string')) {
@@ -188,7 +188,7 @@ export async function planAsk(ask, {
     messages.push({ role: 'user', content: 'Emit only tool_calls for write_file with JSON string arguments.' });
   };
   for (let turn = 1; turn <= budget + Number(repairUsed); turn += 1) {
-    const response = await chatCompletion({ config, fetchImpl, env, vault, messages, onEvent, retryCommand,
+    const response = await (await import('../lib/llm.mjs')).chatCompletion({ config, fetchImpl, env, vault, messages, onEvent, retryCommand, signal,
       ...(tools ? { tools: plannerToolDefinitions } : {}) });
     lastResponse = response.response;
     onResponse?.(lastResponse);
@@ -341,10 +341,12 @@ export function renderAsk(ask) {
 }
 
 export function renderAssignment(issue) {
-  return render(template('ASSIGNMENT'), {
+  const assignment = render(template('ASSIGNMENT'), {
     ISSUE_URL: issue.url,
     ISSUE_NUMBER: String(issue.number),
     TITLE: issue.title,
     ASK: issue.body,
   });
+  const wave = issueWave(issue);
+  return wave === null ? assignment : assignment.replace(/^## Ask$/m, `- Wave: ${wave}\n\n## Ask`);
 }

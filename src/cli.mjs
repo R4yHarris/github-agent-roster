@@ -4,10 +4,12 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
 
-const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const cliStartedAt = performance.now();
+
+const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const help = `Usage:
   roster                     Open the interactive shell in a TTY
+  roster --debug [COMMAND]   Enable process-only debug JSONL logging
   roster --help
   roster doctor [--warm]
   roster init
@@ -19,12 +21,12 @@ const help = `Usage:
   roster fleet default ID
   roster fleet remove ID
   roster ask "..."
-  roster run --issue N [--runtime builtin] [--seats planner,coder,reviewer] [--auto-model] [--publish] [--skip-review] [--confirm]
+  roster run --issue N [--runtime builtin] [--seats planner,coder,reviewer] [--auto-model] [--publish] [--skip-review] [--confirm] [--plan]
   roster run --seat coder --runtime builtin
   roster prepare --issue N
   roster run --ask-file PATH --runtime builtin
-  roster status [--issue N] [--offline]
   roster bench
+  roster status [--issue N] [--offline]
   roster recipe validate PATH
   roster stats [--ref REVISION_OR_RANGE] [--evals PATH]
   roster vault set NAME
@@ -88,12 +90,18 @@ function statsOptions(args) {
 }
 
 async function main(args) {
-  if (args.length === 0 && process.stdin.isTTY) {
-    const { startRepl } = await import('./repl.mjs');
-    process.exitCode = await startRepl({ repoRoot: rosterRoot });
-  } else if (args.length === 0 || (args.length === 1 && ['--help', '-h'].includes(args[0]))) {
+  const debugFlag = args[0] === '--debug';
+  if (debugFlag) args = args.slice(1);
+  if ((args.length === 0 && !process.stdin.isTTY) || (args.length === 1 && ['--help', '-h'].includes(args[0]))) {
     process.stdout.write(help);
     if (args.length === 0) process.exitCode = 2;
+    return;
+  }
+  const { createDebugLog } = await import('./lib/debug-log.mjs');
+  const debug = createDebugLog({ enabled: debugFlag || process.env.ROSTER_DEBUG === '1' });
+  if (args.length === 0) {
+    const { startRepl } = await import('./repl.mjs');
+    process.exitCode = await startRepl({ repoRoot: rosterRoot, debug });
   } else if (args.length === 2 && args[0] === 'ask') {
     const { formatAsk, submitAsk } = await import('./lib/ask.mjs');
     const result = await submitAsk(args[1], {
@@ -145,14 +153,15 @@ async function main(args) {
           : `RECIPE: ${demo.recipePath}\nTASK: ${demo.taskPath}\nRESULT: ${demo.resultPath}\nREVIEW: ${demo.reviewPath}\n`)) +
       `Mode: ${demo.mode}\n`);
   } else if (args[0] === 'run') {
-    const options = runOptions(args.slice(1));
     const { runBuiltinIssue, runBuiltinTask } = await import('./lib/builtin.mjs');
-    if (options.issue === undefined) await runBuiltinTask({ repoRoot: rosterRoot });
+    const options = runOptions(args.slice(1));
+    if (options.issue === undefined) await runBuiltinTask({ repoRoot: rosterRoot, debug });
     else {
       const result = await runBuiltinIssue(options.issue, { publish: options.publish, seats: options.seats,
         skipReview: options.skipReview,
         confirm: options.confirm,
-        autoModel: options.autoModel, repoRoot: rosterRoot });
+        planMode: options.plan,
+        autoModel: options.autoModel, repoRoot: rosterRoot, debug });
       if (result.failed) process.exitCode = 1;
     }
   } else if (args[0] === 'status') {
@@ -232,11 +241,11 @@ async function main(args) {
     const options = {};
     const seen = new Set();
     const usage = 'Use roster run --issue N [--runtime builtin] [--seats planner,coder,reviewer] ' +
-      '[--auto-model] [--publish] [--skip-review] [--confirm], ' +
+      '[--auto-model] [--publish] [--skip-review] [--confirm] [--plan], ' +
       'or roster run --seat coder --runtime builtin for an existing TASK.md.';
     for (let index = 0; index < args.length; index += 1) {
       const flag = args[index];
-      if (!['--issue', '--seat', '--seats', '--runtime', '--auto-model', '--publish', '--skip-review', '--confirm'].includes(flag) ||
+      if (!['--issue', '--seat', '--seats', '--runtime', '--auto-model', '--publish', '--skip-review', '--confirm', '--plan'].includes(flag) ||
           seen.has(flag)) {
         throw new TypeError(usage);
       }
@@ -245,6 +254,7 @@ async function main(args) {
       else if (flag === '--auto-model') options.autoModel = true;
       else if (flag === '--skip-review') options.skipReview = true;
       else if (flag === '--confirm') options.confirm = true;
+      else if (flag === '--plan') options.plan = true;
       else {
         const value = args[++index];
         if (!value || value.startsWith('--')) throw new TypeError(usage);
@@ -252,7 +262,7 @@ async function main(args) {
       }
     }
     if (options.issue === undefined && options.seat === 'coder' && options.runtime === 'builtin' &&
-        options.seats === undefined && !options.autoModel && !options.publish && !options.skipReview && !options.confirm) return options;
+        options.seats === undefined && !options.autoModel && !options.publish && !options.skipReview && !options.confirm && !options.plan) return options;
     if (!options.issue || (options.runtime !== undefined && options.runtime !== 'builtin') ||
         (options.seat !== undefined && options.seat !== 'coder') ||
         (options.seats !== undefined &&

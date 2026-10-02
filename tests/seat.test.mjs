@@ -104,6 +104,33 @@ test('configured standalone logging does not become an app diff or opt into JSON
   assert.equal(existsSync(path.join(options.worktree, '.roster', 'runs', 'runs.jsonl')), false);
 });
 
+test('standalone CLI --debug and ROSTER_DEBUG=1 enable only file metadata, while default stays off', (context) => {
+  for (const mode of ['off', 'flag', 'env']) {
+    const options = fixture(context);
+    cpSync(path.join(sourceRoot, 'src'), path.join(options.repoRoot, 'src'), { recursive: true });
+    const env = { ...process.env, AI_TASK: 'local-task', AI_SESSION: 'standalone-debug-test',
+      ROSTER_DEBUG: mode === 'env' ? '1' : '0',
+      GITHUB_AGENT_CONTRACTS: path.join(options.repoRoot, 'vendor', 'github-agent-contracts'),
+      ROSTER_MODEL: '' };
+    const result = spawnSync(process.execPath, [
+      path.join(options.repoRoot, 'src', 'cli.mjs'), ...(mode === 'flag' ? ['--debug'] : []),
+      'run', '--seat', 'coder', '--runtime', 'builtin',
+    ], { cwd: options.worktree, env, encoding: 'utf8', timeout: 10_000 });
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+    const logs = path.join(options.worktree, '.roster', 'logs');
+    if (mode === 'off') assert.equal(existsSync(logs), false);
+    else {
+      const files = readdirSync(logs);
+      assert.equal(files.length, 1);
+      assert.match(files[0], /^debug-[A-Za-z0-9._-]+\.jsonl$/);
+      const rows = readFileSync(path.join(logs, files[0]), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      assert.deepEqual([...new Set(rows.map(({ seat }) => seat))], ['coder', 'reviewer']);
+    }
+    assert.doesNotMatch(result.stdout + result.stderr, /"phase":|"path_class":/);
+  }
+});
+
 test('the exact standalone CLI command consumes TASK.md in cwd with no GitHub dependency', (context) => {
   const options = fixture(context);
   cpSync(path.join(sourceRoot, 'src'), path.join(options.repoRoot, 'src'), { recursive: true });
