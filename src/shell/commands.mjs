@@ -9,6 +9,8 @@ export const commands = Object.freeze([
   page('history', 'Session', '/history', 'Show the last 20 stored safe commands.', '/history'),
   page('resume', 'Session', '/resume [N]', 'List local issue runs with no argument; resume an isolated worktree and reuse a valid TASK/recipe.', '/resume 108'),
   page('recap', 'Session', '/recap', 'Print one human metadata line: outcome, files, last test, review and finish reason. No completion body.', '/recap'),
+  page('btw', 'Session', '/btw QUESTION', 'Ask one read-only model question about current task metadata; no tools, tests, writes, memory or publication changes.',
+    '/btw Which acceptance check covers this edge case?'),
   page('checkpoints', 'Session', '/checkpoints', 'List current-task checkpoint number, seat, short status and time.', '/checkpoints'),
   page('rewind', 'Session', '/rewind N', 'Restore checkpoint-covered product files; keep TASK/PLAN/logs. Refuse published PRs. /undo means latest only.',
     '/rewind 1', [], ['undo']),
