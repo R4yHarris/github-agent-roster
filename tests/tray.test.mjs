@@ -5,7 +5,7 @@ import test from 'node:test';
 import { stripVTControlCharacters } from 'node:util';
 import { parseConfig } from '../src/lib/config.mjs';
 import { createDispatcher, startRepl } from '../src/repl.mjs';
-import { formatTray } from '../src/shell/tray.mjs';
+import { createTray, formatTray } from '../src/shell/tray.mjs';
 
 const display = { issue: 108, branch: 'issue-108', seat: 'coder', state: 'drafting',
   model: 'deepseek-v4.1', host: '192.168.1.48:8888', effort: 'l',
@@ -93,4 +93,41 @@ test('TTY shell contains the banner once, top bar, bottom bar and bright cyan in
   assert.match(plain, /roster> /);
   input.destroy();
   output.destroy();
+});
+
+test('writer pauses, flushes and redraws waiting output before a key event', () => {
+  const calls = [];
+  let text = '';
+  const output = {
+    columns: 120,
+    write(value) { text += String(value); calls.push('write'); },
+    flush() { calls.push('flush'); },
+  };
+  const shell = {
+    closed: false,
+    pause() { calls.push('pause'); },
+    resume() { calls.push('resume'); },
+    setPrompt(value) { calls.push(`setPrompt:${stripVTControlCharacters(value)}`); },
+    prompt(preserveCursor) { calls.push(`prompt:${preserveCursor}`); },
+    getCursorPos() { return { rows: 0 }; },
+  };
+  const state = {
+    display: { ...display, startedAt: Date.now() - 130000 },
+    pendingSecret: null,
+    pendingQuestion: false,
+    statusbar: true,
+    debug: { enabled: false },
+  };
+  const tray = createTray({ output, state, shell });
+  tray.write('Waiting for the coder.\n');
+
+  const plain = stripVTControlCharacters(text);
+  assert.match(plain, /Waiting for the coder\./);
+  assert.match(plain, /roster \| #108 \| coder \| drafting \| issue-108/);
+  assert.match(plain, /2m 10s/);
+  assert.deepEqual(calls.slice(0, 3), ['pause', 'write', 'flush']);
+  assert.ok(calls.includes('setPrompt:* roster> '));
+  assert.ok(calls.includes('prompt:true'));
+  assert.equal(calls.at(-1), 'resume');
+  tray.close();
 });

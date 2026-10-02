@@ -63,7 +63,16 @@ export function formatTray(display, { columns = 80, color = true, now = Date.now
 export function createTray({ output, state, shell }) {
   let visible = false;
   let barLines = 0;
+  let refreshTimer;
   const frame = () => formatTray(state.display, { columns: output.columns ?? 80, debug: state.debug.enabled });
+
+  function flush(target = output) {
+    target.flush?.();
+  }
+
+  function pause() {
+    if (!shell.closed) shell.pause();
+  }
 
   function erase() {
     if (!visible) return;
@@ -74,27 +83,61 @@ export function createTray({ output, state, shell }) {
     visible = false;
   }
 
-  function render() {
-    if (state.pendingSecret !== null || state.pendingQuestion) return;
-    erase();
+  function updateRefreshTimer() {
+    if (state.display.busy && refreshTimer === undefined) {
+      refreshTimer = setInterval(render, 1000);
+      refreshTimer.unref?.();
+    } else if (!state.display.busy && refreshTimer !== undefined) {
+      clearInterval(refreshTimer);
+      refreshTimer = undefined;
+    }
+  }
+
+  function redraw() {
     const { top, bottom, prompt } = frame();
     barLines = state.statusbar ? 2 : 0;
     if (barLines) output.write(`${top}\n${bottom}\n`);
+    flush();
     shell.setPrompt(prompt);
     shell.prompt(true);
+    flush();
+    shell.resume();
     visible = true;
+    updateRefreshTimer();
+  }
+
+  function render() {
+    if (state.pendingSecret !== null || state.pendingQuestion || shell.closed) return;
+    pause();
+    erase();
+    redraw();
   }
 
   return {
     render, erase,
-    banner() { output.write(`${paint('github-agent-roster', 'label', true)}\n`); },
+    banner() {
+      pause();
+      output.write(`${paint('github-agent-roster', 'label', true)}\n`);
+      flush();
+      shell.resume();
+    },
     committed() { visible = false; },
     write(text, target = output) {
+      if (shell.closed) {
+        target.write(text);
+        flush(target);
+        return;
+      }
+      pause();
       erase();
       target.write(text);
-      if (String(text).endsWith('\n')) render();
+      flush(target);
+      if (String(text).endsWith('\n') && state.pendingSecret === null && !state.pendingQuestion) redraw();
+      else shell.resume();
     },
     close() {
+      if (refreshTimer !== undefined) clearInterval(refreshTimer);
+      refreshTimer = undefined;
       if (visible) {
         cursorTo(output, 0);
         clearLine(output, 0);
