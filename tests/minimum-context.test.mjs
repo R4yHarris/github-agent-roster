@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -50,11 +51,11 @@ test('truncated tool calls are not executed and the complete tool_calls retry is
   }, runTestCommand: async () => ({ stdout: 'pass', stderr: '' }) });
   assert.equal(result.excellence.pass, true);
   assert.equal(result.turns, 3);
-  assert.deepEqual(caps, [2048, 4096, 4096]);
+  assert.deepEqual(caps, [512, 512, 512]);
   assert.doesNotMatch(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /PRIVATE_TRUNCATED_BODY/);
 });
 
-test('a README write survives one docs length retry without reasoning at 4096', async (t) => {
+test('a README write survives one docs length retry without reasoning at 512', async (t) => {
   const options = fixture(t);
   const caps = [];
   let calls = 0;
@@ -62,8 +63,8 @@ test('a README write survives one docs length retry without reasoning at 4096', 
     calls += 1;
     const body = JSON.parse(request.body);
     caps.push(body.max_tokens);
-    assert.equal(body.reasoning_effort, calls === 3 ? 'none' : 'low');
-    assert.equal(body.chat_template_kwargs.thinking, calls !== 3);
+    assert.equal(body.reasoning_effort, 'none');
+    assert.equal(body.chat_template_kwargs.thinking, false);
     if (calls === 1) return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
       role: 'assistant', tool_calls: [{ id: 'readme', type: 'function', function: {
         name: 'write_file', arguments: JSON.stringify({ path: 'README.md', content: '# Project\n\n## Status\nActive.\n' }),
@@ -76,16 +77,19 @@ test('a README write survives one docs length retry without reasoning at 4096', 
   }, runTestCommand: async () => ({ stdout: 'pass', stderr: '' }) });
   assert.equal(result.excellence.pass, true);
   assert.equal(result.turns, 3);
-  assert.deepEqual(caps, [2048, 2048, 4096]);
+  assert.deepEqual(caps, [512, 512, 512]);
   assert.match(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /## Status/);
 });
 
-test('a second docs length fails review after one no-reasoning retry without losing the README edit', async (t) => {
+test('a second docs length passes review when the required Status section is already saved', async (t) => {
   const options = fixture(t);
+  execFileSync('git', ['init'], { cwd: options.worktree, stdio: 'ignore' });
+  execFileSync('git', ['add', 'README.md', 'TASK.md'], { cwd: options.worktree, stdio: 'ignore' });
+  execFileSync('git', ['-c', 'user.name=Roster Test', '-c', 'user.email=roster@example.invalid',
+    'commit', '-m', 'fixture'], { cwd: options.worktree, stdio: 'ignore' });
   let calls = 0;
   let tests = 0;
-  let failed;
-  await assert.rejects(runCoder({ ...options, fetchImpl: async (_url, request) => {
+  const result = await runCoder({ ...options, fetchImpl: async (_url, request) => {
     calls += 1;
     const body = JSON.parse(request.body);
     if (calls === 1) return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
@@ -93,24 +97,25 @@ test('a second docs length fails review after one no-reasoning retry without los
         name: 'write_file', arguments: JSON.stringify({ path: 'README.md', content: '# Project\n\n## Status\nActive.\n' }),
       } }],
     } }] });
-    assert.equal(body.max_tokens, calls === 2 ? 2048 : 4096);
-    assert.equal(body.reasoning_effort, calls === 2 ? 'low' : 'none');
-    assert.equal(body.chat_template_kwargs.thinking, calls === 2);
+    assert.equal(body.max_tokens, 512);
+    assert.equal(body.reasoning_effort, 'none');
+    assert.equal(body.chat_template_kwargs.thinking, false);
     return Response.json({ choices: [{ finish_reason: 'length',
       message: { role: 'assistant', content: 'PRIVATE_BODY' } }] });
-  }, runTestCommand: async () => { tests += 1; return { stdout: 'pass', stderr: '' }; } }), (error) => {
-    failed = error.result;
-    return /finish reason: length/.test(error.message);
-  });
+  }, runTestCommand: async () => { tests += 1; return { stdout: 'pass', stderr: '' }; } });
   assert.equal(calls, 3);
   assert.equal(tests, 1);
-  assert.equal(failed.finishReason, 'length');
+  assert.equal(result.excellence.pass, true);
+  assert.equal(result.finishReason, undefined);
   assert.match(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /## Status/);
-  const review = await runReviewer({ ...options, coderResult: failed,
-    fetchImpl: () => assert.fail('Repeated length must not request reviewer inference') });
-  assert.equal(review.verdict, 'fail');
-  assert.match(review.content, /finish reason: length/);
-  assert.doesNotMatch(readFileSync(failed.resultPath, 'utf8') + review.content, /PRIVATE_BODY/);
+  const review = await runReviewer({ ...options, coderResult: result,
+    fetchImpl: async () => Response.json({ choices: [{ finish_reason: 'stop', message: {
+      role: 'assistant', content: JSON.stringify({ verdict: 'pass',
+        reasons: ['The saved Status section and passing checks satisfy the task.'],
+        security_notes: ['Only README.md changed.'] }),
+    } }] }) });
+  assert.equal(review.verdict, 'pass', review.content);
+  assert.doesNotMatch(readFileSync(result.resultPath, 'utf8') + review.content, /PRIVATE_BODY/);
 });
 
 test('an unknown finish reason after a README write fails review by name without printing its response', async (t) => {
@@ -202,8 +207,8 @@ test('minimum docs coder makes no research request and still checks tests, file 
     fetchImpl: async (_url, request) => {
       calls += 1;
       const body = JSON.parse(request.body);
-      assert.equal(body.reasoning_effort, 'low');
-      assert.equal(body.max_tokens, 2048);
+      assert.equal(body.reasoning_effort, 'none');
+      assert.equal(body.max_tokens, 512);
       assert.doesNotMatch(body.messages[0].content, /builtin research step|## Principal/);
       assert.deepEqual(body.tools.map(({ function: tool }) => tool.name), calls === 1
         ? ['read_file', 'write_file', 'run_test'] : []);
@@ -225,7 +230,7 @@ test('minimum docs coder makes no research request and still checks tests, file 
   assert.equal(result.researchPath, undefined);
   assert.equal(existsSync(join(options.worktree, 'RESEARCH.md')), false);
   assert.equal(result.run.metrics.prompt_tokens, 100);
-  assert.equal(result.run.metrics.effort, 'l');
+  assert.equal(result.run.metrics.effort, '-');
   assert.doesNotMatch(readFileSync(join(options.repoRoot, '.roster', 'memory', 'coder.jsonl'), 'utf8'), /reasoning_content/);
 });
 

@@ -20,7 +20,8 @@ test('difficulty versus model prior selects effort for every task class and ask 
     for (const taskClass of ['feat', 'fix', 'docs', 'test']) {
       for (const difficulty of [1, 2, 4, 5]) {
         const selected = selectReasoning(config, { kind, taskClass, difficulty });
-        assert.equal(selected.llm.effort, difficulty <= 2 ? 'l' : 'h');
+        assert.equal(selected.llm.effort, kind === 'slice' && taskClass === 'docs'
+          ? 'none' : difficulty <= 2 ? 'l' : 'h');
         assert.equal(selected.llm.model_prior, 'strong');
       }
     }
@@ -30,7 +31,7 @@ test('difficulty versus model prior selects effort for every task class and ask 
     assert.equal(selected.llm.effort, 'l');
     assert.equal(selected.llm.max_tokens, 4096);
   }
-  assert.equal(selectReasoning(config, { kind: 'slice', taskClass: 'docs', difficulty: 1 }).llm.max_tokens, 2048);
+  assert.equal(selectReasoning(config, { kind: 'slice', taskClass: 'docs', difficulty: 1 }).llm.max_tokens, 512);
   const unknown = selectReasoning({ ...config, llm: { ...config.llm, model: 'unrated' } },
     { kind: 'slice', taskClass: 'fix', difficulty: 1 });
   assert.equal(unknown.llm.effort, 'm');
@@ -52,13 +53,13 @@ test('SGLang DeepSeek4.1 maps medium to high and caps at max; cloud retains four
   assert.equal(nextEffort(cloud, 'x'), 'x');
 });
 
-test('selected docs request sends low/2048 and drops reasoning_content from all returned evidence', async () => {
+test('selected docs request disables reasoning at 512 and drops reasoning_content from all returned evidence', async () => {
   const selected = selectReasoning(config, { kind: 'slice', taskClass: 'docs', difficulty: 1 });
   const chat = createBuiltinChat(selected, { env: {}, fetchImpl: async (_url, request) => {
     const body = JSON.parse(request.body);
-    assert.equal(body.reasoning_effort, 'low');
-    assert.equal(body.max_tokens, 2048);
-    assert.equal(body.chat_template_kwargs.thinking, true);
+    assert.equal(body.reasoning_effort, 'none');
+    assert.equal(body.max_tokens, 512);
+    assert.equal(body.chat_template_kwargs.thinking, false);
     return Response.json({ choices: [{ message: { role: 'assistant', content: 'Done.',
       reasoning_content: 'PRIVATE_THINKING' } }] });
   } });
@@ -82,7 +83,7 @@ test('feature planner request uses the strong model prior with low/4096 without 
   });
 });
 
-test('/effort x persists but docs slices cap overrides and retries at high; none disables thinking', async (t) => {
+test('/effort x persists but docs slices disable reasoning; none disables thinking', async (t) => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'roster-reasoning-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
   writeFileSync(join(repoRoot, 'roster.config.example.yml'), example);
@@ -90,8 +91,8 @@ test('/effort x persists but docs slices cap overrides and retries at high; none
   assert.equal(updated.llm.effort_override, 'x');
   const selected = selectReasoning({ ...updated, llm: { ...updated.llm, base_url: config.llm.base_url,
     model: config.llm.model } }, { kind: 'slice', taskClass: 'docs', difficulty: 1, previousEffort: 'l' });
-  assert.equal(selected.llm.effort, 'h');
-  assert.equal(mappedEffort(selected.llm), 'high');
+  assert.equal(selected.llm.effort, 'none');
+  assert.equal(mappedEffort(selected.llm), 'none');
   const disabled = await setConfigValue('effort', 'none', { repoRoot });
   assert.equal(buildRun({ config: { ...disabled, llm: { ...disabled.llm, model: 'served' } },
     response: null, env: {} }).env.AI_EFFORT, '-');
@@ -105,7 +106,7 @@ test('/effort x persists but docs slices cap overrides and retries at high; none
   await chat({ messages: [{ role: 'user', content: 'Task' }] });
 });
 
-test('shell /effort x remains explicit but cannot send max or xhigh for a docs slice', async (t) => {
+test('shell /effort x remains explicit but docs slices still disable reasoning', async (t) => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'roster-shell-effort-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
   writeFileSync(join(repoRoot, 'roster.config.example.yml'), example);
@@ -116,7 +117,7 @@ test('shell /effort x remains explicit but cannot send max or xhigh for a docs s
       runBuiltinIssue: async (_issue, options) => {
         assert.equal(options.config.llm.effort_override, 'x');
         const selected = selectReasoning(options.config, { kind: 'slice', taskClass: 'docs', difficulty: 1 });
-        assert.equal(mappedEffort(selected.llm), 'high');
+        assert.equal(mappedEffort(selected.llm), 'none');
         return { issue: { number: 108 }, command: null };
       },
     },
@@ -151,7 +152,7 @@ test('difficulty 1 sends low and difficulty 5 sends high for a strong coder, ind
   for (const difficulty of [1, 2, 3, 4, 5]) {
     const selected = selectReasoning(config,
       { kind: 'slice', taskClass: 'docs', difficulty, previousEffort: 'x' });
-    assert.equal(mappedEffort(selected.llm), 'high');
+    assert.equal(mappedEffort(selected.llm), 'none');
   }
 });
 

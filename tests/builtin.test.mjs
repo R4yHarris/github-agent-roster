@@ -682,20 +682,20 @@ test('a configured direct ask implements and reviews the slice after its streame
   assert.match(logs.join('\n'), /Human AI-Eval|human AI-Eval/);
 });
 
-test('docs slice retry after failed review raises one supported tier and never exceeds high', async (context) => {
+test('docs slice retry after failed review remains reasoning-free at 512', async (context) => {
   const options = fixture(context);
   options.issue.body = renderIssueBody(options.issue.body, { task_class: 'docs', difficulty: 1 });
   const config = { ...llmConfig, llm: { ...llmConfig.llm, model: 'deepseek-v4.1-flash',
     base_url: 'http://192.168.1.48:8888/v1' } };
-  for (const effort of ['low', 'high', 'high', 'high', 'none']) {
+  for (const effort of ['none', 'none', 'none', 'none', 'none']) {
     let coderTurns = 0;
-    const activeConfig = effort === 'none' ? { ...config, llm: { ...config.llm, effort_override: 'none' } } : config;
-    const result = await runIssueWithSeats(42, { ...options, config: activeConfig, log: () => {},
+    const result = await runIssueWithSeats(42, { ...options, config, log: () => {},
       fetchImpl: async (_url, request) => {
         const body = JSON.parse(request.body);
         const system = body.messages[0].content;
         if (system.startsWith('You are the builtin planner seat.')) {
-          assert.equal(body.reasoning_effort, 'low');
+          assert.equal(body.reasoning_effort, 'none');
+          assert.equal(body.max_tokens, 512);
           return Response.json({ choices: [{ message: { role: 'assistant', content: JSON.stringify({
             title: options.issue.title, acceptance_checks: ['node --test exits 0'],
             files_allowed: ['README.md'], task_class: 'docs', difficulty: 1,
@@ -708,7 +708,7 @@ test('docs slice retry after failed review raises one supported tier and never e
         }
         coderTurns += 1;
         assert.equal(body.reasoning_effort, effort);
-        assert.equal(body.max_tokens, 2048);
+        assert.equal(body.max_tokens, 512);
         assert.doesNotMatch(system, /## Principal|## Seat memory|implement-task/);
         return Response.json({ choices: [{ finish_reason: coderTurns === 1 ? 'tool_calls' : 'stop',
           message: coderTurns === 1 ? { role: 'assistant', reasoning_content: 'PRIVATE_CODER_THINKING',

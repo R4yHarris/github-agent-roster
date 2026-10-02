@@ -40,10 +40,10 @@ export function selectReasoning(config, { kind, taskClass, difficulty, previousE
   if (previousEffort !== undefined && config.llm.effort_override === undefined) {
     effort = nextEffort(config.llm, previousEffort);
   }
-  if (docsSlice && effort === 'x') effort = 'h';
+  if (docsSlice) effort = 'none';
   if (usesDeepseekReasoning(config.llm) && effort === 'm') effort = 'h';
   return { ...config, llm: { ...config.llm, effort, model_prior: prior.strength,
     task_difficulty: difficulty, task_class: taskClass, task_kind: kind ?? config.llm.task_kind,
-    ...(docsSlice && difficulty <= 2 ? { max_tokens: 2048 } : planning ? { max_tokens: 4096 } : {}),
+    ...(docsSlice ? { max_tokens: 512 } : planning ? { max_tokens: 4096 } : {}),
   } };
 }
