@@ -58,6 +58,7 @@ export async function runCoder({
       allowRunTest: config.tools?.run_test !== false,
       readmeOnlyDocs: context.contextPolicy.readmeOnlyDocs,
       sliceReadsOnly: context.contextPolicy.sliceReadsOnly,
+      allowRepoMap: context.contextPolicy.repoMap,
       beforeWrite: lstatSync(path.join(worktree, '.git'), { throwIfNoEntry: false })
         ? ({ allowedFiles }) => captureCheckpoint({ worktree, task, allowedFiles, env,
           apiKeyEnv: config.llm.api_key_env, signal }) : undefined,

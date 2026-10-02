@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { redactSecrets } from './memory.mjs';
 import { assertContractsInitialized, ContractsSubmoduleError, onlyMissingContractsScripts } from '../lib/contracts.mjs';
 import { throwIfCancelled } from './cancel.mjs';
+import { readTaskMetadata } from './estimate.mjs';
 
 const execute = promisify(execFile);
 const managedFiles = new Set(['assignment.md', 'task.md', 'recipe.yml', 'plan.md', 'context.md', 'research.md', 'result.md', 'review.md', 'estimate.md']);
@@ -38,7 +39,7 @@ export function isForbiddenRead(file) {
 
 function isProtectedSurface(file) {
   const parts = partsOf(file);
-  return hasAmbiguousComponents(file) || isSecret(file) || isDebugLog(file) || isShellHistory(file) || isCheckpoint(file) ||
+  return hasAmbiguousComponents(file) || isSecret(file) || isDebugLog(file) || isShellHistory(file) || isCheckpoint(file) || isRepoMap(file) ||
     parts.includes('.git') || parts.includes('agent-policy.yml') ||
     parts.some((part, index) =>
       (part === '.github' && parts[index + 1] === 'workflows') ||
@@ -54,7 +55,7 @@ export function isForbiddenWrite(file) {
 
 export function isManagedFile(file) {
   const parts = partsOf(file);
-  return parts.length === 1 && managedFiles.has(parts[0]) || isRunLog(file) || isDebugLog(file) || isShellHistory(file) || isCheckpoint(file);
+  return parts.length === 1 && managedFiles.has(parts[0]) || isRunLog(file) || isDebugLog(file) || isShellHistory(file) || isCheckpoint(file) || isRepoMap(file);
 }
 
 export function isDebugLog(file) {
@@ -70,6 +71,10 @@ export function isShellHistory(file) {
 export function isCheckpoint(file) {
   const parts = partsOf(file);
   return parts[0] === '.roster' && parts[1] === 'checkpoints';
+}
+
+export function isRepoMap(file) {
+  return partsOf(file).join('/') === '.roster/map.md';
 }
 
 export function isRunLog(file) {
@@ -218,6 +223,7 @@ export async function createTools({
   runCommand = execute,
   onEvent, signal,
   beforeWrite,
+  allowRepoMap = false,
 } = {}) {
   if (!['planner', 'coder'].includes(seat)) throw new TypeError('Only planner and coder seats have file tools');
   if (seat === 'planner' && (!Array.isArray(plannerArtifacts) || !plannerArtifacts.length ||
@@ -225,6 +231,7 @@ export async function createTools({
     throw new TypeError('Planner scope must contain only known root planning artifacts');
   }
   if (typeof allowRunTest !== 'boolean') throw new TypeError('run_test permission must be a boolean');
+  if (typeof allowRepoMap !== 'boolean' || allowRepoMap && seat !== 'coder') throw new TypeError('Repo map access requires a coder policy');
   if (typeof plannerReads !== 'boolean' || plannerReads &&
       (seat !== 'planner' || plannerArtifacts.length !== 1 || plannerArtifacts[0] !== 'PLAN.md')) {
     throw new TypeError('Planner exploration requires PLAN.md-only write scope');
@@ -244,6 +251,15 @@ export async function createTools({
     throw new Error('Worktree must be a real directory, not a symlink');
   }
   const canonicalRoot = await fs.realpath(root);
+  if (allowRepoMap) {
+    const file = path.join(root, 'TASK.md');
+    const taskEntry = await fs.lstat(file);
+    if (!taskEntry.isFile() || taskEntry.isSymbolicLink() || taskEntry.nlink !== 1 || taskEntry.size > 65536) {
+      throw new Error('Repo map access requires a valid regular TASK.md');
+    }
+    const metadata = readTaskMetadata(await fs.readFile(file, 'utf8'));
+    if (metadata.difficulty < 4 || metadata.task_class === 'docs') throw new Error('Repo map access requires difficulty 4+ and a non-docs task');
+  }
   let readmeWritten = false;
   const repairFiles = new Set();
   const scopedFiles = () => taskAndRepairFiles(allowedFiles, [...repairFiles]);
@@ -277,6 +293,7 @@ export async function createTools({
       throw new ToolAccessError('Tool path must stay inside the worktree');
     }
     const normalized = relative.split(path.sep).join('/');
+    const mapRead = !write && allowRepoMap && isRepoMap(normalized);
     if (plannerReads && partsOf(normalized).includes('.roster')) {
       throw new ToolAccessError('Plan exploration cannot read private .roster artifacts');
     }
@@ -290,10 +307,10 @@ export async function createTools({
         ? `Planner write_file allows only root ${plannerArtifacts.join(', ').replace(/, ([^,]+)$/, ', and $1')}`
         : `Writing ${normalized} is not allowed by TASK.md or worktree policy`);
     }
-    if (isForbiddenRead(normalized)) {
+    if (isForbiddenRead(normalized) && !mapRead) {
       throw new ToolAccessError('Tool access to secrets, Git metadata, policy, workflows, contracts, or debug logs is refused');
     }
-    if (!write && !readable(normalized, directory)) {
+    if (!write && !mapRead && !readable(normalized, directory)) {
       throw new ToolAccessError(`Reading ${normalized} is not allowed by TASK.md slice scope`);
     }
     return { file, relative, normalized };
@@ -338,6 +355,7 @@ export async function createTools({
       await checkComponents(relative);
       const entry = await fs.lstat(file);
       if (!entry.isFile()) throw new Error('read_file requires a regular file');
+      if (isRepoMap(relative.split(path.sep).join('/')) && entry.nlink !== 1) throw new Error('Repo map must be a single-link file');
       await checkParent(file);
       const text = await fs.readFile(file, 'utf8');
       return args.max_lines === undefined ? text : text.split(/\r?\n/).slice(0, args.max_lines).join('\n');

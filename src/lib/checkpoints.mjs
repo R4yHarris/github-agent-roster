@@ -8,6 +8,7 @@ import { ensureLocalPath } from './paths.mjs';
 import { isAllowedFile, isForbiddenRead, isManagedFile } from '../runtime/tools.mjs';
 import { redactEvidence } from '../runtime/excellence.mjs';
 import { throwIfCancelled } from '../runtime/cancel.mjs';
+import { ensureManagedIgnored } from './managed.mjs';
 
 const execute = promisify(execFile);
 const oid = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
@@ -91,19 +92,7 @@ export async function captureCheckpoint({ worktree, task, allowedFiles, env = pr
   const directory = path.join(worktree, '.roster', 'checkpoints', identity(task));
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   await ensureLocalPath(directory, worktree);
-  const exclude = path.resolve(worktree, (await git(worktree, ['rev-parse', '--git-path', 'info/exclude'], env)).trim());
-  const excludeEntry = await fs.lstat(exclude).catch((error) => { if (error.code === 'ENOENT') return null; throw error; });
-  if (excludeEntry && (!excludeEntry.isFile() || excludeEntry.isSymbolicLink() || excludeEntry.nlink !== 1)) {
-    throw new Error('Git exclude must be a regular single-link file before recording checkpoints');
-  }
-  const exclusions = await fs.readFile(exclude, 'utf8').catch((error) => {
-    if (error.code === 'ENOENT') return '';
-    throw error;
-  });
-  if (!exclusions.split(/\r?\n/).includes('.roster/checkpoints/')) {
-    await fs.mkdir(path.dirname(exclude), { recursive: true });
-    await fs.appendFile(exclude, `${exclusions.endsWith('\n') || !exclusions ? '' : '\n'}.roster/checkpoints/\n`);
-  }
+  await ensureManagedIgnored(worktree, '.roster/checkpoints/', env);
   const index = path.join(directory, `index-${randomBytes(8).toString('hex')}`);
   const indexEnv = { ...env, GIT_INDEX_FILE: index };
   const ref = `refs/roster/checkpoints/${task}/${number}`;

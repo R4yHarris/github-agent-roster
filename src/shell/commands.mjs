@@ -15,6 +15,7 @@ export const commands = Object.freeze([
     '/btw Which acceptance check covers this edge case?'),
   page('context', 'Session', '/context', 'Show last measured seat provider, model, effort, input, output, context max, finish reason, character pack budget and prior-feedback inclusion. Missing counts are -.',
     '/context', [], ['usage']),
+  page('map', 'Session', '/map', 'Write a filename-only repo map: top two directory levels plus TASK paths, capped at 80 lines. Coder reads require non-docs difficulty4+.', '/map'),
   page('checkpoints', 'Session', '/checkpoints', 'List current-task checkpoint number, seat, short status and time.', '/checkpoints'),
   page('rewind', 'Session', '/rewind N', 'Restore checkpoint-covered product files; keep TASK/PLAN/logs. Refuse published PRs. /undo means latest only.',
     '/rewind 1', [], ['undo']),
