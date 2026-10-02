@@ -357,7 +357,7 @@ test('issue body task metadata reaches TASK.md and ESTIMATE.md before coder/revi
   options.issue.body = renderIssueBody(options.issue.body, {
     task_class: 'fix', difficulty: 4, estimate_min: 35,
   });
-  const result = await runBuiltinIssue(42, {
+  const result = await runIssueWithSeats(42, {
     ...options, config: stubConfig, log: () => {},
     fetchImpl: () => assert.fail('Stub must not call an LLM'),
   });
@@ -518,6 +518,64 @@ test('test budget exhaustion runs all four repairs, then writes failing review w
   for (let attempt = 1; attempt <= 4; attempt += 1) {
     assert.match(options.stderr, new RegExp(`Tests failed\\. Repair ${attempt} of 4\\.`));
   }
+});
+
+test('a bounded docs review returns to draft once, reviews again, and then stops', async (context) => {
+  const options = fixture(context);
+  options.issue.body = renderIssueBody(options.issue.body, {
+    task_class: 'docs', difficulty: 1, estimate_min: 10,
+  });
+  let coderCalls = 0;
+  let reviews = 0;
+  let tests = 0;
+  const result = await runIssueWithSeats(42, {
+    ...options,
+    config: llmConfig,
+    log: () => {},
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      const system = body.messages[0].content;
+      if (system.startsWith('You are the builtin planner seat.')) {
+        return Response.json({ choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant', content: JSON.stringify({
+            title: 'Add Status',
+            acceptance_checks: ['node --test exits 0', 'README has a Status section'],
+            files_allowed: ['README.md'],
+          }),
+        } }] });
+      }
+      if (system.startsWith('You are the builtin reviewer seat.')) {
+        reviews += 1;
+        return Response.json({ choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant', content: JSON.stringify(reviews === 1 ? {
+            verdict: 'fail', reasons: ['Status must say Active.'], security_notes: [],
+          } : {
+            verdict: 'pass', reasons: [], security_notes: [],
+          }),
+        } }] });
+      }
+      coderCalls += 1;
+      const draft = coderCalls <= 2 ? 'Draft.' : 'Active.';
+      const tools = body.tools ?? [];
+      return Response.json({ choices: [tools.length ? { finish_reason: 'tool_calls', message: {
+        role: 'assistant', tool_calls: [{ id: `save-${coderCalls}`, type: 'function', function: {
+          name: 'write_file', arguments: JSON.stringify({
+            path: 'README.md', content: `# Example\n\n## Status\n${draft}\n`,
+          }),
+        } }],
+      } } : { finish_reason: 'stop', message: {
+        role: 'assistant', content: `Saved ${draft} and passed checks.`,
+      } }] });
+    },
+    runTestCommand: async () => {
+      tests += 1;
+      return { stdout: 'pass', stderr: '' };
+    },
+  });
+  assert.equal(result.review.verdict, 'pass');
+  assert.equal(reviews, 2);
+  assert.equal(coderCalls, 4);
+  assert.match(readFileSync(path.join(result.worktreePath, 'README.md'), 'utf8'), /## Status\nActive\./);
 });
 
 test('a repaired failing test passes excellence, read-only review, and publication staging without widening TASK', async (context) => {
@@ -707,9 +765,10 @@ test('docs slice retry after failed review remains reasoning-free at 8192', asyn
         assert.equal(body.reasoning_effort, effort);
         assert.equal(body.max_tokens, 8192);
         assert.doesNotMatch(system, /## Principal|## Seat memory|implement-task/);
-        return Response.json({ choices: [{ finish_reason: coderTurns === 1 ? 'tool_calls' : 'stop',
-          message: coderTurns === 1 ? { role: 'assistant', reasoning_content: 'PRIVATE_CODER_THINKING',
-            tool_calls: [{ id: 'edit', type: 'function', function: { name: 'write_file',
+        const drafting = body.tools?.length;
+        return Response.json({ choices: [{ finish_reason: drafting ? 'tool_calls' : 'stop',
+          message: drafting ? { role: 'assistant', reasoning_content: 'PRIVATE_CODER_THINKING',
+            tool_calls: [{ id: `edit-${coderTurns}`, type: 'function', function: { name: 'write_file',
               arguments: JSON.stringify({ path: 'README.md', content: `# Example\n\n## Status\n${effort} ${Date.now()}.\n` }) } }],
           } : { role: 'assistant', content: 'Changed the scoped README.', reasoning_content: 'PRIVATE_CODER_THINKING' },
         }] });

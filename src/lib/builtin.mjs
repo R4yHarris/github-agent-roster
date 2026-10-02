@@ -579,12 +579,14 @@ async function runBuiltinAssignment(issueNumber, {
     await recordSeat(sessions.reviewer, reviewerRun);
     return { review, reviewerRun };
   };
+  const coderSeat = (priorFeedback = planner.feedback?.context) =>
+    liveLog.seat('coder', sessions.coder, coderConfig, (onEvent) => runCoder({
+      worktree: worktreePath, repoRoot, config: coderConfig, task: prepared.task, session: sessions.coder,
+      fetchImpl, env, vault, runTestCommand, priorFeedback, onEvent, askKind, retryCommand, signal, steeringControl,
+    }));
   let result;
   try {
-    result = await liveLog.seat('coder', sessions.coder, coderConfig, (onEvent) => runCoder({
-      worktree: worktreePath, repoRoot, config: coderConfig, task: prepared.task, session: sessions.coder,
-      fetchImpl, env, vault, runTestCommand, priorFeedback: planner.feedback?.context, onEvent, askKind, retryCommand, signal, steeringControl,
-    }));
+    result = await coderSeat();
   } catch (error) {
     if (error instanceof Error && error.result) {
       await recordSeat(sessions.coder, error.result.run, error.result.excellence);
@@ -592,9 +594,21 @@ async function runBuiltinAssignment(issueNumber, {
     }
     throw error;
   }
-  const coderRun = result.run;
+  let coderRun = result.run;
   await recordSeat(sessions.coder, coderRun, result.excellence);
-  const { review, reviewerRun } = await reviewSeat(result);
+  let { review, reviewerRun } = await reviewSeat(result);
+  const boundedDocs = planner.metadata.task_class === 'docs' && taskFilesAllowed(planner.task).length === 1;
+  if (boundedDocs && result.excellence.pass && review.queried && review.verdict === 'fail') {
+    await archiveRunArtifacts(worktreePath, {
+      task: prepared.task,
+      git: (args) => git(worktreePath, args, commandEnv),
+      preserve: ['RECIPE.yml', 'TASK.md', 'ESTIMATE.md'],
+    });
+    result = await coderSeat(review.content);
+    coderRun = result.run;
+    await recordSeat(sessions.coder, coderRun, result.excellence);
+    ({ review, reviewerRun } = await reviewSeat(result));
+  }
   await ensureUnchanged(planner.recipePath, planner.recipe);
   await ensureUnchanged(planner.taskPath, planner.task);
   await ensureUnchanged(planner.estimatePath, planner.estimate);

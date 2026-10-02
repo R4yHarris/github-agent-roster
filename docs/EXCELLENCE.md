@@ -6,9 +6,10 @@ grade its own work with a human AI-Eval or claim that a passing test proves
 every requirement.
 For a configured coder, the same gate also checks each final summary
 inside the bounded tool loop, but only after tests turn green. A nonzero test
-exit starts a separate repair attempt, with up to four repairs after the
-initial run. Each attempt has a fresh configured tool-turn allowance and
-receives a bounded, redacted failure summary; exit 1 is never completion.
+exit starts a separate repair attempt: bounded single-file docs slices get one
+repair after the initial run, while other tasks get up to four. Each attempt
+has a fresh configured tool-turn allowance and receives a bounded, redacted
+failure summary; exit 1 is never completion.
 Excellence and reviewer wait for green tests or exhaustion of that repair
 budget. Timeouts and denied tool paths remain terminal failures.
 After memory is recorded, the gate runs again against the verified

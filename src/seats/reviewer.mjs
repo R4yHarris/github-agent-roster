@@ -151,9 +151,10 @@ export async function runReviewer({
         security_notes: ['No passing verification or completed review is available.'],
       };
     } else if (coderResult.repairBudgetExhausted === true) {
+      const budget = coderResult.testRepairBudget ?? 4;
       report = {
         verdict: 'fail',
-        reasons: ['Coder test repair budget (4) exhausted; tests did not pass.'],
+        reasons: [`Coder test repair budget (${budget}) exhausted; tests did not pass.`],
         security_notes: ['No passing implementation or completed review is available.'],
       };
     } else if (!coderResult.excellence?.pass || coderResult.mode !== 'llm') {

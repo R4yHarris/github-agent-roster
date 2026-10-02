@@ -185,6 +185,41 @@ test('docs tools exclude list_dir and one write received during test returns to 
   assert.match(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /## Status\nActive\./);
 });
 
+test('a bounded docs check returns to draft once and a second failed check stops', async (t) => {
+  const options = fixture(t);
+  let calls = 0;
+  let tests = 0;
+  let failed;
+  await assert.rejects(runCoder({
+    ...options,
+    askKind: 'slice',
+    fetchImpl: async () => {
+      calls += 1;
+      return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+        role: 'assistant', tool_calls: [{ id: `save-${calls}`, type: 'function', function: {
+          name: 'write_file', arguments: JSON.stringify({
+            path: 'README.md', content: `# Project\n\n## Status\nAttempt ${calls}.\n`,
+          }),
+        } }],
+      } }] });
+    },
+    runTestCommand: async () => {
+      tests += 1;
+      throw Object.assign(new Error(`failed check ${tests}`), {
+        code: 1, stdout: `failed check ${tests}`, stderr: '',
+      });
+    },
+  }), (error) => {
+    failed = error.result;
+    return /Test repair budget \(1\) exhausted/.test(error.message);
+  });
+  assert.equal(calls, 2);
+  assert.equal(tests, 2);
+  assert.equal(failed.testRepairs, 1);
+  assert.equal(failed.testRepairBudget, 1);
+  assert.equal(failed.repairBudgetExhausted, true);
+});
+
 test('a bounded docs slice naming one non-README file is not offered a directory walk', async (t) => {
   const options = fixture(t);
   const taskText = options.taskText.replaceAll('README.md', 'docs/guide.md');

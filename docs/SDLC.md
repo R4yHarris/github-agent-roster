@@ -202,9 +202,11 @@ Failed configured runs also save a truthful result before rejecting. See the
 protected surfaces.
 After RESULT.md, the read-only builtin reviewer checks the task acceptance
 checks and the Git diff against that result, then writes REVIEW.md with
-pass/fail reasons and security notes. A failed review leaves the coder's
-changes intact but blocks Roster-managed publication by default; see
-[review and explicit bypass](REVIEW.md).
+pass/fail reasons and security notes. For a bounded single-file docs slice, the
+first model-backed review failure returns once to the coder with the review
+feedback, then reviews the repaired result again; a second failure stops. Other
+failed reviews leave the coder's changes intact and block Roster-managed
+publication by default; see [review and explicit bypass](REVIEW.md).
 
 With no endpoint, the stub writes a deterministic `RESULT.md` summary, exits
 zero, and **does not edit code or run tests**. It cannot deliver a software

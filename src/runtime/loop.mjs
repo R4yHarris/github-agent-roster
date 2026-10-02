@@ -61,6 +61,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     parsedTask.files_allowed.length === 1
     ? parsedTask.files_allowed[0] : null;
   const boundedDocs = singleAllowedFile !== null;
+  const repairBudget = boundedDocs ? 1 : testRepairBudget;
 
   const messages = [
     { role: 'system', content: context.pack },
@@ -99,6 +100,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   let lateWriteReturned = false;
   let steeringMessage;
   progress.testRepairs = 0;
+  progress.testRepairBudget = repairBudget;
   progress.repairFiles = [];
   const repairTests = async (tests) => {
     if (!Number.isSafeInteger(tests?.exit_code) || tests.exit_code < 0) {
@@ -115,17 +117,17 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       env, apiKeyEnv: config.llm.api_key_env,
     }).slice(0, 4096);
     const failure = `Final node --test failed (exit ${tests.exit_code}):\n${output}`;
-    if (progress.testRepairs === testRepairBudget) {
+    if (progress.testRepairs === repairBudget) {
       progress.repairBudgetExhausted = true;
-      throw new Error(`${failure}\nTest repair budget (${testRepairBudget}) exhausted`);
+      throw new Error(`${failure}\nTest repair budget (${repairBudget}) exhausted`);
     }
     progress.testRepairs += 1;
     attemptTurns = 0;
     finalSummaryOnly = false;
     checksPassedAfterWrite = false;
-    await onEvent?.({ type: 'test-repair', attempt: progress.testRepairs, budget: testRepairBudget });
+    await onEvent?.({ type: 'test-repair', attempt: progress.testRepairs, budget: repairBudget });
     messages.push({ role: 'user', content: `${failure}\n` +
-      `Repair ${progress.testRepairs} of ${testRepairBudget}. Read this failure summary and repair TASK-allowed files` +
+      `Repair ${progress.testRepairs} of ${repairBudget}. Read this failure summary and repair TASK-allowed files` +
       (progress.repairFiles.length ? ` plus the failing tests: ${progress.repairFiles.join(', ')}` : '') +
       '. Rerun node --test, then provide a new summary. No change is verified yet.' });
     return true;
@@ -297,8 +299,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
             env, apiKeyEnv: config.llm.api_key_env,
           }),
         });
-        if (progress.testRepairs === 0 && call.function.name === 'write_file' &&
-            result.path === singleAllowedFile) {
+        if (call.function.name === 'write_file' && result.path === singleAllowedFile) {
           wroteSingleAllowedFile = true;
           continue;
         }
