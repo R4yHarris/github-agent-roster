@@ -47,6 +47,8 @@ export const commands = Object.freeze([
       '--id, --base-url, --model, --context, --concurrency, --hardware, --task-class: existing fleet add flags']),
   page('stats', 'Model', '/stats [REF]', 'Read model run metrics without selecting a model.', '/stats HEAD'),
   page('issues', 'Board', '/issues', 'List up to 100 open issue numbers and titles only; never bodies.', '/issues'),
+  page('waves', 'Board', '/waves [open]', 'Read PLAN.md child drafts and GitHub states. Only explicit open creates those drafts; earlier open waves block later starts. No second board is stored.',
+    '/waves', ['open: explicitly create only missing drafts already validated in PLAN.md']),
   page('issue', 'Board', '/issue N', 'Show cached title/state/branch/PR metadata; query GitHub only on a cache miss.', '/issue 108'),
   page('diff', 'Board', '/diff', 'Print tracked git diff filenames in the current issue worktree, never file bodies.', '/diff'),
   page('log', 'Board', '/log N|debug', 'Tail local seat logs; debug tail is refused while debug is off.', '/log 108'),

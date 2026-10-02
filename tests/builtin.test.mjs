@@ -192,6 +192,31 @@ test('a locally reconstructed resume handle reuses valid TASK with no planner or
     program === 'gh' || args[0] === 'worktree' && args[1] === 'add'), false);
 });
 
+test('an open earlier wave blocks the later issue before a worktree or coder starts', async (context) => {
+  const options = fixture(context);
+  options.issue.labels = [{ name: 'wave:2' }];
+  const original = options.runCommand;
+  await assert.rejects(runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {},
+    runCommand: async (program, args, cwd) => program === 'gh' && args[0] === 'issue' && args[1] === 'list'
+      ? JSON.stringify([{ number: 41, title: 'Wave 1' }]) : original(program, args, cwd),
+  }), /Wave 2 is blocked/);
+  assert.equal(options.calls.some(({ args }) => args[0] === 'worktree' && args[1] === 'add'), false);
+});
+
+test('resume preserves manual wave labels and cannot bypass a newly reopened earlier wave', async (context) => {
+  const options = fixture(context);
+  options.issue.labels = [{ name: 'wave:2' }];
+  const original = options.runCommand;
+  await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {},
+    runCommand: async (program, args, cwd) => program === 'gh' && args[0] === 'issue' && args[1] === 'list'
+      ? '[]' : original(program, args, cwd) });
+  const prepared = await readLocalRun({ number: 42, cwd: options.target, config: stubConfig, env: options.env });
+  assert.deepEqual(prepared.issue.labels, [{ name: 'wave:2' }]);
+  await assert.rejects(runBuiltinIssue(42, { ...options, config: stubConfig, preparedRun: prepared, log: () => {},
+    runCommand: async (program, args, cwd) => program === 'gh' && args[0] === 'issue' && args[1] === 'list'
+      ? JSON.stringify([{ number: 41 }]) : original(program, args, cwd) }), /Wave 2 is blocked/);
+});
+
 test('roster ask writes a local draft ask, recipe, and executable task without network', async (context) => {
   const { repoRoot } = fixture(context);
   const result = await writeAsk('Add a Status section to README.md.', {

@@ -61,7 +61,7 @@ test('reads the issue in the current repository and prepares one coder worktree'
   assert.deepEqual(calls, [
     { program: 'git', args: ['rev-parse', '--show-toplevel'], cwd: options.cwd },
     { program: 'git', args: ['remote', 'get-url', 'origin'], cwd: repoRoot },
-    { program: 'gh', args: ['issue', 'view', '42', '--repo', 'example/repository', '--json', 'number,title,body,url'], cwd: repoRoot },
+    { program: 'gh', args: ['issue', 'view', '42', '--repo', 'example/repository', '--json', 'number,title,body,url,labels'], cwd: repoRoot },
     { program: 'git', args: ['worktree', 'list', '--porcelain', '-z'], cwd: repoRoot },
     { program: 'git', args: ['for-each-ref', '--format=%(refname)', 'refs/heads/issue-42'], cwd: repoRoot },
     { program: 'git', args: ['worktree', 'add', '-b', 'issue-42', worktreePath], cwd: repoRoot },
@@ -255,7 +255,7 @@ test('selects the SSH origin explicitly instead of the gh default repository', a
       : originalRunCommand(program, args, cwd);
   await runIssue(42, options);
   assert.deepEqual(calls.find(({ program }) => program === 'gh').args,
-    ['issue', 'view', '42', '--repo', 'example/repository', '--json', 'number,title,body,url']);
+    ['issue', 'view', '42', '--repo', 'example/repository', '--json', 'number,title,body,url,labels']);
 });
 
 test('rejects a non-GitHub origin before reading an issue', async () => {
