@@ -51,11 +51,11 @@ test('truncated tool calls are not executed and the complete tool_calls retry is
   }, runTestCommand: async () => ({ stdout: 'pass', stderr: '' }) });
   assert.equal(result.excellence.pass, true);
   assert.equal(result.turns, 3);
-  assert.deepEqual(caps, [512, 512, 512]);
+  assert.deepEqual(caps, [2048, 2048, 2048]);
   assert.doesNotMatch(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /PRIVATE_TRUNCATED_BODY/);
 });
 
-test('a README write survives one docs length retry without reasoning at 512', async (t) => {
+test('a README write survives one docs length continue without reasoning at 2048', async (t) => {
   const options = fixture(t);
   const caps = [];
   let calls = 0;
@@ -70,14 +70,17 @@ test('a README write survives one docs length retry without reasoning at 512', a
         name: 'write_file', arguments: JSON.stringify({ path: 'README.md', content: '# Project\n\n## Status\nActive.\n' }),
       } }],
     } }] });
-    if (calls === 3) assert.ok(!request.body.includes('PRIVATE_TRUNCATED_RESPONSE'));
+    if (calls === 3) {
+      assert.equal(body.messages.at(-2).content, 'PRIVATE_TRUNCATED_RESPONSE');
+      assert.match(body.messages.at(-1).content, /Continue it from where it stopped/);
+    }
     return Response.json({ choices: [{ finish_reason: calls === 2 ? 'length' : 'stop', message: {
       role: 'assistant', content: calls === 2 ? 'PRIVATE_TRUNCATED_RESPONSE' : 'Added Status.',
     } }] });
   }, runTestCommand: async () => ({ stdout: 'pass', stderr: '' }) });
   assert.equal(result.excellence.pass, true);
   assert.equal(result.turns, 3);
-  assert.deepEqual(caps, [512, 512, 512]);
+  assert.deepEqual(caps, [2048, 2048, 2048]);
   assert.match(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /## Status/);
 });
 
@@ -97,7 +100,7 @@ test('a second docs length passes review when the required Status section is alr
         name: 'write_file', arguments: JSON.stringify({ path: 'README.md', content: '# Project\n\n## Status\nActive.\n' }),
       } }],
     } }] });
-    assert.equal(body.max_tokens, 512);
+    assert.equal(body.max_tokens, 2048);
     assert.equal(body.reasoning_effort, 'none');
     assert.equal(body.chat_template_kwargs.thinking, false);
     return Response.json({ choices: [{ finish_reason: 'length',
@@ -208,7 +211,7 @@ test('minimum docs coder makes no research request and still checks tests, file 
       calls += 1;
       const body = JSON.parse(request.body);
       assert.equal(body.reasoning_effort, 'none');
-      assert.equal(body.max_tokens, 512);
+      assert.equal(body.max_tokens, 2048);
       assert.doesNotMatch(body.messages[0].content, /builtin research step|## Principal/);
       assert.deepEqual(body.tools.map(({ function: tool }) => tool.name), calls === 1
         ? ['read_file', 'write_file', 'run_test'] : []);

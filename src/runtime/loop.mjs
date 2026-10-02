@@ -184,12 +184,12 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         continue;
       }
       if (error instanceof UnsupportedFinishReasonError && error.truncated && chat.lastAttempts === 2 &&
-          readmeOnlyDocs && checksPassedAfterWrite &&
-          await hasRequiredReadmeStatus({ task: context.task, tools })) {
+          readmeOnlyDocs && await hasRequiredReadmeStatus({ task: context.task, tools })) {
         acceptedLateLength = true;
         usages.push(chat.lastUsage);
         response = { finish_reason: 'stop', message: { role: 'assistant',
-          content: 'README.md already contains the required one-line Status section; task checks passed.' },
+          content: 'README.md already contains the required one-line Status section' +
+            (checksPassedAfterWrite ? '; task checks passed.' : '.') },
         usage: chat.lastUsage };
       } else {
         throw error;

@@ -682,7 +682,7 @@ test('a configured direct ask implements and reviews the slice after its streame
   assert.match(logs.join('\n'), /Human AI-Eval|human AI-Eval/);
 });
 
-test('docs slice retry after failed review remains reasoning-free at 512', async (context) => {
+test('docs slice retry after failed review remains reasoning-free at 2048', async (context) => {
   const options = fixture(context);
   options.issue.body = renderIssueBody(options.issue.body, { task_class: 'docs', difficulty: 1 });
   const config = { ...llmConfig, llm: { ...llmConfig.llm, model: 'deepseek-v4.1-flash',
@@ -695,7 +695,7 @@ test('docs slice retry after failed review remains reasoning-free at 512', async
         const system = body.messages[0].content;
         if (system.startsWith('You are the builtin planner seat.')) {
           assert.equal(body.reasoning_effort, 'none');
-          assert.equal(body.max_tokens, 512);
+          assert.equal(body.max_tokens, 2048);
           return Response.json({ choices: [{ message: { role: 'assistant', content: JSON.stringify({
             title: options.issue.title, acceptance_checks: ['node --test exits 0'],
             files_allowed: ['README.md'], task_class: 'docs', difficulty: 1,
@@ -708,7 +708,7 @@ test('docs slice retry after failed review remains reasoning-free at 512', async
         }
         coderTurns += 1;
         assert.equal(body.reasoning_effort, effort);
-        assert.equal(body.max_tokens, 512);
+        assert.equal(body.max_tokens, 2048);
         assert.doesNotMatch(system, /## Principal|## Seat memory|implement-task/);
         return Response.json({ choices: [{ finish_reason: coderTurns === 1 ? 'tool_calls' : 'stop',
           message: coderTurns === 1 ? { role: 'assistant', reasoning_content: 'PRIVATE_CODER_THINKING',

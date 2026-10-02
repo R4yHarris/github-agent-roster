@@ -17,7 +17,7 @@ const completion = (reason, content = 'Done.', usage) => Response.json({
   model: 'served-model', choices: [{ finish_reason: reason, message: { role: 'assistant', content } }], usage,
 });
 
-test('docs length retries once at 512 without reasoning and logs the requested human line', async (t) => {
+test('docs length continues once at 2048 without reasoning and logs the requested human line', async (t) => {
   const repoRoot = mkdtempSync(path.join(tmpdir(), 'roster-docs-length-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
   const docs = selectReasoning({ ...config, llm: { ...config.llm, model: 'deepseek-v4.1-flash' } },
@@ -34,12 +34,15 @@ test('docs length retries once at 512 without reasoning and logs the requested h
     await chat({ messages: [{ role: 'user', content: 'Edit docs/guide.md.' }] });
     await chat({ messages: [{ role: 'user', content: 'Finish.' }] });
   });
-  assert.deepEqual(requests.map(({ max_tokens }) => max_tokens), [512, 512, 512]);
+  assert.deepEqual(requests.map(({ max_tokens }) => max_tokens), [2048, 2048, 2048]);
   assert.deepEqual(requests.map(({ reasoning_effort }) => reasoning_effort), ['none', 'none', 'none']);
   assert.deepEqual(requests.map(({ chat_template_kwargs }) => chat_template_kwargs.thinking), [false, false, false]);
-  assert.match(shell, /Response truncated\. Retrying without reasoning\./);
+  assert.equal(requests[1].messages.at(-2).role, 'assistant');
+  assert.equal(requests[1].messages.at(-2).content, 'PRIVATE_BODY');
+  assert.match(requests[1].messages.at(-1).content, /Continue it from where it stopped/);
+  assert.match(shell, /Response truncated\. Continuing the same message\./);
   assert.match(shell, /Drafting at none effort/);
-  assert.match(readFileSync(logger.path, 'utf8'), /Response truncated\. Retrying without reasoning\./);
+  assert.match(readFileSync(logger.path, 'utf8'), /Response truncated\. Continuing the same message\./);
   assert.doesNotMatch(shell + readFileSync(logger.path, 'utf8'), /PRIVATE_BODY/);
 });
 
@@ -53,10 +56,29 @@ test('cloud docs slices disable reasoning from the first request while non-slice
       return completion(requests.length === 1 ? 'length' : 'stop');
     } });
     await chat({ messages: [{ role: 'user', content: 'Docs task.' }] });
-    assert.equal(requests[0].max_tokens, kind === 'slice' ? 512 : 4096);
-    assert.equal(requests[1].max_tokens, kind === 'slice' ? 512 : 2048);
+    assert.equal(requests[0].max_tokens, kind === 'slice' ? 2048 : 4096);
+    assert.equal(requests[1].max_tokens, kind === 'slice' ? 2048 : 2048);
     assert.equal(requests[0].reasoning_effort, kind === 'slice' ? 'none' : 'medium');
     assert.equal(requests[1].reasoning_effort, kind === 'slice' ? 'none' : requests[0].reasoning_effort);
+  }
+});
+
+test('a docs slice never sends a completion cap below 2048 and sends the thinking flag disabled', async () => {
+  for (const configured of [undefined, 256, 512, 8192]) {
+    const selected = selectReasoning({ ...config, llm: { ...config.llm, model: 'deepseek-v4.1-flash',
+      ...(configured === undefined ? {} : { max_tokens: configured }) } },
+    { kind: 'slice', taskClass: 'docs', difficulty: 1 });
+    const requests = [];
+    const chat = createBuiltinChat(selected, { env: {}, fetchImpl: async (_url, request) => {
+      requests.push(JSON.parse(request.body));
+      return completion(requests.length === 1 ? 'length' : 'stop', 'Partial.');
+    } });
+    await chat({ messages: [{ role: 'user', content: 'Docs task.' }] });
+    for (const body of requests) {
+      assert.notEqual(body.max_tokens, 512);
+      assert.ok(body.max_tokens >= 2048, `cap ${body.max_tokens} is below 2048`);
+      assert.equal(body.chat_template_kwargs.thinking, false);
+    }
   }
 });
 
