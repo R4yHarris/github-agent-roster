@@ -45,6 +45,7 @@ import { taskAndRepairFiles } from './runtime/tools.mjs';
 import { taskFilesAllowed } from './planner/task.mjs';
 import { listLocalRuns, readLocalRun, recapRun } from './lib/local-runs.mjs';
 import { askSideQuestion } from './lib/side-question.mjs';
+import { formatContext } from './shell/context.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const unknownCommand = 'Unknown command. /help lists commands.\n';
@@ -137,6 +138,7 @@ export function createDispatcher({
     lastRequest: null, pendingConfirm: null,
     routeNext: false, fleetProfileId: null, pendingQuestion: false,
     sideController: null,
+    lastMeasuredSeat: null,
     statusbar: true, controller: null, history: [], issueCache: new Map(), display: {
       issue: null, branch: api.repositoryBranch(cwd), seat: config.seat.id, state: 'idle', busy: false,
       model: config.llm.model, host: config.llm.base_url ? new URL(config.llm.base_url).host : '',
@@ -146,6 +148,11 @@ export function createDispatcher({
   const notify = () => onStateChange(state);
   const receiveEvent = (event) => {
     const display = state.display;
+    if (event.type === 'seat-measurement') {
+      state.lastMeasuredSeat = Object.fromEntries(['seat', 'provider', 'model', 'effort', 'input', 'output',
+        'contextMax', 'finishReason', 'packBudgetChars', 'priorFeedbackIncluded'].map((key) => [key, event[key]]));
+      return;
+    }
     display.seat = event.seat;
     if (['finish-reason', 'completion'].includes(event.type)) display.lastFinishReason = event.reason;
     if (event.type === 'tool' && event.name === 'run_test') display.lastTestName = 'node --test';
@@ -320,6 +327,10 @@ export function createDispatcher({
     const command = canonicalCommand(inputCommand);
     const args = rawArguments?.trim() ?? '';
     switch (command) {
+      case 'context':
+        if (args) throw new TypeError('Use /context or /usage.');
+        safeWrite(formatContext(state.lastMeasuredSeat, { packBudgetChars: state.config.seat.context_chars, env }));
+        return true;
       case 'btw': {
         if (!args) throw new TypeError('Use /btw QUESTION.');
         if (state.sideController) throw new Error('A read-only side question is already active.');

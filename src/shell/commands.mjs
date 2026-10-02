@@ -11,6 +11,8 @@ export const commands = Object.freeze([
   page('recap', 'Session', '/recap', 'Print one human metadata line: outcome, files, last test, review and finish reason. No completion body.', '/recap'),
   page('btw', 'Session', '/btw QUESTION', 'Ask one read-only model question about current task metadata; no tools, tests, writes, memory or publication changes.',
     '/btw Which acceptance check covers this edge case?'),
+  page('context', 'Session', '/context', 'Show last measured seat provider, model, effort, input, output, context max, finish reason, character pack budget and prior-feedback inclusion. Missing counts are -.',
+    '/context', [], ['usage']),
   page('checkpoints', 'Session', '/checkpoints', 'List current-task checkpoint number, seat, short status and time.', '/checkpoints'),
   page('rewind', 'Session', '/rewind N', 'Restore checkpoint-covered product files; keep TASK/PLAN/logs. Refuse published PRs. /undo means latest only.',
     '/rewind 1', [], ['undo']),
