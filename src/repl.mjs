@@ -22,6 +22,7 @@ import { humanEvalHint } from './lib/seat-publication.mjs';
 import { readIssueLogs } from './lib/run-log.mjs';
 import { createDebugLog } from './lib/debug-log.mjs';
 import { createTray } from './shell/tray.mjs';
+import { createTranscript } from './shell/transcript.mjs';
 import { canonicalCommand, completeCommand, formatHelp } from './shell/commands.mjs';
 import { createHistory, safeHistoryLine } from './shell/history.mjs';
 import { isRunCancelled, RunCancelledError } from './runtime/cancel.mjs';
@@ -41,6 +42,7 @@ import { taskFilesAllowed } from './planner/task.mjs';
 import { listLocalRuns, readLocalRun, recapRun } from './lib/local-runs.mjs';
 import { askSideQuestion } from './lib/side-question.mjs';
 import { formatContext } from './shell/context.mjs';
+import { formatUsage } from './shell/usage.mjs';
 import { listIssueWorktrees } from './lib/worktrees.mjs';
 import { runOnlyReview } from './lib/review.mjs';
 import { waveBoard } from './lib/waves.mjs';
@@ -157,6 +159,7 @@ export function createDispatcher({
       model: config.llm.model, host: config.llm.base_url ? new URL(config.llm.base_url).host : '',
       effort: config.llm.effort, contextUsed: undefined, contextMax: config.llm.context_max, startedAt: null,
       lastFinishReason: null, lastTestName: null, review: null,
+      outputTokens: undefined, toolCount: undefined, thinking: undefined, maxTokens: undefined,
     } };
   const notify = () => onStateChange(state);
   const receiveEvent = (event) => {
@@ -168,19 +171,24 @@ export function createDispatcher({
     }
     display.seat = event.seat;
     if (['finish-reason', 'completion'].includes(event.type)) display.lastFinishReason = event.reason;
+    if (event.type === 'tool') display.toolCount = (display.toolCount ?? 0) + 1;
     if (event.type === 'tool' && event.name === 'run_test') display.lastTestName = 'node --test';
     if (event.type === 'seat-start') {
       display.state = { planner: 'planning', coder: 'drafting', reviewer: 'reviewing' }[event.seat];
-      Object.assign(display, { model: event.model, host: event.host, effort: event.effort,
-        contextMax: event.contextMax, contextUsed: undefined });
+      for (const [key, value] of [['model', event.model], ['host', event.host], ['effort', event.effort],
+        ['contextMax', event.contextMax]]) if (value !== undefined) display[key] = value;
+      Object.assign(display, { contextUsed: undefined, outputTokens: undefined, toolCount: 0 });
     } else if (event.type === 'tool' && event.name === 'run_test') display.state = 'testing';
     else if (event.type === 'http' && event.phase === 'start') {
       display.state = { planner: 'planning', coder: 'drafting', reviewer: 'reviewing' }[event.seat];
       if (event.effort !== undefined) display.effort = event.effort;
+      if (event.thinking !== undefined) display.thinking = event.thinking;
+      if (event.maxTokens !== undefined) display.maxTokens = event.maxTokens;
     } else if (event.type === 'seat-error') display.state = 'failed';
     else if (event.type === 'seat-end') {
       if (event.model) display.model = event.model;
       display.contextUsed = event.contextUsed;
+      if (event.outputTokens !== undefined) display.outputTokens = event.outputTokens;
       if (event.verdict) display.state = event.verdict === 'pass' ? 'passed' : 'failed';
       if (event.verdict) display.review = event.verdict;
     }
@@ -437,8 +445,12 @@ export function createDispatcher({
       case 'batch':
         throw new Error('One seat at a time. Worktrees are isolated.');
       case 'context':
-        if (args) throw new TypeError('Use /context or /usage.');
+        if (args) throw new TypeError('Use /context.');
         safeWrite(formatContext(state.lastMeasuredSeat, { packBudgetChars: state.config.seat.context_chars, env }));
+        return true;
+      case 'usage':
+        if (args) throw new TypeError('Use /usage.');
+        safeWrite(formatUsage(state.display, state.lastMeasuredSeat));
         return true;
       case 'btw': {
         if (!args) throw new TypeError('Use /btw QUESTION.');
@@ -951,9 +963,10 @@ export async function startRepl({
   ...options
 } = {}) {
   let tray;
+  let transcript;
   const terminal = input.isTTY === true;
-  const messages = { isTTY: output.isTTY, write(text) { if (tray) tray.write(text); else output.write(text); } };
-  const errors = { write(text) { if (tray) tray.write(text, errorOutput); else errorOutput.write(text); } };
+  const messages = { isTTY: output.isTTY, write(text) { transcript?.reset(); if (tray) tray.write(text); else output.write(text); } };
+  const errors = { write(text) { transcript?.reset(); if (tray) tray.write(text, errorOutput); else errorOutput.write(text); } };
   let question;
   let shell;
   const { dispatch, state, banner, cancel, queueInput } = createDispatcher({ ...options, input, output: messages, errorOutput: errors,
@@ -986,7 +999,12 @@ export async function startRepl({
   terminalOutput.columns = output.columns ?? 80;
   shell = createInterface({ input, output: terminalOutput, terminal, historySize: 200,
     history: [...state.history].reverse(), removeHistoryDuplicates: true, completer: completeCommand });
-  if (terminal) tray = createTray({ output, state, shell });
+  if (terminal) {
+    tray = createTray({ output, state, shell, env: options.env ?? process.env,
+      cwd: options.cwd ?? process.cwd(), services: options.services ?? {} });
+    transcript = createTranscript({ write: (text, writeOptions) => tray.write(text, output, writeOptions) });
+    state.transcript = transcript;
+  }
   shell.on('SIGINT', () => { if (!cancel()) shell.close(); });
   shell.on('close', () => { cancel(); question?.reject(new RunCancelledError()); question = null; });
   shell.on('history', (entries) => {
@@ -1027,7 +1045,7 @@ export async function startRepl({
     if (suppressEcho) suppressEcho = false;
     else if (/^\/vault set [A-Za-z_][A-Za-z0-9_]{0,63}$/.test(line.trim())) suppressEcho = true;
   });
-  if (tray) { tray.banner(); tray.render(); }
+  if (tray) { await tray.banner(); tray.render(); }
   else { output.write(`${banner}\n`); shell.setPrompt('roster> '); shell.prompt(); }
   let exitCode = 0;
   try {

@@ -20,7 +20,7 @@ test('missing response usage remains unknown rather than borrowing config/env co
   assert.match(output, /Prior feedback included: no/);
   assert.doesNotMatch(output, /999/);
   assert.match(formatHelp('context'), /provider, model, effort, input, output, context max, finish reason/);
-  assert.match(formatHelp('context'), /Aliases: \/usage/);
+  assert.match(formatHelp('usage'), /model, endpoint, prompt and completion tokens/);
 });
 
 test('measurements select metadata only and never send token counts into debug JSONL', async (t) => {
@@ -48,7 +48,7 @@ test('measurements select metadata only and never send token counts into debug J
   assert.doesNotMatch(readFileSync(debug.path, 'utf8'), /prompt_tokens|completion_tokens|"input"|PRIVATE_COMPLETION_BODY/);
 });
 
-test('context and usage are read-only aliases and retain the actual last seat after model selection', async () => {
+test('context keeps the measured seat and usage adds a read-only session panel', async () => {
   let text = '';
   const shell = createDispatcher({ config, env: {}, output: { write(value) { text += value; } },
     errorOutput: { write() {} }, services: { repositoryBranch: () => 'main' } });
@@ -57,10 +57,12 @@ test('context and usage are read-only aliases and retain the actual last seat af
   await shell.dispatch('/model different-session-model');
   text = '';
   await shell.dispatch('/context');
-  const first = text;
+  assert.match(text, /Seat: coder\nProvider: vllm\nModel: measured-model/);
+  assert.doesNotMatch(text, /different-session-model/);
   text = '';
   await shell.dispatch('/usage');
-  assert.equal(text, first);
-  assert.match(text, /Model: measured-model/);
+  assert.match(text, /^Model: measured-model\n/);
+  assert.match(text, /Prompt tokens: 17\nCompletion tokens: 9\nContext max: 1048576/);
+  assert.match(text, /Finish reason: stop\nTool calls: -\nElapsed: -\nThinking: -\nMax completion tokens: -/);
   assert.doesNotMatch(text, /different-session-model/);
 });

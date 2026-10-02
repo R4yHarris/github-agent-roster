@@ -79,7 +79,7 @@ test('plan Enter accepts once and stop preserves the existing plan without invok
     } } });
   await shell.dispatch('/plan Add Status to README.md.');
   assert.equal(shell.state.display.state, 'planning');
-  assert.match(formatTray(shell.state.display, { color: false }).bottom, /plan/);
+  assert.match(formatTray(shell.state.display, { color: false }).rail, /plan/);
   await shell.dispatch('');
   assert.equal(calls[1].acceptPlan, true);
   assert.equal(calls[1].preparedRun, paused);
