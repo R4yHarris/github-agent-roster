@@ -60,6 +60,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   const singleAllowedFile = readTaskMetadata(context.task).task_class === 'docs' &&
     parsedTask.files_allowed.length === 1
     ? parsedTask.files_allowed[0] : null;
+  const boundedDocs = singleAllowedFile !== null;
 
   const messages = [
     { role: 'system', content: context.pack },
@@ -74,11 +75,12 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   ];
   const definitions = toolDefinitions.filter((tool) => config.seat.tools.includes(tool.function.name) &&
     (tool.function.name !== 'run_test' || config.tools?.run_test !== false) &&
-    (!readmeOnlyDocs || ['read_file', 'write_file', 'run_test'].includes(tool.function.name))).map((tool) =>
-    !readmeOnlyDocs || tool.function.name === 'run_test' ? tool : {
+    (!boundedDocs || ['read_file', 'write_file', 'run_test'].includes(tool.function.name))).map((tool) =>
+    !boundedDocs || tool.function.name === 'run_test' ? tool : {
       ...tool, function: { ...tool.function, parameters: { ...tool.function.parameters,
         properties: { ...tool.function.parameters.properties,
-          path: { type: 'string', enum: tool.function.name === 'read_file' ? ['TASK.md', 'README.md'] : ['README.md'] },
+          path: { type: 'string', enum: tool.function.name === 'read_file'
+            ? ['TASK.md', singleAllowedFile] : [singleAllowedFile] },
         },
       } },
     });
@@ -235,9 +237,9 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
           calls = [];
         }
       } else {
-        if (readmeOnlyDocs && Array.isArray(message.tool_calls) && message.tool_calls
+        if (boundedDocs && Array.isArray(message.tool_calls) && message.tool_calls
           .some((call) => ['list_dir', 'search_text'].includes(call?.function?.name))) {
-          throw new ToolAccessError('README-only docs task does not allow directory listing or repository search');
+          throw new ToolAccessError('Bounded docs task does not allow directory listing or repository search');
         }
         calls = decodeCalls(message, offeredTools, ids, turn);
         if ((needsTools || finishReason === 'tool_calls') && !calls.length) {
