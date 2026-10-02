@@ -32,6 +32,8 @@ export const commands = Object.freeze([
       '--auto-model: route from fleet priors and human evaluations']),
   page('retry', 'Ask', '/retry', 'Repeat the last Ask or issue run in the same worktree without worktree add.', '/retry'),
   page('stop', 'Ask', '/stop', 'Cancel the active seat or confirmed task, like one Ctrl+C.', '/stop'),
+  page('steer', 'Ask', '/steer TEXT', 'Interrupt the drafting coder model call and send queued text plus this instruction next. It cannot widen Allowed Files or edit TASK.md; Ctrl+C cancels without steering.',
+    '/steer Keep the public API unchanged.'),
   page('publish', 'Ask', '/publish [SUBJECT] [--model MODEL] [--skip-review]',
     'Publish reviewed changes only through the GitHub App SDK.', '/publish feat: add status --model GPT-6.1-Sol',
     ['--model MODEL: actual publishing model; measured seat metadata wins',

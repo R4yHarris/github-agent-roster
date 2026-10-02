@@ -28,6 +28,7 @@ agents and CI.
 | `/run N [--auto-model] [--confirm]` or `/run --issue N [--auto-model] [--confirm]` | Run an existing issue, initializing contracts before tests. Slices print the summary and continue. `--confirm` pauses; Enter resumes the prepared task in its worktree without another issue lookup, while `/stop` cancels. Feature/initiative writes PLAN only; clarify stops. Auto-model does not rewrite the saved default. |
 | `/retry` | Rerun the last plain or slash Ask or issue run in the same registered worktree. Preserve app changes, validate the unchanged assignment and branch, archive managed run artifacts, reuse a valid TASK/recipe, and never call worktree add for a retry. |
 | `/stop` | Immediately cancel an in-flight seat or a confirmed handoff, like one Ctrl+C. |
+| `/steer TEXT` | Interrupt only a drafting coder model call, discard its stale response/tool calls, and send queued lines plus this text as the next human instruction. It cannot modify TASK or widen Allowed Files. Planner/reviewer/test phases cannot be steered. The shell says `Steering the coder.`; Ctrl+C still cancels the run without an instruction. |
 | `/status [N] [--offline]` | With no number, show cached issue, branch, seat, state, model, host, effort, last finish reason, last test name, and review. Current and previously run issue snapshots use no model/GitHub request. An uncached explicit issue uses the existing status reader; `--offline` prohibits GitHub. |
 | `/history` | Show the last 20 stored safe commands, without vault or secret lines. |
 | `/resume` or `/resume N` | List registered local issue runs (number, title, last seat/state, branch), or reconstruct the assignment locally and continue in that exact worktree. A valid TASK/recipe skips planner; no new worktree or GitHub issue lookup is required. It attaches local artifacts, not a foreign running process. |
@@ -65,6 +66,14 @@ agents and CI.
 | `/quit` or `/q` or `exit` | Exit with status 0. Ctrl+C cancels an active run; a second interrupt or idle Ctrl+C exits. |
 
 ## Keys and history
+
+Plain text entered while a task seat is active is held locally (up to eight
+lines/4096 characters) and is not automatically sent to the model or started as
+another Ask. Explicit steering sends the held text within the same bounded
+coder/tool scope. Aborted model calls remain counted as actual attempts and
+unknown usage stays unknown; cancelled calls do not consume a completed-turn
+allowance. Unsent input is discarded when the run ends, with a notice on normal
+completion. Steering metadata logs only the phase, never instruction text.
 
 Wave-labelled issue runs are gated before worktree creation/coding: any earlier
 open wave blocks a later wave. Explicitly opened plans use their GitHub marker

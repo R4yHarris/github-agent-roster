@@ -152,6 +152,7 @@ export async function runBuiltinTask({
   debug = createDebugLog({ env }),
   onRunEvent,
   signal,
+  steeringControl,
 } = {}) {
   throwIfCancelled(signal);
   config = { ...config, capabilities: config.capabilities ?? await loadCapabilities({ cwd }) };
@@ -238,7 +239,7 @@ export async function runBuiltinTask({
   try {
     result = await liveLog.seat('coder', session, config, (onEvent) => runCoder({
       worktree: worktreePath, repoRoot, config, env, task, session,
-      fetchImpl, vault, runTestCommand, onEvent, askKind, retryCommand, signal,
+      fetchImpl, vault, runTestCommand, onEvent, askKind, retryCommand, signal, steeringControl,
     }));
   } catch (error) {
     if (error instanceof Error && error.result) {
@@ -366,6 +367,7 @@ async function runBuiltinAssignment(issueNumber, {
   onPrepared,
   planMode = false,
   acceptPlan = false,
+  steeringControl,
 } = {}) {
   throwIfCancelled(signal);
   config = { ...config, capabilities: config.capabilities ?? await loadCapabilities({ cwd }) };
@@ -580,7 +582,7 @@ async function runBuiltinAssignment(issueNumber, {
   try {
     result = await liveLog.seat('coder', sessions.coder, coderConfig, (onEvent) => runCoder({
       worktree: worktreePath, repoRoot, config: coderConfig, task: prepared.task, session: sessions.coder,
-      fetchImpl, env, vault, runTestCommand, priorFeedback: planner.feedback?.context, onEvent, askKind, retryCommand, signal,
+      fetchImpl, env, vault, runTestCommand, priorFeedback: planner.feedback?.context, onEvent, askKind, retryCommand, signal, steeringControl,
     }));
   } catch (error) {
     if (error instanceof Error && error.result) {
