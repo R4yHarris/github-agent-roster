@@ -32,6 +32,7 @@ agents and CI.
 | `/history` | Show the last 20 stored safe commands, without vault or secret lines. |
 | `/resume` or `/resume N` | List registered local issue runs (number, title, last seat/state, branch), or reconstruct the assignment locally and continue in that exact worktree. A valid TASK/recipe skips planner; no new worktree or GitHub issue lookup is required. It attaches local artifacts, not a foreign running process. |
 | `/recap` | Print one human metadata line with TASK outcome/files, last test exit, review and finish reason. Never print RESULT completion text. |
+| `/btw QUESTION` | Ask the configured model one read-only question about current task metadata. It offers no tools, refuses tool requests, and prints only the answer; no task, memory, measured-seat state or publication body is changed. It can answer alongside a running seat without steering it. Truncation fails rather than making a second request. |
 | `/checkpoints` | List the current task's pre-write checkpoint number, coder seat, short status and time. |
 | `/rewind N` or `/undo` | Restore checkpoint-covered product files and remove newly created files in that same task scope. Keep PLAN, TASK, recipe, result and logs. Undo selects the latest checkpoint only. Stop the seat first; any open/closed/merged PR on the branch refuses rewind, and unavailable PR verification fails closed. Verification/review are invalidated after restoration. |
 | `/statusbar on\|off` | Toggle both blue delivery-tray bars; the default is on and the setting is process-local. |

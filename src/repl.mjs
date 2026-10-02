@@ -44,6 +44,7 @@ import { readPlannerTask } from './seats/planner.mjs';
 import { taskAndRepairFiles } from './runtime/tools.mjs';
 import { taskFilesAllowed } from './planner/task.mjs';
 import { listLocalRuns, readLocalRun, recapRun } from './lib/local-runs.mjs';
+import { askSideQuestion } from './lib/side-question.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const unknownCommand = 'Unknown command. /help lists commands.\n';
@@ -97,6 +98,7 @@ const defaultServices = {
   checkDoctor, formatDoctor, warmDoctor, privateConfigPath, publicConfig,
   listCheckpoints, rewindCheckpoint, readPlannerTask,
   listLocalRuns, readLocalRun, recapRun,
+  askSideQuestion,
   issueCommenter: commentMergedIssue,
   publisher: publishWithContracts,
   repositoryBranch(cwd) {
@@ -134,6 +136,7 @@ export function createDispatcher({
   const state = { lastAsk: null, lastRun: null, pendingSecret: null, published: false, config, debug,
     lastRequest: null, pendingConfirm: null,
     routeNext: false, fleetProfileId: null, pendingQuestion: false,
+    sideController: null,
     statusbar: true, controller: null, history: [], issueCache: new Map(), display: {
       issue: null, branch: api.repositoryBranch(cwd), seat: config.seat.id, state: 'idle', busy: false,
       model: config.llm.model, host: config.llm.base_url ? new URL(config.llm.base_url).host : '',
@@ -190,6 +193,11 @@ export function createDispatcher({
   }
 
   function cancel() {
+    if (state.sideController && !state.sideController.signal.aborted) {
+      state.sideController.abort(new RunCancelledError());
+      if (state.controller && !state.controller.signal.aborted) state.controller.abort(new RunCancelledError());
+      return true;
+    }
     if (state.pendingConfirm !== null) {
       state.pendingConfirm = null;
       state.display.state = 'idle';
@@ -312,6 +320,20 @@ export function createDispatcher({
     const command = canonicalCommand(inputCommand);
     const args = rawArguments?.trim() ?? '';
     switch (command) {
+      case 'btw': {
+        if (!args) throw new TypeError('Use /btw QUESTION.');
+        if (state.sideController) throw new Error('A read-only side question is already active.');
+        const controller = new AbortController();
+        state.sideController = controller;
+        try {
+          const answer = await api.askSideQuestion({ question: args, run: state.lastRun,
+            config: state.config, env, signal: controller.signal });
+          safeWrite(`${answer}\n`);
+        } finally {
+          state.sideController = null;
+        }
+        return true;
+      }
       case 'resume': {
         if (!args) {
           const runs = await api.listLocalRuns({ cwd: currentRoot(), config: state.config, env });
@@ -830,6 +852,7 @@ export async function startRepl({
   let historyError;
   let suppressEcho = false;
   const handledLines = [];
+  const sideRequests = new Set();
   const terminalOutput = new Writable({
     write(chunk, encoding, callback) {
       if (!suppressEcho && state.pendingSecret === null) output.write(chunk, encoding);
@@ -852,8 +875,14 @@ export async function startRepl({
   shell.on('line', (line) => {
     tray?.committed();
     const answer = question;
+    const sideQuestion = /^\/btw\s+\S/.test(line.trim()) && state.controller !== null && !answer;
     const activeStop = line.trim() === '/stop' && state.controller !== null;
-    handledLines.push(activeStop || Boolean(answer));
+    handledLines.push(activeStop || sideQuestion || Boolean(answer));
+    if (sideQuestion) {
+      const pending = dispatch(line).catch((error) => errors.write(`${error.message}\n`))
+        .finally(() => sideRequests.delete(pending));
+      sideRequests.add(pending);
+    }
     if (answer) { question = null; state.pendingQuestion = false; answer.resolve(line); }
     if (activeStop) cancel();
     if (state.controller !== null && ['/quit', '/q', 'exit'].includes(line.trim())) {
@@ -895,6 +924,7 @@ export async function startRepl({
     }
   } finally {
     shell.close();
+    await Promise.all(sideRequests);
     tray?.close();
     terminalOutput.end();
     await history.flush().catch((error) => { historyError ??= error; });

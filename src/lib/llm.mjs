@@ -6,7 +6,9 @@ import { mergeUsage } from '../metrics/run.mjs';
 
 export function createBuiltinChat(config, {
   fetchImpl, env = process.env, vault, onEvent, retryCommand, clock, signal,
+  retryLength = true,
 } = {}) {
+  if (typeof retryLength !== 'boolean') throw new TypeError('Length retry permission must be a boolean');
   const transport = createChat({ llm: {
     base_url: config.llm.base_url,
     model: config.llm.model,
@@ -58,7 +60,7 @@ export function createBuiltinChat(config, {
         }
         usages.push(transport.lastResponse?.usage ?? null);
         lastUsage = mergeUsage(...usages);
-        const retry = error.truncated && !lengthRetried && current.max_tokens > 1;
+        const retry = retryLength && error.truncated && !lengthRetried && current.max_tokens > 1;
         await onEvent?.({ type: 'finish-reason', reason: error.finishReason, retry,
           ...(retry && docsSlice ? { withoutReasoning: true } : {}),
         });
