@@ -315,6 +315,47 @@ test('a sole README save runs the docs check before refusing a later empty searc
     event.type === 'tool-result' && event.name === 'search_text' && event.status === 'denied'));
 });
 
+test('a docs slice stays in draft until its named file is saved', async (t) => {
+  const options = fixture(t);
+  const events = [];
+  let calls = 0;
+  let tests = 0;
+  const result = await runCoder({
+    ...options,
+    askKind: 'slice',
+    onEvent: (event) => events.push(event),
+    fetchImpl: async () => {
+      calls += 1;
+      if (calls === 1) {
+        return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant', tool_calls: [
+            { id: 'early-check', type: 'function', function: {
+              name: 'run_test', arguments: '{}',
+            } },
+            { id: 'save', type: 'function', function: {
+              name: 'write_file', arguments: JSON.stringify({
+                path: 'README.md', content: '# Project\n\n## Status\nActive.\n',
+              }),
+            } },
+          ],
+        } }] });
+      }
+      return Response.json({ choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant', content: 'Saved the named file and passed its check.',
+      } }] });
+    },
+    runTestCommand: async () => {
+      tests += 1;
+      assert.match(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /## Status/);
+      return { stdout: 'pass', stderr: '' };
+    },
+  });
+  assert.equal(result.excellence.pass, true);
+  assert.equal(tests, 1);
+  assert.ok(events.findIndex((event) => event.type === 'tool' && event.name === 'write_file') <
+    events.findIndex((event) => event.type === 'tool' && event.name === 'run_test'));
+});
+
 test('docs1 README-only tools deny planner fixtures, RESEARCH and repo search; reads may precede the required write', async (t) => {
   const options = fixture(t);
   mkdirSync(join(options.worktree, 'tests', 'fixtures'), { recursive: true });

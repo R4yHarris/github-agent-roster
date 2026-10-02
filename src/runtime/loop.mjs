@@ -262,6 +262,15 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       let failedTests;
       let wroteSingleAllowedFile = false;
       for (const [index, call] of calls.entries()) {
+        const savesNamedFileLater = singleAllowedFile && call.function.name === 'run_test' &&
+          calls.slice(index + 1).some((pending) =>
+            pending.function.name === 'write_file' && pending.args.path === singleAllowedFile);
+        if (!wroteSingleAllowedFile && savesNamedFileLater) {
+          messages.push({ role: 'tool', tool_call_id: call.id,
+            content: `Deferred until ${singleAllowedFile} is saved.` });
+          await onEvent?.({ type: 'tool-result', name: call.function.name, status: 'denied' });
+          continue;
+        }
         if (wroteSingleAllowedFile && call.function.name !== 'write_file') {
           messages.push({ role: 'tool', tool_call_id: call.id,
             content: 'Refused after the successful sole-file write; task checks run next.' });
