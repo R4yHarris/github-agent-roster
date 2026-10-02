@@ -22,6 +22,7 @@ import { withResearchSummary } from './helpers/research.mjs';
 import { recordedCoderRun } from '../src/lib/seat-publication.mjs';
 import { createDebugLog } from '../src/lib/debug-log.mjs';
 import { readLocalRun } from '../src/lib/local-runs.mjs';
+import { createSteeringControl } from '../src/runtime/steering.mjs';
 
 function runBuiltinIssue(issue, options) {
   return runIssueWithSeats(issue, { ...options, fetchImpl: withResearchSummary(options.fetchImpl) });
@@ -215,6 +216,42 @@ test('resume preserves manual wave labels and cannot bypass a newly reopened ear
   await assert.rejects(runBuiltinIssue(42, { ...options, config: stubConfig, preparedRun: prepared, log: () => {},
     runCommand: async (program, args, cwd) => program === 'gh' && args[0] === 'issue' && args[1] === 'list'
       ? JSON.stringify([{ number: 41 }]) : original(program, args, cwd) }), /Wave 2 is blocked/);
+});
+
+test('a live builtin coder can be steered into its next scoped instruction without a second run', async (context) => {
+  const options = fixture(context);
+  const steeringControl = createSteeringControl();
+  let coderCalls = 0;
+  let firstSignal;
+  const pending = runBuiltinIssue(42, { ...options, config: llmConfig, steeringControl, log: () => {},
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      if (body.messages[0].content.startsWith('You are the builtin planner seat.')) {
+        return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+          content: JSON.stringify({ title: 'Add Status', acceptance_checks: ['node --test exits 0'], files_allowed: ['README.md'] }) } }] });
+      }
+      if (body.messages[0].content.startsWith('You are the builtin reviewer seat.')) {
+        return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+          content: JSON.stringify({ verdict: 'pass', reasons: ['The scoped change matches the task.'], security_notes: [] }) } }] });
+      }
+      coderCalls += 1;
+      if (coderCalls === 1) { firstSignal = request.signal; return new Promise(() => {}); }
+      if (coderCalls === 2) {
+        assert.match(body.messages.at(-1).content, /Human steering[\s\S]*Keep the change scoped/);
+        return Response.json({ choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant',
+          tool_calls: [{ id: 'scoped', type: 'function', function: { name: 'write_file',
+            arguments: '{"path":"README.md","content":"# Example\\n\\n## Status\\nReady.\\n"}' } }] } }] });
+      }
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Added Status.' } }] });
+    }, runTestCommand: async () => ({ stdout: 'pass', stderr: '' }) });
+  for (let index = 0; index < 1000 && !firstSignal; index += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.ok(firstSignal && steeringControl.waiting);
+  steeringControl.steer('Keep the change scoped to README.md.');
+  const run = await pending;
+  assert.equal(firstSignal.aborted, true);
+  assert.equal(coderCalls, 3);
+  assert.equal(run.review.verdict, 'pass');
+  assert.match(readFileSync(run.taskPath, 'utf8'), /Files allowed\n- `README\.md`/);
 });
 
 test('roster ask writes a local draft ask, recipe, and executable task without network', async (context) => {

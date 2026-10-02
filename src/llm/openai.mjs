@@ -86,8 +86,9 @@ export function createChat(config = {}, {
   const local = isLocalLlmHost(url.hostname);
 
   let lastResponse = null;
-  const chat = async function chat(request) {
+  const chat = async function chat(request, { signal: requestSignal = signal } = {}) {
     throwIfCancelled(signal);
+    throwIfCancelled(requestSignal);
     if (!isObject(request) || !Array.isArray(request.messages) || request.messages.length === 0 ||
         request.messages.some((message) => !isObject(message) || typeof message.role !== 'string' || !message.role)) {
       throw new TypeError('A chat request requires a non-empty messages array with message roles.');
@@ -163,7 +164,7 @@ export function createChat(config = {}, {
 
     try {
       const response = await withRequestTimeout(send, {
-        host, local, timeoutMs, retryCommand, clock, signal,
+        host, local, timeoutMs, retryCommand, clock, signal: requestSignal,
         ...(onEvent ? { onWaiting: (event) => onEvent({ type: 'waiting', ...event }) } : {}),
       });
       const usage = response.usage === null ? null : Object.freeze(Object.fromEntries(
@@ -183,6 +184,7 @@ export function createChat(config = {}, {
       if (error?.code === 'ROSTER_RUN_LOG') throw error;
       if (isRunCancelled(error)) throw error;
       throwIfCancelled(signal);
+      throwIfCancelled(requestSignal);
       if (error instanceof LlmTimeoutError) {
         await onEvent?.({ type: 'timeout', host, local, timeoutMs, retryCommand });
       }

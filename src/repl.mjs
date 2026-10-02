@@ -50,6 +50,7 @@ import { listIssueWorktrees } from './lib/worktrees.mjs';
 import { runOnlyReview } from './lib/review.mjs';
 import { waveBoard } from './lib/waves.mjs';
 import { writeRepoMap } from './lib/repo-map.mjs';
+import { createSteeringControl } from './runtime/steering.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const unknownCommand = 'Unknown command. /help lists commands.\n';
@@ -147,6 +148,7 @@ export function createDispatcher({
     routeNext: false, fleetProfileId: null, pendingQuestion: false,
     sideController: null,
     lastMeasuredSeat: null,
+    steeringControl: null, queuedInput: [],
     statusbar: true, controller: null, history: [], issueCache: new Map(), display: {
       issue: null, branch: api.repositoryBranch(cwd), seat: config.seat.id, state: 'idle', busy: false,
       model: config.llm.model, host: config.llm.base_url ? new URL(config.llm.base_url).host : '',
@@ -207,6 +209,22 @@ export function createDispatcher({
     safeWrite(`Model: ${model || '(unset)'}\nHost: ${host()}\n`);
   }
 
+  function queueInput(line) {
+    const text = line.trim();
+    const combined = [...state.queuedInput, text].join('\n');
+    if (state.queuedInput.length === 8 || combined.length > 4096 ||
+        redactEvidence(combined, { env, apiKeyEnv: state.config.llm.api_key_env }) !== combined) {
+      throw new TypeError('Queued input limit or secret-material guard refused the line.');
+    }
+    state.queuedInput.push(text);
+    output.write('Input queued. Use /steer TEXT to send it to the drafting coder.\n');
+  }
+
+  function discardQueued(signal) {
+    if (state.queuedInput.length && !signal.aborted) output.write('Queued input was not sent to the coder.\n');
+    state.queuedInput = [];
+  }
+
   function cancel() {
     if (state.sideController && !state.sideController.signal.aborted) {
       state.sideController.abort(new RunCancelledError());
@@ -230,6 +248,8 @@ export function createDispatcher({
     if (state.controller !== null) throw new Error('A seat is already running; cancel it before starting another.');
     const controller = new AbortController();
     state.controller = controller;
+    state.steeringControl = createSteeringControl({ signal: controller.signal });
+    state.queuedInput = [];
     state.pendingConfirm = null;
     if (request) state.lastRequest = request;
     state.lastRun = { planningOnly: true, failed: true, askKind: 'clarify', command: null };
@@ -246,6 +266,7 @@ export function createDispatcher({
         log: (message) => output.write(`${message}\n`), errorOutput,
         onRunEvent: receiveEvent,
         signal: controller.signal,
+        steeringControl: state.steeringControl,
         onPrepared(prepared) {
           if (request) request.prepared = prepared;
           state.lastRun = { ...prepared, planningOnly: true, failed: true, askKind: 'clarify', command: null };
@@ -260,6 +281,9 @@ export function createDispatcher({
       state.display.state = isRunCancelled(error) ? 'idle' : 'failed';
       throw error;
     } finally {
+      discardQueued(controller.signal);
+      state.steeringControl?.dispose();
+      state.steeringControl = null;
       state.display.busy = false;
       state.controller = null;
       notify();
@@ -323,7 +347,8 @@ export function createDispatcher({
       if (state.pendingConfirm) return runRequest(state.pendingConfirm, { retry: true, continueConfirmed: true });
       return true;
     }
-    if (text === 'exit') return false;
+    if (text === 'exit') { cancel(); return false; }
+    if (state.controller !== null && !text.startsWith('/')) { queueInput(text); return true; }
     if (text === '/') { output.write(formatHelp()); return true; }
     if (!text.startsWith('/')) return runRequest({ kind: 'ask', text, options: {} });
     const match = /^\/([a-z]+)(?:\s+(.*))?$/.exec(text);
@@ -335,6 +360,20 @@ export function createDispatcher({
     const command = canonicalCommand(inputCommand);
     const args = rawArguments?.trim() ?? '';
     switch (command) {
+      case 'steer': {
+        if (!args) throw new TypeError('Use /steer TEXT.');
+        if (state.display.seat !== 'coder' || !state.steeringControl?.waiting) {
+          throw new Error('Steering requires a drafting coder model call; it cannot change planner or reviewer scope.');
+        }
+        const instruction = [...state.queuedInput, args].join('\n');
+        if (instruction.length > 4096 || redactEvidence(instruction, { env, apiKeyEnv: state.config.llm.api_key_env }) !== instruction) {
+          throw new TypeError('Steering instruction exceeds 4096 characters or contains secret material.');
+        }
+        state.steeringControl.steer(instruction);
+        state.queuedInput = [];
+        output.write('Steering the coder.\n');
+        return true;
+      }
       case 'map':
         if (args) throw new TypeError('Use /map.');
         if (!state.lastRun?.worktreePath) throw new Error('Run or resume a task before /map.');
@@ -376,6 +415,7 @@ export function createDispatcher({
           if (state.lastRun) state.lastRun = { ...state.lastRun, review: null };
           throw error;
         } finally {
+          discardQueued(controller.signal);
           state.controller = null;
           state.display.busy = false;
           notify();
@@ -818,6 +858,7 @@ export function createDispatcher({
           if (result?.skipped !== true && !Number.isInteger(result?.status)) throw new Error('Warm probe returned no status.');
           safeWrite(`Warm probe: host=${host()} status=${result.skipped ? 'skipped' : result.status}\n`);
         } finally {
+          discardQueued(controller.signal);
           state.controller = null;
           state.display.busy = false;
           notify();
@@ -881,6 +922,7 @@ export function createDispatcher({
         return true;
       case 'quit':
         if (args) throw new TypeError('Use /quit.');
+        cancel();
         return false;
       default:
         errorOutput.write(unknownCommand);
@@ -893,6 +935,7 @@ export function createDispatcher({
     state,
     banner: 'github-agent-roster',
     cancel,
+    queueInput,
   };
 }
 
@@ -910,7 +953,7 @@ export async function startRepl({
   const errors = { write(text) { if (tray) tray.write(text, errorOutput); else errorOutput.write(text); } };
   let question;
   let shell;
-  const { dispatch, state, banner, cancel } = createDispatcher({ ...options, input, output: messages, errorOutput: errors,
+  const { dispatch, state, banner, cancel, queueInput } = createDispatcher({ ...options, input, output: messages, errorOutput: errors,
     onStateChange() { if (tray) tray.render(); },
     onUiAction(command) { if (command === 'clear') { tray?.erase(); output.write('\x1b[2J\x1b[H'); } },
     askInput(prompt) {
@@ -953,9 +996,16 @@ export async function startRepl({
     tray?.committed();
     const answer = question;
     const sideQuestion = /^\/btw\s+\S/.test(line.trim()) && state.controller !== null && !answer;
+    const steering = /^\/steer(?:\s|$)/.test(line.trim()) && state.controller !== null && !answer;
+    const queued = state.controller !== null && !answer &&
+      !suppressEcho && state.pendingSecret === null && line.trim() && !line.trim().startsWith('/') && line.trim() !== 'exit';
     const activeStop = line.trim() === '/stop' && state.controller !== null;
-    handledLines.push(activeStop || sideQuestion || Boolean(answer));
-    if (sideQuestion) {
+    handledLines.push(activeStop || sideQuestion || steering || Boolean(queued) || Boolean(answer));
+    if (queued) {
+      try { queueInput(line); }
+      catch (error) { errors.write(`${error.message}\n`); }
+    }
+    if (sideQuestion || steering) {
       const pending = dispatch(line).catch((error) => errors.write(`${error.message}\n`))
         .finally(() => sideRequests.delete(pending));
       sideRequests.add(pending);

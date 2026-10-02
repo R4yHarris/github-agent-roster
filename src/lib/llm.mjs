@@ -32,7 +32,7 @@ export function createBuiltinChat(config, {
   let lengthRetried = false;
   let lastAttempts = 0;
   let lastUsage = null;
-  const chat = async (request) => {
+  const chat = async (request, { signal: requestSignal = signal } = {}) => {
     let current = { ...request, max_tokens: request.max_tokens ?? completionCap,
       ...(reasoningDisabled ? { reasoning_effort: 'none',
         ...(usesDeepseekReasoning(config.llm) ? { chat_template_kwargs: { thinking: false } } : {}),
@@ -48,7 +48,7 @@ export function createBuiltinChat(config, {
     for (;;) {
       lastAttempts += 1;
       try {
-        const response = await transport(current);
+        const response = await transport(current, { signal: requestSignal });
         await onEvent?.({ type: 'completion', reason: response.finish_reason ?? null });
         usages.push(response.usage);
         lastUsage = usages.length === 1 ? response.usage : mergeUsage(...usages);

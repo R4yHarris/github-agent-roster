@@ -21,6 +21,7 @@ export async function runCoder({
   priorFeedback = null, onEvent, askKind,
   retryCommand = retryCommandForTask(task),
   signal,
+  steeringControl,
 }) {
   const stages = [];
   const memoryPath = seatMemoryPath({
@@ -93,7 +94,7 @@ export async function runCoder({
       },
     };
     result = await runLoop({
-      config, context, tools: trackedTools, fetchImpl, env, vault, onEvent, retryCommand, signal,
+      config, context, tools: trackedTools, fetchImpl, env, vault, onEvent, retryCommand, signal, steeringControl,
       verify: async (candidate) => {
         const evidence = await checkExcellence({
           worktree, task: context.task, result: candidate, baseline, memoryPath,
