@@ -1,68 +1,79 @@
 import { clearLine, clearScreenDown, cursorTo, moveCursor } from 'node:readline';
 import { stripVTControlCharacters } from 'node:util';
+import { collectBannerFacts, formatBanner } from './banner.mjs';
 
-const colors = { label: '\x1b[96m', white: '\x1b[97m',
-  red: '\x1b[91m', green: '\x1b[92m', reset: '\x1b[0m' };
-const efforts = { l: 'low', m: 'medium', h: 'high', x: 'max', none: 'none' };
+const colors = { label: '\x1b[96m', white: '\x1b[97m', yellow: '\x1b[93m',
+  orange: '\x1b[38;5;208m', red: '\x1b[91m', green: '\x1b[92m', reset: '\x1b[0m' };
+const phases = { idle: 'idle', planning: 'plan', drafting: 'draft', testing: 'test',
+  reviewing: 'review', passed: 'pass', failed: 'fail', published: 'done' };
+const families = { deepseek: 'ds', qwen: 'qwen', llama: 'llama', mistral: 'mstrl',
+  gemma: 'gemma', claude: 'claude', gpt: 'gpt', phi: 'phi', kimi: 'kimi', glm: 'glm' };
+const BAR_CELLS = 10;
+const RULE = '\u2500';
+const SEPARATOR = ' \u2502 ';
+
 const clean = (value) => stripVTControlCharacters(String(value ?? '-')).replace(/[\x00-\x1f\x7f]/g, '');
-const paint = (value, color, enabled) => enabled ? `${colors[color]}${value}${colors.reset}` : value;
+const paint = (value, color, enabled) => (enabled ? `${colors[color]}${value}${colors.reset}` : String(value));
 const length = (value) => stripVTControlCharacters(value).length;
 
-function count(value, capacity = false) {
-  if (!Number.isSafeInteger(value) || value < 0 || capacity && value === 0) return '-';
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}m`;
-  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`;
-  return String(value);
+export function shortModel(model) {
+  const id = clean(model).trim().toLowerCase();
+  if (!id || id === '-') return '-';
+  const parts = id.split(/[-_/]/).filter(Boolean);
+  const family = families[parts[0]] ?? parts[0].slice(0, 6);
+  const version = parts.slice(1).find((part) => /^v?\d/.test(part));
+  return version ? `${family}-${version}` : family;
 }
 
-function elapsed(startedAt, now) {
-  if (startedAt === null || startedAt === undefined) return '-';
+export function formatElapsed(startedAt, now) {
+  if (!Number.isFinite(startedAt)) return '-';
   const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
-  return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`;
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m${String(seconds % 60).padStart(2, '0')}s`;
+  return `${Math.floor(seconds / 3600)}h${String(Math.floor((seconds % 3600) / 60)).padStart(2, '0')}m`;
 }
 
-function fit(text, width) {
-  const value = clean(text);
-  return value.length <= width ? value : width > 3 ? `${value.slice(0, width - 3)}...` : value.slice(0, width);
+export function formatContextBar(used, max, { color = true } = {}) {
+  const known = Number.isSafeInteger(used) && used >= 0 && Number.isSafeInteger(max) && max > 0;
+  if (!known) return `[${'-'.repeat(BAR_CELLS)}]`;
+  const percent = Math.min(100, (used / max) * 100);
+  const filled = Math.min(BAR_CELLS, Math.max(percent > 0 ? 1 : 0, Math.round((percent / 100) * BAR_CELLS)));
+  const tone = percent >= 95 ? 'red' : percent >= 80 ? 'orange' : percent >= 50 ? 'yellow' : 'green';
+  return `[${paint('#'.repeat(filled), tone, color)}${'-'.repeat(BAR_CELLS - filled)}]`;
 }
 
-export function formatTray(display, { columns = 80, color = true, now = Date.now(), debug = false } = {}) {
-  const width = Math.max(1, Number.isSafeInteger(columns) ? columns - 1 : 79);
+export function formatTray(display = {}, { columns = 80, color = true, now = Date.now(), debug = false } = {}) {
+  const width = Math.max(8, Number.isSafeInteger(columns) ? columns - 1 : 79);
+  const state = clean(display.state) || 'idle';
+  const phase = phases[state] ?? state;
   const issue = display.issue === null || display.issue === undefined ? 'local' : `#${display.issue}`;
-  const state = clean(display.state);
-  const stateColor = state === 'failed' ? 'red' : state === 'passed' ? 'green' : 'white';
-  const prefix = `roster | ${issue} | ${clean(display.seat)} | ${state} | `;
-  const branch = fit(display.branch || '-', Math.max(1, width - prefix.length));
-  let top = `${paint('roster', 'label', color)} | ${paint(issue, 'white', color)} | ` +
-    `${paint(clean(display.seat), 'white', color)} | ${paint(state, stateColor, color)} | ` +
-    paint(branch, 'white', color);
-  if (length(top) > width) top = paint(fit(`${prefix}${branch}`, width), stateColor, color);
-  const field = (label, value) => (label ? `${paint(label, 'label', color)} ` : '') + paint(clean(value), 'white', color);
-  const base = [
-    field(display.mode === 'plan' ? 'plan' : '', display.model || '-'),
-    field('', display.host || '-'),
-    field('effort', efforts[display.effort] ?? display.effort ?? '-'),
-    field('ctx', `${count(display.contextUsed)} / ${count(display.contextMax, true)}`),
-    field('', elapsed(display.startedAt, now)),
-    field('debug', debug ? 'on' : 'off'),
+  const where = state === 'idle' ? 'idle' : `${issue} ${phase}`;
+  const effort = clean(display.effort ?? '-').trim() || '-';
+  const model = `${shortModel(display.model)} ${effort === '-' ? '-' : effort[0]}`;
+  const failed = state === 'failed';
+  const tail = failed && display.lastFinishReason ? clean(display.lastFinishReason)
+    : state === 'idle' ? '-' : formatElapsed(display.startedAt, now);
+  const fields = [
+    paint(where, failed ? 'red' : state === 'passed' ? 'green' : 'white', color),
+    paint(model, 'white', color),
+    formatContextBar(display.contextUsed, display.contextMax, { color }),
+    paint(tail, failed ? 'red' : 'white', color) + (debug ? paint('*', 'label', color) : ''),
   ];
-  let bottom = base.join(' | ');
-  if (length(bottom) > width) {
-    base.splice(4, 1);
-    bottom = base.join(' | ');
+  let rail = fields.join(SEPARATOR);
+  for (const index of [2, 1]) {
+    if (length(rail) <= width) break;
+    fields.splice(index, 1);
+    rail = fields.join(SEPARATOR);
   }
-  if (length(bottom) > width) {
-    base.splice(1, 1);
-    bottom = base.join(' | ');
-  }
-  if (length(bottom) > width) bottom = paint(fit(bottom, width), 'white', color);
-  const prompt = `${display.busy ? `${paint('*', 'label', color)} ` : ''}${paint('roster> ', 'label', color)}`;
-  return { top, bottom, prompt };
+  const rule = paint(RULE.repeat(width), 'label', color);
+  const prompt = paint('roster> ', 'label', color);
+  return { rule, rail, prompt };
 }
 
-export function createTray({ output, state, shell }) {
+export function createTray({ output, state, shell, env = process.env, cwd = process.cwd(), services = {} }) {
   let visible = false;
   let barLines = 0;
+  let bannerPrinted = false;
   let refreshTimer;
   const frame = () => formatTray(state.display, { columns: output.columns ?? 80, debug: state.debug.enabled });
 
@@ -94,9 +105,9 @@ export function createTray({ output, state, shell }) {
   }
 
   function redraw() {
-    const { top, bottom, prompt } = frame();
-    barLines = state.statusbar ? 2 : 0;
-    if (barLines) output.write(`${top}\n${bottom}\n`);
+    const { rule, rail, prompt } = frame();
+    barLines = state.statusbar ? 3 : 0;
+    if (barLines) output.write(`${rule}\n${rail}\n${rule}\n`);
     flush();
     shell.setPrompt(prompt);
     shell.prompt(true);
@@ -114,15 +125,20 @@ export function createTray({ output, state, shell }) {
   }
 
   return {
-    render, erase,
-    banner() {
+    render,
+    erase,
+    async banner() {
+      if (bannerPrinted) return;
+      bannerPrinted = true;
       pause();
-      output.write(`${paint('github-agent-roster', 'label', true)}\n`);
+      const facts = await collectBannerFacts({ env, cwd, branch: state.display.branch,
+        llm: state.config?.llm ?? {}, services });
+      output.write(formatBanner(facts));
       flush();
       shell.resume();
     },
     committed() { visible = false; },
-    write(text, target = output) {
+    write(text, target = output, { replace = false } = {}) {
       if (shell.closed) {
         target.write(text);
         flush(target);
@@ -130,6 +146,11 @@ export function createTray({ output, state, shell }) {
       }
       pause();
       erase();
+      if (replace) {
+        moveCursor(output, 0, -1);
+        cursorTo(output, 0);
+        clearLine(output, 0);
+      }
       target.write(text);
       flush(target);
       if (String(text).endsWith('\n') && state.pendingSecret === null && !state.pendingQuestion) redraw();

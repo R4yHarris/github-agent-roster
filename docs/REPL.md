@@ -1,17 +1,37 @@
 # Interactive Roster shell
 
 Run `roster` with no arguments from a Git worktree and an interactive terminal
-after [installing it](INSTALL.md). The bright-cyan `github-agent-roster` banner
-appears once. A bright-cyan delivery tray shows the product, issue (or `local`), seat,
-state, and branch above a bottom bar with model, host, effort, declared context
-and measured prompt usage, elapsed time, and debug mode. Unknown usage is `-`,
-never an invented zero. Labels and the `roster> ` input are bright cyan, values
-are white, and a bright-cyan `*` marks busy seats. Failed reviews are bright red,
-and passes are bright green. Bars repaint on seat/test
-events without exposing model prompts or completions. Narrow terminals drop
-elapsed time, then host. `/statusbar on|off` toggles both bars for this process.
-Status and waiting lines, the busy mark, and elapsed time repaint immediately
-without requiring a keypress; redraws preserve Ctrl+C, history keys, and Tab.
+after [installing it](INSTALL.md). The screen has three regions.
+
+The **banner** prints once at startup: the product and its version, then
+`node MAJOR · SHELL · WORKTREE · BRANCH`, then `endpoint STATE · MODEL · HOST`,
+then `contracts VERSION · update STATE · warnings COUNT`. Each fact is checked
+separately, an unknown fact prints `-` rather than a guess, and every failed
+check adds its own bright-yellow line without stopping startup. The release and
+endpoint probes are opt-in (`ROSTER_BANNER_CHECKS=on`) and time out after one
+second, so an unchecked release prints `update skipped` and the whole banner
+finishes in under two seconds.
+
+The **transcript** scrolls above the rail with one short line per step: a phase
+line, a tool line, a waiting line and a verdict line. Repeated identical tool
+calls collapse into one counted line such as `read README.md · 2`, and the
+waiting line is rewritten in place rather than repeated. Model prompts,
+completions and file bodies are never printed.
+
+The **rail** is pinned between two bright-cyan rules directly above the
+bright-cyan `roster> ` prompt, for example
+`#108 draft │ ds-v4.1 l │ [----------] │ 7m26s`. It carries the issue and
+phase, the short model with its effort letter, a ten-cell context bar and
+elapsed time; an idle session shows `idle` and `-`. The bar stays empty while
+usage is unknown and is green under 50%, yellow to 80%, orange to 95% and red
+at or above 95%. A failed seat turns the first field red and replaces elapsed
+with the finish reason, and `/debug on` adds a trailing `*`. Narrow terminals
+drop the bar, then the model, keeping the issue and elapsed fields. Values are
+white, waiting and warnings are bright yellow, failures bright red and passes
+bright green; no other colours, dim text or emoji are used. The rail repaints on
+seat, tool and test events without a keypress, and redraws preserve Ctrl+C,
+history keys and Tab. `/statusbar off` removes both rules and the rail for this
+process and leaves the plain prompt.
 `--help` still prints the existing CLI usage and exits 0; empty arguments
 with non-TTY stdin print that usage and exit 2. Flags remain available for
 agents and CI.
@@ -20,7 +40,7 @@ agents and CI.
 | --- | --- |
 | `TEXT` (no slash) | Classify a direct local ask without `gh` or issue creation. In a local Git worktree, slices print the task summary and run planner/coder/reviewer to RESULT.md and REVIEW.md; features and initiatives write PLAN.md and stop. |
 | `/ask TEXT` | Use the same local planner/coder/reviewer path as plain text; never create a GitHub issue. A bounded slice reaches RESULT and REVIEW, while clarify and initiative/feature planning retain their existing boundaries. CLI `roster ask` keeps its separate issue/draft behavior. |
-| `/plan TEXT` or `/run N --plan` | Enter opt-in plan mode: explore with read-only source tools and write only PLAN.md. The tray remains planning and shows plan mode. Enter accepts a bounded slice, validates its original Ask/file scope, creates the normal TASK/recipe handoff and starts coder in the same worktree. `/stop` keeps the plan and starts no coder. Feature/initiative plans remain planning-only. |
+| `/plan TEXT` or `/run N --plan` | Enter opt-in plan mode: explore with read-only source tools and write only PLAN.md. The rail remains in the plan phase. Enter accepts a bounded slice, validates its original Ask/file scope, creates the normal TASK/recipe handoff and starts coder in the same worktree. `/stop` keeps the plan and starts no coder. Feature/initiative plans remain planning-only. |
 | `/model [ID\|clear] [--save]` | Show the session model and host, or change only this process. `--save` explicitly writes the private model setting; `clear` lets the next run route. |
 | `/effort [l|m|h|x|none|status]` | Show or select session effort without writing config; docs still cap at high and their truncation retry drops reasoning. |
 | `/provider` | Show the selected profile name and host, never a key. |
@@ -39,11 +59,12 @@ agents and CI.
 | `/batch` | Refuse with `One seat at a time. Worktrees are isolated.`; no parallel seat or second board is started. |
 | `/recap` | Print one human metadata line with TASK outcome/files, last test exit, review and finish reason. Never print RESULT completion text. |
 | `/btw QUESTION` | Ask the configured model one read-only question about current task metadata. It offers no tools, refuses tool requests, and prints only the answer; no task, memory, measured-seat state or publication body is changed. It can answer alongside a running seat without steering it. Truncation fails rather than making a second request. |
-| `/context` or `/usage` | Show this process's last response-backed seat: provider, actual model, actual request effort, input/output counts, declared context capacity, finish reason, character pack budget and whether prior feedback was included. Missing counts are `-`; no body or environment usage is substituted. Side questions do not replace the measured seat. |
+| `/context` | Show this process's last response-backed seat: provider, actual model, actual request effort, input/output counts, declared context capacity, finish reason, character pack budget and whether prior feedback was included. Missing counts are `-`; no body or environment usage is substituted. Side questions do not replace the measured seat. |
+| `/usage` | Print one read-only panel for the current session: full model, endpoint, prompt and completion tokens, context max, effort, finish reason, tool calls, elapsed time, whether thinking was disabled and the outbound completion cap. Unknown values are `-`. |
 | `/map` | Write ignored `.roster/map.md` with TASK-named paths and the top two directory levels, capped at 80 filename-only lines (no file bodies). Protected/private paths and symlinks are omitted. Non-docs difficulty4+ coders may load/read it; low difficulty and all docs tasks cannot. It grants no extra product path permissions and coder writes are always refused. |
 | `/checkpoints` | List the current task's pre-write checkpoint number, coder seat, short status and time. |
 | `/rewind N` or `/undo` | Restore checkpoint-covered product files and remove newly created files in that same task scope. Keep PLAN, TASK, recipe, result and logs. Undo selects the latest checkpoint only. Stop the seat first; any open/closed/merged PR on the branch refuses rewind, and unavailable PR verification fails closed. Verification/review are invalidated after restoration. |
-| `/statusbar on\|off` | Toggle both delivery-tray bars; the default is on and the setting is process-local. The plain-text prompt remains available while the bars are off. |
+| `/statusbar on\|off` | Toggle the pinned rail and its two rules; the default is on and the setting is process-local. The plain-text prompt remains available while the rail is off. |
 | `/log N` | Tail up to 50 safe metadata lines from each local `.roster/runs/roster-N-*.log`, without network or seat execution. |
 | `/debug on` or `/debug off` or `/debug status` | Enable, stop or show testing metadata logging for this process only; never write config or change environment variables. |
 | `/log debug` | Tail up to 50 validated JSONL events from this process's most recent debug file. Fail closed while debug is off; reenable explicitly before reading. |
@@ -110,7 +131,7 @@ Tab completes slash commands from the shared registry; a second Tab lists
 matches. Ctrl+C aborts the active seat/model request/test process and returns
 to the prompt. A second Ctrl+C, Ctrl+D on an empty input, `/quit`, `/q`, or
 `exit` exits with status 0. A cancelled task cannot be published as completed
-work. `/redraw` repaints the tray without clearing scrollback; `/clear` clears
+work. `/redraw` repaints the rail without clearing scrollback; `/clear` clears
 the screen and repaints it. No extra terminal dependency is used.
 
 Unknown commands print `Unknown command. /help lists commands.` and leave the

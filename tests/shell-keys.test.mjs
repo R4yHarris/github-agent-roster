@@ -161,8 +161,26 @@ test('Tab completes registry commands and redraw does not clear scrollback', asy
   assert.equal(await shell.done, 0);
 });
 
-test('cancellation aborts the actual model request instead of leaving it waiting for the timeout', async () => {
-  const controller = new AbortController();
+test('/help lists the core commands and /statusbar off removes the pinned rules', async (t) => {
+  const root = fixture(t);
+  const shell = tty(t, root);
+  await until(() => shell.text.includes('roster> '));
+  shell.input.write('/help\n');
+  await until(() => shell.text.includes('/statusbar on|off'));
+  for (const usage of ['/run ', '/publish ', '/debug ', '/usage', '/statusbar ', '/quit']) {
+    assert.ok(shell.text.includes(usage), usage);
+  }
+  shell.input.write('/statusbar off\n');
+  await until(() => shell.text.includes('Status bars off.'));
+  await wait(20);
+  assert.doesNotMatch(shell.text.slice(shell.text.lastIndexOf('Status bars off.')), /\u2500{10}/);
+  assert.doesNotMatch(shell.raw, /\x1b\[34/);
+  assert.doesNotMatch(shell.raw, /\x1b\[2m/);
+  shell.input.write('/quit\n');
+  assert.equal(await shell.done, 0);
+});
+
+test('cancellation aborts the actual model request instead of leaving it waiting for the timeout', async () => {  const controller = new AbortController();
   let requestSignal;
   const chat = createBuiltinChat({ ...config, llm: { ...config.llm,
     base_url: 'http://localhost:8000/v1', model: 'test-model' } }, {
