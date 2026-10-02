@@ -95,8 +95,14 @@ including tasks that explicitly waive tests. Directory listing and search
 are denied on this class, so requests for RESEARCH.md, tests/fixtures, or a
 repo-wide `search_text` cannot enlarge the context. Identified failing tests
 are added to the read/write schemas only after a failed test run.
+After a successful write when TASK permits exactly one application file, the
+harness runs the task checks immediately and only once. Green checks switch to
+summary-only mode, so later read/search requests are denied without executing
+or invalidating the passing result. Failed checks reopen scoped reads and
+searches for the bounded repair loop.
 A tool denial terminates coding with an unverified result, not file content
-or evidence of completed work. Other task
+or evidence of completed work, except for requests refused after those
+post-write checks are already green. Other task
 classes/difficulties/scopes retain the existing behavior below.
 
 Malformed coder tool-call arrays/JSON arguments get exactly one tool-only repair.
@@ -164,7 +170,8 @@ subdirectory; an explicitly requested unsafe path fails rather than silently
 returning no matches. Line numbers are one-based. An additional match beyond
 the 50 returned lines sets `truncated: true`; exactly 50 matches is not
 reported as truncated. No subprocess is used for search and no npm dependency
-is required.
+is required. Empty, NUL-containing, or multiline literal queries are denied
+before a search tool-start event.
 
 `run_test` accepts no arbitrary command or shell arguments. It strips the
 configured model API key and App/GitHub credentials from the child

@@ -8,6 +8,7 @@ import { ContractsSubmoduleError, onlyMissingContractsScripts } from '../lib/con
 import { UnsupportedFinishReasonError } from '../llm/finish-reason.mjs';
 import { throwIfCancelled } from './cancel.mjs';
 import { SteeringInterrupt } from './steering.mjs';
+import { readTaskMetadata } from './estimate.mjs';
 
 class MalformedCoderTools extends Error {}
 export const testRepairBudget = 4;
@@ -55,6 +56,10 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   }
   const readmeOnlyDocs = context.contextPolicy?.readmeOnlyDocs === true;
   const sliceReadsOnly = context.contextPolicy?.sliceReadsOnly === true;
+  const parsedTask = parseTaskDocument(context.task);
+  const singleAllowedFile = readTaskMetadata(context.task).task_class === 'docs' &&
+    parsedTask.files_allowed.length === 1
+    ? parsedTask.files_allowed[0] : null;
 
   const messages = [
     { role: 'system', content: context.pack },
@@ -88,6 +93,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   let needsTools = false;
   let attemptTurns = 0;
   let finalSummaryOnly = false;
+  let checksPassedAfterWrite = false;
   let steeringMessage;
   progress.testRepairs = 0;
   progress.repairFiles = [];
@@ -113,6 +119,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     progress.testRepairs += 1;
     attemptTurns = 0;
     finalSummaryOnly = false;
+    checksPassedAfterWrite = false;
     await onEvent?.({ type: 'test-repair', attempt: progress.testRepairs, budget: testRepairBudget });
     messages.push({ role: 'user', content: `${failure}\n` +
       `Repair ${progress.testRepairs} of ${testRepairBudget}. Read this failure summary and repair TASK-allowed files` +
@@ -149,7 +156,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     progress.turns += 1;
     const turn = progress.turns;
     progress.usage = null;
-    const currentDefinitions = readmeOnlyDocs && progress.repairFiles.length ? definitions.map((tool) =>
+    const scopedDefinitions = readmeOnlyDocs && progress.repairFiles.length ? definitions.map((tool) =>
       ['read_file', 'write_file'].includes(tool.function.name) ? {
         ...tool, function: { ...tool.function, parameters: { ...tool.function.parameters,
           properties: { ...tool.function.parameters.properties,
@@ -160,6 +167,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
           },
         } },
       } : tool) : definitions;
+    const currentDefinitions = finalSummaryOnly && checksPassedAfterWrite ? [] : scopedDefinitions;
     let response;
     try {
       response = steeringControl ? await steeringControl.request((requestSignal) =>
@@ -185,7 +193,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       .includes(finishReason)) {
       throw new Error('LLM coder returned an unsupported chat response');
     }
-    if (finalSummaryOnly && (finishReason === 'tool_calls' ||
+    if (finalSummaryOnly && !checksPassedAfterWrite && (finishReason === 'tool_calls' ||
         message.tool_calls !== undefined && (!Array.isArray(message.tool_calls) || message.tool_calls.length) ||
         typeof message.content !== 'string' || !message.content.trim())) {
       throw new Error('Coder must return a final summary without tools after green repair tests');
@@ -193,9 +201,18 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     let calls;
     let deterministic;
     try {
-      calls = decodeCalls(message, offeredTools, ids, turn);
-      if ((needsTools || finishReason === 'tool_calls') && !calls.length) {
-        throw new MalformedCoderTools('Coder repair did not emit tool calls');
+      if (finalSummaryOnly && checksPassedAfterWrite && Array.isArray(message.tool_calls) &&
+          message.tool_calls.length) {
+        for (const call of message.tool_calls) {
+          await onEvent?.({ type: 'tool-result', name: call?.function?.name ?? 'unknown', status: 'denied' });
+        }
+        deterministic = `Updated ${singleAllowedFile}. Task checks passed.`;
+        calls = [];
+      } else {
+        calls = decodeCalls(message, offeredTools, ids, turn);
+        if ((needsTools || finishReason === 'tool_calls') && !calls.length) {
+          throw new MalformedCoderTools('Coder repair did not emit tool calls');
+        }
       }
       needsTools = false;
     } catch (error) {
@@ -224,7 +241,14 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       messages.push({ role: 'assistant', content: message.content ?? null,
         tool_calls: calls.map(({ args: _args, ...call }) => call) });
       let failedTests;
+      let wroteSingleAllowedFile = false;
       for (const [index, call] of calls.entries()) {
+        if (wroteSingleAllowedFile && call.function.name !== 'write_file') {
+          messages.push({ role: 'tool', tool_call_id: call.id,
+            content: 'Refused after the successful sole-file write; task checks run next.' });
+          await onEvent?.({ type: 'tool-result', name: call.function.name, status: 'denied' });
+          continue;
+        }
         const result = await tools[call.function.name](call.args);
         messages.push({
           role: 'tool', tool_call_id: call.id,
@@ -232,6 +256,11 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
             env, apiKeyEnv: config.llm.api_key_env,
           }),
         });
+        if (progress.testRepairs === 0 && call.function.name === 'write_file' &&
+            result.path === singleAllowedFile) {
+          wroteSingleAllowedFile = true;
+          continue;
+        }
         if (call.function.name === 'run_test') {
           progress.tests = result;
           if (result.exit_code !== 0) {
@@ -245,6 +274,21 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         }
       }
       if (failedTests) await repairTests(failedTests);
+      if (wroteSingleAllowedFile) {
+        const testsSkipped = taskSkipsTests(context.task);
+        const tests = testsSkipped ? undefined : await tools.run_test({});
+        progress.tests = tests;
+        if (tests && tests.exit_code !== 0) {
+          await repairTests(tests);
+          continue;
+        }
+        checksPassedAfterWrite = true;
+        finalSummaryOnly = true;
+        attemptTurns = 0;
+        needsTools = false;
+        messages.push({ role: 'user', content: 'Task checks passed after the sole allowed file was saved. ' +
+          'Return a final summary only; do not request more tools.' });
+      }
       continue;
     }
     if (!deterministic && (finishReason === 'tool_calls' || typeof message.content !== 'string' ||
@@ -253,7 +297,8 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     }
     const usage = mergeUsage(...usages);
     const testsSkipped = taskSkipsTests(context.task);
-    const tests = testsSkipped && progress.testRepairs === 0 ? undefined : await tools.run_test({});
+    const tests = checksPassedAfterWrite ? progress.tests
+      : testsSkipped && progress.testRepairs === 0 ? undefined : await tools.run_test({});
     progress.tests = tests;
     const summary = deterministic ?? message.content.trim();
     const result = {

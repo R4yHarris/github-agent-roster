@@ -83,6 +83,7 @@ test('a README write survives one docs length retry without reasoning at 4096', 
 test('a second docs length fails review after one no-reasoning retry without losing the README edit', async (t) => {
   const options = fixture(t);
   let calls = 0;
+  let tests = 0;
   let failed;
   await assert.rejects(runCoder({ ...options, fetchImpl: async (_url, request) => {
     calls += 1;
@@ -97,11 +98,12 @@ test('a second docs length fails review after one no-reasoning retry without los
     assert.equal(body.chat_template_kwargs.thinking, calls === 2);
     return Response.json({ choices: [{ finish_reason: 'length',
       message: { role: 'assistant', content: 'PRIVATE_BODY' } }] });
-  }, runTestCommand: () => assert.fail('Repeated length must not reach tests') }), (error) => {
+  }, runTestCommand: async () => { tests += 1; return { stdout: 'pass', stderr: '' }; } }), (error) => {
     failed = error.result;
     return /finish reason: length/.test(error.message);
   });
   assert.equal(calls, 3);
+  assert.equal(tests, 1);
   assert.equal(failed.finishReason, 'length');
   assert.match(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /## Status/);
   const review = await runReviewer({ ...options, coderResult: failed,
@@ -114,6 +116,7 @@ test('a second docs length fails review after one no-reasoning retry without los
 test('an unknown finish reason after a README write fails review by name without printing its response', async (t) => {
   const options = fixture(t);
   let calls = 0;
+  let tests = 0;
   let failed;
   await assert.rejects(runCoder({ ...options, fetchImpl: async () => {
     calls += 1;
@@ -125,11 +128,12 @@ test('an unknown finish reason after a README write fails review by name without
     return Response.json({ model: 'failed-response-model',
       usage: { prompt_tokens: 17, completion_tokens: 9 },
       choices: [{ finish_reason: 'eos_token', message: { role: 'assistant', content: 'PRIVATE_RESPONSE_BODY' } }] });
-  }, runTestCommand: () => assert.fail('An unknown finish reason must fail before tests') }), (error) => {
+  }, runTestCommand: async () => { tests += 1; return { stdout: 'pass', stderr: '' }; } }), (error) => {
     failed = error.result;
     return /finish reason: eos_token/.test(error.message) && !error.message.includes('PRIVATE_RESPONSE_BODY');
   });
   assert.equal(calls, 2);
+  assert.equal(tests, 1);
   assert.equal(failed.finishReason, 'eos_token');
   assert.equal(failed.run.env.AI_MODEL, 'failed-response-model');
   assert.equal(failed.run.env.AI_CONTEXT_USED, '17');
@@ -201,8 +205,8 @@ test('minimum docs coder makes no research request and still checks tests, file 
       assert.equal(body.reasoning_effort, 'low');
       assert.equal(body.max_tokens, 2048);
       assert.doesNotMatch(body.messages[0].content, /builtin research step|## Principal/);
-      assert.deepEqual(body.tools.map(({ function: tool }) => tool.name),
-        ['read_file', 'write_file', 'run_test']);
+      assert.deepEqual(body.tools.map(({ function: tool }) => tool.name), calls === 1
+        ? ['read_file', 'write_file', 'run_test'] : []);
       return Response.json({ choices: [calls === 1 ? { finish_reason: 'tool_calls', message: {
         role: 'assistant', tool_calls: [{ id: 'edit', type: 'function', function: {
           name: 'write_file', arguments: JSON.stringify({ path: 'README.md', content: '# Project\n\n## Status\nActive.\n' }),
@@ -223,6 +227,64 @@ test('minimum docs coder makes no research request and still checks tests, file 
   assert.equal(result.run.metrics.prompt_tokens, 100);
   assert.equal(result.run.metrics.effort, 'l');
   assert.doesNotMatch(readFileSync(join(options.repoRoot, '.roster', 'memory', 'coder.jsonl'), 'utf8'), /reasoning_content/);
+});
+
+test('a sole README save runs the docs check before refusing a later empty search', async (t) => {
+  const options = fixture(t);
+  mkdirSync(join(options.worktree, 'tests'), { recursive: true });
+  writeFileSync(join(options.worktree, 'tests', 'repl.test.mjs'), '');
+  const events = [];
+  let calls = 0;
+  let tests = 0;
+  const result = await runCoder({
+    ...options,
+    askKind: 'slice',
+    onEvent: (event) => events.push(event),
+    fetchImpl: async (_url, request) => {
+      calls += 1;
+      const body = JSON.parse(request.body);
+      if (calls === 1) {
+        return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant', tool_calls: [{ id: 'read', type: 'function', function: {
+            name: 'read_file', arguments: JSON.stringify({ path: 'README.md' }),
+          } }],
+        } }] });
+      }
+      if (calls === 2) {
+        return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant', tool_calls: [
+            { id: 'save', type: 'function', function: {
+              name: 'write_file', arguments: JSON.stringify({
+                path: 'README.md', content: '# Project\n\n## Status\nActive.\n',
+              }),
+            } },
+            { id: 'reread', type: 'function', function: {
+              name: 'read_file', arguments: JSON.stringify({ path: 'README.md' }),
+            } },
+          ],
+        } }] });
+      }
+      assert.deepEqual(body.tools, []);
+      return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+        role: 'assistant', tool_calls: [{ id: 'empty-search', type: 'function', function: {
+          name: 'search_text', arguments: JSON.stringify({ query: '', path: 'README.md' }),
+        } }],
+      } }] });
+    },
+    runTestCommand: async (_program, args) => {
+      tests += 1;
+      assert.deepEqual(args, ['--test', 'tests/repl.test.mjs']);
+      assert.match(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /## Status/);
+      return { stdout: 'pass', stderr: '' };
+    },
+  });
+  assert.equal(calls, 3);
+  assert.equal(tests, 1);
+  assert.equal(result.excellence.pass, true);
+  assert.equal(events.filter((event) => event.type === 'tool' && event.name === 'read_file').length, 1);
+  assert.ok(!events.some((event) => event.type === 'tool' && event.name === 'search_text'));
+  assert.ok(events.some((event) =>
+    event.type === 'tool-result' && event.name === 'search_text' && event.status === 'denied'));
 });
 
 test('docs1 README-only tools deny planner fixtures, RESEARCH and repo search; reads may precede the required write', async (t) => {

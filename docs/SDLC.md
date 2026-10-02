@@ -193,7 +193,10 @@ API key or App credentials. A nonzero exit returns captured stdout, stderr,
 and exit code to the coder as a failed tool result so it can correct the task
 within its turn budget; a timeout reports an explicit error. Final nonzero
 verification fails the run and records failed memory instead of claiming
-success. A successful run appends memory, runs the excellence gate, and writes RESULT.md.
+success. After a successful write to the sole TASK-allowed file, checks run
+immediately; green checks prohibit another read or search, while failed checks
+reopen scoped tools for repair. A successful run appends memory, runs the
+excellence gate, and writes RESULT.md.
 Failed configured runs also save a truthful result before rejecting. See the
 [five-tool contract and denylist](TOOLS.md) for the exact inputs and
 protected surfaces.

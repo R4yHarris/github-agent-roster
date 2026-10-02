@@ -158,6 +158,13 @@ function argumentsFor(value, required, optional = []) {
   }
 }
 
+function validateSearchTextArguments(args) {
+  argumentsFor(args, ['query'], ['path']);
+  if (typeof args.query !== 'string' || !args.query.length || /[\r\n\0]/.test(args.query)) {
+    throw new ToolAccessError('search_text query must be nonempty, single-line literal text');
+  }
+}
+
 export const toolDefinitions = [
   {
     type: 'function',
@@ -521,12 +528,9 @@ export async function createTools({
     },
 
     async search_text(args) {
-      argumentsFor(args, ['query'], ['path']);
+      validateSearchTextArguments(args);
       if (readmeOnlyDocs) {
         throw new ToolAccessError('README-only docs task does not allow repository search; read README.md directly');
-      }
-      if (typeof args.query !== 'string' || !args.query.length || /[\r\n\0]/.test(args.query)) {
-        throw new TypeError('search_text query must be nonempty, single-line literal text');
       }
       const matches = [];
       async function visit(input) {
@@ -570,6 +574,14 @@ export async function createTools({
       await onEvent({ type: 'tool-refused', name });
       await onEvent({ type: 'tool-result', name, path: location, status: 'denied' });
       throw new OutsideWorktreeError();
+    }
+    if (name === 'search_text') {
+      try {
+        validateSearchTextArguments(args);
+      } catch (error) {
+        await onEvent({ type: 'tool-result', name, path: location, status: 'denied' });
+        throw error;
+      }
     }
     await onEvent({ type: 'tool', name, ...(location === undefined ? {} : { path: location }) });
     let result;
