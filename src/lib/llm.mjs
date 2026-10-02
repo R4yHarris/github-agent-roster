@@ -9,16 +9,17 @@ export function createBuiltinChat(config, {
   retryLength = true,
 } = {}) {
   if (typeof retryLength !== 'boolean') throw new TypeError('Length retry permission must be a boolean');
+  const docsSlice = config.llm.task_kind === 'slice' && config.llm.task_class === 'docs';
   const transport = createChat({ llm: {
     base_url: config.llm.base_url,
     model: config.llm.model,
     api_key_name: config.llm.api_key_env,
     api_key_optional: config.llm.api_key_optional ?? true,
     request_timeout_ms: config.llm.request_timeout_ms,
-    reasoning_effort: mappedEffort(config.llm),
+    reasoning_effort: docsSlice ? 'none' : mappedEffort(config.llm),
     max_tokens: config.llm.max_tokens,
     ...(usesDeepseekReasoning(config.llm) ? {
-      chat_template_kwargs: { thinking: config.llm.effort !== 'none' },
+      chat_template_kwargs: { thinking: !docsSlice && config.llm.effort !== 'none' },
     } : {}),
   } }, { fetch: fetchImpl, env, vault, onEvent: onEvent && ((event) => onEvent({
     ...event, ...(event.type === 'http' ? {
@@ -26,9 +27,8 @@ export function createBuiltinChat(config, {
     } : {}),
   })), retryCommand, clock, signal });
   if (transport === null) return null;
-  let completionCap = config.llm.max_tokens ?? 4096;
-  const docsSlice = config.llm.task_kind === 'slice' && config.llm.task_class === 'docs';
-  let reasoningDisabled = false;
+  let completionCap = docsSlice ? Math.min(config.llm.max_tokens ?? 512, 512) : config.llm.max_tokens ?? 4096;
+  let reasoningDisabled = docsSlice;
   let lengthRetried = false;
   let lastAttempts = 0;
   let lastUsage = null;
@@ -66,15 +66,14 @@ export function createBuiltinChat(config, {
         });
         if (!retry) throw error;
         lengthRetried = true;
-        reasoningDisabled = docsSlice;
-        completionCap = docsSlice ? 4096 : Math.floor(current.max_tokens / 2);
+        completionCap = docsSlice ? current.max_tokens : Math.floor(current.max_tokens / 2);
         current = { ...current, max_tokens: completionCap,
           ...(reasoningDisabled ? { reasoning_effort: 'none',
             ...(usesDeepseekReasoning(config.llm) ? { chat_template_kwargs: { thinking: false } } : {}),
           } : {}),
           messages: [
           ...current.messages, { role: 'user', content:
-            (docsSlice ? 'The response was truncated. Retry without reasoning within the 4096 completion cap. '
+            (docsSlice ? 'The response was truncated. Retry without reasoning within the 512 completion cap. '
               : 'The response was truncated. Retry concisely within the smaller completion cap. ') +
             'Return complete tool calls or a complete summary; do not repeat previously executed edits.' },
         ] };

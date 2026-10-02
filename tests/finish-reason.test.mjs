@@ -17,7 +17,7 @@ const completion = (reason, content = 'Done.', usage) => Response.json({
   model: 'served-model', choices: [{ finish_reason: reason, message: { role: 'assistant', content } }], usage,
 });
 
-test('docs length retries once at 4096 without reasoning and logs the requested human line', async (t) => {
+test('docs length retries once at 512 without reasoning and logs the requested human line', async (t) => {
   const repoRoot = mkdtempSync(path.join(tmpdir(), 'roster-docs-length-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
   const docs = selectReasoning({ ...config, llm: { ...config.llm, model: 'deepseek-v4.1-flash' } },
@@ -34,16 +34,16 @@ test('docs length retries once at 4096 without reasoning and logs the requested 
     await chat({ messages: [{ role: 'user', content: 'Edit docs/guide.md.' }] });
     await chat({ messages: [{ role: 'user', content: 'Finish.' }] });
   });
-  assert.deepEqual(requests.map(({ max_tokens }) => max_tokens), [2048, 4096, 4096]);
-  assert.deepEqual(requests.map(({ reasoning_effort }) => reasoning_effort), ['low', 'none', 'none']);
-  assert.deepEqual(requests.map(({ chat_template_kwargs }) => chat_template_kwargs.thinking), [true, false, false]);
+  assert.deepEqual(requests.map(({ max_tokens }) => max_tokens), [512, 512, 512]);
+  assert.deepEqual(requests.map(({ reasoning_effort }) => reasoning_effort), ['none', 'none', 'none']);
+  assert.deepEqual(requests.map(({ chat_template_kwargs }) => chat_template_kwargs.thinking), [false, false, false]);
   assert.match(shell, /Response truncated\. Retrying without reasoning\./);
   assert.match(shell, /Drafting at none effort/);
   assert.match(readFileSync(logger.path, 'utf8'), /Response truncated\. Retrying without reasoning\./);
   assert.doesNotMatch(shell + readFileSync(logger.path, 'utf8'), /PRIVATE_BODY/);
 });
 
-test('cloud docs slices also disable reasoning on length while non-slice docs keep the existing retry', async () => {
+test('cloud docs slices disable reasoning from the first request while non-slice docs keep the existing retry', async () => {
   for (const kind of ['slice', 'feature']) {
     const selected = selectReasoning({ ...config, llm: { ...config.llm,
       base_url: 'https://example.invalid/v1' } }, { kind, taskClass: 'docs', difficulty: 1 });
@@ -53,7 +53,9 @@ test('cloud docs slices also disable reasoning on length while non-slice docs ke
       return completion(requests.length === 1 ? 'length' : 'stop');
     } });
     await chat({ messages: [{ role: 'user', content: 'Docs task.' }] });
-    assert.equal(requests[1].max_tokens, kind === 'slice' ? 4096 : 2048);
+    assert.equal(requests[0].max_tokens, kind === 'slice' ? 512 : 4096);
+    assert.equal(requests[1].max_tokens, kind === 'slice' ? 512 : 2048);
+    assert.equal(requests[0].reasoning_effort, kind === 'slice' ? 'none' : 'medium');
     assert.equal(requests[1].reasoning_effort, kind === 'slice' ? 'none' : requests[0].reasoning_effort);
   }
 });

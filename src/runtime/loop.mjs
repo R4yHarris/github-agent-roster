@@ -3,7 +3,7 @@ import { mergeUsage } from '../metrics/run.mjs';
 import { taskAndRepairFiles, toolDefinitions } from './tools.mjs';
 import { redactEvidence, taskSkipsTests } from './excellence.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
-import { applyReadmeStatus } from './readme-status.mjs';
+import { applyReadmeStatus, hasRequiredReadmeStatus } from './readme-status.mjs';
 import { ContractsSubmoduleError, onlyMissingContractsScripts } from '../lib/contracts.mjs';
 import { UnsupportedFinishReasonError } from '../llm/finish-reason.mjs';
 import { throwIfCancelled } from './cancel.mjs';
@@ -169,6 +169,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       } : tool) : definitions;
     const currentDefinitions = finalSummaryOnly && checksPassedAfterWrite ? [] : scopedDefinitions;
     let response;
+    let acceptedLateLength = false;
     try {
       response = steeringControl ? await steeringControl.request((requestSignal) =>
         chat({ messages, tools: currentDefinitions }, { signal: requestSignal }))
@@ -182,12 +183,24 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         attemptTurns = Math.max(0, attemptTurns - 1);
         continue;
       }
-      throw error;
+      if (error instanceof UnsupportedFinishReasonError && error.truncated && chat.lastAttempts === 2 &&
+          readmeOnlyDocs && checksPassedAfterWrite &&
+          await hasRequiredReadmeStatus({ task: context.task, tools })) {
+        acceptedLateLength = true;
+        usages.push(chat.lastUsage);
+        response = { finish_reason: 'stop', message: { role: 'assistant',
+          content: 'README.md already contains the required one-line Status section; task checks passed.' },
+        usage: chat.lastUsage };
+      } else {
+        throw error;
+      }
     }
-    progress.turns += chat.lastAttempts - 1;
-    progress.response = chat.lastResponse;
-    usages.push(response.usage);
-    progress.usage = mergeUsage(...usages);
+    if (!acceptedLateLength) {
+      progress.turns += chat.lastAttempts - 1;
+      progress.response = chat.lastResponse;
+      usages.push(response.usage);
+      progress.usage = mergeUsage(...usages);
+    }
     const { message, finish_reason: finishReason } = response;
     if (!message || typeof message !== 'object' || !['stop', 'tool_calls', undefined, null]
       .includes(finishReason)) {
@@ -199,9 +212,11 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       throw new Error('Coder must return a final summary without tools after green repair tests');
     }
     let calls;
-    let deterministic;
+    let deterministic = acceptedLateLength ? message.content : undefined;
     try {
-      if (finalSummaryOnly && checksPassedAfterWrite && Array.isArray(message.tool_calls) &&
+      if (acceptedLateLength) {
+        calls = [];
+      } else if (finalSummaryOnly && checksPassedAfterWrite && Array.isArray(message.tool_calls) &&
           message.tool_calls.length) {
         for (const call of message.tool_calls) {
           await onEvent?.({ type: 'tool-result', name: call?.function?.name ?? 'unknown', status: 'denied' });
