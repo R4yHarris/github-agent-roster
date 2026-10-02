@@ -21,6 +21,7 @@ import { packAgentRun } from '../vendor/github-agent-contracts/scripts/parse-age
 import { withResearchSummary } from './helpers/research.mjs';
 import { recordedCoderRun } from '../src/lib/seat-publication.mjs';
 import { createDebugLog } from '../src/lib/debug-log.mjs';
+import { readLocalRun } from '../src/lib/local-runs.mjs';
 
 function runBuiltinIssue(issue, options) {
   return runIssueWithSeats(issue, { ...options, fetchImpl: withResearchSummary(options.fetchImpl) });
@@ -176,6 +177,19 @@ test('plan mode stays PLAN-only until a human accepts and resumes the same slice
   assert.equal(second.planningOnly, undefined);
   assert.equal(existsSync(first.planPath), true);
   assert.equal(second.result.mode, 'stub');
+});
+
+test('a locally reconstructed resume handle reuses valid TASK with no planner or worktree creation', async (context) => {
+  const options = fixture(context);
+  const first = await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {} });
+  const prepared = await readLocalRun({ number: 42, cwd: options.target, config: stubConfig, env: options.env });
+  const before = options.calls.length;
+  const second = await runBuiltinIssue(42, { ...options, config: stubConfig, preparedRun: prepared, log: () => {},
+    fetchImpl: () => assert.fail('A valid stub handoff must not request a planner model') });
+  assert.equal(second.worktreePath, first.worktreePath);
+  assert.equal(second.planner.reused, true);
+  assert.equal(options.calls.slice(before).some(({ program, args }) =>
+    program === 'gh' || args[0] === 'worktree' && args[1] === 'add'), false);
 });
 
 test('roster ask writes a local draft ask, recipe, and executable task without network', async (context) => {

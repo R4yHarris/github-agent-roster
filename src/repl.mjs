@@ -43,6 +43,7 @@ import { listCheckpoints, rewindCheckpoint } from './lib/checkpoints.mjs';
 import { readPlannerTask } from './seats/planner.mjs';
 import { taskAndRepairFiles } from './runtime/tools.mjs';
 import { taskFilesAllowed } from './planner/task.mjs';
+import { listLocalRuns, readLocalRun, recapRun } from './lib/local-runs.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const unknownCommand = 'Unknown command. /help lists commands.\n';
@@ -95,6 +96,7 @@ const defaultServices = {
   formatIssueSummary, listOpenIssues, readDiffNames,
   checkDoctor, formatDoctor, warmDoctor, privateConfigPath, publicConfig,
   listCheckpoints, rewindCheckpoint, readPlannerTask,
+  listLocalRuns, readLocalRun, recapRun,
   issueCommenter: commentMergedIssue,
   publisher: publishWithContracts,
   repositoryBranch(cwd) {
@@ -310,6 +312,26 @@ export function createDispatcher({
     const command = canonicalCommand(inputCommand);
     const args = rawArguments?.trim() ?? '';
     switch (command) {
+      case 'resume': {
+        if (!args) {
+          const runs = await api.listLocalRuns({ cwd: currentRoot(), config: state.config, env });
+          if (!runs.length) output.write('No local issue runs.\n');
+          for (const run of runs) safeWrite(
+            `#${run.issue.number} | ${run.issue.title.replace(/[\x00-\x1f\x7f]/g, '?')} | ${run.seat} | ${run.state} | ${run.task}\n`);
+          return true;
+        }
+        if (!/^[1-9]\d*$/.test(args) || !Number.isSafeInteger(Number(args))) throw new TypeError('Use /resume [N].');
+        const prepared = await api.readLocalRun({ number: Number(args), cwd: currentRoot(), config: state.config, env });
+        if (prepared.planMode) {
+          const request = { kind: 'run', issue: args, options: { planMode: true }, prepared };
+          return executeRun(async () => prepared, { issue: Number(args), planMode: true }, request);
+        }
+        return runRequest({ kind: 'run', issue: args, options: {}, prepared }, { retry: true });
+      }
+      case 'recap':
+        if (args) throw new TypeError('Use /recap.');
+        safeWrite(await api.recapRun(state.lastRun, { finishReason: state.display.lastFinishReason, env }));
+        return true;
       case 'checkpoints':
       case 'rewind': {
         const run = state.lastRun;
