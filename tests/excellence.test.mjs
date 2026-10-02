@@ -42,6 +42,29 @@ test('clean fixture passes with changed scope, executed tests, and recorded mode
   assert.match(readFileSync(file, 'utf8'), /Model: local-model\nTool-loop turns: 2/);
 });
 
+test('a changed vendor submodule path fails the review even when tests pass', async (context) => {
+  const options = await fixture(context);
+  const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid',
+    '-c', 'commit.gpgsign=false', ...args], { cwd, stdio: 'pipe' });
+  const vendor = path.join(options.worktree, 'vendor', 'github-agent-contracts');
+  mkdirSync(vendor, { recursive: true });
+  git(vendor, 'init', '-q');
+  writeFileSync(path.join(vendor, 'agent-pr.mjs'), 'first\n');
+  git(vendor, 'add', '.');
+  git(vendor, 'commit', '-q', '-m', 'first');
+  git(options.worktree, 'init', '-q');
+  git(options.worktree, 'add', 'README.md', 'TASK.md', 'vendor/github-agent-contracts');
+  git(options.worktree, 'commit', '-q', '-m', 'base');
+  options.baseline = await snapshotWorktree(options.worktree);
+  writeFileSync(path.join(vendor, 'agent-pr.mjs'), 'second\n');
+  git(vendor, 'commit', '-q', '-am', 'second');
+  writeFileSync(path.join(options.worktree, 'README.md'), '# After\n');
+  const gate = await checkExcellence(options);
+  assert.equal(options.result.tests.exit_code, 0);
+  assert.equal(gate.pass, false);
+  assert.ok(gate.reasons.some((reason) => /vendor path.*vendor\/github-agent-contracts$/.test(reason)), gate.reasons.join('\n'));
+});
+
 test('secret paths and out-of-scope changes fail without reading or reporting secret values', async (context) => {
   const options = await fixture(context);
   writeFileSync(path.join(options.worktree, '.env'), 'PRIVATE=fixture-secret-value\n');

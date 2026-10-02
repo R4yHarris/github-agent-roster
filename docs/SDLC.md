@@ -183,8 +183,12 @@ roster's skills, and the last 20 memory JSONL lines. Its
 reject symlink escapes; writes must match the TASK file's allowed list and
 cannot touch `.env*`, `*.pem`, `.git`, `agent-policy.yml`,
 `.github/workflows`, the pinned contracts submodule, or the generated
-task/result files. Directory listings hide protected entries. `run_test` runs
-`node --test` in the worktree with a 60-second timeout and without the model
+task/result files. Paths with `..`, absolute paths, and `vendor/` are refused
+before any tool runs (`Refused: outside the worktree.`), and a vendor path in
+the diff fails review. Directory listings hide protected entries. `run_test` runs
+`node --test tests/repl.test.mjs` with a 60-second cap for a README-only docs
+slice, or the full `node --test` suite with a 5-minute cap otherwise, always
+without the model
 API key or App credentials. A nonzero exit returns captured stdout, stderr,
 and exit code to the coder as a failed tool result so it can correct the task
 within its turn budget; a timeout reports an explicit error. Final nonzero

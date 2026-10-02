@@ -14,6 +14,31 @@ const managedFiles = new Set(['assignment.md', 'task.md', 'recipe.yml', 'plan.md
 export class ToolAccessError extends Error {
   code = 'ROSTER_TOOL_DENIED';
 }
+export const outsideWorktreeMessage = 'Refused: outside the worktree.';
+export class OutsideWorktreeError extends ToolAccessError {
+  constructor() { super(outsideWorktreeMessage); }
+}
+export const docsTestFiles = Object.freeze(['tests/repl.test.mjs']);
+export const docsTestTimeoutMs = 60_000;
+export const fullTestTimeoutMs = 300_000;
+
+export function isOutsideWorktreePath(input) {
+  if (typeof input !== 'string') return false;
+  if (path.isAbsolute(input) || path.win32.isAbsolute(input) || /^[a-z]:/i.test(input)) return true;
+  const parts = partsOf(input).filter((part) => part && part !== '.');
+  return parts.includes('..') || parts[0] === 'vendor';
+}
+
+export function isReadmeOnlyScope(allowedFiles) {
+  return Array.isArray(allowedFiles) && allowedFiles.length === 1 && allowedFiles[0] === 'README.md';
+}
+
+export function testCommandFor(allowedFiles) {
+  return isReadmeOnlyScope(allowedFiles)
+    ? { args: ['--test', ...docsTestFiles], timeoutMs: docsTestTimeoutMs, label: `node --test ${docsTestFiles.join(' ')}` }
+    : { args: ['--test'], timeoutMs: fullTestTimeoutMs, label: 'node --test' };
+}
+
 export const plannerArtifactFiles = Object.freeze(['RECIPE.yml', 'TASK.md', 'ESTIMATE.md']);
 export const planArtifactFiles = Object.freeze(['PLAN.md']);
 
@@ -40,7 +65,7 @@ export function isForbiddenRead(file) {
 function isProtectedSurface(file) {
   const parts = partsOf(file);
   return hasAmbiguousComponents(file) || isSecret(file) || isDebugLog(file) || isShellHistory(file) || isCheckpoint(file) || isRepoMap(file) ||
-    parts.includes('.git') || parts.includes('agent-policy.yml') ||
+    parts.includes('.git') || parts.includes('agent-policy.yml') || parts[0] === 'vendor' ||
     parts.some((part, index) =>
       (part === '.github' && parts[index + 1] === 'workflows') ||
       (part === 'vendor' && parts[index + 1] === 'github-agent-contracts'));
@@ -279,6 +304,7 @@ export async function createTools({
 
   function locate(input, { directory = false, write = false } = {}) {
     throwIfCancelled(signal);
+    if (isOutsideWorktreePath(input)) throw new OutsideWorktreeError();
     if (typeof input !== 'string' || !input.trim() || input.includes('\0') ||
         path.isAbsolute(input) || path.win32.isAbsolute(input)) {
       throw new ToolAccessError('Tool path must be relative to the worktree');
@@ -290,7 +316,7 @@ export async function createTools({
     const relative = path.relative(root, file);
     if ((!directory && !relative) || relative === '..' ||
         relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-      throw new ToolAccessError('Tool path must stay inside the worktree');
+      throw new OutsideWorktreeError();
     }
     const normalized = relative.split(path.sep).join('/');
     const mapRead = !write && allowRepoMap && isRepoMap(normalized);
@@ -339,7 +365,7 @@ export async function createTools({
     const canonicalParent = await fs.realpath(path.dirname(file));
     const relative = path.relative(canonicalRoot, canonicalParent);
     if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-      throw new ToolAccessError('Tool path resolves outside the worktree');
+      throw new OutsideWorktreeError();
     }
   }
 
@@ -453,10 +479,15 @@ export async function createTools({
       const testEnv = { ...env, ROSTER_SEAT: 'coder' };
       for (const name of [apiKeyEnv, 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH',
         'GH_TOKEN', 'GITHUB_TOKEN', 'NODE_TEST_CONTEXT']) delete testEnv[name];
+      let command = testCommandFor(seat === 'coder' ? allowedFiles : []);
+      if (command.args.length > 1) {
+        const docsCheck = await fs.lstat(path.join(root, ...docsTestFiles[0].split('/'))).catch(() => null);
+        if (!docsCheck?.isFile()) command = testCommandFor([]);
+      }
       try {
         await assertContractsInitialized(root);
-        const { stdout, stderr } = await runCommand(process.execPath, ['--test'], {
-          cwd: root, timeout: 60_000, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
+        const { stdout, stderr } = await runCommand(process.execPath, command.args, {
+          cwd: root, timeout: command.timeoutMs, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
           env: testEnv, signal,
         });
         return { exit_code: 0, stdout, stderr };
@@ -467,7 +498,7 @@ export async function createTools({
           throw error;
         }
         if (error.code === 'ETIMEDOUT' || error.killed) {
-          throw new Error('node --test timed out after 60 seconds', { cause: error });
+          throw new Error(`${command.label} timed out after ${command.timeoutMs / 1000} seconds`, { cause: error });
         }
         if (typeof error.code === 'number') {
           const result = { exit_code: error.code, stdout: error.stdout ?? '', stderr: error.stderr ?? '' };
@@ -525,12 +556,21 @@ export async function createTools({
       return { matches: matches.slice(0, 50), truncated: matches.length > 50 };
     },
   };
+  const guarded = Object.fromEntries(Object.entries(tools).map(([name, execute]) => [name, async (args) => {
+    if (isOutsideWorktreePath(args?.path)) throw new OutsideWorktreeError();
+    return execute(args);
+  }]));
   const selected = seat === 'planner' ? plannerReads
-    ? { read_file: tools.read_file, list_dir: tools.list_dir, search_text: tools.search_text, write_file: tools.write_file }
-    : { write_file: tools.write_file } : tools;
+    ? { read_file: guarded.read_file, list_dir: guarded.list_dir, search_text: guarded.search_text, write_file: guarded.write_file }
+    : { write_file: guarded.write_file } : guarded;
   if (!onEvent) return selected;
   return Object.fromEntries(Object.entries(selected).map(([name, execute]) => [name, async (args) => {
     const location = args?.path ?? (['list_dir', 'search_text'].includes(name) ? '.' : undefined);
+    if (isOutsideWorktreePath(location)) {
+      await onEvent({ type: 'tool-refused', name });
+      await onEvent({ type: 'tool-result', name, path: location, status: 'denied' });
+      throw new OutsideWorktreeError();
+    }
     await onEvent({ type: 'tool', name, ...(location === undefined ? {} : { path: location }) });
     let result;
     try {

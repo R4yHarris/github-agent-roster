@@ -14,6 +14,11 @@ function fixture(context) {
   return worktree;
 }
 
+function docsCheck(worktree) {
+  mkdirSync(path.join(worktree, 'tests'), { recursive: true });
+  writeFileSync(path.join(worktree, 'tests', 'repl.test.mjs'), '');
+}
+
 test('every slice denies out-of-scope file reads, including fixtures and harness sources', async (context) => {
   const worktree = fixture(context);
   mkdirSync(path.join(worktree, 'docs'));
@@ -53,7 +58,7 @@ test('a real failed node test grants only its regular failing-test file for repa
     "test('broken', () => assert.equal(1, 2));\n");
   writeFileSync(path.join(worktree, 'tests', 'unrelated.test.mjs'),
     "import test from 'node:test';\ntest('unrelated', () => {});\n");
-  const tools = await createTools({ worktree, allowedFiles: ['README.md'], sliceReadsOnly: true });
+  const tools = await createTools({ worktree, allowedFiles: ['src/app.mjs'], sliceReadsOnly: true });
   await assert.rejects(tools.read_file({ path: failing }), /not allowed/);
   const failed = await tools.run_test();
   assert.equal(failed.exit_code, 1);
@@ -67,6 +72,7 @@ test('a real failed node test grants only its regular failing-test file for repa
 
 test('a killed test process with numeric exit 1 is a terminal timeout, not a repairable check', async (context) => {
   const worktree = fixture(context);
+  docsCheck(worktree);
   const tools = await createTools({ worktree, allowedFiles: ['README.md'],
     runCommand: async () => { throw Object.assign(new Error('killed'), {
       code: 1, killed: true, stdout: 'not ok', stderr: '',
@@ -88,10 +94,10 @@ test('limits reading, writing, and listing to worktree files allowed by TASK.md'
     'nested/.env.local', 'key.pem', 'src/agent-policy.yml', '.github/workflows/build.yml',
     '.git/config', 'TASK.md', 'ASSIGNMENT.md', 'RESULT.md', 'REVIEW.md',
     'RECIPE.yml', 'ESTIMATE.md', '.roster/evals.jsonl']) {
-    await assert.rejects(tools.write_file({ path: file, content: 'bad' }), /relative|inside|secret|not allowed/i, file);
+    await assert.rejects(tools.write_file({ path: file, content: 'bad' }), /relative|inside|outside the worktree|secret|not allowed/i, file);
   }
   await assert.rejects(tools.read_file({ path: '.env' }), /secrets/);
-  await assert.rejects(tools.read_file({ path: '../outside.md' }), /inside/);
+  await assert.rejects(tools.read_file({ path: '../outside.md' }), /Refused: outside the worktree/);
   await assert.rejects(tools.write_file({ path: 'README.md', content: 42 }), /must be text/);
   await assert.rejects(tools.read_file({ path: 'README.md', ignored: true }), /Tool arguments/);
   assert.equal(isForbiddenWrite('other/.github/workflows/ci.yml'), true);
@@ -130,19 +136,19 @@ test('list_dir hides protected entries and refuses their paths while writes stay
   }
   const tools = await createTools({ worktree, allowedFiles: ['**/*'] });
   assert.deepEqual((await tools.list_dir({ path: '.' })).map(({ name }) => name),
-    ['.github', 'README.md', 'src', 'vendor']);
+    ['.github', 'README.md', 'src']);
   assert.deepEqual((await tools.list_dir({ path: '.github' })).map(({ name }) => name), []);
-  assert.deepEqual((await tools.list_dir({ path: 'vendor' })).map(({ name }) => name), []);
+  await assert.rejects(tools.list_dir({ path: 'vendor' }), /Refused: outside the worktree/);
   assert.deepEqual((await tools.list_dir({ path: 'src' })).map(({ name }) => name), []);
   for (const file of ['..', path.dirname(worktree), '.env', 'agent-policy.yml',
     '.github/workflows', 'src/key.pem', 'src/.env.private', 'src/agent-policy.yml',
     'vendor/github-agent-contracts']) {
     await assert.rejects(tools.list_dir({ path: file }),
-      /relative|inside|secrets|Listing protected/i, file);
+      /relative|inside|outside the worktree|secrets|Listing protected/i, file);
   }
   for (const file of ['agent-policy.yml', '.github/workflows/ci.yml',
     'vendor/github-agent-contracts/checker.mjs', 'src/key.pem', 'src/agent-policy.yml']) {
-    await assert.rejects(tools.write_file({ path: file, content: 'changed' }), /not allowed|secrets/);
+    await assert.rejects(tools.write_file({ path: file, content: 'changed' }), /not allowed|secrets|outside the worktree/);
     assert.equal(readFileSync(path.join(worktree, file), 'utf8'), 'protected');
   }
   assert.equal(isForbiddenWrite('vendor/github-agent-contracts/scripts/agent-pr.mjs'), true);
@@ -174,8 +180,9 @@ test('refuses symlink paths rather than following them out of the worktree', asy
   assert.equal(readFileSync(outside, 'utf8'), 'outside');
 });
 
-test('run_test uses node --test with a 60s timeout and strips API and GitHub credentials', async (context) => {
+test('a README-only task runs only the shell test file with a 60s cap and strips credentials', async (context) => {
   const worktree = fixture(context);
+  docsCheck(worktree);
   let options;
   const tools = await createTools({
     worktree, allowedFiles: ['README.md'], apiKeyEnv: 'CUSTOM_KEY',
@@ -184,7 +191,7 @@ test('run_test uses node --test with a 60s timeout and strips API and GitHub cre
       GITHUB_APP_ID: '1', GITHUB_APP_PRIVATE_KEY_PATH: 'key.pem' },
     runCommand: async (program, args, received) => {
       assert.equal(program, process.execPath);
-      assert.deepEqual(args, ['--test']);
+      assert.deepEqual(args, ['--test', 'tests/repl.test.mjs'], 'README-only tasks must not spawn the full suite');
       options = received;
       return { stdout: 'tests pass', stderr: '' };
     },
@@ -209,7 +216,48 @@ test('run_test uses node --test with a 60s timeout and strips API and GitHub cre
   });
   const timedOut = await createTools({ worktree, allowedFiles: ['README.md'],
     runCommand: async () => { throw Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }); } });
-  await assert.rejects(timedOut.run_test(), /timed out after 60 seconds/);
+  await assert.rejects(timedOut.run_test(), /node --test tests\/repl\.test\.mjs timed out after 60 seconds/);
+});
+
+test('a code slice keeps the full suite with a 5 minute cap', async (context) => {
+  const worktree = fixture(context);
+  docsCheck(worktree);
+  let received;
+  const tools = await createTools({ worktree, allowedFiles: ['src/**'],
+    runCommand: async (_program, args, options) => { received = { args, timeout: options.timeout }; return { stdout: '', stderr: '' }; } });
+  await tools.run_test();
+  assert.deepEqual(received, { args: ['--test'], timeout: 300_000 });
+  const otherRepo = fixture(context);
+  const fallback = await createTools({ worktree: otherRepo, allowedFiles: ['README.md'],
+    runCommand: async (_program, args, options) => { received = { args, timeout: options.timeout }; return { stdout: '', stderr: '' }; } });
+  await fallback.run_test();
+  assert.deepEqual(received, { args: ['--test'], timeout: 300_000 }, 'a repo without the shell test keeps its full suite');
+  const timedOut = await createTools({ worktree, allowedFiles: ['src/**'],
+    runCommand: async () => { throw Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }); } });
+  await assert.rejects(timedOut.run_test(), /^Error: node --test timed out after 300 seconds$/m);
+});
+
+test('every tool refuses "..", vendor, and absolute paths before it runs', async (context) => {
+  const worktree = fixture(context);
+  mkdirSync(path.join(worktree, 'vendor', 'github-agent-contracts', 'scripts'), { recursive: true });
+  writeFileSync(path.join(worktree, 'vendor', 'github-agent-contracts', 'scripts', 'agent-pr.mjs'), '');
+  const events = [];
+  for (const options of [{ allowedFiles: ['**/*'] }, { allowedFiles: ['README.md'], readmeOnlyDocs: true },
+    { allowedFiles: ['**/*'], onEvent: async (event) => { events.push(event); } }]) {
+    const tools = await createTools({ worktree, ...options });
+    for (const target of ['..', '../outside', 'src/../../x', 'vendor', './vendor/github-agent-contracts',
+      'Vendor\\x', path.join(worktree, 'README.md'), 'C:/Windows']) {
+      await assert.rejects(tools.list_dir({ path: target }), /Refused: outside the worktree\.$/);
+      await assert.rejects(tools.read_file({ path: target }), /Refused: outside the worktree\.$/);
+      await assert.rejects(tools.write_file({ path: target, content: 'x' }), /Refused: outside the worktree\.$/);
+      await assert.rejects(tools.search_text({ path: target, query: 'x' }), /Refused: outside the worktree\.$/);
+    }
+  }
+  assert.ok(events.length > 0);
+  assert.ok(events.every((event) => event.type !== 'tool'), 'a refused path must not start the tool');
+  assert.ok(events.some((event) => event.type === 'tool-refused' && event.name === 'list_dir'));
+  const listed = await (await createTools({ worktree, allowedFiles: ['**/*'] })).list_dir({ path: '.' });
+  assert.ok(!listed.some(({ name }) => name === 'vendor'), 'vendor must not appear in a listing');
 });
 
 test('a disabled run_test permission refuses execution even for direct harness calls', async (context) => {
@@ -230,7 +278,7 @@ test('run_test actually executes Node tests from the worktree', async (context) 
     "import test from 'node:test';\nimport assert from 'node:assert/strict';\n" +
     "import { writeFileSync } from 'node:fs';\n" +
     "test('example', () => { assert.equal(2 + 2, 4); writeFileSync('ran-marker.txt', 'yes'); });\n");
-  const tools = await createTools({ worktree, allowedFiles: ['README.md'] });
+  const tools = await createTools({ worktree, allowedFiles: ['example.mjs'] });
   const result = await tools.run_test();
   assert.equal(result.exit_code, 0, result.stderr);
   assert.equal(readFileSync(path.join(worktree, 'ran-marker.txt'), 'utf8'), 'yes');
@@ -246,8 +294,8 @@ test('exactly five tools deny protected reads and Windows alias or stream paths'
     'agent-policy.yml', '.github/workflows/build.yml', '.git/config',
     '.roster/vault/.key', 'vendor/github-agent-contracts/scripts/agent-pr.mjs']) {
     assert.equal(isForbiddenRead(file), true, file);
-    await assert.rejects(tools.read_file({ path: file }), /secrets/, file);
-    await assert.rejects(tools.search_text({ query: 'secret', path: file }), /secrets/, file);
+    await assert.rejects(tools.read_file({ path: file }), /secrets|outside the worktree/, file);
+    await assert.rejects(tools.search_text({ query: 'secret', path: file }), /secrets|outside the worktree/, file);
   }
   for (const file of ['.env ', 'key.pem.', 'key.pem::$DATA', '.git:metadata',
     'src/agent-policy.yml.', 'src/file.mjs:stream']) {
@@ -255,7 +303,7 @@ test('exactly five tools deny protected reads and Windows alias or stream paths'
     await assert.rejects(tools.write_file({ path: file, content: 'bad' }),
       /ambiguous Windows|data streams/, file);
   }
-  await assert.rejects(tools.search_text({ query: 'secret', path: '../outside' }), /inside/);
+  await assert.rejects(tools.search_text({ query: 'secret', path: '../outside' }), /Refused: outside the worktree/);
 });
 
 test('literal search caps results at fifty lines and never shells out or reveals protected bodies', async (context) => {

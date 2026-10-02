@@ -35,7 +35,7 @@ test('planner never writes app code, paths outside root, protected files, or oth
     '.env', 'agent-policy.yml', '.github/workflows/ci.yml', 'vendor/github-agent-contracts/x.mjs',
     'REVIEW.md', 'RESULT.md', 'ASSIGNMENT.md', '.roster/evals.jsonl']) {
     await assert.rejects(tools.write_file({ path: file, content: 'bad' }),
-      /Planner write_file|relative|inside|ambiguous/, file);
+      /Planner write_file|relative|inside|outside the worktree|ambiguous/, file);
   }
   assert.equal(existsSync(path.join(worktree, 'src')), false);
   assert.equal(existsSync(path.join(worktree, '.github')), false);
