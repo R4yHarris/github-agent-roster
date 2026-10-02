@@ -161,7 +161,7 @@ test('planning-only writer can write PLAN.md, never TASK/recipe/app code, and co
   t.after(() => rmSync(worktree, { recursive: true, force: true }));
   const tools = await createTools({ worktree, seat: 'planner', plannerArtifacts: ['PLAN.md'] });
   for (const name of ['TASK.md', 'RECIPE.yml', 'ESTIMATE.md', 'README.md', 'src/code.mjs', '../PLAN.md', '.\\PLAN.md']) {
-    await assert.rejects(tools.write_file({ path: name, content: 'denied' }), /Planner write_file|inside/);
+    await assert.rejects(tools.write_file({ path: name, content: 'denied' }), /Planner write_file|inside|outside the worktree/);
   }
   assert.equal(existsSync(path.join(worktree, 'src')), false);
   await tools.write_file({ path: 'PLAN.md', content: '# Plan\n' });

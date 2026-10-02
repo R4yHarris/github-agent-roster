@@ -43,7 +43,7 @@ test('a length finish and refused vendor list record only selected reason and pa
     await onEvent({ type: 'finish-reason', reason: 'length', retry: true, completion: 'PRIVATE_COMPLETION' });
     const tools = await createTools({ worktree: repoRoot, allowedFiles: ['README.md'],
       readmeOnlyDocs: true, onEvent });
-    await assert.rejects(tools.list_dir({ path: 'vendor/private-directory' }), /does not allow directory listing/);
+    await assert.rejects(tools.list_dir({ path: 'vendor/private-directory' }), /Refused: outside the worktree\.$/);
     return {};
   });
   const text = readFileSync(debug.path, 'utf8');
@@ -56,7 +56,8 @@ test('a length finish and refused vendor list record only selected reason and pa
   assert.equal(denied.seat, 'coder');
   assert.doesNotMatch(text, /PRIVATE_COMPLETION|private-directory|"path":|"completion":/);
   assert.doesNotMatch(shell, /"time":|"path_class":/);
-  assert.equal(shell.split('\n').filter((line) => line.includes('Listing')).length, 1);
+  assert.equal(shell.split('\n').filter((line) => line.includes('Listing')).length, 0);
+  assert.equal(shell.split('\n').filter((line) => line === 'Refused: outside the worktree.').length, 1);
   assert.ok(rows.every((row) => Number.isInteger(row.elapsed_ms) && row.elapsed_ms >= 0));
 });
 

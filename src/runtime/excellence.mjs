@@ -118,6 +118,10 @@ export async function checkExcellence({
     .filter((file) => baseline.get(file) !== current.get(file)) : [];
   const files = [...new Set([...changed, ...git.files])].sort();
   for (const file of files) {
+    if (file.replaceAll('\\', '/').split('/')[0].toLowerCase() === 'vendor') {
+      reasons.push(`Diff touches a vendor path, which the coder must never change: ${file}`);
+      continue;
+    }
     if (isForbiddenWrite(file) || !isAllowedFile(file, allowed)) {
       reasons.push(`Diff path is protected or outside TASK.md allowed paths: ${file}`);
       continue;

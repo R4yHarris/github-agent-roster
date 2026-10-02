@@ -85,6 +85,7 @@ export async function createRunLog({
       ? event.withoutReasoning ? 'Response truncated. Retrying without reasoning.' : 'Response truncated. Retrying.'
       : `Unsupported LLM finish reason: ${safe(event.reason)}.`;
     if (event.type === 'contracts-uninitialized') return 'Contracts submodule was not initialized';
+    if (event.type === 'tool-refused') return 'Refused: outside the worktree.';
     if (event.type === 'test-repair') return `Tests failed. Repair ${event.attempt} of ${event.budget}.`;
     if (event.type === 'http' && event.phase === 'start') {
       return name === 'coder' && event.effort
@@ -122,6 +123,9 @@ export async function createRunLog({
           (event.retry ? event.withoutReasoning
             ? ' Response truncated. Retrying without reasoning.' : ' Response truncated. Retrying.' : '');
       case 'contracts-uninitialized': return 'contracts submodule uninitialized';
+      case 'tool-refused':
+        if (!tools.includes(event.name)) throw new TypeError('Invalid live tool refusal event');
+        return `tool refused ${event.name} outside-worktree`;
       case 'test-repair':
         if (event.budget !== 4 || !Number.isInteger(event.attempt) || event.attempt < 1 || event.attempt > event.budget) {
           throw new TypeError('Invalid live test repair event');
@@ -281,6 +285,7 @@ export async function readLastRunLog({
     const parsed = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z (?:start seat|seat) (planner|coder|reviewer) (.+)$/.exec(lastLine);
     const metadata = /^(?:session=[A-Za-z0-9._[\]-]{1,128}|model="(?:[^"\\]|\\.)*" host="(?:[^"\\]|\\.)*"|mode (?:stub|llm)|waiting host=[A-Za-z0-9.:[\]-]{1,255} elapsed=\d+s(?: cold-start up to 15m)?|The LLM request timed out after \d+(?:\.\d+)?s at host=[A-Za-z0-9.:[\]-]{1,255}\. (?:Cold-start: the host may still be warming; Spark\/SGLang can take up to 15m\. )?This is an endpoint timeout, not a bad TASK\. (?:Retry: (?:roster run --issue [1-9]\d*(?: --auto-model)?|roster run --seat coder --runtime builtin|roster doctor --warm)|Retry the same request\.)|implementation (?:model|deterministic-readme)|http chat\.completions (?:start|ok status=2\d\d|error(?: status=[1-5]\d\d)? class=(?:authentication|network|timeout|http|response|abort))|tool (?:read_file|write_file|list_dir|run_test|search_text)(?: path="(?:[^"\\]|\\.)*")?|wrote (?:RECIPE\.yml|TASK\.md|PLAN\.md|ESTIMATE\.md|RESULT\.md|REVIEW\.md)|error class=(?:Error|TypeError|RangeError|AbortError|RunLogError)|elapsed_ms=\d+ mode=(?:stub|llm))$/;
     const validMetadata = (value) => metadata.test(value) || value === 'steering coder' ||
+      /^tool refused (?:read_file|write_file|list_dir|run_test|search_text) outside-worktree$/.test(value) ||
       /^completion finish_reason=(?:null|"stop"|"tool_calls")$/.test(value);
     if (!parsed || !validMetadata(parsed[2]) || /[\x00-\x1f\x7f]/.test(lastLine) ||
         Buffer.byteLength(lastLine) > maximumLineBytes) {
