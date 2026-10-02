@@ -37,7 +37,10 @@ issue and elapsed fields. Values are
 white, waiting and warnings are bright yellow, failures bright red and passes
 bright green; no other colours, dim text or emoji are used. The rail repaints on
 seat, tool and test events without a keypress, and redraws preserve Ctrl+C,
-history keys and Tab. `/statusbar off` removes both rules and the rail for this
+history keys and Tab. A redraw pauses readline, repaints only the two rules,
+the rail and the debug detail, and leaves the input row to readline, so a tick
+never joins the rule to a half-typed command or consumes typed characters.
+`/statusbar off` removes both rules and the rail for this
 process and leaves the plain prompt.
 
 Seat events reach the screen through one synchronous sink shared by the runtime
