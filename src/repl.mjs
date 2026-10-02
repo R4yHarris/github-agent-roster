@@ -47,6 +47,7 @@ import { listLocalRuns, readLocalRun, recapRun } from './lib/local-runs.mjs';
 import { askSideQuestion } from './lib/side-question.mjs';
 import { formatContext } from './shell/context.mjs';
 import { listIssueWorktrees } from './lib/worktrees.mjs';
+import { runOnlyReview } from './lib/review.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const unknownCommand = 'Unknown command. /help lists commands.\n';
@@ -102,6 +103,7 @@ const defaultServices = {
   listLocalRuns, readLocalRun, recapRun,
   askSideQuestion,
   listIssueWorktrees,
+  runOnlyReview,
   issueCommenter: commentMergedIssue,
   publisher: publishWithContracts,
   repositoryBranch(cwd) {
@@ -329,6 +331,35 @@ export function createDispatcher({
     const command = canonicalCommand(inputCommand);
     const args = rawArguments?.trim() ?? '';
     switch (command) {
+      case 'review': {
+        if (args && args !== '--again') throw new TypeError('Use /review [--again].');
+        if (state.controller !== null) throw new Error('Stop the active seat before starting an explicit review.');
+        const controller = new AbortController();
+        state.controller = controller;
+        state.display.busy = true;
+        state.display.seat = 'reviewer';
+        state.display.state = 'reviewing';
+        notify();
+        try {
+          state.lastRun = await api.runOnlyReview(state.lastRun, { repoRoot, config: state.config, env,
+            again: args === '--again', signal: controller.signal, onRunEvent: receiveEvent,
+            debug: state.debug, errorOutput });
+          state.display.review = state.lastRun.review.verdict;
+          state.display.state = state.lastRun.review.verdict === 'pass' ? 'passed' : 'failed';
+          output.write(`Review: ${state.lastRun.review.verdict}. ${state.lastRun.review.verdict === 'fail'
+            ? 'Publication is blocked unless /publish --skip-review is explicit.' : 'Read-only review complete.'}\n`);
+        } catch (error) {
+          state.display.state = isRunCancelled(error) ? 'idle' : 'failed';
+          state.display.review = null;
+          if (state.lastRun) state.lastRun = { ...state.lastRun, review: null };
+          throw error;
+        } finally {
+          state.controller = null;
+          state.display.busy = false;
+          notify();
+        }
+        return true;
+      }
       case 'worktrees': {
         if (args) throw new TypeError('Use /worktrees.');
         const worktrees = await api.listIssueWorktrees({ cwd: currentRoot(), env });

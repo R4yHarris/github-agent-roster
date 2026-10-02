@@ -35,6 +35,8 @@ export const commands = Object.freeze([
     'Publish reviewed changes only through the GitHub App SDK.', '/publish feat: add status --model GPT-6.1-Sol',
     ['--model MODEL: actual publishing model; measured seat metadata wins',
       '--skip-review: if review failed, explicitly bypass that verdict only, not tests or policy']),
+  page('review', 'Ask', '/review [--again]', 'Run only the read-only reviewer on current verified task/diff evidence. It writes REVIEW.md, never product code. Failed review blocks publication.',
+    '/review --again', ['--again: archive an existing managed report and rerun the current diff']),
   page('model', 'Model', '/model [ID|clear] [--save]', 'Show model and host; select for this session unless --save is explicit.',
     '/model deepseek-v4.1-flash --save', ['--save: write the private model setting']),
   page('effort', 'Model', '/effort [l|m|h|x|none|status]', 'Select session effort without writing config; docs cap at high and length retries drop reasoning.', '/effort l'),
