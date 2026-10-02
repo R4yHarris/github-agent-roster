@@ -993,6 +993,7 @@ export async function startRepl({
   let suppressEcho = false;
   const handledLines = [];
   const sideRequests = new Set();
+  let exitCode = 0;
   const terminalOutput = new Writable({
     write(chunk, encoding, callback) {
       if (!suppressEcho && state.pendingSecret === null) output.write(chunk, encoding);
@@ -1009,7 +1010,11 @@ export async function startRepl({
     transcript = createTranscript({ write: (text, writeOptions) => tray.write(text, output, writeOptions) });
     state.transcript = transcript;
   }
-  shell.on('SIGINT', () => { if (!cancel()) shell.close(); });
+  shell.on('SIGINT', () => {
+    if (cancel()) return;
+    exitCode = 130;
+    shell.close();
+  });
   shell.on('close', () => { cancel(); question?.reject(new RunCancelledError()); question = null; });
   shell.on('history', (entries) => {
     const secret = suppressEcho || state.pendingSecret !== null || state.pendingQuestion;
@@ -1051,7 +1056,6 @@ export async function startRepl({
   });
   if (tray) { await tray.banner(); tray.render(); }
   else { output.write(`${banner}\n`); shell.setPrompt('roster> '); shell.prompt(); }
-  let exitCode = 0;
   try {
     for await (const line of shell) {
       if (handledLines.shift()) continue;

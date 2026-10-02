@@ -38,8 +38,11 @@ white, waiting and warnings are bright yellow, failures bright red and passes
 bright green; no other colours, dim text or emoji are used. The rail repaints on
 seat, tool and test events without a keypress, and redraws preserve Ctrl+C,
 history keys and Tab. A redraw pauses readline, repaints only the two rules,
-the rail and the debug detail, and leaves the input row to readline, so a tick
-never joins the rule to a half-typed command or consumes typed characters.
+the rail and the debug detail, flushes stdout and calls `prompt(true)` before
+returning. Every transcript append follows the same pause, write, flush and
+prompt sequence. The input row remains owned by readline, so a one-second tick
+needs no key event and never joins the rule to a half-typed command or consumes
+typed characters.
 `/statusbar off` removes both rules and the rail for this
 process and leaves the plain prompt.
 
@@ -109,7 +112,7 @@ agents and CI.
 | `/help` or `/` | Show the six command groups: Session, Ask, Model, Board, Human, Settings. |
 | `/help GROUP` | List one group's commands, for example `/help Session` or `/help Board`. |
 | `/help COMMAND` | Show usage, aliases, flags and one example, for example `/help run`. Lowercase command names win; `/help Model` selects the Model group. |
-| `/quit` or `/q` or `exit` | Exit with status 0. Ctrl+C cancels an active run; a second interrupt or idle Ctrl+C exits. |
+| `/quit` or `/q` or `exit` | Exit with status 0. Ctrl+C cancels an active run; a second interrupt or idle Ctrl+C exits with status 130. |
 
 ## Keys and history
 
@@ -151,10 +154,11 @@ History is a protected harness artifact, not a coder-readable source file.
 
 Tab completes slash commands from the shared registry; a second Tab lists
 matches. Ctrl+C aborts the active seat/model request/test process and returns
-to the prompt. A second Ctrl+C, Ctrl+D on an empty input, `/quit`, `/q`, or
-`exit` exits with status 0. A cancelled task cannot be published as completed
-work. `/redraw` repaints the rail without clearing scrollback; `/clear` clears
-the screen and repaints it. No extra terminal dependency is used.
+to the prompt. A second Ctrl+C or Ctrl+C while idle exits with status 130.
+Ctrl+D on an empty input, `/quit`, `/q`, and `exit` exit with status 0. A
+cancelled task cannot be published as completed work. `/redraw` repaints the
+rail without clearing scrollback; `/clear` clears the screen and repaints it.
+No extra terminal dependency is used.
 
 Unknown commands print `Unknown command. /help lists commands.` and leave the
 prompt open without running a seat. Every registered command has a help page;
