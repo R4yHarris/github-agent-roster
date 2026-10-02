@@ -186,6 +186,7 @@ export async function runReviewer({
       lastResponse = chat.lastResponse;
       if (!['stop', null, undefined].includes(response.finish_reason) ||
           response.message?.tool_calls !== undefined ||
+          response.message?.function_call !== undefined ||
           typeof response.message?.content !== 'string') {
         throw new Error('Reviewer cannot request tools or omit its structured response');
       }
