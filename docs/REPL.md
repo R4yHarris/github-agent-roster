@@ -10,6 +10,8 @@ are white, and a bright-cyan `*` marks busy seats. Failed reviews are bright red
 and passes are bright green. Bars repaint on seat/test
 events without exposing model prompts or completions. Narrow terminals drop
 elapsed time, then host. `/statusbar on|off` toggles both bars for this process.
+Status and waiting lines, the busy mark, and elapsed time repaint immediately
+without requiring a keypress; redraws preserve Ctrl+C, history keys, and Tab.
 `--help` still prints the existing CLI usage and exits 0; empty arguments
 with non-TTY stdin print that usage and exit 2. Flags remain available for
 agents and CI.
