@@ -86,11 +86,53 @@ test('usage updates the rail and /usage without printing a transcript line or an
   const panel = formatUsage(display, null);
   assert.match(panel, /Prompt tokens: -\nCompletion tokens: -\nContext max: -/);
   assert.match(panel, /Thinking: disabled\nMax completion tokens: 512/);
-  assert.equal(stripVTControlCharacters(formatTray(display, { color: false }).rail).includes('[----------]'), true);
+  assert.equal(stripVTControlCharacters(formatTray(display, { color: false }).rail).includes('- / -'), true);
   paint({ kind: 'usage', input: 524288, output: 40, contextMax: 1048576, finishReason: 'stop' });
-  assert.match(stripVTControlCharacters(formatTray(display, { color: false, now: 0 }).rail), /\[#####-----\]/);
+  assert.match(stripVTControlCharacters(formatTray(display, { color: false, now: 0 }).rail),
+    /\[#####-----\] 524\.3k \/ 1\.0m/);
   assert.match(formatUsage(display, null), /Prompt tokens: 524288\nCompletion tokens: 40/);
   assert.equal(written.length, 0);
+});
+
+test('a planner run through the log writes one line per event and no old sentences', async () => {
+  const { mkdtempSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { createRunLog } = await import('../src/lib/run-log.mjs');
+  const repoRoot = mkdtempSync(join(tmpdir(), 'roster-one-writer-'));
+  try {
+    const written = [];
+    let shell = '';
+    const transcript = createTranscript({ write: (text) => written.push(text.trimEnd()), color: false });
+    const sink = createEventSink({ emit: createShellPainter({ transcript }), issue: () => 108, clock: () => 0 });
+    const logger = await createRunLog({ repoRoot, session: 'roster-108-planner', env: {},
+      errorOutput: { write(text) { shell += text; } }, observe: (event) => sink.receive(event) });
+    await logger.seat('planner', 'roster-108-planner', config, async (onEvent) => {
+      await onEvent({ type: 'tool', name: 'write_file', path: 'TASK.md' });
+      await onEvent({ type: 'wrote', path: 'TASK.md' });
+      await onEvent({ type: 'waiting', host: 'localhost:8000', local: true, elapsedSeconds: 45 });
+      await onEvent({ type: 'waiting', host: 'localhost:8000', local: true, elapsedSeconds: 46 });
+      return { mode: 'stub', verdict: 'pass' };
+    });
+    sink.flush();
+    assert.equal(shell, '');
+    assert.deepEqual(written, [
+      '#108 plan',
+      'write_file TASK.md',
+      'waiting \u00b7 45s \u00b7 local hardware can take minutes after idle',
+      'waiting \u00b7 46s \u00b7 local hardware can take minutes after idle',
+      '#108 plan \u00b7 pass \u00b7 TASK.md',
+    ]);
+    const log = readFileSync(join(repoRoot, '.roster', 'runs', 'roster-108-planner.log'), 'utf8');
+    assert.match(log, /seat planner tool write_file path="TASK\.md"/);
+    for (const sentence of ['Writing the plan', 'Saving TASK.md.', 'Still waiting on the model',
+      'Drafting the change', 'Drafting at', 'before editing', 'Listing ']) {
+      assert.ok(!shell.includes(sentence), sentence);
+      assert.ok(!written.join('\n').includes(sentence), sentence);
+    }
+  } finally {
+    rmSync(repoRoot, { recursive: true, force: true });
+  }
 });
 
 test('debug prints the thinking flag and completion cap under the rail, never in the prompt', () => {

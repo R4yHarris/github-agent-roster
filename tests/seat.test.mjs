@@ -95,9 +95,8 @@ test('configured standalone logging does not become an app diff or opt into JSON
   assert.deepEqual(result.result.excellence.files, ['README.md']);
   const liveLog = readFileSync(result.logPath, 'utf8');
   assert.notEqual(liveLog, stderr);
-  assert.match(stderr, /^Saving README\.md\.$/m);
-  assert.match(liveLog, /seat coder tool write_file path="README\.md"/);
-  assert.match(liveLog, /seat coder http chat\.completions ok status=200/);
+  assert.doesNotMatch(stderr, /Saving README\.md\./);
+  assert.match(liveLog, /seat coder tool write_file path="README\.md"/);  assert.match(liveLog, /seat coder http chat\.completions ok status=200/);
   assert.match(liveLog, /model="config-model" host="localhost:3456"/);
   assert.doesNotMatch(stderr, /http chat|model=|host=|elapsed_ms=|\d{4}-\d\d-\d\dT/);
   assert.doesNotMatch(stderr, /PRIVATE_|test-only-live-key|# Before|## Status/);
@@ -147,8 +146,7 @@ test('the exact standalone CLI command consumes TASK.md in cwd with no GitHub de
   assert.match(result.stdout, /Mode: stub/);
   assert.match(result.stdout, /CONTEXT: .+CONTEXT\.md/);
   assert.doesNotMatch(result.stdout, /RESEARCH:|undefined/);
-  assert.match(result.stderr, /^Preparing the task summary\.$/m);
-  assert.match(result.stderr, /^Checking the diff against the task\.$/m);
+  assert.doesNotMatch(result.stderr, /Preparing the task summary\.|Checking the diff against the task\./);
   assert.doesNotMatch(result.stderr, /\d{4}-\d\d-\d\dT|start seat|mode stub/);
   const liveLog = readFileSync(path.join(options.worktree, '.roster', 'runs', 'single-seat-test.log'), 'utf8');
   assert.notEqual(liveLog, result.stderr);

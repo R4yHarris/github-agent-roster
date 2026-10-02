@@ -156,8 +156,9 @@ Live `.roster/runs/*.log` files are managed and write-protected too, and their
 append-only activity is excluded from verification and publication diffs.
 Run logging records only the tool name and requested path, never arguments
 containing file bodies, search queries, tool results, or test output.
-The shell stderr projection is a single human action per tool event, such as
-`Reading README.md before editing.`, `Saving README.md.`, or `Running tests.`
+The shell projection is a single transcript line per tool event, such as
+`read_file README.md`, `write_file README.md` or `run_test`, collapsed with a
+count when the same tool repeats on the same target.
 Paths remain redacted and single-line. Timestamped tool/HTTP/model metadata
 stays in the run log, not the live stderr status. No additional work is
 scheduled by status reporting.

@@ -5,7 +5,11 @@ after [installing it](INSTALL.md). The screen has three regions.
 
 The **banner** prints once at startup: the product and its version, then
 `node MAJOR · SHELL · WORKTREE · BRANCH`, then `endpoint STATE · MODEL · HOST`,
-then `contracts VERSION · update STATE · warnings COUNT`. Each fact is checked
+then `contracts VERSION · update STATE · warnings COUNT`. The version comes from
+`package.json` unless it is the `0.0.0` placeholder, in which case the roster
+checkout is described from Git instead. A configured `base_url` prints
+`endpoint configured`, a successful probe prints `endpoint ok` and a failed
+reachability check prints `endpoint down`, never a dash. Each fact is checked
 separately, an unknown fact prints `-` rather than a guess, and every failed
 check adds its own bright-yellow line without stopping startup. The release and
 endpoint probes are opt-in (`ROSTER_BANNER_CHECKS=on`) and time out after one
@@ -20,13 +24,16 @@ completions and file bodies are never printed.
 
 The **rail** is pinned between two bright-cyan rules directly above the
 bright-cyan `roster> ` prompt, for example
-`#108 draft │ ds-v4.1 l │ [----------] │ 7m26s`. It carries the issue and
-phase, the short model with its effort letter, a ten-cell context bar and
-elapsed time; an idle session shows `idle` and `-`. The bar stays empty while
-usage is unknown and is green under 50%, yellow to 80%, orange to 95% and red
-at or above 95%. A failed seat turns the first field red and replaces elapsed
-with the finish reason, and `/debug on` adds a trailing `*`. Narrow terminals
-drop the bar, then the model, keeping the issue and elapsed fields. Values are
+`#108 draft │ deepseek-v4.1-flash l │ - / 1.0m │ 7m26s`. It carries the issue
+and phase, the configured model id with its effort letter, the context counts
+and elapsed time; an idle session shows `idle` and `-`. Unknown usage prints
+`- / 1.0m` with no bar; a real count prints `5.2k / 1.0m` behind a ten-cell bar
+that is green under 50%, yellow to 80%, orange to 95% and red at or above 95%.
+Token counts are never estimated from character length. A failed seat turns the
+first field red and replaces elapsed with the finish reason, and `/debug on`
+adds a trailing `*`. The endpoint, the branch and the word `debug` stay off the
+rail. Narrow terminals drop the context field, then the model, keeping the
+issue and elapsed fields. Values are
 white, waiting and warnings are bright yellow, failures bright red and passes
 bright green; no other colours, dim text or emoji are used. The rail repaints on
 seat, tool and test events without a keypress, and redraws preserve Ctrl+C,
@@ -196,16 +203,15 @@ Multiple Outcomes now take the feature PLAN path instead.
 A planning-only handoff or clarification cannot publish, even with a
 review bypass. No file scope is invented for an Ask that names no files.
 
-`/run N` streams one plain-language stderr line per action event, independently
-of its final summary. Planner start/model request says
-`Writing the plan: outcome, allowed files, and checks.` Coder reads say
-`Reading README.md before editing.`, writes say `Saving README.md.`, model
-requests say `Drafting the change.`, and tests say `Running tests.`
-Configured coder requests include the chosen effort, for example
-`Drafting at low effort. Model prior: strong.`
-Reviewer start says `Checking the diff against the task.` These are status
-projections only: they do not add tools, checks, edits, or work. A stub coder
-says `Preparing the task summary.` rather than claiming an implementation.
+`/run N` produces one shell line per action event, independently of its final
+summary. The tray is the only writer: the run log keeps every technical record
+in `.roster/runs/`, and the shell transcript prints the phase, the tool, the
+waiting tick and the verdict exactly once each. A phase line is `#108 draft`, a
+tool line is `write_file README.md` and collapses on repeat into
+`write_file README.md · 2`, a waiting tick rewrites its own row, and a verdict
+is one line such as `108 draft · fail · length · no write`. The run log no
+longer narrates the same events in sentences, so nothing is printed twice.
+These are status projections only: they do not add tools, checks, edits, or work.
 
 Unsupported LLM finish reasons are named in the shell and run log without
 printing response bodies. `stop` and `tool_calls` are accepted. The first
@@ -295,9 +301,8 @@ every 30s, for example:
 2026-10-01T12:00:00.000Z seat planner waiting host=192.168.1.48:8888 elapsed=90s cold-start up to 15m
 ```
 
-After more than 30s, each waiting event prints only
-`Still waiting on the model. Local hardware can take minutes after idle.`
-to stderr. Timeout prints
+After more than 30s, each waiting event rewrites the transcript waiting row in
+place instead of appending a sentence. Timeout prints
 `The model did not answer in time. It may still be waking.`
 The detailed host/elapsed/retry metadata remains in the technical log and
 the actionable error report.

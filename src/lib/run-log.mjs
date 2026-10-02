@@ -12,11 +12,6 @@ const tools = ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text']
 const artifacts = ['RECIPE.yml', 'TASK.md', 'PLAN.md', 'ESTIMATE.md', 'RESULT.md', 'REVIEW.md'];
 const httpErrors = ['authentication', 'network', 'timeout', 'http', 'response', 'abort'];
 const maximumLineBytes = 2048;
-const seatActions = {
-  planner: 'Writing the plan: outcome, allowed files, and checks.',
-  coder: 'Drafting the change.',
-  reviewer: 'Checking the diff against the task.',
-};
 
 export class RunLogError extends Error {
   code = 'ROSTER_RUN_LOG';
@@ -80,32 +75,16 @@ export async function createRunLog({
     return write;
   }
 
-  function humanEventText(name, event) {
+  function humanEventText(event) {
     if (event.type === 'finish-reason') return event.retry
       ? event.continued ? 'Response truncated. Continuing the same message.' : 'Response truncated. Retrying.'
       : `Unsupported LLM finish reason: ${safe(event.reason)}.`;
     if (event.type === 'contracts-uninitialized') return 'Contracts submodule was not initialized';
     if (event.type === 'tool-refused') return 'Refused: outside the worktree.';
     if (event.type === 'test-repair') return `Tests failed. Repair ${event.attempt} of ${event.budget}.`;
-    if (event.type === 'http' && event.phase === 'start') {
-      return name === 'coder' && event.effort
-        ? `Drafting at ${event.effort} effort. Model prior: ${event.modelPrior ?? 'unknown'}.`
-        : seatActions[name];
-    }
-    if (event.type === 'waiting' && event.elapsedSeconds > 30) {
-      return 'Still waiting on the model. Local hardware can take minutes after idle.';
-    }
     if (event.type === 'timeout') return 'The model did not answer in time. It may still be waking.';
-    if (event.type !== 'tool') return null;
-    const location = typeof event.path === 'string' ? safe(event.path).slice(0, 512) : 'the requested file';
-    switch (event.name) {
-      case 'read_file': return `Reading ${location} before editing.`;
-      case 'write_file': return `Saving ${location}.`;
-      case 'run_test': return 'Running tests.';
-      case 'list_dir': return `Listing ${location}.`;
-      case 'search_text': return 'Finding the relevant text.';
-      default: throw new TypeError('Invalid live tool event');
-    }
+    if (event.type === 'tool' && !tools.includes(event.name)) throw new TypeError('Invalid live tool event');
+    return null;
   }
 
   function eventText(event) {
@@ -208,7 +187,7 @@ export async function createRunLog({
         if (text === modelEvent) return;
         modelEvent = text;
       }
-      await append(`seat ${name} ${text}`, humanEventText(name, event));
+      await append(`seat ${name} ${text}`, humanEventText(event));
     };
     const started = clock();
     const measured = async (result) => {
@@ -225,8 +204,7 @@ export async function createRunLog({
       host: mode === 'stub' ? '' : new URL(config.llm.base_url).host,
       effort: config.llm.effort, contextMax: config.llm.context_max });
     await debug.record({ repoRoot, issue, seat: name, event: { type: 'seat-start' } });
-    await append(`start seat ${name} session=${safe(seatSession)}`,
-      name === 'coder' && mode === 'stub' ? 'Preparing the task summary.' : seatActions[name]);
+    await append(`start seat ${name} session=${safe(seatSession)}`);
     await onEvent({ type: 'model', model: mode === 'stub' ? 'builtin-stub' : config.llm.model,
       host: mode === 'stub' ? '-' : new URL(config.llm.base_url).host });
     await append(`seat ${name} mode ${mode}`);

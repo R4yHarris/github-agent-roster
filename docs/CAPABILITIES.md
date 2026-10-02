@@ -39,7 +39,7 @@ suggested difficulty, otherwise high; unknown models use a conservative
 difficulty-2 prior. Local DeepSeek maps medium to high. An explicit effort
 override still applies, but a docs slice is always capped at high, including
 overrides and failed-review retries. Output-token budgets remain separate.
-The coder logs `Drafting at low effort. Model prior: strong.` for that selection.
+The coder records `http chat.completions start` with that effort in the run log.
 Prior context is not substituted for measured usage or configured capacity.
 
 [`loadCapabilities`](../src/lib/capabilities.mjs) loads the installed example

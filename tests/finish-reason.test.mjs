@@ -41,7 +41,7 @@ test('docs length continues once at 2048 without reasoning and logs the requeste
   assert.equal(requests[1].messages.at(-2).content, 'PRIVATE_BODY');
   assert.match(requests[1].messages.at(-1).content, /Continue it from where it stopped/);
   assert.match(shell, /Response truncated\. Continuing the same message\./);
-  assert.match(shell, /Drafting at none effort/);
+  assert.doesNotMatch(shell, /Drafting at none effort/);
   assert.match(readFileSync(logger.path, 'utf8'), /Response truncated\. Continuing the same message\./);
   assert.doesNotMatch(shell + readFileSync(logger.path, 'utf8'), /PRIVATE_BODY/);
 });

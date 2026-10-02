@@ -136,7 +136,7 @@ test('human coder request status records chosen effort without exposing reasonin
       reasoning_content: 'PRIVATE_THINKING' });
     return {};
   });
-  assert.match(stderr, /^Drafting at low effort\. Model prior: strong\.$/m);
+  assert.doesNotMatch(stderr, /Drafting at low effort/);
   assert.doesNotMatch(stderr, /PRIVATE_THINKING/);
 });
 
