@@ -177,7 +177,8 @@ export function createChat(config = {}, {
         const reason = redactSecrets(rawReason, {
           env, apiKeyEnv: llm.api_key_name ?? 'OPENAI_API_KEY',
         }).replace(/[\x00-\x1f\x7f]/g, '?').slice(0, 128) || '(empty)';
-        throw new UnsupportedFinishReasonError(reason, { truncated: response.finish_reason === 'length' });
+        throw new UnsupportedFinishReasonError(reason, {
+          truncated: response.finish_reason === 'length', partial: response.message ?? null });
       }
       return response;
     } catch (error) {

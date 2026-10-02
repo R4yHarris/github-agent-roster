@@ -82,7 +82,7 @@ export async function createRunLog({
 
   function humanEventText(name, event) {
     if (event.type === 'finish-reason') return event.retry
-      ? event.withoutReasoning ? 'Response truncated. Retrying without reasoning.' : 'Response truncated. Retrying.'
+      ? event.continued ? 'Response truncated. Continuing the same message.' : 'Response truncated. Retrying.'
       : `Unsupported LLM finish reason: ${safe(event.reason)}.`;
     if (event.type === 'contracts-uninitialized') return 'Contracts submodule was not initialized';
     if (event.type === 'tool-refused') return 'Refused: outside the worktree.';
@@ -120,8 +120,8 @@ export async function createRunLog({
           throw new TypeError('Invalid live finish reason');
         }
         return `finish_reason=${JSON.stringify(safe(event.reason))} retry=${event.retry}` +
-          (event.retry ? event.withoutReasoning
-            ? ' Response truncated. Retrying without reasoning.' : ' Response truncated. Retrying.' : '');
+          (event.retry ? event.continued
+            ? ' Response truncated. Continuing the same message.' : ' Response truncated. Retrying.' : '');
       case 'contracts-uninitialized': return 'contracts submodule uninitialized';
       case 'tool-refused':
         if (!tools.includes(event.name)) throw new TypeError('Invalid live tool refusal event');

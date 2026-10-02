@@ -44,6 +44,7 @@ export function selectReasoning(config, { kind, taskClass, difficulty, previousE
   if (usesDeepseekReasoning(config.llm) && effort === 'm') effort = 'h';
   return { ...config, llm: { ...config.llm, effort, model_prior: prior.strength,
     task_difficulty: difficulty, task_class: taskClass, task_kind: kind ?? config.llm.task_kind,
-    ...(docsSlice ? { max_tokens: 512 } : planning ? { max_tokens: 4096 } : {}),
+    ...(docsSlice ? { max_tokens: Math.max(config.llm.max_tokens ?? 2048, 2048) }
+      : planning ? { max_tokens: 4096 } : {}),
   } };
 }

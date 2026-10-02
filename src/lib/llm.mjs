@@ -29,7 +29,8 @@ export function createBuiltinChat(config, {
     } : {}),
   })), retryCommand, clock, signal });
   if (transport === null) return null;
-  let completionCap = docsSlice ? Math.min(config.llm.max_tokens ?? 512, 512) : config.llm.max_tokens ?? 4096;
+  let completionCap = docsSlice
+    ? Math.max(config.llm.max_tokens ?? 2048, 2048) : config.llm.max_tokens ?? 4096;
   let reasoningDisabled = docsSlice;
   let lengthRetried = false;
   let lastAttempts = 0;
@@ -68,18 +69,25 @@ export function createBuiltinChat(config, {
         lastUsage = mergeUsage(...usages);
         const retry = retryLength && error.truncated && !lengthRetried && current.max_tokens > 1;
         await onEvent?.({ type: 'finish-reason', reason: error.finishReason, retry,
-          ...(retry && docsSlice ? { withoutReasoning: true } : {}),
+          ...(retry && docsSlice ? { continued: true } : {}),
         });
         if (!retry) throw error;
         lengthRetried = true;
+        const resumable = docsSlice && typeof error.partial?.content === 'string' &&
+          error.partial.content.trim() && !error.partial.tool_calls?.length
+          ? error.partial.content : null;
         completionCap = docsSlice ? current.max_tokens : Math.floor(current.max_tokens / 2);
         current = { ...current, max_tokens: completionCap,
           ...(reasoningDisabled ? { reasoning_effort: 'none',
             ...(usesDeepseekReasoning(config.llm) ? { chat_template_kwargs: { thinking: false } } : {}),
           } : {}),
           messages: [
-          ...current.messages, { role: 'user', content:
-            (docsSlice ? 'The response was truncated. Retry without reasoning within the 512 completion cap. '
+          ...current.messages,
+          ...(resumable === null ? [] : [{ role: 'assistant', content: resumable }]),
+          { role: 'user', content:
+            (docsSlice ? resumable === null
+              ? 'The response stopped at the completion cap. Continue the same answer from where it stopped. '
+              : 'That message stopped at the completion cap. Continue it from where it stopped, without repeating it. '
               : 'The response was truncated. Retry concisely within the smaller completion cap. ') +
             'Return complete tool calls or a complete summary; do not repeat previously executed edits.' },
         ] };
