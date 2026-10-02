@@ -4,11 +4,13 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { ensureLocalPath } from '../lib/paths.mjs';
+import { redactEvidence } from '../lib/redaction.mjs';
 import { taskFilesAllowed } from '../planner/stub.mjs';
 import { splitTaskFrontmatter } from './skills.mjs';
 import { isAllowedFile, isForbiddenRead, isForbiddenWrite, isManagedFile, isRunLog, isDebugLog, isShellHistory, isCheckpoint, isRepoMap, taskAndRepairFiles } from './tools.mjs';
 
 const execute = promisify(execFile);
+export { redactEvidence } from '../lib/redaction.mjs';
 
 export function taskSkipsTests(task) {
   const { frontmatter } = splitTaskFrontmatter(task);
@@ -18,20 +20,6 @@ export function taskSkipsTests(task) {
   const value = /^tests: (none|required)[ \t]*$/.exec(declarations[0]);
   if (!value) throw new Error('TASK.md tests must be none or required');
   return value[1] === 'none';
-}
-
-export function redactEvidence(text, { env = process.env, apiKeyEnv = 'ROSTER_API_KEY' } = {}) {
-  let safe = text;
-  const values = Object.entries(env).filter(([name, value]) =>
-    typeof value === 'string' && value && (name === apiKeyEnv ||
-      /TOKEN|PASSWORD|SECRET|PRIVATE_KEY|API_KEY/i.test(name)))
-    .map(([, value]) => value).sort((left, right) => right.length - left.length);
-  for (const value of values) safe = safe.split(value).join('[redacted]');
-  return safe
-    .replace(/-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-\r\n]*PRIVATE KEY-----|$)/g,
-      '[redacted private key]')
-    .replace(/\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{24,})\b/g,
-      '[redacted credential]');
 }
 
 function ignoredNotebook(file, worktree, memoryPath) {

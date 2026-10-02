@@ -2,25 +2,9 @@
 
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { runIssue } from './lib/issue.mjs';
-import { parseEvaluationArgs, recordEvaluation } from './lib/eval.mjs';
-import { parseRecommendationArgs, repositoryRoot } from './lib/learn.mjs';
-import { formatAsk, submitAsk } from './lib/ask.mjs';
-import { runBuiltinIssue, runBuiltinTask } from './lib/builtin.mjs';
-import { loadConfig } from './lib/config.mjs';
-import { runDemo } from './lib/demo.mjs';
-import { checkDoctor, formatDoctor, warmDoctor } from './lib/doctor.mjs';
-import { formatInit, initializeRoster } from './lib/init.mjs';
-import { runOnboard } from './onboard/wizard.mjs';
-import { runFleet } from './lib/fleet-cli.mjs';
-import { formatMetrics, loadAvailableMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
-import { resolveContractsPath, resolveProjectRoot } from './lib/paths.mjs';
-import { formatRoute, routeTask } from './lib/route.mjs';
-import { formatStatus, readStatus } from './lib/status.mjs';
-import { validateRecipe } from './lib/recipe.mjs';
-import { startRepl } from './repl.mjs';
-import { createFileVault, validateSecretName } from './vault/file.mjs';
-import { createDebugLog } from './lib/debug-log.mjs';
+import { performance } from 'node:perf_hooks';
+
+const cliStartedAt = performance.now();
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const help = `Usage:
@@ -41,6 +25,7 @@ const help = `Usage:
   roster run --seat coder --runtime builtin
   roster prepare --issue N
   roster run --ask-file PATH --runtime builtin
+  roster bench
   roster status [--issue N] [--offline]
   roster recipe validate PATH
   roster stats [--ref REVISION_OR_RANGE] [--evals PATH]
@@ -66,6 +51,7 @@ Vault set reads a secret from stdin; vault list prints names, never values.
 `;
 
 async function setVaultSecret(name) {
+  const { createFileVault, validateSecretName } = await import('./vault/file.mjs');
   validateSecretName(name);
   if (process.stdin.isTTY) throw new TypeError('Pipe the secret to roster vault set NAME through stdin.');
   process.stdin.setEncoding('utf8');
@@ -80,6 +66,7 @@ async function setVaultSecret(name) {
 }
 
 async function getVaultSecret(name) {
+  const { createFileVault, validateSecretName } = await import('./vault/file.mjs');
   validateSecretName(name);
   if (process.stdout.isTTY) throw new TypeError('Pipe roster vault get NAME; refusing to print a secret in a terminal.');
   const value = await createFileVault().get(name);
@@ -105,18 +92,24 @@ function statsOptions(args) {
 async function main(args) {
   const debugFlag = args[0] === '--debug';
   if (debugFlag) args = args.slice(1);
-  const debug = createDebugLog({ enabled: debugFlag || process.env.ROSTER_DEBUG === '1' });
-  if (args.length === 0 && process.stdin.isTTY) {
-    process.exitCode = await startRepl({ repoRoot: rosterRoot, debug });
-  } else if (args.length === 0 || (args.length === 1 && ['--help', '-h'].includes(args[0]))) {
+  if ((args.length === 0 && !process.stdin.isTTY) || (args.length === 1 && ['--help', '-h'].includes(args[0]))) {
     process.stdout.write(help);
     if (args.length === 0) process.exitCode = 2;
+    return;
+  }
+  const { createDebugLog } = await import('./lib/debug-log.mjs');
+  const debug = createDebugLog({ enabled: debugFlag || process.env.ROSTER_DEBUG === '1' });
+  if (args.length === 0) {
+    const { startRepl } = await import('./repl.mjs');
+    process.exitCode = await startRepl({ repoRoot: rosterRoot, debug });
   } else if (args.length === 2 && args[0] === 'ask') {
+    const { formatAsk, submitAsk } = await import('./lib/ask.mjs');
     const result = await submitAsk(args[1], {
       repoRoot: rosterRoot,
     });
     process.stdout.write(formatAsk(result));
   } else if (args[0] === 'doctor') {
+    const { checkDoctor, formatDoctor, warmDoctor } = await import('./lib/doctor.mjs');
     if (args.length > 2 || args.length === 2 && args[1] !== '--warm') {
       throw new TypeError('Use roster doctor [--warm].');
     }
@@ -125,18 +118,23 @@ async function main(args) {
     if (!result.ok) process.exitCode = 1;
     if (args[1] === '--warm') await warmDoctor();
   } else if (args.length === 1 && args[0] === 'init') {
+    const { formatInit, initializeRoster } = await import('./lib/init.mjs');
     process.stdout.write(formatInit(await initializeRoster()));
   } else if (args.length === 1 && args[0] === 'onboard') {
+    const { runOnboard } = await import('./onboard/wizard.mjs');
     process.exitCode = (await runOnboard({ installationRoot: rosterRoot })).exitCode;
   } else if (args[0] === 'fleet') {
+    const { runFleet } = await import('./lib/fleet-cli.mjs');
     const result = await runFleet(args.slice(1), { installationRoot: rosterRoot });
     if (result.exitCode !== undefined) process.exitCode = result.exitCode;
   } else if (args[0] === 'prepare') {
+    const { runIssue } = await import('./lib/issue.mjs');
     if (args.length !== 3 || args[1] !== '--issue') {
       throw new TypeError('Use roster prepare --issue N.');
     }
     await runIssue(args[2]);
   } else if (args[0] === 'run' && args.includes('--ask-file')) {
+    const { runDemo } = await import('./lib/demo.mjs');
     const flags = args.slice(1);
     if (flags.length !== 4 ||
         !['--ask-file', '--runtime'].includes(flags[0]) ||
@@ -155,6 +153,7 @@ async function main(args) {
           : `RECIPE: ${demo.recipePath}\nTASK: ${demo.taskPath}\nRESULT: ${demo.resultPath}\nREVIEW: ${demo.reviewPath}\n`)) +
       `Mode: ${demo.mode}\n`);
   } else if (args[0] === 'run') {
+    const { runBuiltinIssue, runBuiltinTask } = await import('./lib/builtin.mjs');
     const options = runOptions(args.slice(1));
     if (options.issue === undefined) await runBuiltinTask({ repoRoot: rosterRoot, debug });
     else {
@@ -166,6 +165,8 @@ async function main(args) {
       if (result.failed) process.exitCode = 1;
     }
   } else if (args[0] === 'status') {
+    const { loadConfig } = await import('./lib/config.mjs');
+    const { formatStatus, readStatus } = await import('./lib/status.mjs');
     let issue;
     let offline = false;
     const flags = new Set();
@@ -186,16 +187,21 @@ async function main(args) {
     process.stdout.write(formatStatus(await readStatus({ issue, offline,
       config: loadConfig({ repoRoot: rosterRoot, cwd: process.cwd() }) })));
   } else if (args.length === 3 && args[0] === 'recipe' && args[1] === 'validate') {
+    const { validateRecipe } = await import('./lib/recipe.mjs');
     validateRecipe(args[2]);
     process.stdout.write(`Valid recipe: ${args[2]}\n`);
   } else if (args.length === 3 && args[0] === 'vault' && args[1] === 'set') {
     await setVaultSecret(args[2]);
   } else if (args.length === 2 && args[0] === 'vault' && args[1] === 'list') {
+    const { createFileVault } = await import('./vault/file.mjs');
     const names = await createFileVault().list();
     if (names.length) process.stdout.write(`${names.join('\n')}\n`);
   } else if (args.length === 3 && args[0] === 'vault' && args[1] === 'get') {
     await getVaultSecret(args[2]);
   } else if (args[0] === 'stats') {
+    const { formatMetrics, loadMetrics, summarizeMetrics } = await import('./lib/metrics.mjs');
+    const { resolveContractsPath } = await import('./lib/paths.mjs');
+    const { repositoryRoot } = await import('./lib/learn.mjs');
     const options = statsOptions(args.slice(1));
     const records = loadMetrics({
       ...options,
@@ -205,15 +211,28 @@ async function main(args) {
     });
     process.stdout.write(formatMetrics(summarizeMetrics(records)));
   } else if (args[0] === 'eval') {
+    const { parseEvaluationArgs, recordEvaluation } = await import('./lib/eval.mjs');
     const { values, options } = parseEvaluationArgs(args.slice(1));
     const evaluation = await recordEvaluation(...values, options);
     process.stdout.write(`Recorded AI-Eval for ${evaluation.sha ?? evaluation.session}.\n`);
   } else if (args[0] === 'recommend') {
+    const { parseRecommendationArgs } = await import('./lib/learn.mjs');
+    const { loadAvailableMetrics } = await import('./lib/metrics.mjs');
+    const { loadConfig } = await import('./lib/config.mjs');
+    const { formatRoute, routeTask } = await import('./lib/route.mjs');
+    const { resolveProjectRoot } = await import('./lib/paths.mjs');
     const { taskClass, difficulty } = parseRecommendationArgs(args.slice(1));
     const cwd = resolveProjectRoot();
     const route = await routeTask({ cwd, installationRoot: rosterRoot, taskClass,
       difficulty: difficulty ?? 2, records: loadAvailableMetrics({ cwd }) });
     process.stdout.write(formatRoute(route, taskClass, loadConfig({ cwd })));
+  } else if (args.length === 1 && args[0] === 'bench') {
+    const { runBench } = await import('./lib/bench.mjs');
+    const result = await runBench({
+      cwd: process.cwd(), repoRoot: rosterRoot,
+      commandDispatchMs: performance.now() - cliStartedAt,
+    });
+    process.stdout.write(`${JSON.stringify(result.report, null, 2)}\n`);
   } else {
     throw new TypeError('Unknown arguments. Run roster --help for usage.');
   }

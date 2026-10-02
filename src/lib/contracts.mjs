@@ -1,6 +1,8 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
+const initializedWorktrees = new Set();
+
 export class ContractsSubmoduleError extends Error {
   code = 'ROSTER_CONTRACTS_UNINITIALIZED';
 
@@ -25,18 +27,35 @@ export async function assertContractsInitialized(worktree) {
 }
 
 export async function initializeWorktreeSubmodules(worktree, runCommand) {
+  const root = path.resolve(worktree);
+  const publisher = path.join(root, 'vendor', 'github-agent-contracts', 'scripts', 'agent-pr.mjs');
+  const publisherStatus = await fs.lstat(publisher).catch((error) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (publisherStatus?.isFile() && !publisherStatus.isSymbolicLink()) {
+    await assertContractsInitialized(root);
+    initializedWorktrees.add(root);
+    return false;
+  }
+  if (initializedWorktrees.has(root)) {
+    await assertContractsInitialized(root);
+    return false;
+  }
   try {
-    await runCommand('git', ['submodule', 'update', '--init', '--recursive'], worktree);
+    await runCommand('git', ['submodule', 'update', '--init', '--recursive'], root);
   } catch (error) {
     try {
-      await assertContractsInitialized(worktree);
+      await assertContractsInitialized(root);
     } catch (dependencyError) {
       if (dependencyError instanceof ContractsSubmoduleError) throw new ContractsSubmoduleError({ cause: error });
       throw dependencyError;
     }
     throw error;
   }
-  await assertContractsInitialized(worktree);
+  await assertContractsInitialized(root);
+  initializedWorktrees.add(root);
+  return true;
 }
 
 export function onlyMissingContractsScripts(tests) {

@@ -1,4 +1,3 @@
-import { chatCompletion } from '../lib/llm.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
 import { isAllowedFile } from '../runtime/tools.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
@@ -120,7 +119,7 @@ export async function planOutline(ask, {
   const usages = [];
   let response;
   for (let turn = 1; turn <= Math.min(budget, 2); turn += 1) {
-    const completion = await chatCompletion({ config, messages, fetchImpl, env, vault, onEvent, retryCommand, signal });
+    const completion = await (await import('../lib/llm.mjs')).chatCompletion({ config, messages, fetchImpl, env, vault, onEvent, retryCommand, signal });
     response = completion.response;
     onResponse?.(response);
     usages.push(completion.usage);

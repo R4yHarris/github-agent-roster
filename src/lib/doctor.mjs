@@ -6,7 +6,6 @@ import { loadConfig, validateBaseUrl } from './config.mjs';
 import { resolveContractsPath, resolveProjectRoot } from './paths.mjs';
 import { resolveSecret } from './secrets.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
-import { defaultRequestFetch } from '../llm/http.mjs';
 import { ChatError, isLocalLlmHost, resolveRequestTimeout, withRequestTimeout } from '../llm/request.mjs';
 import { isRunCancelled, throwIfCancelled } from '../runtime/cancel.mjs';
 
@@ -30,7 +29,7 @@ export async function warmDoctor({
   const timeoutMs = resolveRequestTimeout(config.llm);
   const key = await resolveSecret(config.llm.api_key_env, { env, vault });
   if (!key && config.llm.api_key_optional === false) throw new ChatError('An LLM API key is required.', 'authentication');
-  const fetch = fetchImpl === undefined ? defaultRequestFetch(timeoutMs) : fetchImpl;
+  const fetch = fetchImpl === undefined ? (await import('../llm/http.mjs')).defaultRequestFetch(timeoutMs) : fetchImpl;
   if (typeof fetch !== 'function') throw new TypeError('A fetch implementation is required.');
   errorOutput.write(`warming host=${host} timeout_ms=${timeoutMs}\n`);
   const probe = async (signal) => {

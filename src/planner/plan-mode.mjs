@@ -1,4 +1,3 @@
-import { createBuiltinChat } from '../lib/llm.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
 import { buildPlan, planFromTask, planStub } from './stub.mjs';
 import { parseTaskDocument } from './task.mjs';
@@ -30,6 +29,7 @@ export async function planSlice(ask, {
     return { plan: planStub(ask, { reference, title, metadata }).task.replace(/^# Task:/m, '# Plan:'),
       mode: 'stub', turns: 0, usage: null, response: null };
   }
+  const { createBuiltinChat } = await import('../lib/llm.mjs');
   const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand, signal });
   const messages = [
     { role: 'system', content: 'You are the read-only plan-mode planner. Explore with read_file, list_dir, or search_text. ' +

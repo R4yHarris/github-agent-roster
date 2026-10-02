@@ -2,6 +2,7 @@
 node_modules/
 .worktrees/
 .roster/runs/
+.roster/bench.json
 .roster/logs/
 .roster/history
 .roster/history.*

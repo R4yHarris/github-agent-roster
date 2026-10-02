@@ -1,5 +1,4 @@
 import { readFileSync } from 'node:fs';
-import { chatCompletion } from '../lib/llm.mjs';
 import { parseRecipe } from '../lib/recipe.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
 import { inferTaskClass } from '../lib/learn.mjs';
@@ -189,7 +188,7 @@ export async function planAsk(ask, {
     messages.push({ role: 'user', content: 'Emit only tool_calls for write_file with JSON string arguments.' });
   };
   for (let turn = 1; turn <= budget + Number(repairUsed); turn += 1) {
-    const response = await chatCompletion({ config, fetchImpl, env, vault, messages, onEvent, retryCommand, signal,
+    const response = await (await import('../lib/llm.mjs')).chatCompletion({ config, fetchImpl, env, vault, messages, onEvent, retryCommand, signal,
       ...(tools ? { tools: plannerToolDefinitions } : {}) });
     lastResponse = response.response;
     onResponse?.(lastResponse);

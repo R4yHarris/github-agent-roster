@@ -4,10 +4,6 @@ import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { Writable } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { prepareBuiltinPublication, runBuiltinAsk, runBuiltinIssue } from './lib/builtin.mjs';
-import {
-  commentMergedIssue, mergedPullNumber, mergedPullNumberFromFailure,
-} from './lib/issue-board.mjs';
 import { isReviewRequired, loadConfig, requirePublicationEnabled, setConfigValue } from './lib/config.mjs';
 import { recordEvaluation } from './lib/eval.mjs';
 import { inferTaskClass, parseRecommendationArgs, repositoryRoot } from './lib/learn.mjs';
@@ -18,7 +14,6 @@ import {
   buildPublishMessage, formatPublishCommand, formatPublishEnvironment, parsePublishArgs, publicationTask,
 } from './lib/publication.mjs';
 import { redactEvidence } from './runtime/excellence.mjs';
-import { requirePassingReview } from './seats/reviewer.mjs';
 import { isLlmTimeout } from './llm/request.mjs';
 import { formatStatus, readStatus } from './lib/status.mjs';
 import { createFileVault, validateSecretName } from './vault/file.mjs';
@@ -76,6 +71,7 @@ async function publishWithContracts({ contractsPath, cwd, env, message, model, o
   const code = await main(['--message', message, '--model', model, '--merge-when-green'], {
     cwd, env, stdout, stderr,
   });
+  const { mergedPullNumber, mergedPullNumberFromFailure } = await import('./lib/issue-board.mjs');
   if (code === 0) {
     return { mergedPullRequest: /^Merged PR #/m.test(successText)
       ? mergedPullNumber(successText) : null };
@@ -92,10 +88,17 @@ async function publishWithContracts({ contractsPath, cwd, env, message, model, o
   throw new Error('App publication failed; see the publisher error above.');
 }
 
+// Seat, LLM, reviewer, and issue-board modules load on first use so /help, /status, and /quit start fast.
+const lazy = (specifier, name) => async (...args) => (await import(specifier))[name](...args);
+const requirePassingReview = lazy('./seats/reviewer.mjs', 'requirePassingReview');
+
 const defaultServices = {
-  runBuiltinAsk, runBuiltinIssue, recordEvaluation, repositoryRoot, loadMetrics,
+  runBuiltinAsk: lazy('./lib/builtin.mjs', 'runBuiltinAsk'),
+  runBuiltinIssue: lazy('./lib/builtin.mjs', 'runBuiltinIssue'),
+  prepareBuiltinPublication: lazy('./lib/builtin.mjs', 'prepareBuiltinPublication'),
+  recordEvaluation, repositoryRoot, loadMetrics,
   summarizeMetrics, formatMetrics, loadAvailableMetrics, routeTask, formatRoute,
-  resolveContractsPath, prepareBuiltinPublication, createFileVault,
+  resolveContractsPath, createFileVault,
   validateSecretName, readStatus, formatStatus, setConfigValue,
   publicationTask,
   readIssueLogs,
@@ -109,7 +112,7 @@ const defaultServices = {
   runOnlyReview,
   waveBoard,
   writeRepoMap,
-  issueCommenter: commentMergedIssue,
+  issueCommenter: lazy('./lib/issue-board.mjs', 'commentMergedIssue'),
   publisher: publishWithContracts,
   repositoryBranch(cwd) {
     const root = resolveProjectRoot(cwd);

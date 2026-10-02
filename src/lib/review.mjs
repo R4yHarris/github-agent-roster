@@ -8,7 +8,6 @@ import { createRunLog } from './run-log.mjs';
 import { recordRun } from './learn.mjs';
 import { buildRun } from '../metrics/run.mjs';
 import { readPlannerTask, readPreviousReview } from '../seats/planner.mjs';
-import { runReviewer } from '../seats/reviewer.mjs';
 import { checkExcellence } from '../runtime/excellence.mjs';
 import { throwIfCancelled } from '../runtime/cancel.mjs';
 
@@ -46,7 +45,7 @@ export async function runOnlyReview(run, {
   const session = run.sessions?.reviewer ?? `roster-${randomBytes(8).toString('hex')}-reviewer`;
   const logger = await createRunLog({ repoRoot: run.repoRoot ?? worktree, session, env, debug,
     issue: run.issue?.number ?? null, errorOutput, observe: onRunEvent });
-  const review = await logger.seat('reviewer', session, config, (onEvent) => runReviewer({
+  const review = await logger.seat('reviewer', session, config, async (onEvent) => (await import('../seats/reviewer.mjs')).runReviewer({
     worktree, repoRoot, config, coderResult, env, fetchImpl, vault, signal, onEvent, askKind: run.askKind ?? 'slice',
   }));
   const measured = review.response ? buildRun({ config, response: review.response, task: run.task, session, env: {} }) : null;

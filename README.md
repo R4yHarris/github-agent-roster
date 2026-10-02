@@ -53,7 +53,16 @@ roster doctor
 roster
 ```
 
-Use Node 20+ and the global npm bin on PATH in the current terminal.
+Use Node 20+, Git, and `gh` for GitHub operations. `npm` is install-only:
+Roster has no runtime package dependencies and needs no Python, `pip`, or
+globally installed packages after installation. The `roster` bin starts with
+Node and its installed repository files.
+
+The seat wait is dominated by model response time; process startup and command
+dispatch are harness overhead. Run `roster bench` to measure the local process,
+config, dispatch, worktree, submodule, and mocked-model timings. The benchmark
+is offline, writes numeric timings only to `.roster/bench.json`, and expects
+command dispatch to stay within 150 ms on the benchmark machine.
 Windows and WSL need separate Node installs. For another target project,
 run the last three commands from that project's worktree root after
 installation. The [complete onboarding path](docs/ONBOARDING.md) covers

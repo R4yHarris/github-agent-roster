@@ -136,7 +136,8 @@ export async function prepareBuiltinPublication(run, {
     throw new Error(`Publishing refused by excellence gate: ${excellence.reasons[0]}`);
   }
   const commandEnv = withoutLlmKeys(env, config);
-  await git(run.worktreePath, ['submodule', 'update', '--init', '--recursive'], commandEnv);
+  await initializeWorktreeSubmodules(run.worktreePath, async (_program, args, worktree) =>
+    git(worktree, args, commandEnv));
   const contractsPath = resolveContractsPath({ repoRoot: run.worktreePath, cwd, env });
   await stageReviewedFiles(run.worktreePath, taskAndRepairFiles(taskFilesAllowed(run.planner.task),
     run.result.repairFiles), { env: commandEnv });

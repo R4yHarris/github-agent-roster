@@ -1,5 +1,4 @@
 import { stripVTControlCharacters } from 'node:util';
-import { createBuiltinChat } from './llm.mjs';
 import { resolveSecret } from './secrets.mjs';
 import { readPlannerTask } from '../seats/planner.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
@@ -26,6 +25,7 @@ export async function askSideQuestion({
   const redact = (value) => redactEvidence(value, { env: requestEnv, apiKeyEnv: config.llm.api_key_env });
   const content = redact(JSON.stringify({ task: context, question }));
   if (content.length > config.seat.context_chars) throw new Error('Side-question task context exceeds the configured character budget.');
+  const { createBuiltinChat } = await import('./llm.mjs');
   const chat = createBuiltinChat({ ...config, llm: { ...config.llm, max_tokens: 1024 } }, {
     env: requestEnv, vault, fetchImpl, signal, retryLength: false,
   });
