@@ -42,7 +42,9 @@ the rail and the debug detail, flushes stdout and calls `prompt(true)` before
 returning. Every transcript append follows the same pause, write, flush and
 prompt sequence. The input row remains owned by readline, so a one-second tick
 needs no key event and never joins the rule to a half-typed command or consumes
-typed characters.
+typed characters. On terminal resize, the tray clears from the banner down,
+reprints the cached banner once and paints one rail at the new width; later
+ticks continue using that width.
 `/statusbar off` removes both rules and the rail for this
 process and leaves the plain prompt.
 
