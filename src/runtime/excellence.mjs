@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { ensureLocalPath } from '../lib/paths.mjs';
 import { taskFilesAllowed } from '../planner/stub.mjs';
 import { splitTaskFrontmatter } from './skills.mjs';
-import { isAllowedFile, isForbiddenRead, isForbiddenWrite, isManagedFile, isRunLog, isDebugLog, isShellHistory, taskAndRepairFiles } from './tools.mjs';
+import { isAllowedFile, isForbiddenRead, isForbiddenWrite, isManagedFile, isRunLog, isDebugLog, isShellHistory, isCheckpoint, taskAndRepairFiles } from './tools.mjs';
 
 const execute = promisify(execFile);
 
@@ -35,7 +35,7 @@ export function redactEvidence(text, { env = process.env, apiKeyEnv = 'ROSTER_AP
 }
 
 function ignoredNotebook(file, worktree, memoryPath) {
-  return isRunLog(file) || isDebugLog(file) || isShellHistory(file) || file === '.roster/memory' || file.startsWith('.roster/memory/') ||
+  return isRunLog(file) || isDebugLog(file) || isShellHistory(file) || isCheckpoint(file) || file === '.roster/memory' || file.startsWith('.roster/memory/') ||
     (memoryPath && path.relative(path.resolve(worktree, file), path.resolve(memoryPath)) === '');
 }
 

@@ -30,6 +30,8 @@ agents and CI.
 | `/stop` | Immediately cancel an in-flight seat or a confirmed handoff, like one Ctrl+C. |
 | `/status [N] [--offline]` | With no number, show cached issue, branch, seat, state, model, host, effort, last finish reason, last test name, and review. Current and previously run issue snapshots use no model/GitHub request. An uncached explicit issue uses the existing status reader; `--offline` prohibits GitHub. |
 | `/history` | Show the last 20 stored safe commands, without vault or secret lines. |
+| `/checkpoints` | List the current task's pre-write checkpoint number, coder seat, short status and time. |
+| `/rewind N` or `/undo` | Restore checkpoint-covered product files and remove newly created files in that same task scope. Keep PLAN, TASK, recipe, result and logs. Undo selects the latest checkpoint only. Stop the seat first; any open/closed/merged PR on the branch refuses rewind, and unavailable PR verification fails closed. Verification/review are invalidated after restoration. |
 | `/statusbar on\|off` | Toggle both blue delivery-tray bars; the default is on and the setting is process-local. |
 | `/log N` | Tail up to 50 safe metadata lines from each local `.roster/runs/roster-N-*.log`, without network or seat execution. |
 | `/debug on` or `/debug off` or `/debug status` | Enable, stop or show testing metadata logging for this process only; never write config or change environment variables. |
@@ -54,6 +56,14 @@ agents and CI.
 | `/quit` or `/q` or `exit` | Exit with status 0. Ctrl+C cancels an active run; a second interrupt or idle Ctrl+C exits. |
 
 ## Keys and history
+
+Before each configured coder write in a Git worktree, the harness snapshots
+task-allowed products (including explicitly granted failing-test repair scope)
+into a Git tree and a `refs/roster/checkpoints/<task>/<n>` ref. It uses neither
+stash nor human-authored commits and does not change the main index or HEAD.
+Ignored, protected metadata lives under `.roster/checkpoints/<issue>/<n>`.
+Secrets, managed artifacts, symlinks and hard links are not captured as products.
+Standalone filesystem-only seat fixtures have no Git checkpoint capability.
 
 Plan mode never offers tests or publication and cannot write TASK.md, RECIPE.yml
 or product files before acceptance. Exploration excludes secrets and private
