@@ -185,6 +185,36 @@ test('docs tools exclude list_dir and one write received during test returns to 
   assert.match(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /## Status\nActive\./);
 });
 
+test('a bounded docs slice naming one non-README file is not offered a directory walk', async (t) => {
+  const options = fixture(t);
+  const taskText = options.taskText.replaceAll('README.md', 'docs/guide.md');
+  writeFileSync(join(options.worktree, 'TASK.md'), taskText);
+  mkdirSync(join(options.worktree, 'docs'));
+  writeFileSync(join(options.worktree, 'docs', 'guide.md'), '# Guide\n');
+  let calls = 0;
+  let offered;
+  const result = await runCoder({
+    ...options,
+    fetchImpl: async (_url, request) => {
+      calls += 1;
+      const names = JSON.parse(request.body).tools.map(({ function: tool }) => tool.name);
+      if (calls === 1) offered = names;
+      return Response.json({ choices: [calls === 1 ? { finish_reason: 'tool_calls', message: {
+        role: 'assistant', tool_calls: [{ id: 'save-guide', type: 'function', function: {
+          name: 'write_file', arguments: JSON.stringify({
+            path: 'docs/guide.md', content: '# Guide\n\n## Status\nActive.\n',
+          }),
+        } }],
+      } } : { finish_reason: 'stop', message: {
+        role: 'assistant', content: 'Saved the guide and passed its check.',
+      } }] });
+    },
+    runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+  });
+  assert.equal(result.excellence.pass, true);
+  assert.ok(!offered.includes('list_dir'), offered.join(','));
+});
+
 test('an unknown finish reason after a README write fails review by name without printing its response', async (t) => {
   const options = fixture(t);
   let calls = 0;
