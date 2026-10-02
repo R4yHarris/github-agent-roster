@@ -117,7 +117,7 @@ test('Ctrl+C cancels an in-flight seat and returns to the prompt; Ctrl+D exits z
   assert.equal(await shell.done, 0);
 });
 
-test('second Ctrl+C, aliases and exit leave with zero', async (t) => {
+test('aliases, exit and Ctrl+D leave with zero while idle Ctrl+C exits 130', async (t) => {
   for (const command of ['/q\n', '/quit\n', 'exit\n', '\x04']) {
     const root = fixture(t);
     const shell = tty(t, root);
@@ -125,17 +125,31 @@ test('second Ctrl+C, aliases and exit leave with zero', async (t) => {
     shell.input.write(command);
     assert.equal(await shell.done, 0);
   }
+  const idleRoot = fixture(t);
+  const idle = tty(t, idleRoot);
+  await until(() => idle.text.includes('roster> '));
+  idle.input.write('\x03');
+  assert.equal(await idle.done, 130);
+});
+
+test('a second Ctrl+C exits 130 after the first aborts an in-flight run', async (t) => {
   const root = fixture(t);
   let started = false;
+  let aborted = false;
   const shell = tty(t, root, { runBuiltinIssue: async (_issue, { signal }) => {
     started = true;
-    return new Promise((_, reject) => signal.addEventListener('abort', () => reject(new RunCancelledError())));
+    return new Promise((_, reject) => signal.addEventListener('abort', () => {
+      aborted = true;
+      reject(new RunCancelledError());
+    }, { once: true }));
   } });
   await until(() => shell.text.includes('roster> '));
   shell.input.write('/run 42\n');
   await until(() => started);
-  shell.input.write('\x03\x03');
-  assert.equal(await shell.done, 0);
+  shell.input.write('\x03');
+  await until(() => aborted);
+  shell.input.write('\x03');
+  assert.equal(await shell.done, 130);
 });
 
 test('Tab completes registry commands and redraw does not clear scrollback', async (t) => {

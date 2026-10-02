@@ -761,7 +761,7 @@ test('/publish aborts with set model before calling the publisher or printing an
   }
 });
 
-test('TTY shell prints the banner and exits zero on /quit and Ctrl+C', async () => {
+test('TTY shell prints the banner, exits zero on /quit and exits 130 on Ctrl+C', async () => {
   async function runLine(line) {
     const input = new PassThrough();
     input.isTTY = true;
@@ -787,7 +787,7 @@ test('TTY shell prints the banner and exits zero on /quit and Ctrl+C', async () 
   assert.match(quit.text, /roster> /);
 
   const interrupt = await runLine('\x03');
-  assert.equal(interrupt.code, 0);
+  assert.equal(interrupt.code, 130);
 });
 
 test('TTY vault entry hides the secret while storing it through the vault library', async () => {
