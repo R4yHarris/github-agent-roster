@@ -102,5 +102,6 @@ export async function loadContext({ worktree, memoryPath, repoRoot, config, prin
   await ensureLocalPath(contextPath, worktree);
   await fs.writeFile(contextPath, pack, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
   return { agents, task, memory, files, skills, pack, contextPath, truncated, minimalDocs, skillNames,
-    contextPolicy: policy };
+    contextPolicy: policy, packBudgetChars: budget,
+    priorFeedbackIncluded: sections.some(({ heading }) => heading === 'Prior feedback') };
 }

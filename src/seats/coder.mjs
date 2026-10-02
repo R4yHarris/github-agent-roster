@@ -163,6 +163,7 @@ export async function runCoder({
   await onEvent?.({ type: 'wrote', path: 'RESULT.md' });
   stages.push('result');
   result = { ...result, excellence, resultPath, baseline, memoryPath, run, taskMetadata: metadata,
+    packBudgetChars: context?.packBudgetChars, priorFeedbackIncluded: context?.priorFeedbackIncluded,
     contextPath: context?.contextPath, researchPath: research?.researchPath };
   if (!excellence.pass && (result.mode !== 'stub' || result.error)) {
     const failure = new Error(redactEvidence(excellence.reasons[0], {

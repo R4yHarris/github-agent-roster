@@ -5,6 +5,7 @@ import { ensureLocalPath } from './paths.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
 import { timeoutHint, validateRequestTimeout, validateRetryCommand } from '../llm/request.mjs';
 import { createDebugLog } from './debug-log.mjs';
+import { buildRun } from '../metrics/run.mjs';
 
 const seats = ['planner', 'coder', 'reviewer'];
 const tools = ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text'];
@@ -189,8 +190,12 @@ export async function createRunLog({
     logPath(repoRoot, seatSession);
     let mode = config.llm.base_url ? 'llm' : 'stub';
     let modelEvent;
+    let effort;
+    let finishReason;
     const onEvent = async (event) => {
       const text = eventText(event);
+      if (event.type === 'http' && event.phase === 'start') effort = event.effort;
+      if (['completion', 'finish-reason'].includes(event.type)) finishReason = event.reason;
       await observe?.({ ...event, seat: name });
       await debug.record({ repoRoot, issue, seat: name, event });
       if (event.type === 'tool-result') return;
@@ -201,6 +206,16 @@ export async function createRunLog({
       await append(`seat ${name} ${text}`, humanEventText(name, event));
     };
     const started = clock();
+    const measured = async (result) => {
+      if (!result?.response) return;
+      const run = buildRun({ config, response: result.response, session: seatSession, env: {} });
+      if (!run) return;
+      await observe?.({ type: 'seat-measurement', seat: name, provider: run.metrics.provider,
+        model: run.metrics.model, effort: effort ?? run.metrics.effort,
+        input: run.metrics.prompt_tokens, output: run.metrics.completion_tokens, contextMax: run.metrics.context_max,
+        finishReason, packBudgetChars: result.packBudgetChars ?? config.seat?.context_chars,
+        priorFeedbackIncluded: result.priorFeedbackIncluded ?? false });
+    };
     await observe?.({ type: 'seat-start', seat: name, model: mode === 'stub' ? '' : config.llm.model,
       host: mode === 'stub' ? '' : new URL(config.llm.base_url).host,
       effort: config.llm.effort, contextMax: config.llm.context_max });
@@ -212,6 +227,7 @@ export async function createRunLog({
     await append(`seat ${name} mode ${mode}`);
     try {
       const result = await operation(onEvent);
+      await measured(result);
       await observe?.({ type: 'seat-end', seat: name, verdict: result?.verdict,
         contextUsed: result?.response?.usage?.prompt_tokens, model: result?.response?.model });
       const actualMode = result?.mode ?? (typeof result?.queried === 'boolean' ? result.queried ? 'llm' : 'stub' : mode);
@@ -223,6 +239,7 @@ export async function createRunLog({
       return result;
     } catch (error) {
       mode = error?.result?.mode ?? mode;
+      await measured(error?.result);
       await observe?.({ type: 'seat-error', seat: name });
       await debug.record({ repoRoot, issue, seat: name, event: { type: 'seat-error' } });
       await append(`seat ${name} error class=${errorClass(error)}`);
