@@ -1,12 +1,13 @@
 # Interactive Roster shell
 
 Run `roster` with no arguments from a Git worktree and an interactive terminal
-after [installing it](INSTALL.md). The bright-blue `github-agent-roster` banner
-appears once. A blue delivery tray shows the product, issue (or `local`), seat,
+after [installing it](INSTALL.md). The bright-cyan `github-agent-roster` banner
+appears once. A bright-cyan delivery tray shows the product, issue (or `local`), seat,
 state, and branch above a bottom bar with model, host, effort, declared context
 and measured prompt usage, elapsed time, and debug mode. Unknown usage is `-`,
-never an invented zero. The blue input is `roster> `; a cyan `*` marks busy
-seats, failed reviews are red, and passes are green. Bars repaint on seat/test
+never an invented zero. Labels and the `roster> ` input are bright cyan, values
+are white, and a bright-cyan `*` marks busy seats. Failed reviews are bright red,
+and passes are bright green. Bars repaint on seat/test
 events without exposing model prompts or completions. Narrow terminals drop
 elapsed time, then host. `/statusbar on|off` toggles both bars for this process.
 `--help` still prints the existing CLI usage and exits 0; empty arguments
@@ -40,7 +41,7 @@ agents and CI.
 | `/map` | Write ignored `.roster/map.md` with TASK-named paths and the top two directory levels, capped at 80 filename-only lines (no file bodies). Protected/private paths and symlinks are omitted. Non-docs difficulty4+ coders may load/read it; low difficulty and all docs tasks cannot. It grants no extra product path permissions and coder writes are always refused. |
 | `/checkpoints` | List the current task's pre-write checkpoint number, coder seat, short status and time. |
 | `/rewind N` or `/undo` | Restore checkpoint-covered product files and remove newly created files in that same task scope. Keep PLAN, TASK, recipe, result and logs. Undo selects the latest checkpoint only. Stop the seat first; any open/closed/merged PR on the branch refuses rewind, and unavailable PR verification fails closed. Verification/review are invalidated after restoration. |
-| `/statusbar on\|off` | Toggle both blue delivery-tray bars; the default is on and the setting is process-local. |
+| `/statusbar on\|off` | Toggle both delivery-tray bars; the default is on and the setting is process-local. The plain-text prompt remains available while the bars are off. |
 | `/log N` | Tail up to 50 safe metadata lines from each local `.roster/runs/roster-N-*.log`, without network or seat execution. |
 | `/debug on` or `/debug off` or `/debug status` | Enable, stop or show testing metadata logging for this process only; never write config or change environment variables. |
 | `/log debug` | Tail up to 50 validated JSONL events from this process's most recent debug file. Fail closed while debug is off; reenable explicitly before reading. |
