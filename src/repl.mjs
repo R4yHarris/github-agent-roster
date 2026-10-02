@@ -49,6 +49,7 @@ import { formatContext } from './shell/context.mjs';
 import { listIssueWorktrees } from './lib/worktrees.mjs';
 import { runOnlyReview } from './lib/review.mjs';
 import { waveBoard } from './lib/waves.mjs';
+import { writeRepoMap } from './lib/repo-map.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const unknownCommand = 'Unknown command. /help lists commands.\n';
@@ -106,6 +107,7 @@ const defaultServices = {
   listIssueWorktrees,
   runOnlyReview,
   waveBoard,
+  writeRepoMap,
   issueCommenter: commentMergedIssue,
   publisher: publishWithContracts,
   repositoryBranch(cwd) {
@@ -333,6 +335,14 @@ export function createDispatcher({
     const command = canonicalCommand(inputCommand);
     const args = rawArguments?.trim() ?? '';
     switch (command) {
+      case 'map':
+        if (args) throw new TypeError('Use /map.');
+        if (!state.lastRun?.worktreePath) throw new Error('Run or resume a task before /map.');
+        {
+          const map = await api.writeRepoMap({ worktree: state.lastRun.worktreePath, env, apiKeyEnv: state.config.llm.api_key_env });
+          output.write(`Repo map: ${map.lines} filename-only lines (cap 80).\n`);
+        }
+        return true;
       case 'waves': {
         if (args && args !== 'open') throw new TypeError('Use /waves or /waves open.');
         if (!state.lastRun?.worktreePath) throw new Error('Run or resume a plan worktree before /waves.');
