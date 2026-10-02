@@ -32,6 +32,18 @@ bright green; no other colours, dim text or emoji are used. The rail repaints on
 seat, tool and test events without a keypress, and redraws preserve Ctrl+C,
 history keys and Tab. `/statusbar off` removes both rules and the rail for this
 process and leaves the plain prompt.
+
+Seat events reach the screen through one synchronous sink shared by the runtime
+loop, the tool runner and the shell. Only five kinds of event may touch the
+screen: a phase (`plan`, `draft`, `test`, `review`) with the issue number, a
+tool with its name and target, a wait rewritten in place with elapsed seconds,
+a verdict with pass or fail, the finish reason and the files written or
+`no write`, and usage. Usage updates the rail bar and `/usage` only and never
+prints a transcript line; unknown usage leaves the bar empty and shows `-`
+rather than an estimate from character length. Repeated tool events coalesce
+within 200 ms and the rail ticks at most once a second, so painting never waits
+on the network. `/debug on` adds one `thinking … │ max_tokens …` line under the
+rail, never inside the prompt body.
 `--help` still prints the existing CLI usage and exits 0; empty arguments
 with non-TTY stdin print that usage and exit 2. Flags remain available for
 agents and CI.

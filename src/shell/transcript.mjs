@@ -33,15 +33,16 @@ export function createTranscript({ write, color = true } = {}) {
       const label = issue === null || issue === undefined ? 'local' : `#${issue}`;
       return emit(formatStep([`${label} ${clean(name)}`.trim()]), 'white');
     },
-    tool(name, target) {
-      const key = `tool:${clean(name)}:${clean(target)}`;
-      if (last && last.key === key) {
-        last.count += 1;
-        write(`${paint(formatStep([`${clean(name)} ${clean(target)}`.trim(), String(last.count)]), 'white', color)}\n`,
-          { replace: true });
-        return formatStep([`${clean(name)} ${clean(target)}`.trim(), String(last.count)]);
-      }
-      return emit(formatStep([`${clean(name)} ${clean(target)}`.trim()]), 'white', { key });
+    tool(name, target, total) {
+      const label = `${clean(name)} ${clean(target)}`.trim();
+      const key = `tool:${label}`;
+      const same = Boolean(last && last.key === key);
+      const explicit = Number.isSafeInteger(total) && total >= 1;
+      const count = explicit ? total : same ? last.count + 1 : 1;
+      const text = formatStep([label, count > 1 ? String(count) : '']);
+      write(`${paint(text, 'white', color)}\n`, { replace: same });
+      last = { key, tone: 'white', count };
+      return text;
     },
     waiting(parts) {
       const text = formatStep(['waiting'].concat(parts));

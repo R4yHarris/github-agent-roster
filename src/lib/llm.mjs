@@ -10,6 +10,7 @@ export function createBuiltinChat(config, {
 } = {}) {
   if (typeof retryLength !== 'boolean') throw new TypeError('Length retry permission must be a boolean');
   const docsSlice = config.llm.task_kind === 'slice' && config.llm.task_class === 'docs';
+  const outbound = { maxTokens: null, thinking: null };
   const transport = createChat({ llm: {
     base_url: config.llm.base_url,
     model: config.llm.model,
@@ -24,6 +25,7 @@ export function createBuiltinChat(config, {
   } }, { fetch: fetchImpl, env, vault, onEvent: onEvent && ((event) => onEvent({
     ...event, ...(event.type === 'http' ? {
       modelPrior: config.llm.model_prior ?? modelCapabilityPrior(config.llm.model).strength,
+      ...(event.phase === 'start' ? { maxTokens: outbound.maxTokens, thinking: outbound.thinking } : {}),
     } : {}),
   })), retryCommand, clock, signal });
   if (transport === null) return null;
@@ -47,6 +49,10 @@ export function createBuiltinChat(config, {
     const usages = [];
     for (;;) {
       lastAttempts += 1;
+      outbound.maxTokens = current.max_tokens;
+      outbound.thinking = usesDeepseekReasoning(config.llm)
+        ? current.chat_template_kwargs?.thinking ?? (!docsSlice && config.llm.effort !== 'none')
+        : (current.reasoning_effort ?? (docsSlice ? 'none' : mappedEffort(config.llm))) !== 'none';
       try {
         const response = await transport(current, { signal: requestSignal });
         await onEvent?.({ type: 'completion', reason: response.finish_reason ?? null });
