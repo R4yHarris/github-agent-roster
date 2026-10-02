@@ -30,6 +30,8 @@ agents and CI.
 | `/stop` | Immediately cancel an in-flight seat or a confirmed handoff, like one Ctrl+C. |
 | `/status [N] [--offline]` | With no number, show cached issue, branch, seat, state, model, host, effort, last finish reason, last test name, and review. Current and previously run issue snapshots use no model/GitHub request. An uncached explicit issue uses the existing status reader; `--offline` prohibits GitHub. |
 | `/history` | Show the last 20 stored safe commands, without vault or secret lines. |
+| `/resume` or `/resume N` | List registered local issue runs (number, title, last seat/state, branch), or reconstruct the assignment locally and continue in that exact worktree. A valid TASK/recipe skips planner; no new worktree or GitHub issue lookup is required. It attaches local artifacts, not a foreign running process. |
+| `/recap` | Print one human metadata line with TASK outcome/files, last test exit, review and finish reason. Never print RESULT completion text. |
 | `/checkpoints` | List the current task's pre-write checkpoint number, coder seat, short status and time. |
 | `/rewind N` or `/undo` | Restore checkpoint-covered product files and remove newly created files in that same task scope. Keep PLAN, TASK, recipe, result and logs. Undo selects the latest checkpoint only. Stop the seat first; any open/closed/merged PR on the branch refuses rewind, and unavailable PR verification fails closed. Verification/review are invalidated after restoration. |
 | `/statusbar on\|off` | Toggle both blue delivery-tray bars; the default is on and the setting is process-local. |

@@ -7,6 +7,8 @@ export const commands = Object.freeze([
   page('status', 'Session', '/status [N] [--offline]', 'Show cached session fields without a model or GitHub request.', '/status',
     ['--offline: use local cached evidence only']),
   page('history', 'Session', '/history', 'Show the last 20 stored safe commands.', '/history'),
+  page('resume', 'Session', '/resume [N]', 'List local issue runs with no argument; resume an isolated worktree and reuse a valid TASK/recipe.', '/resume 108'),
+  page('recap', 'Session', '/recap', 'Print one human metadata line: outcome, files, last test, review and finish reason. No completion body.', '/recap'),
   page('checkpoints', 'Session', '/checkpoints', 'List current-task checkpoint number, seat, short status and time.', '/checkpoints'),
   page('rewind', 'Session', '/rewind N', 'Restore checkpoint-covered product files; keep TASK/PLAN/logs. Refuse published PRs. /undo means latest only.',
     '/rewind 1', [], ['undo']),
