@@ -46,6 +46,7 @@ import { taskFilesAllowed } from './planner/task.mjs';
 import { listLocalRuns, readLocalRun, recapRun } from './lib/local-runs.mjs';
 import { askSideQuestion } from './lib/side-question.mjs';
 import { formatContext } from './shell/context.mjs';
+import { listIssueWorktrees } from './lib/worktrees.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const unknownCommand = 'Unknown command. /help lists commands.\n';
@@ -100,6 +101,7 @@ const defaultServices = {
   listCheckpoints, rewindCheckpoint, readPlannerTask,
   listLocalRuns, readLocalRun, recapRun,
   askSideQuestion,
+  listIssueWorktrees,
   issueCommenter: commentMergedIssue,
   publisher: publishWithContracts,
   repositoryBranch(cwd) {
@@ -327,6 +329,17 @@ export function createDispatcher({
     const command = canonicalCommand(inputCommand);
     const args = rawArguments?.trim() ?? '';
     switch (command) {
+      case 'worktrees': {
+        if (args) throw new TypeError('Use /worktrees.');
+        const worktrees = await api.listIssueWorktrees({ cwd: currentRoot(), env });
+        output.write(worktrees.length ? worktrees.map((entry) =>
+          redactEvidence(`${entry.path} | ${entry.branch} | ${entry.seat} | ${entry.status}`, {
+            env, apiKeyEnv: state.config.llm.api_key_env,
+          }).replace(/[\x00-\x1f\x7f]/g, '?')).join('\n') + '\n' : 'No registered issue worktrees.\n');
+        return true;
+      }
+      case 'batch':
+        throw new Error('One seat at a time. Worktrees are isolated.');
       case 'context':
         if (args) throw new TypeError('Use /context or /usage.');
         safeWrite(formatContext(state.lastMeasuredSeat, { packBudgetChars: state.config.seat.context_chars, env }));
