@@ -94,6 +94,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   let attemptTurns = 0;
   let finalSummaryOnly = false;
   let checksPassedAfterWrite = false;
+  let lateWriteReturned = false;
   let steeringMessage;
   progress.testRepairs = 0;
   progress.repairFiles = [];
@@ -218,11 +219,21 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         calls = [];
       } else if (finalSummaryOnly && checksPassedAfterWrite && Array.isArray(message.tool_calls) &&
           message.tool_calls.length) {
-        for (const call of message.tool_calls) {
-          await onEvent?.({ type: 'tool-result', name: call?.function?.name ?? 'unknown', status: 'denied' });
+        const returnToDraft = !lateWriteReturned && message.tool_calls.length === 1 &&
+          message.tool_calls[0]?.function?.name === 'write_file';
+        if (returnToDraft) {
+          lateWriteReturned = true;
+          finalSummaryOnly = false;
+          checksPassedAfterWrite = false;
+          attemptTurns = 0;
+          calls = decodeCalls(message, offeredTools, ids, turn);
+        } else {
+          for (const call of message.tool_calls) {
+            await onEvent?.({ type: 'tool-result', name: call?.function?.name ?? 'unknown', status: 'denied' });
+          }
+          deterministic = `Updated ${singleAllowedFile}. Task checks passed.`;
+          calls = [];
         }
-        deterministic = `Updated ${singleAllowedFile}. Task checks passed.`;
-        calls = [];
       } else {
         if (readmeOnlyDocs && Array.isArray(message.tool_calls) && message.tool_calls
           .some((call) => ['list_dir', 'search_text'].includes(call?.function?.name))) {

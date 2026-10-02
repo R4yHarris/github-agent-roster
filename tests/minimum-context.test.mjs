@@ -141,6 +141,50 @@ test('a README-only docs slice offers no list_dir and a directory walk fails the
   assert.equal(readFileSync(join(options.worktree, 'README.md'), 'utf8'), '# Project\n');
 });
 
+test('docs tools exclude list_dir and one write received during test returns to draft', async (t) => {
+  const options = fixture(t);
+  let calls = 0;
+  let tests = 0;
+  const result = await runCoder({
+    ...options,
+    askKind: 'slice',
+    fetchImpl: async (_url, request) => {
+      calls += 1;
+      const body = JSON.parse(request.body);
+      assert.ok(!body.tools.some(({ function: tool }) => tool.name === 'list_dir'));
+      if (calls === 1) {
+        return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant', tool_calls: [{ id: 'first-save', type: 'function', function: {
+            name: 'write_file', arguments: JSON.stringify({
+              path: 'README.md', content: '# Project\n\n## Status\nDraft.\n',
+            }),
+          } }],
+        } }] });
+      }
+      if (calls === 2) {
+        return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant', tool_calls: [{ id: 'late-save', type: 'function', function: {
+            name: 'write_file', arguments: JSON.stringify({
+              path: 'README.md', content: '# Project\n\n## Status\nActive.\n',
+            }),
+          } }],
+        } }] });
+      }
+      return Response.json({ choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant', content: 'Saved the final Status and reran its check.',
+      } }] });
+    },
+    runTestCommand: async () => {
+      tests += 1;
+      return { stdout: 'pass', stderr: '' };
+    },
+  });
+  assert.equal(result.excellence.pass, true);
+  assert.equal(calls, 3);
+  assert.equal(tests, 2);
+  assert.match(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /## Status\nActive\./);
+});
+
 test('an unknown finish reason after a README write fails review by name without printing its response', async (t) => {
   const options = fixture(t);
   let calls = 0;
