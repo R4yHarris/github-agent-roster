@@ -4,6 +4,13 @@ import { modelCapabilityPrior } from '../lib/capabilities.mjs';
 const cloudEfforts = { l: 'low', m: 'medium', h: 'high', x: 'xhigh', none: 'none' };
 const deepseekEfforts = { l: 'low', m: 'high', h: 'high', x: 'max', none: 'none' };
 
+export const DOCS_COMPLETION_FLOOR = 8192;
+
+export function docsCompletionCap(llm = {}) {
+  return Math.max(Number.isSafeInteger(llm.max_tokens) ? llm.max_tokens : DOCS_COMPLETION_FLOOR,
+    DOCS_COMPLETION_FLOOR);
+}
+
 export function usesDeepseekReasoning(llm) {
   return Boolean(llm.base_url && isLocalLlmHost(new URL(llm.base_url).hostname) &&
     /deepseek[-_/]?v4[._-]?1/i.test(llm.model ?? ''));
@@ -44,7 +51,7 @@ export function selectReasoning(config, { kind, taskClass, difficulty, previousE
   if (usesDeepseekReasoning(config.llm) && effort === 'm') effort = 'h';
   return { ...config, llm: { ...config.llm, effort, model_prior: prior.strength,
     task_difficulty: difficulty, task_class: taskClass, task_kind: kind ?? config.llm.task_kind,
-    ...(docsSlice ? { max_tokens: Math.max(config.llm.max_tokens ?? 2048, 2048) }
+    ...(docsSlice ? { max_tokens: docsCompletionCap(config.llm) }
       : planning ? { max_tokens: 4096 } : {}),
   } };
 }

@@ -51,11 +51,11 @@ test('truncated tool calls are not executed and the complete tool_calls retry is
   }, runTestCommand: async () => ({ stdout: 'pass', stderr: '' }) });
   assert.equal(result.excellence.pass, true);
   assert.equal(result.turns, 3);
-  assert.deepEqual(caps, [2048, 2048, 2048]);
+  assert.deepEqual(caps, [8192, 8192, 8192]);
   assert.doesNotMatch(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /PRIVATE_TRUNCATED_BODY/);
 });
 
-test('a README write survives one docs length continue without reasoning at 2048', async (t) => {
+test('a README write survives one docs length continue without reasoning at 8192', async (t) => {
   const options = fixture(t);
   const caps = [];
   let calls = 0;
@@ -80,7 +80,7 @@ test('a README write survives one docs length continue without reasoning at 2048
   }, runTestCommand: async () => ({ stdout: 'pass', stderr: '' }) });
   assert.equal(result.excellence.pass, true);
   assert.equal(result.turns, 3);
-  assert.deepEqual(caps, [2048, 2048, 2048]);
+  assert.deepEqual(caps, [8192, 8192, 8192]);
   assert.match(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /## Status/);
 });
 
@@ -100,7 +100,7 @@ test('a second docs length passes review when the required Status section is alr
         name: 'write_file', arguments: JSON.stringify({ path: 'README.md', content: '# Project\n\n## Status\nActive.\n' }),
       } }],
     } }] });
-    assert.equal(body.max_tokens, 2048);
+    assert.equal(body.max_tokens, 8192);
     assert.equal(body.reasoning_effort, 'none');
     assert.equal(body.chat_template_kwargs.thinking, false);
     return Response.json({ choices: [{ finish_reason: 'length',
@@ -119,6 +119,26 @@ test('a second docs length passes review when the required Status section is alr
     } }] }) });
   assert.equal(review.verdict, 'pass', review.content);
   assert.doesNotMatch(readFileSync(result.resultPath, 'utf8') + review.content, /PRIVATE_BODY/);
+});
+
+test('a README-only docs slice offers no list_dir and a directory walk fails the seat', async (t) => {
+  const options = fixture(t);
+  let calls = 0;
+  await assert.rejects(runCoder({ ...options, fetchImpl: async (_url, request) => {
+    calls += 1;
+    const body = JSON.parse(request.body);
+    const offered = body.tools.map(({ function: tool }) => tool.name);
+    assert.ok(!offered.includes('list_dir'), offered.join(','));
+    assert.ok(!offered.includes('search_text'), offered.join(','));
+    assert.equal(body.max_tokens, 8192);
+    assert.equal(body.chat_template_kwargs.thinking, false);
+    return Response.json({ choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant',
+      tool_calls: [{ id: 'walk', type: 'function', function: {
+        name: 'list_dir', arguments: JSON.stringify({ path: '.' }) } }] } }] });
+  }, runTestCommand: () => assert.fail('A refused directory walk must not run tests') }),
+  /does not allow directory listing/);
+  assert.equal(calls, 1);
+  assert.equal(readFileSync(join(options.worktree, 'README.md'), 'utf8'), '# Project\n');
 });
 
 test('an unknown finish reason after a README write fails review by name without printing its response', async (t) => {
@@ -211,7 +231,7 @@ test('minimum docs coder makes no research request and still checks tests, file 
       calls += 1;
       const body = JSON.parse(request.body);
       assert.equal(body.reasoning_effort, 'none');
-      assert.equal(body.max_tokens, 2048);
+      assert.equal(body.max_tokens, 8192);
       assert.doesNotMatch(body.messages[0].content, /builtin research step|## Principal/);
       assert.deepEqual(body.tools.map(({ function: tool }) => tool.name), calls === 1
         ? ['read_file', 'write_file', 'run_test'] : []);

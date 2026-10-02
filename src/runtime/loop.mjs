@@ -1,6 +1,6 @@
 import { createBuiltinChat } from '../lib/llm.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
-import { taskAndRepairFiles, toolDefinitions } from './tools.mjs';
+import { taskAndRepairFiles, toolDefinitions, ToolAccessError } from './tools.mjs';
 import { redactEvidence, taskSkipsTests } from './excellence.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
 import { applyReadmeStatus, hasRequiredReadmeStatus } from './readme-status.mjs';
@@ -224,6 +224,10 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         deterministic = `Updated ${singleAllowedFile}. Task checks passed.`;
         calls = [];
       } else {
+        if (readmeOnlyDocs && Array.isArray(message.tool_calls) && message.tool_calls
+          .some((call) => ['list_dir', 'search_text'].includes(call?.function?.name))) {
+          throw new ToolAccessError('README-only docs task does not allow directory listing or repository search');
+        }
         calls = decodeCalls(message, offeredTools, ids, turn);
         if ((needsTools || finishReason === 'tool_calls') && !calls.length) {
           throw new MalformedCoderTools('Coder repair did not emit tool calls');

@@ -17,7 +17,7 @@ const completion = (reason, content = 'Done.', usage) => Response.json({
   model: 'served-model', choices: [{ finish_reason: reason, message: { role: 'assistant', content } }], usage,
 });
 
-test('docs length continues once at 2048 without reasoning and logs the requested human line', async (t) => {
+test('docs length continues once at 8192 without reasoning and logs the requested human line', async (t) => {
   const repoRoot = mkdtempSync(path.join(tmpdir(), 'roster-docs-length-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
   const docs = selectReasoning({ ...config, llm: { ...config.llm, model: 'deepseek-v4.1-flash' } },
@@ -34,7 +34,7 @@ test('docs length continues once at 2048 without reasoning and logs the requeste
     await chat({ messages: [{ role: 'user', content: 'Edit docs/guide.md.' }] });
     await chat({ messages: [{ role: 'user', content: 'Finish.' }] });
   });
-  assert.deepEqual(requests.map(({ max_tokens }) => max_tokens), [2048, 2048, 2048]);
+  assert.deepEqual(requests.map(({ max_tokens }) => max_tokens), [8192, 8192, 8192]);
   assert.deepEqual(requests.map(({ reasoning_effort }) => reasoning_effort), ['none', 'none', 'none']);
   assert.deepEqual(requests.map(({ chat_template_kwargs }) => chat_template_kwargs.thinking), [false, false, false]);
   assert.equal(requests[1].messages.at(-2).role, 'assistant');
@@ -56,14 +56,14 @@ test('cloud docs slices disable reasoning from the first request while non-slice
       return completion(requests.length === 1 ? 'length' : 'stop');
     } });
     await chat({ messages: [{ role: 'user', content: 'Docs task.' }] });
-    assert.equal(requests[0].max_tokens, kind === 'slice' ? 2048 : 4096);
-    assert.equal(requests[1].max_tokens, kind === 'slice' ? 2048 : 2048);
+    assert.equal(requests[0].max_tokens, kind === 'slice' ? 8192 : 4096);
+    assert.equal(requests[1].max_tokens, kind === 'slice' ? 8192 : 2048);
     assert.equal(requests[0].reasoning_effort, kind === 'slice' ? 'none' : 'medium');
     assert.equal(requests[1].reasoning_effort, kind === 'slice' ? 'none' : requests[0].reasoning_effort);
   }
 });
 
-test('a docs slice never sends a completion cap below 2048 and sends the thinking flag disabled', async () => {
+test('a docs slice never sends a completion cap below 8192 and sends the thinking flag disabled', async () => {
   for (const configured of [undefined, 256, 512, 8192]) {
     const selected = selectReasoning({ ...config, llm: { ...config.llm, model: 'deepseek-v4.1-flash',
       ...(configured === undefined ? {} : { max_tokens: configured }) } },
@@ -76,7 +76,7 @@ test('a docs slice never sends a completion cap below 2048 and sends the thinkin
     await chat({ messages: [{ role: 'user', content: 'Docs task.' }] });
     for (const body of requests) {
       assert.notEqual(body.max_tokens, 512);
-      assert.ok(body.max_tokens >= 2048, `cap ${body.max_tokens} is below 2048`);
+      assert.ok(body.max_tokens >= 8192, `cap ${body.max_tokens} is below 8192`);
       assert.equal(body.chat_template_kwargs.thinking, false);
     }
   }

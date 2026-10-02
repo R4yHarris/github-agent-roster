@@ -77,7 +77,7 @@ without editing the tracked example or storing credentials.
 - `llm.effort` (`l|m|h|x|none`) describes effort; automatic seat selection uses
   task difficulty versus the model capability prior for every ask. A strong
   model uses low at difficulty1-2; difficulty4-5 uses high, regardless of
-  task class or filenames. Docs difficulty1-2 retains 2048 output tokens;
+  task class or filenames. Docs difficulty1-2 retains at least 8192 output tokens;
   feature/initiative plans retain 4096; slice context remains minimum. Requests send the
   selected `reasoning_effort` and `max_tokens`. Cloud maps l/m/h/x to
   low/medium/high/xhigh. Local DeepSeek-V4.1 maps to low/high/high/max;

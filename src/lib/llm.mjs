@@ -1,5 +1,5 @@
 import { createChat } from '../llm/openai.mjs';
-import { mappedEffort, usesDeepseekReasoning } from '../llm/reasoning.mjs';
+import { docsCompletionCap, mappedEffort, usesDeepseekReasoning } from '../llm/reasoning.mjs';
 import { modelCapabilityPrior } from './capabilities.mjs';
 import { UnsupportedFinishReasonError } from '../llm/finish-reason.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
@@ -30,13 +30,15 @@ export function createBuiltinChat(config, {
   })), retryCommand, clock, signal });
   if (transport === null) return null;
   let completionCap = docsSlice
-    ? Math.max(config.llm.max_tokens ?? 2048, 2048) : config.llm.max_tokens ?? 4096;
+    ? docsCompletionCap(config.llm) : config.llm.max_tokens ?? 4096;
   let reasoningDisabled = docsSlice;
   let lengthRetried = false;
   let lastAttempts = 0;
   let lastUsage = null;
   const chat = async (request, { signal: requestSignal = signal } = {}) => {
-    let current = { ...request, max_tokens: request.max_tokens ?? completionCap,
+    let current = { ...request, max_tokens: docsSlice
+      ? Math.max(request.max_tokens ?? completionCap, completionCap)
+      : request.max_tokens ?? completionCap,
       ...(reasoningDisabled ? { reasoning_effort: 'none',
         ...(usesDeepseekReasoning(config.llm) ? { chat_template_kwargs: { thinking: false } } : {}),
       } : {}),

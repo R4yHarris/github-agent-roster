@@ -103,19 +103,23 @@ For a non-docs-slice run it logs `Response truncated. Retrying.`, discards the
 truncated completion without executing or replaying its tool calls, and asks
 for a concise complete response with half the previous completion cap.
 A docs slice starts with reasoning disabled (`reasoning_effort: none`, and
-local DeepSeek `thinking: false`) and never sends a completion cap below 2048.
+local DeepSeek `thinking: false`) before its first request and never sends a
+completion cap below 8192, including the continue turn.
 On `length` it logs `Response truncated. Continuing the same message.`, keeps
 the partial assistant message, and sends exactly one *continue* turn at the
 same cap; a truncated tool call is still dropped rather than replayed, and the
 continue turn then asks for the complete call. This applies regardless of the
 docs filename, preserves completed writes, and has no second retry.
 Builtin requests start at 4096 tokens unless the seat supplies a cap, such as
-2048 for docs slices. The retry cap and, for docs slices, disabled reasoning remain in effect for later
+the 8192 floor for docs slices. The retry cap and, for docs slices, disabled reasoning remain in effect for later
 requests; it is an output cap, not the model context capacity.
 The retry is an extra coder model turn, independent of failed-test repairs.
 A second `length` after a saved README-only Status edit is treated as a
 late summary success when the exact `## Status` heading and one body line are
-already present. Otherwise a second `length`, or any other unsupported reason,
+already present. A README-only docs slice is offered `read_file`, `write_file`
+and `run_test` only: `list_dir` and `search_text` are not in its tool list, and
+a requested directory walk fails the seat instead of starting another turn.
+Otherwise a second `length`, or any other unsupported reason,
 is terminal and appears by name in failure evidence and review. Completed
 README writes are preserved; the invalid response cannot overwrite them.
 Response-backed metrics retain

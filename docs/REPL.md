@@ -219,8 +219,8 @@ These are status projections only: they do not add tools, checks, edits, or work
 Unsupported LLM finish reasons are named in the shell and run log without
 printing response bodies. `stop` and `tool_calls` are accepted. The first
 `length` uses one extra model turn. A docs slice logs
-`Response truncated. Retrying without reasoning.`, disables reasoning, and
-raises the completion cap once from 2048 to 4096. Other tasks retain
+`Response truncated. Continuing the same message.`, keeps reasoning disabled
+and keeps the same completion cap of at least 8192. Other tasks retain
 `Response truncated. Retrying.` with half the cap. Repeated
 truncation or another unsupported reason fails review with that reason,
 preserving any completed README write. This does not consume a test repair.
@@ -339,7 +339,7 @@ endpoint or profile, setting a model alone still leaves the stub active.
 Every ask uses difficulty versus the [model capability prior](CAPABILITIES.md):
 strong models use low at difficulty1-2, while difficulty4-5 uses high.
 This is independent of task class or filenames. Low-difficulty docs slices
-retain `max_tokens: 2048`; feature/initiative plans retain 4096.
+retain a `max_tokens` floor of 8192; feature/initiative plans retain 4096.
 Every slice denies reads outside TASK.md and its allowed files, including
 tests/fixtures and harness sources unless allowed explicitly.
 A new `/run` after a failing REVIEW
