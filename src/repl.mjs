@@ -39,6 +39,10 @@ import { formatIssueSummary, listOpenIssues, readDiffNames } from './lib/board.m
 import { checkDoctor, formatDoctor, warmDoctor } from './lib/doctor.mjs';
 import { configSetting, privateConfigPath, publicConfig } from './shell/settings.mjs';
 import { parseShellEvaluationArgs } from './shell/evaluation.mjs';
+import { listCheckpoints, rewindCheckpoint } from './lib/checkpoints.mjs';
+import { readPlannerTask } from './seats/planner.mjs';
+import { taskAndRepairFiles } from './runtime/tools.mjs';
+import { taskFilesAllowed } from './planner/task.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const unknownCommand = 'Unknown command. /help lists commands.\n';
@@ -90,6 +94,7 @@ const defaultServices = {
   getFleetProfile, loadFleet, withFleetProfile, runFleet, probeModelDetails,
   formatIssueSummary, listOpenIssues, readDiffNames,
   checkDoctor, formatDoctor, warmDoctor, privateConfigPath, publicConfig,
+  listCheckpoints, rewindCheckpoint, readPlannerTask,
   issueCommenter: commentMergedIssue,
   publisher: publishWithContracts,
   repositoryBranch(cwd) {
@@ -305,6 +310,35 @@ export function createDispatcher({
     const command = canonicalCommand(inputCommand);
     const args = rawArguments?.trim() ?? '';
     switch (command) {
+      case 'checkpoints':
+      case 'rewind': {
+        const run = state.lastRun;
+        if (!run?.worktreePath || !run.task) throw new Error('Run or resume a task worktree before using checkpoints.');
+        if (command === 'checkpoints') {
+          if (args) throw new TypeError('Use /checkpoints.');
+          const records = await api.listCheckpoints({ worktree: run.worktreePath, task: run.task });
+          output.write(records.length ? records.map((record) =>
+            `${record.number} | ${record.seat} | ${record.status} | ${record.time}`).join('\n') + '\n' : 'No checkpoints.\n');
+          return true;
+        }
+        const latest = inputCommand === 'undo';
+        if (latest ? Boolean(args) : !/^[1-9]\d*$/.test(args) || !Number.isSafeInteger(Number(args))) {
+          throw new TypeError(latest ? 'Use /undo for the latest checkpoint only.' : 'Use /rewind N.');
+        }
+        if (state.controller !== null) throw new Error('Stop the active seat before rewinding product files.');
+        const task = await api.readPlannerTask(run.worktreePath);
+        if (task === null) throw new Error('Rewind requires the current TASK.md product scope.');
+        const checkpoint = await api.rewindCheckpoint({ worktree: run.worktreePath, task: run.task,
+          number: latest ? undefined : Number(args), published: state.published, env,
+          allowedFiles: taskAndRepairFiles(taskFilesAllowed(task), run.result?.repairFiles) });
+        state.lastRun = { ...run, review: null, ...(run.result ? { result: { ...run.result,
+          excellence: { ...run.result.excellence, pass: false, reasons: ['Product files were rewound; rerun verification.'] } } } : {}) };
+        state.display.state = 'idle';
+        state.display.review = null;
+        notify();
+        output.write(`Rewound product files to checkpoint ${checkpoint.number}. TASK, plan, and logs were kept; rerun checks before publishing.\n`);
+        return true;
+      }
       case 'plan':
         if (!args) throw new TypeError('Use /plan TEXT, or /run N --plan.');
         return runRequest({ kind: 'ask', text: args, options: { planMode: true } });

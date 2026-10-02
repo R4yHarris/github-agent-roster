@@ -5,6 +5,7 @@ node_modules/
 .roster/logs/
 .roster/history
 .roster/history.*
+.roster/checkpoints/
 .roster/evals.jsonl
 .roster/config.yml
 .roster/config.yml.*

@@ -38,7 +38,7 @@ export function isForbiddenRead(file) {
 
 function isProtectedSurface(file) {
   const parts = partsOf(file);
-  return hasAmbiguousComponents(file) || isSecret(file) || isDebugLog(file) || isShellHistory(file) ||
+  return hasAmbiguousComponents(file) || isSecret(file) || isDebugLog(file) || isShellHistory(file) || isCheckpoint(file) ||
     parts.includes('.git') || parts.includes('agent-policy.yml') ||
     parts.some((part, index) =>
       (part === '.github' && parts[index + 1] === 'workflows') ||
@@ -54,7 +54,7 @@ export function isForbiddenWrite(file) {
 
 export function isManagedFile(file) {
   const parts = partsOf(file);
-  return parts.length === 1 && managedFiles.has(parts[0]) || isRunLog(file) || isDebugLog(file) || isShellHistory(file);
+  return parts.length === 1 && managedFiles.has(parts[0]) || isRunLog(file) || isDebugLog(file) || isShellHistory(file) || isCheckpoint(file);
 }
 
 export function isDebugLog(file) {
@@ -65,6 +65,11 @@ export function isDebugLog(file) {
 export function isShellHistory(file) {
   const parts = partsOf(file);
   return parts[0] === '.roster' && (parts[1] === 'history' || parts[1]?.startsWith('history.'));
+}
+
+export function isCheckpoint(file) {
+  const parts = partsOf(file);
+  return parts[0] === '.roster' && parts[1] === 'checkpoints';
 }
 
 export function isRunLog(file) {
@@ -212,6 +217,7 @@ export async function createTools({
   sliceReadsOnly = false,
   runCommand = execute,
   onEvent, signal,
+  beforeWrite,
 } = {}) {
   if (!['planner', 'coder'].includes(seat)) throw new TypeError('Only planner and coder seats have file tools');
   if (seat === 'planner' && (!Array.isArray(plannerArtifacts) || !plannerArtifacts.length ||
@@ -231,6 +237,7 @@ export async function createTools({
     throw new TypeError('README-only docs tools require coder scope limited to README.md');
   }
   if (onEvent !== undefined && typeof onEvent !== 'function') throw new TypeError('Live tool observer must be a function');
+  if (beforeWrite !== undefined && typeof beforeWrite !== 'function') throw new TypeError('Pre-write checkpoint hook must be a function');
   const root = path.resolve(worktree);
   const status = await fs.lstat(root);
   if (!status.isDirectory() || status.isSymbolicLink()) {
@@ -356,6 +363,7 @@ export async function createTools({
         throw error;
       });
       if (existing && !existing.isFile()) throw new Error('write_file requires a regular file');
+      if (seat === 'coder') await beforeWrite?.({ path: normalized, allowedFiles: scopedFiles() });
       const previous = plannerWrites.get(normalized);
       if (seat === 'planner' && (existing && !previous || !existing && previous)) {
         throw new Error('Planner cannot overwrite pre-existing or externally replaced artifacts');

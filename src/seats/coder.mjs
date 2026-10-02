@@ -12,6 +12,9 @@ import { createTools } from '../runtime/tools.mjs';
 import { isLlmTimeout, retryCommandForTask } from '../llm/request.mjs';
 import { selectReasoning } from '../llm/reasoning.mjs';
 import { throwIfCancelled } from '../runtime/cancel.mjs';
+import { lstatSync } from 'node:fs';
+import path from 'node:path';
+import { captureCheckpoint } from '../lib/checkpoints.mjs';
 
 export async function runCoder({
   worktree, repoRoot, config, task, session, fetchImpl, env = process.env, vault, runTestCommand,
@@ -55,6 +58,9 @@ export async function runCoder({
       allowRunTest: config.tools?.run_test !== false,
       readmeOnlyDocs: context.contextPolicy.readmeOnlyDocs,
       sliceReadsOnly: context.contextPolicy.sliceReadsOnly,
+      beforeWrite: lstatSync(path.join(worktree, '.git'), { throwIfNoEntry: false })
+        ? ({ allowedFiles }) => captureCheckpoint({ worktree, task, allowedFiles, env,
+          apiKeyEnv: config.llm.api_key_env, signal }) : undefined,
       signal,
       onEvent,
     });
