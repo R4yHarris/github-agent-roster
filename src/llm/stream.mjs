@@ -53,7 +53,10 @@ export function createCompletionAssembler(requestedModel) {
   };
 }
 
-export async function readChatStream(response, requestedModel) {
+export async function readChatStream(response, requestedModel, { onDelta } = {}) {
+  if (onDelta !== undefined && typeof onDelta !== 'function') {
+    throw new TypeError('A stream delta observer must be a function.');
+  }
   const body = response.body;
   if (!body || typeof body.getReader !== 'function') {
     throw new ChatError('The LLM stream did not contain a readable body.');
@@ -65,7 +68,7 @@ export async function readChatStream(response, requestedModel) {
   let bytes = 0;
   let done = false;
 
-  const consume = (block) => {
+  const consume = async (block) => {
     for (const line of block.split('\n')) {
       const field = line.startsWith('data:') ? line.slice(5).trim() : '';
       if (!field) continue;
@@ -80,19 +83,29 @@ export async function readChatStream(response, requestedModel) {
         throw new ChatError('The LLM response was not valid JSON.');
       }
       assembler.push(chunk);
+      const text = isObject(chunk) && Array.isArray(chunk.choices)
+        ? chunk.choices[0]?.delta?.content : undefined;
+      if (onDelta && typeof text === 'string' && text) await onDelta(text);
     }
   };
 
   try {
     for (;;) {
-      const { value, done: finished } = await reader.read();
+      let value;
+      let finished;
+      try {
+        ({ value, done: finished } = await reader.read());
+      } catch (error) {
+        if (error instanceof ChatError) throw error;
+        throw new ChatError('The LLM stream ended before the response was complete.', 'response');
+      }
       if (finished) break;
       bytes += value?.byteLength ?? 0;
       if (bytes > maxStreamBytes) throw new ChatError('The LLM stream exceeded the supported size.');
       buffer += decoder.decode(value, { stream: true });
       let separator = buffer.search(/\r?\n\r?\n/);
       while (separator !== -1) {
-        consume(buffer.slice(0, separator).replace(/\r/g, ''));
+        await consume(buffer.slice(0, separator).replace(/\r/g, ''));
         buffer = buffer.slice(separator).replace(/^\r?\n\r?\n/, '');
         separator = buffer.search(/\r?\n\r?\n/);
       }
@@ -102,6 +115,6 @@ export async function readChatStream(response, requestedModel) {
     await reader.cancel().catch(() => {});
   }
   buffer += decoder.decode();
-  if (buffer.trim()) consume(buffer.replace(/\r/g, ''));
+  if (buffer.trim()) await consume(buffer.replace(/\r/g, ''));
   return assembler.payload();
 }

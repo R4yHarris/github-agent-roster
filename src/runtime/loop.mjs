@@ -89,7 +89,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   if (readmeOnlyDocs && !offeredTools.has('write_file')) {
     throw new Error('README-only docs task requires write_file; enable it before running the coder');
   }
-  const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand, signal });
+  const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand, signal, stream: true });
   const usages = [];
   const ids = new Set();
   let repaired = false;

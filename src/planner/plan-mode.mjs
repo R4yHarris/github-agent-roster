@@ -30,7 +30,7 @@ export async function planSlice(ask, {
       mode: 'stub', turns: 0, usage: null, response: null };
   }
   const { createBuiltinChat } = await import('../lib/llm.mjs');
-  const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand, signal });
+  const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand, signal, stream: true });
   const messages = [
     { role: 'system', content: 'You are the read-only plan-mode planner. Explore with read_file, list_dir, or search_text. ' +
       'You may write only PLAN.md, never TASK.md, RECIPE.yml, product code, tests, or publishing operations. ' +

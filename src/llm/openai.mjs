@@ -168,8 +168,16 @@ export function createChat(config = {}, {
           throw new ChatError(`The LLM request failed (HTTP ${response.status}).`, 'http');
         }
         let payload;
+        const sseBody = typeof response.body?.getReader === 'function' &&
+          !/application\/json/i.test(response.headers?.get?.('content-type') ?? '');
         try {
-          payload = streaming ? await readChatStream(response, model) : await response.json();
+          payload = streaming && sseBody
+            ? await readChatStream(response, model, { onDelta: onEvent && (async (text) => {
+              const safe = redactSecrets(key ? text.split(key).join('[redacted]') : text,
+                { env, apiKeyEnv: llm.api_key_name ?? 'OPENAI_API_KEY' });
+              if (safe) await onEvent({ type: 'delta', text: safe });
+            }) })
+            : await response.json();
         } catch (error) {
           if (error instanceof ChatError) throw error;
           throw new ChatError('The LLM response was not valid JSON.');

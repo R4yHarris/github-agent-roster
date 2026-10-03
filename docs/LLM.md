@@ -98,11 +98,20 @@ Extra request fields, such as `temperature` and `max_tokens`, pass through.
 A request may set `stream: true`; the client then adds
 `stream_options: { include_usage: true }`, assembles the server-sent chunks
 into the same `{ message, usage }` result and reads `usage` from the final
-chunk. After every call that reports usage, streaming or not, the client emits
+chunk. Each content delta is forwarded as a redacted `delta` event as it
+arrives, while tool-call deltas only accumulate: the assembled message carries
+complete tool-call arguments, so no caller can act on a partial argument. A
+stream that fails before it completes raises the stream error rather than an
+empty response, and a server that answers a streaming request with a JSON body
+is parsed as a plain completion. The builtin adapter takes `stream: true` for
+the plan, draft, test and review seats; the research and side-question helpers
+stay non-streaming. After every call that reports usage, streaming or not, the
+client emits
 one `usage` event with the server's prompt and completion tokens, plus the
 cached prompt tokens when the endpoint reports them. Token counts are never
 estimated from message length, and the event reaches the rail and `/usage`
-only, never the run log or a trailer.
+only, never the run log or a trailer. Streamed text reaches the live transcript
+only; it is never written to the run log or the debug log.
 
 The shared builtin adapter accepts `stop` and `tool_calls` and grants one
 `length` retry per chat instance (the coder keeps one instance for its run).
