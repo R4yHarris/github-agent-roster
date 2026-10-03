@@ -266,6 +266,7 @@ Its checks run immediately after that write. One failed check returns once to
 draft with a bounded, redacted failure summary; a second failure stops with the
 check output and never starts review. Multi-file tasks retain up to four test
 repair attempts and may include specifically identified failing test files.
+An explicit `tests: none` waiver skips checks, not the required product write.
 Each repair streams its actual attempt and budget. Excellence and reviewer wait
 for green tests; a failed or productless draft never opens review. The first
 model-backed review failure of a bounded one-file slice returns once to draft,
