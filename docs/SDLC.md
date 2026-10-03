@@ -200,13 +200,21 @@ excellence gate, and writes RESULT.md.
 Failed configured runs also save a truthful result before rejecting. See the
 [five-tool contract and denylist](TOOLS.md) for the exact inputs and
 protected surfaces.
-After RESULT.md, the read-only builtin reviewer checks the task acceptance
-checks and the Git diff against that result, then writes REVIEW.md with
-pass/fail reasons and security notes. For a bounded single-file docs slice, the
-first model-backed review failure returns once to the coder with the review
-feedback, then reviews the repaired result again; a second failure stops. Other
-failed reviews leave the coder's changes intact and block Roster-managed
-publication by default; see [review and explicit bypass](REVIEW.md).
+For any bounded one-file slice, the coder is offered only scoped reads, the
+named product write, and checks—never directory listing or repository search.
+A tool call is an action, not a result; complete tool calls run before the same
+seat continues. The product write runs checks immediately. One failed check
+returns once to draft, while a second failure stops without starting review.
+Narration remains a live rewritten transcript line and is not the seat result.
+
+After a successful RESULT.md, the read-only builtin reviewer checks the task
+acceptance checks and the Git diff against that result, then writes REVIEW.md
+with pass/fail reasons and security notes. A failed or productless draft does
+not open review. For every bounded one-file slice, the first model-backed
+review failure returns once to the coder with the review feedback, then reviews
+the repaired result again; a second failure stops. Other failed reviews leave
+the coder's changes intact and block Roster-managed publication by default;
+see [review and explicit bypass](REVIEW.md).
 
 With no endpoint, the stub writes a deterministic `RESULT.md` summary, exits
 zero, and **does not edit code or run tests**. It cannot deliver a software

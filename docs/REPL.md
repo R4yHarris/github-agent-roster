@@ -260,14 +260,17 @@ and keeps the same completion cap of at least 8192. Other tasks retain
 truncation or another unsupported reason fails review with that reason,
 preserving any completed README write. This does not consume a test repair.
 
-Failed tests keep the coder running for one repair attempt on a bounded
-single-file docs slice, or up to four repair attempts for other tasks. It reads
-a bounded, redacted summary, repairs allowed files plus any specifically
-identified failing test, and reruns `node --test`. Each repair streams its
-actual attempt and budget.
-Excellence and reviewer wait for green tests or exhaustion of that budget;
-exit 1 is never done. Timeouts and denied paths remain failures, and initiative
-plans still stop after PLAN.md.
+For any bounded one-file slice, draft offers only `read_file`, `write_file`,
+and `run_test`; the named product file must be written before draft can finish.
+Its checks run immediately after that write. One failed check returns once to
+draft with a bounded, redacted failure summary; a second failure stops with the
+check output and never starts review. Multi-file tasks retain up to four test
+repair attempts and may include specifically identified failing test files.
+Each repair streams its actual attempt and budget. Excellence and reviewer wait
+for green tests; a failed or productless draft never opens review. The first
+model-backed review failure of a bounded one-file slice returns once to draft,
+then a second review verdict ends the loop. Timeouts and denied paths remain
+failures, and initiative plans still stop after PLAN.md.
 
 The existing timestamped technical metadata is appended **only** to the issue repository's
 `.roster/runs/roster-N-coder.log`: seat starts, model/endpoint host, HTTP

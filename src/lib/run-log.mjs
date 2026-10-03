@@ -106,7 +106,8 @@ export async function createRunLog({
         if (!tools.includes(event.name)) throw new TypeError('Invalid live tool refusal event');
         return `tool refused ${event.name} outside-worktree`;
       case 'test-repair':
-        if (event.budget !== 4 || !Number.isInteger(event.attempt) || event.attempt < 1 || event.attempt > event.budget) {
+        if (![1, 4].includes(event.budget) || !Number.isInteger(event.attempt) ||
+            event.attempt < 1 || event.attempt > event.budget) {
           throw new TypeError('Invalid live test repair event');
         }
         return `test repair ${event.attempt}/${event.budget}`;

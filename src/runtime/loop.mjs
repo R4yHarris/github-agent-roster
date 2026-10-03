@@ -8,7 +8,6 @@ import { ContractsSubmoduleError, onlyMissingContractsScripts } from '../lib/con
 import { UnsupportedFinishReasonError } from '../llm/finish-reason.mjs';
 import { throwIfCancelled } from './cancel.mjs';
 import { SteeringInterrupt } from './steering.mjs';
-import { readTaskMetadata } from './estimate.mjs';
 
 class MalformedCoderTools extends Error {}
 export const testRepairBudget = 4;
@@ -57,11 +56,10 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   const readmeOnlyDocs = context.contextPolicy?.readmeOnlyDocs === true;
   const sliceReadsOnly = context.contextPolicy?.sliceReadsOnly === true;
   const parsedTask = parseTaskDocument(context.task);
-  const singleAllowedFile = readTaskMetadata(context.task).task_class === 'docs' &&
-    parsedTask.files_allowed.length === 1
+  const singleAllowedFile = parsedTask.files_allowed.length === 1
     ? parsedTask.files_allowed[0] : null;
-  const boundedDocs = singleAllowedFile !== null;
-  const repairBudget = boundedDocs ? 1 : testRepairBudget;
+  const boundedTask = singleAllowedFile !== null;
+  const repairBudget = boundedTask ? 1 : testRepairBudget;
 
   const messages = [
     { role: 'system', content: context.pack },
@@ -70,14 +68,16 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         'Read task-allowed files before edits; no principal or research pack is needed. '
         : 'Read RESEARCH.md for the pre-edit inventory and gaps. ') +
       (readmeOnlyDocs ? 'Read only TASK.md or README.md; write README.md before tests or finishing. ' : '') +
+      (boundedTask && !readmeOnlyDocs
+        ? `Read TASK.md or ${singleAllowedFile}; write ${singleAllowedFile} before tests or finishing. ` : '') +
       (sliceReadsOnly ? 'Reads, listings, and searches are limited to TASK.md and TASK-allowed paths. ' : '') +
       'Do not claim acceptance checks passed without evidence. ' +
       'Finish with a concise summary of changes, test results, and blockers.' },
   ];
   const definitions = toolDefinitions.filter((tool) => config.seat.tools.includes(tool.function.name) &&
     (tool.function.name !== 'run_test' || config.tools?.run_test !== false) &&
-    (!boundedDocs || ['read_file', 'write_file', 'run_test'].includes(tool.function.name))).map((tool) =>
-    !boundedDocs || tool.function.name === 'run_test' ? tool : {
+    (!boundedTask || ['read_file', 'write_file', 'run_test'].includes(tool.function.name))).map((tool) =>
+    !boundedTask || tool.function.name === 'run_test' ? tool : {
       ...tool, function: { ...tool.function, parameters: { ...tool.function.parameters,
         properties: { ...tool.function.parameters.properties,
           path: { type: 'string', enum: tool.function.name === 'read_file'
@@ -239,9 +239,9 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
           calls = [];
         }
       } else {
-        if (boundedDocs && Array.isArray(message.tool_calls) && message.tool_calls
+        if (boundedTask && Array.isArray(message.tool_calls) && message.tool_calls
           .some((call) => ['list_dir', 'search_text'].includes(call?.function?.name))) {
-          throw new ToolAccessError('Bounded docs task does not allow directory listing or repository search');
+          throw new ToolAccessError('Bounded task does not allow directory listing or repository search');
         }
         calls = decodeCalls(message, offeredTools, ids, turn);
         if ((needsTools || finishReason === 'tool_calls') && !calls.length) {

@@ -33,7 +33,7 @@ import { readTaskMetadata } from '../runtime/estimate.mjs';
 import { loadCapabilities } from './capabilities.mjs';
 import { initializeWorktreeSubmodules } from './contracts.mjs';
 import { createDebugLog } from './debug-log.mjs';
-import { isRunCancelled, throwIfCancelled } from '../runtime/cancel.mjs';
+import { throwIfCancelled } from '../runtime/cancel.mjs';
 import { issueWave, requireEarlierWavesClosed } from './waves.mjs';
 import { githubRepository } from './issue.mjs';
 
@@ -236,21 +236,33 @@ export async function runBuiltinTask({
     });
     return { review, reviewRun };
   };
+  const coderSeat = (priorFeedback = null) =>
+    liveLog.seat('coder', session, config, (onEvent) => runCoder({
+      worktree: worktreePath, repoRoot, config, env, task, session,
+      fetchImpl, vault, runTestCommand, priorFeedback, onEvent, askKind, retryCommand, signal, steeringControl,
+    }));
   let result;
   try {
-    result = await liveLog.seat('coder', session, config, (onEvent) => runCoder({
-      worktree: worktreePath, repoRoot, config, env, task, session,
-      fetchImpl, vault, runTestCommand, onEvent, askKind, retryCommand, signal, steeringControl,
-    }));
+    result = await coderSeat();
   } catch (error) {
     if (error instanceof Error && error.result) {
       await record(error.result);
-      if (!isRunCancelled(error)) error.result.review = (await reviewSeat(error.result)).review;
     }
     throw error;
   }
   await record(result);
-  const { review, reviewRun } = await reviewSeat(result);
+  let { review, reviewRun } = await reviewSeat(result);
+  const boundedTask = taskFilesAllowed(taskSource).length === 1;
+  if (boundedTask && result.excellence.pass && review.queried && review.verdict === 'fail') {
+    await archiveRunArtifacts(worktreePath, {
+      task,
+      git: (args) => git(worktreePath, args, withoutLlmKeys(env, config)),
+      preserve: ['TASK.md'],
+    });
+    result = await coderSeat(review.content);
+    await record(result);
+    ({ review, reviewRun } = await reviewSeat(result));
+  }
   log(`Worktree: ${worktreePath}\nTASK: ${path.join(worktreePath, 'TASK.md')}\n` +
     `Live log: ${liveLog.path}\n` +
     `CONTEXT: ${result.contextPath}\n` + (result.researchPath ? `RESEARCH: ${result.researchPath}\n` : '') +
@@ -590,15 +602,14 @@ async function runBuiltinAssignment(issueNumber, {
   } catch (error) {
     if (error instanceof Error && error.result) {
       await recordSeat(sessions.coder, error.result.run, error.result.excellence);
-      if (!isRunCancelled(error)) error.result.review = (await reviewSeat(error.result)).review;
     }
     throw error;
   }
   let coderRun = result.run;
   await recordSeat(sessions.coder, coderRun, result.excellence);
   let { review, reviewerRun } = await reviewSeat(result);
-  const boundedDocs = planner.metadata.task_class === 'docs' && taskFilesAllowed(planner.task).length === 1;
-  if (boundedDocs && result.excellence.pass && review.queried && review.verdict === 'fail') {
+  const boundedTask = taskFilesAllowed(planner.task).length === 1;
+  if (boundedTask && result.excellence.pass && review.queried && review.verdict === 'fail') {
     await archiveRunArtifacts(worktreePath, {
       task: prepared.task,
       git: (args) => git(worktreePath, args, commandEnv),

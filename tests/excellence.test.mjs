@@ -145,11 +145,22 @@ test('an explicit no-tests task skips automatic tests but still writes a gated r
   cpSync(new URL('../skills/', import.meta.url), path.join(options.repoRoot, 'skills'), { recursive: true });
   writeFileSync(path.join(options.worktree, 'AGENTS.md'), '# Instructions\nStay scoped.\n');
   writeFileSync(path.join(options.worktree, 'TASK.md'), options.task.replace('---\n', '---\ntests: none\n'));
+  let turns = 0;
   const result = await runCoder({
     ...options, config, task: 'issue-4', session: 'coder-4', vault: { get: async () => undefined },
-    fetchImpl: withResearchSummary(async () => ({ status: 200, json: async () => ({
-      choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'No tests requested.' } }],
-    }) })),
+    fetchImpl: withResearchSummary(async () => {
+      turns += 1;
+      return Response.json({ choices: [turns === 1 ? {
+        finish_reason: 'tool_calls',
+        message: { role: 'assistant', tool_calls: [{ id: 'write', type: 'function', function: {
+          name: 'write_file', arguments: JSON.stringify({
+            path: 'README.md', content: '# Bounded no-tests result\n',
+          }),
+        } }] },
+      } : {
+        finish_reason: 'stop', message: { role: 'assistant', content: 'No tests requested.' },
+      }] });
+    }),
     runTestCommand: () => assert.fail('Explicit no-tests task must not automatically execute tests'),
   });
   assert.equal(result.excellence.pass, true);
