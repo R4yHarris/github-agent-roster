@@ -177,7 +177,7 @@ export async function runReviewer({
       if (evidence.length + (principal?.content.length ?? 0) + instructions.length > budget) {
         throw new Error('Reviewer evidence exceeds seat.context_chars');
       }
-      const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand, signal });
+      const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand, signal, stream: true });
       queried = true;
       const response = await chat({ messages: [
         { role: 'system', content: instructions + (principal ? `\n\n${principal.content.trim()}` : '') },

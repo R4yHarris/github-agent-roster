@@ -6,9 +6,10 @@ import { mergeUsage } from '../metrics/run.mjs';
 
 export function createBuiltinChat(config, {
   fetchImpl, env = process.env, vault, onEvent, retryCommand, clock, signal,
-  retryLength = true,
+  retryLength = true, stream = false,
 } = {}) {
   if (typeof retryLength !== 'boolean') throw new TypeError('Length retry permission must be a boolean');
+  if (typeof stream !== 'boolean') throw new TypeError('Seat streaming permission must be a boolean');
   const docsSlice = config.llm.task_kind === 'slice' && config.llm.task_class === 'docs';
   const outbound = { maxTokens: null, thinking: null };
   const transport = createChat({ llm: {
@@ -39,6 +40,7 @@ export function createBuiltinChat(config, {
     let current = { ...request, max_tokens: docsSlice
       ? Math.max(request.max_tokens ?? completionCap, completionCap)
       : request.max_tokens ?? completionCap,
+      ...(stream ? { stream: request.stream ?? true } : {}),
       ...(reasoningDisabled ? { reasoning_effort: 'none',
         ...(usesDeepseekReasoning(config.llm) ? { chat_template_kwargs: { thinking: false } } : {}),
       } : {}),
@@ -104,8 +106,8 @@ export function createBuiltinChat(config, {
   return chat;
 }
 
-export async function chatCompletion({ config, messages, tools, env, fetchImpl, vault, onEvent, retryCommand, signal }) {
-  const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand, signal });
+export async function chatCompletion({ config, messages, tools, env, fetchImpl, vault, onEvent, retryCommand, signal, stream = false }) {
+  const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand, signal, stream });
   if (chat === null) throw new Error('An LLM base_url is required for chat completion');
   const response = await chat({ messages, ...(tools ? { tools } : {}) });
   return {

@@ -17,10 +17,13 @@ second, so an unchecked release prints `update skipped` and the whole banner
 finishes in under two seconds.
 
 The **transcript** scrolls above the rail with one short line per step: a phase
-line, a tool line, a waiting line and a verdict line. Repeated identical tool
-calls collapse into one counted line such as `read README.md · 2`, and the
-waiting line is rewritten in place rather than repeated. Model prompts,
-completions and file bodies are never printed.
+line, a tool line, a model line, a waiting line and a verdict line. Repeated
+identical tool calls collapse into one counted line such as `read README.md · 2`,
+and the waiting line is rewritten in place rather than repeated. While a seat
+streams, its model text grows on a single line that is rewritten in place, never
+one line per token; any other printed line ends it, so the next delta starts a
+fresh line. Model prompts and file bodies are never printed, and the streamed
+text never reaches the run log, the debug log or a commit trailer.
 
 The **rail** is pinned between two bright-cyan rules directly above the
 bright-cyan `roster> ` prompt, for example
@@ -59,11 +62,16 @@ ticks continue using that width.
 process and leaves the plain prompt.
 
 Seat events reach the screen through one synchronous sink shared by the runtime
-loop, the tool runner and the shell. Only five kinds of event may touch the
+loop, the tool runner and the shell. Only six kinds of event may touch the
 screen: a phase (`plan`, `draft`, `test`, `review`) with the issue number, a
-tool with its name and target, a wait rewritten in place with elapsed seconds,
-a verdict with pass or fail, the finish reason and the files written or
-`no write`, and usage. The chat adapter emits one usage event when a call ends,
+tool with its name and target, a content delta appended to the growing model
+line, a wait rewritten in place with elapsed seconds, a verdict with pass or
+fail, the finish reason and the files written or
+`no write`, and usage. The plan, draft, test and review seats call the adapter
+with `stream: true`, so deltas and the usage event arrive during the turn
+instead of when the HTTP call returns; a seat never executes a tool from a
+partial argument, and a stream that fails before the usage chunk fails the seat
+with the stream error. The chat adapter emits one usage event when a call ends,
 built from the server `usage` object: a streaming request sets
 `stream_options.include_usage` so vLLM sends the final usage chunk, and a
 non-streaming body carries the same object. Usage updates the rail bar and

@@ -177,6 +177,11 @@ export async function createRunLog({
     let effort;
     let finishReason;
     const onEvent = async (event) => {
+      // Model text reaches the live transcript only; the durable run log never records completions.
+      if (event?.type === 'delta') {
+        await observe?.({ ...event, seat: name });
+        return;
+      }
       // Usage counts reach the rail and /usage only; the durable run log never records token numbers.
       if (event?.type === 'usage') {
         await observe?.({ ...event, seat: name });

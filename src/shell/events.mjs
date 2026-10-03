@@ -10,11 +10,18 @@ export function createEventSink({ emit, issue = () => null, clock = Date.now, co
   let dirty = false;
   let lastToolAt = -Infinity;
   let written = [];
+  let streaming = false;
+
+  // Any other printed line ends the growing stream line, so the next delta starts a new one.
+  const send = (event) => {
+    if (['phase', 'tool', 'verdict', 'wait'].includes(event.kind)) streaming = false;
+    return emit(event);
+  };
 
   function flushTool() {
     if (!dirty || current === null) return;
     dirty = false;
-    emit({ kind: 'tool', name: current.name, target: current.target, count: current.count });
+    send({ kind: 'tool', name: current.name, target: current.target, count: current.count });
   }
 
   function sendPhase(name) {
@@ -22,7 +29,7 @@ export function createEventSink({ emit, issue = () => null, clock = Date.now, co
     phase = name;
     flushTool();
     current = null;
-    emit({ kind: 'phase', issue: issue(), phase: name });
+    send({ kind: 'phase', issue: issue(), phase: name });
   }
 
   function tool(name, target) {
@@ -41,7 +48,7 @@ export function createEventSink({ emit, issue = () => null, clock = Date.now, co
 
   function verdict(result) {
     flushTool();
-    emit({ kind: 'verdict', issue: issue(), phase, verdict: result, reason: finishReason,
+    send({ kind: 'verdict', issue: issue(), phase, verdict: result, reason: finishReason,
       files: written.length ? [...written] : null });
     written = [];
     current = null;
@@ -68,7 +75,7 @@ export function createEventSink({ emit, issue = () => null, clock = Date.now, co
           return;
         case 'waiting':
           flushTool();
-          emit({ kind: 'wait', seconds: count(event.elapsedSeconds) ?? 0, local: event.local === true });
+          send({ kind: 'wait', seconds: count(event.elapsedSeconds) ?? 0, local: event.local === true });
           return;
         case 'completion':
         case 'finish-reason':
@@ -76,9 +83,18 @@ export function createEventSink({ emit, issue = () => null, clock = Date.now, co
           return;
         case 'http':
           if (event.phase !== 'start') return;
+          streaming = false;
           emit({ kind: 'usage', thinking: typeof event.thinking === 'boolean' ? event.thinking : undefined,
             maxTokens: count(event.maxTokens) });
           return;
+        case 'delta': {
+          if (typeof event.text !== 'string' || !event.text) return;
+          if (!streaming) flushTool();
+          const start = !streaming;
+          streaming = true;
+          send({ kind: 'delta', text: event.text, start });
+          return;
+        }
         case 'seat-measurement':
           emit({ kind: 'usage', input: count(event.input), output: count(event.output),
             contextMax: count(event.contextMax),
@@ -110,6 +126,9 @@ export function createShellPainter({ transcript, display, notify = () => {} } = 
         return;
       case 'tool':
         target()?.tool(event.name, event.target, event.count);
+        return;
+      case 'delta':
+        target()?.stream(event.text, { start: event.start === true });
         return;
       case 'wait':
         target()?.waiting([`${event.seconds}s`,

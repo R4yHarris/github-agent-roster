@@ -188,7 +188,7 @@ export async function planAsk(ask, {
     messages.push({ role: 'user', content: 'Emit only tool_calls for write_file with JSON string arguments.' });
   };
   for (let turn = 1; turn <= budget + Number(repairUsed); turn += 1) {
-    const response = await (await import('../lib/llm.mjs')).chatCompletion({ config, fetchImpl, env, vault, messages, onEvent, retryCommand, signal,
+    const response = await (await import('../lib/llm.mjs')).chatCompletion({ config, fetchImpl, env, vault, messages, onEvent, retryCommand, signal, stream: true,
       ...(tools ? { tools: plannerToolDefinitions } : {}) });
     lastResponse = response.response;
     onResponse?.(lastResponse);

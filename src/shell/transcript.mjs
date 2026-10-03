@@ -44,6 +44,14 @@ export function createTranscript({ write, color = true } = {}) {
       last = { key, tone: 'white', count };
       return text;
     },
+    stream(text, { start = false } = {}) {
+      const open = Boolean(last && last.key === 'stream') && !start;
+      const parts = `${open ? last.parts : ''}${String(text ?? '')}`.slice(-MAX * 2);
+      const line = formatStep([parts.length > MAX ? parts.slice(-MAX) : parts]);
+      write(`${paint(line, 'white', color)}\n`, { replace: open });
+      last = { key: 'stream', tone: 'white', count: 1, parts };
+      return line;
+    },
     waiting(parts) {
       const text = formatStep(['waiting'].concat(parts));
       const replace = Boolean(last && last.key === 'waiting');

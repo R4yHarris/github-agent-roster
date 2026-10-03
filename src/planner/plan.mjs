@@ -119,7 +119,7 @@ export async function planOutline(ask, {
   const usages = [];
   let response;
   for (let turn = 1; turn <= Math.min(budget, 2); turn += 1) {
-    const completion = await (await import('../lib/llm.mjs')).chatCompletion({ config, messages, fetchImpl, env, vault, onEvent, retryCommand, signal });
+    const completion = await (await import('../lib/llm.mjs')).chatCompletion({ config, messages, fetchImpl, env, vault, onEvent, retryCommand, signal, stream: true });
     response = completion.response;
     onResponse?.(response);
     usages.push(completion.usage);

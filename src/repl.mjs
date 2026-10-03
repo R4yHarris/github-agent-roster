@@ -199,7 +199,7 @@ export function createDispatcher({
       applyContextWindow();
       return;
     }
-    if (event.type === 'usage') return;
+    if (event.type === 'usage' || event.type === 'delta') return;
     display.seat = event.seat;
     if (['finish-reason', 'completion'].includes(event.type)) display.lastFinishReason = event.reason;
     if (event.type === 'tool') display.toolCount = (display.toolCount ?? 0) + 1;
