@@ -5,8 +5,9 @@ const colors = { label: '\x1b[96m', white: '\x1b[97m', yellow: '\x1b[93m',
 const DOT = ' \u00b7 ';
 const MAX = 200;
 
-const clean = (value) => stripVTControlCharacters(String(value ?? ''))
-  .replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, MAX);
+const visible = (value) => stripVTControlCharacters(String(value ?? ''))
+  .replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim();
+const clean = (value) => visible(value).slice(0, MAX);
 const paint = (value, color, enabled) => (enabled && colors[color] ? `${colors[color]}${value}${colors.reset}` : value);
 
 export function formatStep(parts) {
@@ -48,12 +49,12 @@ export function createTranscript({ write, color = true } = {}) {
       const open = Boolean(last && last.key === 'stream') && !start;
       const incoming = String(text ?? '');
       const previous = open ? last.parts : '';
-      const parts = (incoming === previous || incoming.startsWith(previous)
-        ? incoming : `${previous}${incoming}`).slice(-8000);
-      const line = formatStep([parts.length > MAX ? parts.slice(-MAX) : parts]);
-      write(`${paint(line, 'white', color)}\n`, { replace: open });
+      const parts = incoming === previous || incoming.startsWith(previous) ? incoming : `${previous}${incoming}`;
+      const delta = visible(parts.slice(previous.length));
       last = { key: 'stream', tone: 'white', count: 1, parts };
-      return line;
+      if (!delta) return '';
+      write(`${paint(delta, 'white', color)}\n`);
+      return delta;
     },
     waiting(parts) {
       const text = formatStep(['waiting'].concat(parts));
