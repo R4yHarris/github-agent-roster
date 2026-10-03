@@ -26,7 +26,7 @@ async function git(worktree, args, env = process.env, options = {}) {
       cwd: worktree, env, encoding: 'utf8', timeout: 30000, maxBuffer: 16 * 1024 * 1024, ...options,
     })).stdout;
   } catch (error) {
-    throw new Error('Checkpoint Git operation failed; no product restoration was authorized.', { cause: error });
+    throw new Error('Checkpoint unavailable; no product restoration was authorized.', { cause: error });
   }
 }
 
