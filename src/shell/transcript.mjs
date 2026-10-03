@@ -5,9 +5,8 @@ const colors = { label: '\x1b[96m', white: '\x1b[97m', yellow: '\x1b[93m',
 const DOT = ' \u00b7 ';
 const MAX = 200;
 
-const visible = (value) => stripVTControlCharacters(String(value ?? ''))
-  .replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim();
-const clean = (value) => visible(value).slice(0, MAX);
+const raw = (value) => stripVTControlCharacters(String(value ?? '')).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
+const clean = (value) => raw(value).replace(/\s+/g, ' ').trim().slice(0, MAX);
 const paint = (value, color, enabled) => (enabled && colors[color] ? `${colors[color]}${value}${colors.reset}` : value);
 
 export function formatStep(parts) {
@@ -18,7 +17,14 @@ export function formatStep(parts) {
 export function createTranscript({ write, color = true } = {}) {
   let last = null;
 
+  function closeStream() {
+    if (last?.key !== 'stream') return;
+    write('\n');
+    last = null;
+  }
+
   function emit(text, tone, { key = null, replace = false } = {}) {
+    closeStream();
     write(`${paint(text, tone, color)}\n`, { replace });
     last = key === null ? null : { key, tone, count: 1, parts: null };
     return text;
@@ -35,6 +41,7 @@ export function createTranscript({ write, color = true } = {}) {
       return emit(formatStep([`${label} ${clean(name)}`.trim()]), 'white');
     },
     tool(name, target, total) {
+      closeStream();
       const label = `${clean(name)} ${clean(target)}`.trim();
       const key = `tool:${label}`;
       const same = Boolean(last && last.key === key);
@@ -50,13 +57,14 @@ export function createTranscript({ write, color = true } = {}) {
       const incoming = String(text ?? '');
       const previous = open ? last.parts : '';
       const parts = incoming === previous || incoming.startsWith(previous) ? incoming : `${previous}${incoming}`;
-      const delta = visible(parts.slice(previous.length));
+      const delta = raw(parts.slice(previous.length));
       last = { key: 'stream', tone: 'white', count: 1, parts };
       if (!delta) return '';
-      write(`${paint(delta, 'white', color)}\n`);
+      write(paint(delta, 'white', color));
       return delta;
     },
     waiting(parts) {
+      closeStream();
       const text = formatStep(['waiting'].concat(parts));
       const replace = Boolean(last && last.key === 'waiting');
       write(`${paint(text, 'yellow', color)}\n`, { replace });

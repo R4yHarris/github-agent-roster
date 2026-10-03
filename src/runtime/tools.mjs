@@ -416,6 +416,11 @@ export async function createTools({
       });
       if (existing && !existing.isFile()) throw new Error('write_file requires a regular file');
       if (seat === 'coder') await beforeWrite?.({ path: normalized, allowedFiles: scopedFiles() });
+      let content = args.content;
+      if (seat === 'coder' && existing?.isFile() && !content.endsWith('\n')) {
+        const previousText = await fs.readFile(file, 'utf8').catch(() => '');
+        if (previousText.endsWith('\n')) content = `${content}\n`;
+      }
       const previous = plannerWrites.get(normalized);
       if (seat === 'planner' && (existing && !previous || !existing && previous)) {
         throw new Error('Planner cannot overwrite pre-existing or externally replaced artifacts');
@@ -444,16 +449,16 @@ export async function createTools({
             }
             await handle.truncate(0);
           }
-          await handle.writeFile(args.content, 'utf8');
-          plannerWrites.set(normalized, { dev: current.dev, ino: current.ino, content: Buffer.from(args.content) });
+          await handle.writeFile(content, 'utf8');
+          plannerWrites.set(normalized, { dev: current.dev, ino: current.ino, content: Buffer.from(content) });
         } else {
-        await handle.writeFile(args.content, 'utf8');
+        await handle.writeFile(content, 'utf8');
         }
       } finally {
         await handle.close();
       }
       if (readmeOnlyDocs && normalized === 'README.md') readmeWritten = true;
-      return { path: normalized, bytes: Buffer.byteLength(args.content, 'utf8') };
+      return { path: normalized, bytes: Buffer.byteLength(content, 'utf8') };
     },
 
     async list_dir(args = {}) {

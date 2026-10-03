@@ -74,7 +74,7 @@ test('content deltas append the new text without overlapping prior text', () => 
   const sink = createEventSink({ emit: createShellPainter({ transcript }) });
   sink.receive({ type: 'delta', text: "I'll add a" });
   sink.receive({ type: 'delta', text: ' new `## Status`' });
-  assert.deepEqual(writes.map(({ text }) => text), ["I'll add a", 'new `## Status`']);
+  assert.deepEqual(writes.map(({ text }) => text), ["I'll add a", ' new `## Status`']);
   assert.ok(writes.every(({ text, replace }) => replace === false && !text.includes('aThe') && !text.includes('#ME')));
 });
 

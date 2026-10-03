@@ -648,7 +648,11 @@ async function runBuiltinAssignment(issueNumber, {
       : 'Stub run: no AI-Run metadata and no code to publish.\n') +
     `Reviewer session: ${sessions.reviewer}\n` +
     (reviewerRun ? `AI-Run: ${reviewerRun.line}\n` : '') +
-    (command ? `From the worktree root, publish only after reviewing changes:\n${command}`
+    (command ? `From the worktree root, publish only after reviewing changes:\n` +
+      formatPublishCommand({
+        message: prepared.local ? 'feat: local ask' : `feat: issue ${prepared.issue.number}`,
+        model,
+      }) + '\n/publish sends the reviewed summary; do not paste the model summary into --message.'
       : config.publish?.enabled === false
         ? 'Publication unavailable: publishing is disabled by publish.enabled.'
         : model
