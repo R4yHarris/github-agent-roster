@@ -3,6 +3,7 @@ import { mergeUsage } from '../metrics/run.mjs';
 import { taskAndRepairFiles, toolDefinitions, ToolAccessError } from './tools.mjs';
 import { redactEvidence, taskSkipsTests } from './excellence.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
+import { readTaskMetadata } from './estimate.mjs';
 import { applyReadmeStatus, hasRequiredReadmeStatus } from './readme-status.mjs';
 import { ContractsSubmoduleError, onlyMissingContractsScripts } from '../lib/contracts.mjs';
 import { UnsupportedFinishReasonError } from '../llm/finish-reason.mjs';
@@ -11,6 +12,14 @@ import { SteeringInterrupt } from './steering.mjs';
 
 class MalformedCoderTools extends Error {}
 export const testRepairBudget = 4;
+
+function repairBudgetFor(task, bounded) {
+  if (!bounded) return testRepairBudget;
+  const difficulty = readTaskMetadata(task).difficulty;
+  if (difficulty <= 2) return 1;
+  if (difficulty === 3) return 2;
+  return testRepairBudget;
+}
 
 function decodeCalls(message, offered, ids, turn) {
   if (message.tool_calls !== undefined && !Array.isArray(message.tool_calls)) {
@@ -59,7 +68,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   const singleAllowedFile = parsedTask.files_allowed.length === 1
     ? parsedTask.files_allowed[0] : null;
   const boundedTask = singleAllowedFile !== null;
-  const repairBudget = boundedTask ? 1 : testRepairBudget;
+  const repairBudget = repairBudgetFor(context.task, boundedTask);
 
   const messages = [
     { role: 'system', content: context.pack },

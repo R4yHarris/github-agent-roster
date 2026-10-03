@@ -62,8 +62,15 @@ export async function runCoder({
       sliceReadsOnly: context.contextPolicy.sliceReadsOnly,
       allowRepoMap: context.contextPolicy.repoMap,
       beforeWrite: lstatSync(path.join(worktree, '.git'), { throwIfNoEntry: false })
-        ? ({ allowedFiles }) => captureCheckpoint({ worktree, task, allowedFiles, env,
-          apiKeyEnv: config.llm.api_key_env, signal }) : undefined,
+        ? async ({ allowedFiles }) => {
+          try {
+            await captureCheckpoint({ worktree, task, allowedFiles, env,
+              apiKeyEnv: config.llm.api_key_env, signal });
+          } catch (error) {
+            if (!(error instanceof Error)) throw error;
+            await onEvent?.({ type: 'checkpoint', status: 'unavailable' });
+          }
+        } : undefined,
       signal,
       onEvent,
     });
