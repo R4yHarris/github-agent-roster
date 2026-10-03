@@ -4,6 +4,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { parseConfig } from '../src/lib/config.mjs';
 import { runBuiltinTask } from '../src/lib/builtin.mjs';
 import { planStub } from '../src/planner/stub.mjs';
@@ -11,7 +12,7 @@ import { runCoder } from '../src/seats/coder.mjs';
 import { createEventSink, createShellPainter } from '../src/shell/events.mjs';
 import { createTranscript } from '../src/shell/transcript.mjs';
 
-const sourceRoot = path.resolve(new URL('../', import.meta.url).pathname.slice(1));
+const sourceRoot = fileURLToPath(new URL('../', import.meta.url));
 const example = readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8');
 const config = parseConfig(example.replace('base_url: ""', 'base_url: http://localhost:3456/v1')
   .replace('model: ""', 'model: local-model').replace('turn_budget: 8', 'turn_budget: 4'));
