@@ -7,7 +7,7 @@ import { isAllowedFile, plannerToolDefinitions } from '../runtime/tools.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
 import { applyFeedback } from './feedback.mjs';
 import { parsePlannerToolCalls } from './tool-calls.mjs';
-import { allowedFile, checkedList, oneLine, parseTaskDocument } from './task.mjs';
+import { allowedFile, checkedList, ensureOriginalAsk, oneLine, parseTaskDocument } from './task.mjs';
 import { selectReasoning } from '../llm/reasoning.mjs';
 import { issueWave } from '../lib/wave-labels.mjs';
 
@@ -223,7 +223,11 @@ export async function planAsk(ask, {
         try {
           const args = call.args;
           result = await tools.write_file(args);
-          if (args.path === 'TASK.md') taskDraft = args.content;
+          if (args.path === 'TASK.md') {
+            const stamped = ensureOriginalAsk(args.content, fixedTitle);
+            if (stamped !== args.content) await tools.write_file({ ...args, content: stamped });
+            taskDraft = stamped;
+          }
         } catch (error) {
           if (!(error instanceof Error)) throw error;
           if (error.code === 'ROSTER_RUN_LOG') throw error;

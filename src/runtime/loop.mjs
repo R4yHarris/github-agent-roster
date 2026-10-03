@@ -248,10 +248,6 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
           calls = [];
         }
       } else {
-        if (boundedTask && Array.isArray(message.tool_calls) && message.tool_calls
-          .some((call) => ['list_dir', 'search_text'].includes(call?.function?.name))) {
-          throw new ToolAccessError('Bounded task does not allow directory listing or repository search');
-        }
         calls = decodeCalls(message, offeredTools, ids, turn);
         if ((needsTools || finishReason === 'tool_calls') && !calls.length) {
           throw new MalformedCoderTools('Coder repair did not emit tool calls');
@@ -301,7 +297,15 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
           await onEvent?.({ type: 'tool-result', name: call.function.name, status: 'denied' });
           continue;
         }
-        const result = await tools[call.function.name](call.args);
+        let result;
+        try {
+          result = await tools[call.function.name](call.args);
+        } catch (error) {
+          if (!(error instanceof ToolAccessError)) throw error;
+          messages.push({ role: 'tool', tool_call_id: call.id, content: `Denied: ${error.message}` });
+          await onEvent?.({ type: 'tool-result', name: call.function.name, status: 'denied' });
+          continue;
+        }
         messages.push({
           role: 'tool', tool_call_id: call.id,
           content: redactEvidence(typeof result === 'string' ? result : JSON.stringify(result), {

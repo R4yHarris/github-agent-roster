@@ -302,6 +302,7 @@ export async function createTools({
 
   function readable(file, directory = false) {
     if (!sliceReadsOnly || file === 'TASK.md' || isAllowedFile(file, scopedFiles())) return true;
+    if (seat === 'coder' && /^(?:src|tests)(?:\/|$)/.test(file)) return true;
     if (!directory) return false;
     const candidate = process.platform === 'win32' ? file.toLowerCase() : file;
     return !candidate || scopedFiles().some((pattern) => {

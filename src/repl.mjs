@@ -740,7 +740,7 @@ export function createDispatcher({
         if (env.ROSTER_SEAT) throw new Error('AI-Eval is human-only; an agent seat cannot record an evaluation.');
         const { values, options } = parseShellEvaluationArgs(args);
         const evaluation = await api.recordEvaluation(...values, { ...options, cwd: currentRoot(), env });
-        output.write(`Recorded AI-Eval for ${evaluation.sha ?? evaluation.session}.\n`);
+        output.write(`Recorded ${evaluation.verdict} for ${evaluation.session ?? evaluation.sha} at ${evaluation.path}.\n`);
         return true;
       }
       case 'log': {
