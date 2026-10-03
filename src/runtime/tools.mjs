@@ -8,6 +8,7 @@ import { redactSecrets } from './memory.mjs';
 import { assertContractsInitialized, ContractsSubmoduleError, onlyMissingContractsScripts } from '../lib/contracts.mjs';
 import { throwIfCancelled } from './cancel.mjs';
 import { readTaskMetadata } from './estimate.mjs';
+import { statusSectionPresent } from './readme-status.mjs';
 
 const execute = promisify(execFile);
 const managedFiles = new Set(['assignment.md', 'task.md', 'recipe.yml', 'plan.md', 'context.md', 'research.md', 'result.md', 'review.md', 'estimate.md']);
@@ -480,7 +481,16 @@ export async function createTools({
       throwIfCancelled(signal);
       argumentsFor(args, []);
       if (readmeOnlyDocs && !readmeWritten) {
-        throw new Error('README-only docs task must write README.md before running tests or other tools');
+        const file = path.join(root, 'README.md');
+        const entry = await fs.lstat(file).catch((error) => {
+          if (error.code === 'ENOENT') return null;
+          throw error;
+        });
+        const present = entry?.isFile() && !entry.isSymbolicLink() && entry.nlink === 1 &&
+          statusSectionPresent(await fs.readFile(file, 'utf8'));
+        if (!present) {
+          throw new Error('README-only docs task must write README.md before running tests or other tools');
+        }
       }
       if (!allowRunTest) throw new ToolAccessError('run_test is disabled by tools.run_test');
       const testEnv = { ...env, ROSTER_SEAT: 'coder' };
