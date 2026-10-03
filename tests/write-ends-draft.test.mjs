@@ -67,15 +67,15 @@ test('a named-file write ends the draft as a write and proceeds to tests, not a 
   assert.doesNotMatch(readFileSync(result.resultPath, 'utf8'), /tool_calls/);
 });
 
-test('content deltas paint the complete growing buffer without overlapping prior text', () => {
+test('content deltas append the new text without overlapping prior text', () => {
   const writes = [];
   const transcript = createTranscript({ color: false,
     write: (text, options = {}) => writes.push({ text: text.trimEnd(), replace: options.replace === true }) });
   const sink = createEventSink({ emit: createShellPainter({ transcript }) });
   sink.receive({ type: 'delta', text: "I'll add a" });
   sink.receive({ type: 'delta', text: ' new `## Status`' });
-  assert.deepEqual(writes.map(({ text }) => text), ["I'll add a", "I'll add a new `## Status`"]);
-  assert.ok(writes.every(({ text }) => !text.includes('aThe') && !text.includes('#ME')));
+  assert.deepEqual(writes.map(({ text }) => text), ["I'll add a", 'new `## Status`']);
+  assert.ok(writes.every(({ text, replace }) => replace === false && !text.includes('aThe') && !text.includes('#ME')));
 });
 
 test('repainting the same buffer does not insert its beginning into the middle', () => {

@@ -205,7 +205,7 @@ test('one failed check returns to draft, while a second failure stops before rev
   assert.equal(events.some((event) => event.type === 'seat-start' && event.seat === 'reviewer'), false);
 });
 
-test('narration deltas rewrite one line and are not the seat result', async (context) => {
+test('narration deltas append and are not the seat result', async (context) => {
   const writes = [];
   const transcript = createTranscript({
     color: false,
@@ -218,7 +218,7 @@ test('narration deltas rewrite one line and are not the seat result', async (con
   sink.receive({ type: 'delta', text: 'NOTE.md' });
   assert.deepEqual(writes, [
     { text: 'Writing', replace: false },
-    { text: 'Writing NOTE.md', replace: true },
+    { text: 'NOTE.md', replace: false },
   ]);
 
   const options = fixture(context);
