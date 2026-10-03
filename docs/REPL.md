@@ -161,7 +161,8 @@ into a Git tree and a `refs/roster/checkpoints/<task>/<n>` ref. It uses neither
 stash nor human-authored commits and does not change the main index or HEAD.
 Ignored, protected metadata lives under `.roster/checkpoints/<issue>/<n>`.
 Secrets, managed artifacts, symlinks and hard links are not captured as products.
-Standalone filesystem-only seat fixtures have no Git checkpoint capability.
+Standalone filesystem-only seat fixtures have no Git checkpoint capability;
+that unavailable capability is reported without a user-facing Git-failure line.
 
 Plan mode never offers tests or publication and cannot write TASK.md, RECIPE.yml
 or product files before acceptance. Exploration excludes secrets and private
@@ -246,7 +247,10 @@ longer narrates the same events in sentences, so nothing is printed twice.
 These are status projections only: they do not add tools, checks, edits, or work.
 
 Unsupported LLM finish reasons are named in the shell and run log without
-printing response bodies. `stop` and `tool_calls` are accepted. The first
+printing response bodies. `stop` and `tool_calls` are accepted. A
+`tool_calls` response executes its complete tool calls before the coder asks
+the model for the next turn; a successful named-file write can close the draft
+gate and start checks, while a tool-call failure never opens review. The first
 `length` uses one extra model turn. A docs slice logs
 `Response truncated. Continuing the same message.`, keeps reasoning disabled
 and keeps the same completion cap of at least 8192. Other tasks retain
