@@ -21,9 +21,11 @@ line, a tool line, a model line, a waiting line and a verdict line. Repeated
 identical tool calls collapse into one counted line such as `read README.md · 2`,
 and the waiting line is rewritten in place rather than repeated. While a seat
 streams, its model text grows on a single line that is rewritten in place, never
-one line per token; any other printed line ends it, so the next delta starts a
-fresh line. Model prompts and file bodies are never printed, and the streamed
-text never reaches the run log, the debug log or a commit trailer.
+one line per token. Repeated full-buffer paints are idempotent, so a producer
+cannot duplicate the beginning of a sentence in the middle of the line; any
+other printed line ends it, so the next delta starts a fresh line. Model
+prompts and file bodies are never printed, and the streamed text never reaches
+the run log, the debug log or a commit trailer.
 
 The **rail** is pinned between two bright-cyan rules directly above the
 bright-cyan `roster> ` prompt, for example
