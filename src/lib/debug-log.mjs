@@ -55,7 +55,8 @@ function validRow(row) {
     [null, 'node --test'].includes(row.test_name) &&
     (row.exit_code === null || Number.isSafeInteger(row.exit_code) && row.exit_code >= 0) &&
     (row.repair === null || typeof row.repair === 'object' && Object.keys(row.repair).length === 2 &&
-      Number.isInteger(row.repair.n) && row.repair.n >= 1 && row.repair.n <= 4 && row.repair.of === 4) &&
+      Number.isInteger(row.repair.n) && row.repair.n >= 1 && row.repair.n <= row.repair.of &&
+      [1, 4].includes(row.repair.of)) &&
     Number.isSafeInteger(row.elapsed_ms) && row.elapsed_ms >= 0;
 }
 

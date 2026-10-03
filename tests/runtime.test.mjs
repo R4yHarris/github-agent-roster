@@ -35,8 +35,10 @@ function fixture(context, config = stubConfig) {
   writeFileSync(path.join(repoRoot, 'skills', 'run-tests', 'SKILL.md'), '# Run tests\nUse node --test.\n');
   writeFileSync(path.join(worktree, 'AGENTS.md'), '# Instructions\nCode carefully.\n');
   writeFileSync(path.join(worktree, 'TASK.md'),
-    planStub('Update `README.md` with a Status section.', { reference: 'issue:4', metadata: { task_class: 'feat', difficulty: 4 } }).task);
+    planStub('Update `README.md` with a Status section and keep `smoke.test.mjs` in scope.',
+      { reference: 'issue:4', metadata: { task_class: 'feat', difficulty: 4 } }).task);
   writeFileSync(path.join(worktree, 'README.md'), '# Example\n');
+  writeFileSync(path.join(worktree, 'smoke.test.mjs'), '// Test fixture scope.\n');
   return {
     repoRoot, worktree, config, task: 'issue-4', session: 'roster-session',
     memoryPath: path.join(repoRoot, config.paths.memory),
@@ -340,6 +342,9 @@ test('the final coder response replaces earlier usage instead of retaining total
 
 test('garbage coder arguments get one repair then the scoped README Status fallback and final excellence', async (context) => {
   const options = fixture(context, llmConfig);
+  writeFileSync(path.join(options.worktree, 'TASK.md'),
+    planStub('Update `README.md` with a Status section.',
+      { reference: 'issue:4', metadata: { task_class: 'feat', difficulty: 4 } }).task);
   let turns = 0;
   let tests = 0;
   const events = [];
@@ -453,7 +458,7 @@ test('first exit 1 gets a repair turn and excellence waits for green tests', asy
         let tests = 0;
         let verifies = 0;
         const events = [];
-        const task = planStub('Update README.md.').task;
+        const task = planStub('Update README.md and smoke.test.mjs.').task;
         const result = await runLoop({ config: llmConfig, context: { task, pack: task },
           tools: {
             write_file: async () => ({ path: 'README.md', bytes: 1 }),
@@ -493,7 +498,7 @@ test('a failed test defers the rest of its tool batch until a repair turn reads 
           let turns = 0;
           let writes = 0;
           let tests = 0;
-          const task = planStub('Update README.md.').task;
+          const task = planStub('Update README.md and smoke.test.mjs.').task;
           const result = await runLoop({ config: llmConfig, context: { task, pack: task }, env: {},
             tools: {
               write_file: async () => { writes += 1; return { path: 'README.md', bytes: 1 }; },
@@ -526,7 +531,8 @@ test('an optional test that exits 1 cannot be waived into a successful final sum
           let tests = 0;
           let turns = 0;
           let verifies = 0;
-          const task = planStub('Update README.md.').task.replace('---\n', '---\ntests: none\n');
+          const task = planStub('Update README.md and smoke.test.mjs.').task
+            .replace('---\n', '---\ntests: none\n');
           const result = await runLoop({ config: llmConfig, context: { task, pack: task }, env: {},
             tools: { run_test: async () => ({ exit_code: 1, stdout: `failure ${++tests}`, stderr: '' }) },
             fetchImpl: async () => {
@@ -548,7 +554,7 @@ test('repair turns can reach their tool allowance without ending on the first fa
             let turns = 0;
             let tests = 0;
             let changed = false;
-            const task = planStub('Update README.md.').task;
+            const task = planStub('Update README.md and smoke.test.mjs.').task;
             const result = await runLoop({ config: { ...llmConfig, seat: { ...llmConfig.seat, turn_budget: 1 } },
               context: { task, pack: task }, env: {},
               tools: {

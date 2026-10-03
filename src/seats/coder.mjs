@@ -48,13 +48,14 @@ export async function runCoder({
     if (config.llm.base_url && !skipsTests && config.tools?.run_test === false) {
       throw new Error('run_test is disabled by tools.run_test; enable it or explicitly declare TASK.md tests: none');
     }
+    const allowedFiles = taskFilesAllowed(context.task);
     metadata = estimateTask(readTaskMetadata(context.task), [], config.llm.model || env?.ROSTER_MODEL || '');
     if (config.llm.base_url && !metadata.model) throw new Error('Set config.llm.model or TASK.md model for the coder seat');
     config = selectReasoning({ ...config, llm: { ...config.llm, model: metadata.model } },
       { kind: askKind ?? 'slice', taskClass: metadata.task_class, difficulty: metadata.difficulty });
     result.model = config.llm.base_url ? metadata.model : 'builtin-stub';
     const tools = await createTools({
-      worktree, allowedFiles: taskFilesAllowed(context.task), memoryPath,
+      worktree, allowedFiles, memoryPath,
       apiKeyEnv: config.llm.api_key_env, env: withoutLlmKeys(env, config), runCommand: runTestCommand,
       allowRunTest: config.tools?.run_test !== false,
       readmeOnlyDocs: context.contextPolicy.readmeOnlyDocs,
@@ -103,6 +104,10 @@ export async function runCoder({
         if (context.contextPolicy.readmeOnlyDocs && !changedFiles.has('README.md')) {
           evidence.pass = false;
           evidence.reasons.unshift('README-only docs task must write README.md before finishing');
+        }
+        if (allowedFiles.length === 1 && !changedFiles.has(allowedFiles[0])) {
+          evidence.pass = false;
+          evidence.reasons.push(`Bounded task must write ${allowedFiles[0]} before finishing`);
         }
         if (evidence.pass) verifiedSnapshot = evidence.snapshot;
         return evidence;

@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { ensureLocalPath } from './paths.mjs';
@@ -6,8 +6,8 @@ import { ensureLocalPath } from './paths.mjs';
 const names = ['RECIPE.yml', 'TASK.md', 'PLAN.md', 'ESTIMATE.md', 'CONTEXT.md', 'RESEARCH.md', 'RESULT.md', 'REVIEW.md'];
 
 export async function archiveRunArtifacts(worktree, { task, git, preserve = [] }) {
-  if (typeof task !== 'string' || !/^(?:issue-[1-9]\d*|local-[a-f0-9]{16})$/.test(task) || typeof git !== 'function') {
-    throw new TypeError('Run archive requires an issue or local task identifier and Git helper');
+  if (typeof task !== 'string' || !/^(?!-$)[A-Za-z0-9._-]{1,64}$/.test(task) || typeof git !== 'function') {
+    throw new TypeError('Run archive requires an opaque task identifier and Git helper');
   }
   if (!Array.isArray(preserve) ||
       preserve.some((name) => !['RECIPE.yml', 'TASK.md', 'PLAN.md', 'ESTIMATE.md'].includes(name))) {
@@ -33,7 +33,9 @@ export async function archiveRunArtifacts(worktree, { task, git, preserve = [] }
     throw new Error('Refusing to replace tracked planning/run artifacts');
   }
   const common = path.resolve(worktree, (await git(['rev-parse', '--git-common-dir'])).trim());
-  const directory = path.join(common, 'roster-artifacts', task,
+  const archiveTask = /^(?:issue-[1-9]\d*|local-[a-f0-9]{16})$/.test(task)
+    ? task : `task-${createHash('sha256').update(task).digest('hex').slice(0, 16)}`;
+  const directory = path.join(common, 'roster-artifacts', archiveTask,
     `${Date.now()}-${randomBytes(6).toString('hex')}`);
   await ensureLocalPath(directory, common);
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });

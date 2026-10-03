@@ -34,6 +34,7 @@ const llmConfig = parseConfig(example.replace('base_url: ""', 'base_url: http://
   .replace('model: ""', 'model: local-model'));
 const vllmConfig = parseConfig(example.replace('profile: ""', 'profile: vllm-local')
   .replace('model: ""', 'model: local-model'));
+const multiFileScope = ['README.md', 'smoke.test.mjs'];
 
 function git(cwd, ...args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
@@ -90,6 +91,15 @@ function fixture(context) {
   };
   return { base, repoRoot, target, cwd, env, contracts, issue, calls, runCommand, errorOutput,
     get stderr() { return stderr; } };
+}
+
+function multiFileFixture(context) {
+  const options = fixture(context);
+  options.issue.body = options.issue.body.replace(
+    '## Files allowed\n- `README.md`\n',
+    '## Files allowed\n- `README.md`\n- `smoke.test.mjs`\n',
+  );
+  return options;
 }
 
 test('opt-in debug logging reaches planner, coder and reviewer without changing the human summary', async (context) => {
@@ -481,8 +491,8 @@ test('an inferred-scope slice continues after the task summary without a second 
   assert.equal(next.result.mode, 'stub');
 });
 
-test('test budget exhaustion runs all four repairs, then writes failing review without reviewer inference', async (context) => {
-  const options = fixture(context);
+test('test budget exhaustion runs all four repairs and stops before review', async (context) => {
+  const options = multiFileFixture(context);
   let tests = 0;
   let coderTurns = 0;
   let failed;
@@ -492,7 +502,7 @@ test('test budget exhaustion runs all four repairs, then writes failing review w
       if (system.startsWith('You are the builtin planner seat.')) {
         return Response.json({ choices: [{ finish_reason: 'stop', message: {
           role: 'assistant', content: JSON.stringify({ title: 'Add Status',
-            acceptance_checks: ['node --test exits 0'], files_allowed: ['README.md'] }),
+            acceptance_checks: ['node --test exits 0'], files_allowed: multiFileScope }),
         } }] });
       }
       assert.ok(!system.startsWith('You are the builtin reviewer seat.'), 'Exhausted tests cannot request reviewer inference');
@@ -513,8 +523,8 @@ test('test budget exhaustion runs all four repairs, then writes failing review w
   assert.equal(tests, 5);
   assert.equal(coderTurns, 5);
   assert.equal(failed.repairBudgetExhausted, true);
-  assert.equal(failed.review.verdict, 'fail');
-  assert.match(readFileSync(failed.review.reviewPath, 'utf8'), /Verdict: fail[\s\S]*repair budget \(4\) exhausted/);
+  assert.equal(failed.review, undefined);
+  assert.equal(existsSync(path.join(failed.resultPath, '..', 'REVIEW.md')), false);
   for (let attempt = 1; attempt <= 4; attempt += 1) {
     assert.match(options.stderr, new RegExp(`Tests failed\\. Repair ${attempt} of 4\\.`));
   }
@@ -578,8 +588,8 @@ test('a bounded docs review returns to draft once, reviews again, and then stops
   assert.match(readFileSync(path.join(result.worktreePath, 'README.md'), 'utf8'), /## Status\nActive\./);
 });
 
-test('a repaired failing test passes excellence, read-only review, and publication staging without widening TASK', async (context) => {
-    const options = fixture(context);
+test('a repaired failing test passes excellence, read-only review, and declared-scope publication staging', async (context) => {
+    const options = multiFileFixture(context);
     let tests = 0;
     let coderTurns = 0;
     const result = await runBuiltinIssue(42, { ...options, config: llmConfig, log: () => {},
@@ -589,7 +599,7 @@ test('a repaired failing test passes excellence, read-only review, and publicati
         if (system.startsWith('You are the builtin planner seat.')) {
           return Response.json({ choices: [{ finish_reason: 'stop', message: {
             role: 'assistant', content: JSON.stringify({ title: 'Add Status',
-              acceptance_checks: ['node --test exits 0'], files_allowed: ['README.md'] }),
+              acceptance_checks: ['node --test exits 0'], files_allowed: multiFileScope }),
           } }] });
         }
         if (system.startsWith('You are the builtin reviewer seat.')) {
@@ -625,7 +635,7 @@ test('a repaired failing test passes excellence, read-only review, and publicati
     assert.deepEqual(result.result.repairFiles, ['smoke.test.mjs']);
     assert.equal(result.result.excellence.pass, true);
     assert.equal(result.review.verdict, 'pass');
-    assert.doesNotMatch(result.planner.task, /Files allowed\n[\s\S]*- `smoke\.test\.mjs`/);
+    assert.match(result.planner.task, /Files allowed\n[\s\S]*- `smoke\.test\.mjs`/);
     const prepared = await prepareBuiltinPublication(result, { cwd: options.cwd, config: llmConfig,
       env: { ...options.env, GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'test-only-key.pem' } });
     assert.equal(git(prepared.worktreePath, 'diff', '--cached', '--name-only'), 'README.md\nsmoke.test.mjs');
@@ -795,8 +805,7 @@ test('cold endpoint timeout preserves a valid TASK and retry skips planner rathe
     runTestCommand: () => assert.fail('Timed-out inference cannot run tests'),
   }), (error) => {
     assert.equal(error.result.timedOut, true);
-    assert.equal(error.result.review.verdict, 'fail');
-    assert.match(error.result.review.content, /HTTP timeout[\s\S]*review was not completed/);
+    assert.equal(error.result.review, undefined);
     return /Cold-start:[\s\S]*host may still be warming[\s\S]*not a bad TASK[\s\S]*Retry: roster run --issue 42/.test(error.message);
   });
   assert.equal(readFileSync(initial.taskPath, 'utf8'), task);
@@ -805,10 +814,30 @@ test('cold endpoint timeout preserves a valid TASK and retry skips planner rathe
   assert.match(options.stderr, /The model did not answer in time\. It may still be waking\./);
   assert.match(readFileSync(initial.logPath, 'utf8'), /host may still be warming[\s\S]*Retry: roster run --issue 42/);
   const logs = [];
+  let retryTurns = 0;
   const retried = await runBuiltinIssue(42, { ...options, config: llmConfig, log: (text) => logs.push(text),
     fetchImpl: async (_url, request) => {
-      assert.doesNotMatch(JSON.parse(request.body).messages[0].content, /builtin planner seat/);
-      return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'No change needed.' } }] });
+      const body = JSON.parse(request.body);
+      assert.doesNotMatch(body.messages[0].content, /builtin planner seat/);
+      if (body.messages[0].content.startsWith('You are the builtin reviewer seat.')) {
+        return Response.json({ choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant', content: JSON.stringify({
+            verdict: 'pass', reasons: [], security_notes: [],
+          }),
+        } }] });
+      }
+      retryTurns += 1;
+      return retryTurns === 1
+        ? Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant', tool_calls: [{ id: 'rewrite', type: 'function', function: {
+            name: 'write_file', arguments: JSON.stringify({
+              path: 'README.md', content: readFileSync(path.join(initial.worktreePath, 'README.md'), 'utf8'),
+            }),
+          } }],
+        } }] })
+        : Response.json({ choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant', content: 'No change needed.',
+        } }] });
     },
     runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
   });
@@ -1137,7 +1166,7 @@ test('auto-model without qualifying evaluations, priors or matching hints stays 
 });
 
 test('ROSTER_MODEL selects the same served model for both seats and their metadata', async (context) => {
-  const options = fixture(context);
+  const options = multiFileFixture(context);
   const config = parseConfig(example.replace('profile: ""', 'profile: ollama'));
   let requests = 0;
   const result = await runBuiltinIssue(42, {
@@ -1150,7 +1179,7 @@ test('ROSTER_MODEL selects the same served model for both seats and their metada
         choices: [{ finish_reason: 'stop', message: { role: 'assistant',
           content: requests === 1 ? JSON.stringify({
             title: 'Add status', acceptance_checks: ['node --test exits 0'],
-            files_allowed: ['README.md'],
+            files_allowed: multiFileScope,
           }) : 'Done.',
         } }],
       }) };
@@ -1198,7 +1227,7 @@ test('a failed planner journals its last measured response rather than aggregate
 });
 
 test('live unprofiled seats report their backend and usage without inheriting Copilot provenance', async (context) => {
-  const options = fixture(context);
+  const options = multiFileFixture(context);
   let requests = 0;
   const result = await runBuiltinIssue(42, {
     ...options, config: llmConfig, log: () => {},
@@ -1209,7 +1238,7 @@ test('live unprofiled seats report their backend and usage without inheriting Co
         choices: [{ finish_reason: 'stop', message: { role: 'assistant',
           content: requests === 1 ? JSON.stringify({
             title: 'Add status', acceptance_checks: ['node --test exits 0'],
-            files_allowed: ['README.md'],
+            files_allowed: multiFileScope,
           }) : 'Reviewed README.',
         } }],
         usage: { prompt_tokens: requests, completion_tokens: 2 },
@@ -1232,7 +1261,7 @@ test('live unprofiled seats report their backend and usage without inheriting Co
 
 for (const selection of ['explicit', 'feedback']) {
   test(`task metadata selects the coder model and estimate before coding (${selection})`, async (context) => {
-    const options = fixture(context);
+    const options = multiFileFixture(context);
     mkdirSync(path.join(options.target, '.roster'), { recursive: true });
     writeFileSync(path.join(options.target, '.roster', 'evals.jsonl'), [60, 25, 10].map((minutes, index) =>
       JSON.stringify({ session: `previous-${index}`, model: 'task-model', task_class: 'fix', effort: 'h',
@@ -1254,7 +1283,7 @@ for (const selection of ['explicit', 'feedback']) {
         return { status: 200, json: async () => ({
           choices: [{ finish_reason: 'stop', message: { role: 'assistant',
             content: requests === 1 ? JSON.stringify({
-              title: 'Fix status', acceptance_checks: ['node --test exits 0'], files_allowed: ['README.md'],
+              title: 'Fix status', acceptance_checks: ['node --test exits 0'], files_allowed: multiFileScope,
               difficulty: 4, estimate_min: 90, task_class: 'fix', model: selection === 'explicit' ? 'task-model' : '',
             }) : 'Done.',
           } }],
@@ -1271,7 +1300,7 @@ for (const selection of ['explicit', 'feedback']) {
 }
 
 test('auto-model uses a three-evaluation recommendation for both seats without editing config', async (context) => {
-  const options = fixture(context);
+  const options = multiFileFixture(context);
   options.issue.title = 'feat: Add status';
   const config = parseConfig(example.replace('profile: ""', 'profile: ollama'));
   mkdirSync(path.join(options.target, '.roster'));
@@ -1295,7 +1324,7 @@ test('auto-model uses a three-evaluation recommendation for both seats without e
       if (requests === 1) return { status: 200, json: async () => ({
         choices: [{ message: { role: 'assistant', content: JSON.stringify({
           title: 'Add status', acceptance_checks: ['node --test exits 0'],
-          files_allowed: ['README.md'],
+          files_allowed: multiFileScope,
         }) } }],
         usage: { prompt_tokens: 2, completion_tokens: 1 },
       }) };
@@ -1322,7 +1351,7 @@ test('auto-model uses a three-evaluation recommendation for both seats without e
 
 test('fleet priors change endpoint/model only for explicit auto-model and never rewrite the saved default', async (context) => {
   for (const autoModel of [false, true]) {
-    const options = fixture(context);
+    const options = multiFileFixture(context);
     options.issue.title = 'feat: Add status';
     mkdirSync(path.join(options.target, '.roster'));
     const configSource = example.replace('base_url: ""', 'base_url: http://localhost:1234/v1')
@@ -1350,7 +1379,7 @@ test('fleet priors change endpoint/model only for explicit auto-model and never 
         assert.equal(body.model, autoModel ? 'routed-model' : 'local-model');
         if (requests === 1) return { status: 200, json: async () => ({
           choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
-            title: 'Add status', acceptance_checks: ['node --test exits 0'], files_allowed: ['README.md'],
+            title: 'Add status', acceptance_checks: ['node --test exits 0'], files_allowed: multiFileScope,
           }) } }],
         }) };
         if (requests === 2) return { status: 200, json: async () => ({
@@ -1389,7 +1418,7 @@ test('fleet priors change endpoint/model only for explicit auto-model and never 
 });
 
 test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the SDK only with --publish', async (context) => {
-  const options = fixture(context);
+  const options = multiFileFixture(context);
   const logs = [];
   let completion = 0;
   let published = 0;
@@ -1407,7 +1436,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
         choices: [{ message: { role: 'assistant', content: JSON.stringify({
           title: 'Add Status to README',
           acceptance_checks: ['node --test exits 0', 'README has a Status section'],
-          files_allowed: ['README.md'],
+          files_allowed: multiFileScope,
         }) } }],
         model: 'actual-planner-model',
         usage: { prompt_tokens: 5, completion_tokens: 2 },
@@ -1523,7 +1552,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
 
 test('a failed reviewer keeps coder changes but blocks publication unless explicitly bypassed', async (context) => {
   for (const [skipReview, reviewRequired] of [[false, true], [true, true], [false, false]]) {
-    const options = fixture(context);
+    const options = multiFileFixture(context);
     let coderTurns = 0;
     let published = 0;
     const fetchImpl = async (_url, request) => {
@@ -1551,7 +1580,7 @@ test('a failed reviewer keeps coder changes but blocks publication unless explic
         return { status: 200, json: async () => ({
           choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
             title: 'Add status', acceptance_checks: ['node --test exits 0', 'README has a Status section'],
-            files_allowed: ['README.md'],
+            files_allowed: multiFileScope,
           }) } }],
         }) };
       }
@@ -1725,13 +1754,13 @@ test('default planner/coder run preserves the task handoff while the coder edits
   assert.equal(readFileSync(path.join(worktreePath, 'src', 'app.mjs'), 'utf8'),
     'export const ready = true;\n');
   assert.deepEqual(['RECIPE.yml', 'TASK.md'].map((name) => readFileSync(path.join(worktreePath, name), 'utf8')), handoff);
-  assert.match(readFileSync(path.join(worktreePath, 'REVIEW.md'), 'utf8'), /Verdict: fail/);
+  assert.equal(existsSync(path.join(worktreePath, 'REVIEW.md')), false);
   assert.equal(options.calls.filter(({ program, args }) =>
     program === 'git' && args[0] === 'worktree' && args[1] === 'add').length, 1);
 });
 
 test('a tool-writing planner hands validated artifacts to the scoped coder and read-only reviewer', async (context) => {
-  const options = fixture(context);
+  const options = multiFileFixture(context);
   const draft = planStub(options.issue.body, { reference: 'issue:42', title: options.issue.title });
   let plannerTurns = 0;
   let coderTurns = 0;
@@ -1799,7 +1828,7 @@ test('a tool-writing planner hands validated artifacts to the scoped coder and r
 
 test('planner and coder use an environment key before the vault and fall back to the vault', async (context) => {
   for (const source of ['environment', 'vault']) {
-    const options = fixture(context);
+    const options = multiFileFixture(context);
     const key = 'test-only-llm-key';
     let vaultReads = 0;
     let requests = 0;
@@ -1816,7 +1845,7 @@ test('planner and coder use an environment key before the vault and fall back to
           choices: [{ message: { role: 'assistant', content: JSON.stringify({
             title: 'Add status',
             acceptance_checks: ['node --test exits 0'],
-            files_allowed: ['README.md'],
+            files_allowed: multiFileScope,
           }) } }],
           usage: { prompt_tokens: 3, completion_tokens: 2 },
         }) };
@@ -1844,7 +1873,7 @@ test('planner and coder use an environment key before the vault and fall back to
 });
 
 test('planner reads its last 20 lines; slice coder omits memory input and both append separately', async (context) => {
-  const options = fixture(context);
+  const options = multiFileFixture(context);
   const directory = path.join(options.repoRoot, '.roster', 'memory');
   mkdirSync(directory, { recursive: true });
   for (const seat of ['planner', 'coder']) {
@@ -1863,7 +1892,7 @@ test('planner reads its last 20 lines; slice coder omits memory input and both a
       return { status: 200, json: async () => ({ choices: [{ message: {
         role: 'assistant', content: JSON.stringify({
           title: 'Add status', acceptance_checks: ['node --test exits 0'],
-          files_allowed: ['README.md'], task_class: 'feat', difficulty: 4,
+          files_allowed: multiFileScope, task_class: 'feat', difficulty: 4,
         }),
       } }] }) };
     }
@@ -1905,14 +1934,14 @@ test('builtin seats record runs automatically without an AI-Eval', async (contex
 });
 
 test('detects a changed recipe after the coder runs tests and refuses publication', async (context) => {
-  const options = fixture(context);
+  const options = multiFileFixture(context);
   let published = false;
   const fetchImpl = async (_url, request) => {
     const body = JSON.parse(request.body);
     if (body.messages[0].content.startsWith('You are the builtin planner seat.')) {
       return { ok: true, status: 200, json: async () => ({ choices: [{ message: { role: 'assistant', content: JSON.stringify({
         title: 'Update README', acceptance_checks: ['node --test exits 0'],
-        files_allowed: ['README.md'],
+        files_allowed: multiFileScope,
       }) } }] }) };
     }
     return { ok: true, status: 200, json: async () => ({
@@ -1931,13 +1960,11 @@ test('detects a changed recipe after the coder runs tests and refuses publicatio
   }), /Diff path is protected or outside TASK\.md allowed paths: RECIPE\.yml/);
   assert.equal(published, false);
   assert.equal(existsSync(path.join(options.target, '.worktrees', 'issue-42', 'RESULT.md')), true);
-  assert.match(readFileSync(path.join(options.target, '.worktrees', 'issue-42', 'REVIEW.md'), 'utf8'),
-    /Verdict: fail/);
+  assert.equal(existsSync(path.join(options.target, '.worktrees', 'issue-42', 'REVIEW.md')), false);
   const records = loadLearning({ cwd: options.target }).runs;
   assert.deepEqual(records.map(({ session, excellence }) => ({ session, excellence })), [
     { session: 'roster-42-planner', excellence: undefined },
     { session: 'roster-42-coder', excellence: 'fail' },
-    { session: 'roster-42-reviewer', excellence: undefined },
   ]);
   assert.ok(records.slice(0, 2).every(({ model }) => model === 'local-model'));
   assert.ok(records[1].defects.some((reason) => reason.includes('RECIPE.yml')));
@@ -1955,7 +1982,7 @@ test('publication preparation requires a model before reading files, staging, or
 });
 
 test('secret-path touches by the test subprocess are retained as redacted journal defects', async (context) => {
-  const options = fixture(context);
+  const options = multiFileFixture(context);
   let requests = 0;
   await assert.rejects(runBuiltinIssue(42, {
     ...options, config: llmConfig, log: () => {},
@@ -1965,7 +1992,7 @@ test('secret-path touches by the test subprocess are retained as redacted journa
       return { status: 200, json: async () => ({ choices: [{
         finish_reason: 'stop',
         message: { role: 'assistant', content: requests === 1 ? JSON.stringify({
-          title: 'Update README', acceptance_checks: ['node --test exits 0'], files_allowed: ['README.md'],
+          title: 'Update README', acceptance_checks: ['node --test exits 0'], files_allowed: multiFileScope,
         }) : 'Reviewed README.',
         },
       }] }) };
@@ -1984,7 +2011,7 @@ test('secret-path touches by the test subprocess are retained as redacted journa
 });
 
 test('publication rechecks append new secret-path defects after an initially passing run', async (context) => {
-  const options = fixture(context);
+  const options = multiFileFixture(context);
   let requests = 0;
   const run = await runBuiltinIssue(42, {
     ...options, config: llmConfig, log: () => {},
@@ -1993,7 +2020,7 @@ test('publication rechecks append new secret-path defects after an initially pas
       requests += 1;
       return { status: 200, json: async () => ({ choices: [{
         finish_reason: 'stop', message: { role: 'assistant', content: requests === 1 ? JSON.stringify({
-          title: 'Update README', acceptance_checks: ['node --test exits 0'], files_allowed: ['README.md'],
+          title: 'Update README', acceptance_checks: ['node --test exits 0'], files_allowed: multiFileScope,
         }) : 'Reviewed README.' },
       }] }) };
     },
