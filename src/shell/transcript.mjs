@@ -49,7 +49,7 @@ export function createTranscript({ write, color = true } = {}) {
       const incoming = String(text ?? '');
       const previous = open ? last.parts : '';
       const parts = (incoming === previous || incoming.startsWith(previous)
-        ? incoming : `${previous}${incoming}`).slice(-MAX * 2);
+        ? incoming : `${previous}${incoming}`).slice(-8000);
       const line = formatStep([parts.length > MAX ? parts.slice(-MAX) : parts]);
       write(`${paint(line, 'white', color)}\n`, { replace: open });
       last = { key: 'stream', tone: 'white', count: 1, parts };

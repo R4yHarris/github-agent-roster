@@ -95,6 +95,7 @@ export function formatTray(display = {}, { columns = 80, color = true, now = Dat
 
 export function createTray({ output, state, shell, env = process.env, cwd = process.cwd(), services = {} }) {
   let visible = false;
+  let lastRows = 1;
   let barLines = 0;
   let bannerPrinted = false;
   let bannerText = '';
@@ -190,11 +191,21 @@ export function createTray({ output, state, shell, env = process.env, cwd = proc
       const erased = visible;
       erase();
       if (replace && erased) {
-        moveCursor(output, 0, -1);
+        const rows = lastRows;
+        moveCursor(output, 0, -rows);
         cursorTo(output, 0);
-        clearLine(output, 0);
+        for (let row = 0; row < rows; row += 1) {
+          clearLine(output, 0);
+          if (row < rows - 1) moveCursor(output, 0, 1);
+        }
+        if (rows > 1) moveCursor(output, 0, -(rows - 1));
+        cursorTo(output, 0);
       }
       target.write(text);
+      const width = Number.isSafeInteger(output.columns) && output.columns > 0 ? output.columns : 80;
+      const plain = stripVTControlCharacters(String(text)).replace(/\n$/, '');
+      lastRows = Math.max(1, plain.split('\n').reduce((total, line) =>
+        total + Math.max(1, Math.ceil(line.length / width)), 0));
       flush(target);
       if (String(text).endsWith('\n') && state.pendingSecret === null && !state.pendingQuestion) redraw();
       else {
