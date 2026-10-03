@@ -74,8 +74,8 @@ test('content deltas append the new text without overlapping prior text', () => 
   const sink = createEventSink({ emit: createShellPainter({ transcript }) });
   sink.receive({ type: 'delta', text: "I'll add a" });
   sink.receive({ type: 'delta', text: ' new `## Status`' });
-  assert.deepEqual(writes.map(({ text }) => text), ["I'll add a", ' new `## Status`']);
-  assert.ok(writes.every(({ text, replace }) => replace === false && !text.includes('aThe') && !text.includes('#ME')));
+  assert.deepEqual(writes.map(({ text }) => text), ["I'll add a", "I'll add a new `## Status`"]);
+  assert.equal(writes.at(-1).replace, true);
 });
 
 test('repainting the same buffer does not insert its beginning into the middle', () => {

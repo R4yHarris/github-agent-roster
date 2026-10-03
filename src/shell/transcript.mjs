@@ -14,12 +14,31 @@ export function formatStep(parts) {
   return text.slice(0, MAX);
 }
 
-export function createTranscript({ write, color = true } = {}) {
+export function wrapNarration(text, columns = 80) {
+  const width = Math.max(20, Number.isSafeInteger(columns) && columns > 1 ? columns - 1 : 79);
+  const lines = [];
+  for (const paragraph of String(text ?? '').split('\n')) {
+    let rest = paragraph;
+    if (!rest) {
+      lines.push('');
+      continue;
+    }
+    while (rest.length > width) {
+      const space = rest.lastIndexOf(' ', width);
+      const cut = space >= Math.floor(width / 2) ? space : width;
+      lines.push(rest.slice(0, cut));
+      rest = rest.slice(cut).replace(/^ /, '');
+    }
+    lines.push(rest);
+  }
+  return lines;
+}
+
+export function createTranscript({ write, color = true, columns = () => 80 } = {}) {
   let last = null;
 
   function closeStream() {
     if (last?.key !== 'stream') return;
-    write('\n');
     last = null;
   }
 
@@ -57,11 +76,10 @@ export function createTranscript({ write, color = true } = {}) {
       const incoming = String(text ?? '');
       const previous = open ? last.parts : '';
       const parts = incoming === previous || incoming.startsWith(previous) ? incoming : `${previous}${incoming}`;
-      const delta = raw(parts.slice(previous.length));
+      const lines = wrapNarration(raw(parts), columns());
       last = { key: 'stream', tone: 'white', count: 1, parts };
-      if (!delta) return '';
-      write(paint(delta, 'white', color));
-      return delta;
+      write(`${paint(lines.join('\n'), 'white', color)}\n`, { replace: open });
+      return lines.join('\n');
     },
     waiting(parts) {
       closeStream();

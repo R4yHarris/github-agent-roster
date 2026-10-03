@@ -1038,7 +1038,10 @@ export async function startRepl({
   if (terminal) {
     tray = createTray({ output, state, shell, env: options.env ?? process.env,
       cwd: options.cwd ?? process.cwd(), services: options.services ?? {} });
-    transcript = createTranscript({ write: (text, writeOptions) => tray.write(text, output, writeOptions) });
+    transcript = createTranscript({
+      write: (text, writeOptions) => tray.write(text, output, writeOptions),
+      columns: () => output.columns ?? 80,
+    });
     state.transcript = transcript;
   }
   shell.on('SIGINT', () => {
