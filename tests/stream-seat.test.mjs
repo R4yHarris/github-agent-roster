@@ -132,15 +132,14 @@ test('the draft and test seat calls request a stream and usage on the final chun
   assert.ok(events.some((event) => event.type === 'delta' && event.text));
 });
 
-test('content deltas append each new chunk instead of rewriting one line', () => {
+test('content deltas reflow one paragraph instead of seeking across the window', () => {
   const writes = [];
-  const transcript = createTranscript({ color: false,
+  const transcript = createTranscript({ color: false, columns: () => 40,
     write: (text, writeOptions = {}) => writes.push({ text: text.trimEnd(), replace: writeOptions.replace === true }) });
   const sink = createEventSink({ emit: createShellPainter({ transcript }) });
   for (const text of ['Re', 'ad', 'me']) sink.receive({ type: 'delta', text });
-  assert.equal(writes.length, 3);
-  assert.deepEqual(writes.map((entry) => entry.text), ['Re', 'ad', 'me']);
-  assert.deepEqual(writes.map((entry) => entry.replace), [false, false, false]);
+  assert.deepEqual(writes.map((entry) => entry.text), ['Re', 'Read', 'Readme']);
+  assert.deepEqual(writes.map((entry) => entry.replace), [false, true, true]);
 });
 
 test('a final usage chunk emits one usage event before the seat returns and lands on the rail', async (context) => {

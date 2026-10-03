@@ -218,7 +218,7 @@ test('narration deltas append and are not the seat result', async (context) => {
   sink.receive({ type: 'delta', text: 'NOTE.md' });
   assert.deepEqual(writes, [
     { text: 'Writing', replace: false },
-    { text: 'NOTE.md', replace: false },
+    { text: 'Writing NOTE.md', replace: true },
   ]);
 
   const options = fixture(context);

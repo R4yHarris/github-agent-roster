@@ -131,8 +131,6 @@ export function createTray({ output, state, shell, env = process.env, cwd = proc
     }
   }
 
-  let pending = 0;
-
   function redraw() {
     const { rule, rail, detail, prompt } = frame();
     barLines = state.statusbar ? detail === null ? 3 : 4 : 0;
@@ -202,31 +200,14 @@ export function createTray({ output, state, shell, env = process.env, cwd = proc
         }
         if (rows > 1) moveCursor(output, 0, -(rows - 1));
         cursorTo(output, 0);
-        pending = 0;
       }
-      const plain = stripVTControlCharacters(String(text));
+      target.write(text);
       const width = Number.isSafeInteger(output.columns) && output.columns > 0 ? output.columns : 80;
-      if (!plain.endsWith('\n')) {
-        if (pending > 0) {
-          moveCursor(output, 0, -1);
-          if (pending >= width) {
-            cursorTo(output, 0);
-            moveCursor(output, 0, 1);
-            pending = 0;
-          } else cursorTo(output, pending);
-        }
-        target.write(plain);
-        pending += plain.length;
-        target.write('\n');
-      } else {
-        target.write(text);
-        pending = 0;
-      }
-      const shown = plain.replace(/\n$/, '');
-      lastRows = Math.max(1, shown.split('\n').reduce((total, line) =>
+      const plain = stripVTControlCharacters(String(text)).replace(/\n$/, '');
+      lastRows = Math.max(1, plain.split('\n').reduce((total, line) =>
         total + Math.max(1, Math.ceil(line.length / width)), 0));
       flush(target);
-      if (state.pendingSecret === null && !state.pendingQuestion) redraw();
+      if (String(text).endsWith('\n') && state.pendingSecret === null && !state.pendingQuestion) redraw();
       else {
         shell.prompt(true);
         flush();
