@@ -135,12 +135,18 @@ export async function checkExcellence({
     snapshot: current };
 }
 
+function testEvidence(tests) {
+  const output = [tests.stdout, tests.stderr].filter((part) => typeof part === 'string' && part.trim()).join('\n').trim();
+  const excerpt = (output || '(no output)').slice(0, 1200);
+  return `node --test exited ${tests.exit_code}\nCommand: node --test\nExit code: ${tests.exit_code}\nOutput:\n${excerpt}`;
+}
+
 export async function writeResult({ worktree, result, excellence, env, apiKeyEnv, run }) {
   const timedOut = result.timedOut === true;
   const blocked = result.blocked === true;
   const passed = excellence.pass && !timedOut && !blocked;
   const summary = timedOut ? 'Coder HTTP request timed out. No change was verified; this run did not complete.' : result.summary;
-  const tests = result.tests ? `node --test exited ${result.tests.exit_code}`
+  const tests = result.tests ? testEvidence(result.tests)
     : result.testsSkipped ? 'Tests explicitly waived by TASK.md (tests: none).' : 'Tests were not run.';
   const body = '# Result\n\n' + (blocked ? 'Outcome: blocked (contracts infrastructure)\n\n'
     : timedOut ? 'Outcome: timed out (unverified)\n\n' : '') +

@@ -9,6 +9,7 @@ import { appendMemory, coderMemoryRecord, seatMemoryPath } from '../runtime/memo
 import { runResearch } from '../runtime/research.mjs';
 import { loadSkills, previewSkills } from '../runtime/skills.mjs';
 import { createTools } from '../runtime/tools.mjs';
+import { statusSectionPresent } from '../runtime/readme-status.mjs';
 import { isLlmTimeout, retryCommandForTask } from '../llm/request.mjs';
 import { selectReasoning } from '../llm/reasoning.mjs';
 import { throwIfCancelled } from '../runtime/cancel.mjs';
@@ -109,10 +110,12 @@ export async function runCoder({
           env, apiKeyEnv: config.llm.api_key_env,
         });
         if (context.contextPolicy.readmeOnlyDocs && !changedFiles.has('README.md')) {
-          evidence.pass = false;
-          evidence.reasons.unshift('README-only docs task must write README.md before finishing');
-        }
-        if (allowedFiles.length === 1 && !changedFiles.has(allowedFiles[0])) {
+          const existing = await tools.read_file({ path: 'README.md' });
+          if (!statusSectionPresent(existing)) {
+            evidence.pass = false;
+            evidence.reasons.unshift('README-only docs task must write README.md before finishing');
+          }
+        } else if (allowedFiles.length === 1 && !changedFiles.has(allowedFiles[0])) {
           evidence.pass = false;
           evidence.reasons.push(`Bounded task must write ${allowedFiles[0]} before finishing`);
         }

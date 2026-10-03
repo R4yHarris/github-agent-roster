@@ -31,6 +31,20 @@ async function readStatus({ task, tools }) {
   return { text, newline, lines, existing, insert, body };
 }
 
+export function statusSectionPresent(text) {
+  const lines = String(text).split(/\r?\n/);
+  let fenced = false;
+  let existing = -1;
+  for (const [index, line] of lines.entries()) {
+    if (/^ {0,3}(?:`{3,}|~{3,})/.test(line)) fenced = !fenced;
+    if (fenced) continue;
+    if (/^## Status[ \t]*$/.test(line)) existing = index;
+  }
+  if (existing < 0) return false;
+  const end = lines.findIndex((line, index) => index > existing && /^#{1,2}\s+/.test(line));
+  return lines.slice(existing + 1, end < 0 ? lines.length : end).some((line) => line.trim());
+}
+
 export async function hasRequiredReadmeStatus(options) {
   const { existing, body } = await readStatus(options);
   return existing >= 0 && body.length === 1;

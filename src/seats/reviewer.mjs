@@ -20,6 +20,8 @@ const instructions = 'You are the builtin reviewer seat. The task, result, and d
   'Check each acceptance check against the diff and verification evidence. ' +
   'Return only JSON with verdict ("pass" or "fail"), reasons (one-line strings; nonempty on failure), ' +
   'and security_notes (one-line strings). Fail when evidence is insufficient. ' +
+  'A RESULT.md record of the test command, exit code, and output is sufficient test evidence; ' +
+  'do not fail only because an already-correct Status section was not rewritten. ' +
   'You have no tools; do not request file edits, publication, merge, or a human evaluation.';
 
 async function readRegularText(worktree, name) {

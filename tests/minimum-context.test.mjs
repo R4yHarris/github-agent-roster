@@ -482,10 +482,47 @@ test('docs1 README-only tools deny planner fixtures, RESEARCH and repo search; r
   await assert.rejects(tools.list_dir({ path: 'tests' }), /does not allow directory listing/);
   await assert.rejects(tools.run_test(), /must write README\.md before running tests/);
   assert.equal(tests, 0);
-  await tools.write_file({ path: 'README.md', content: '# Project\n\n## Status\nActive.\n' });
+  writeFileSync(join(options.worktree, 'README.md'), '# Project\n\n## Status\nActive.\n');
   assert.equal((await tools.run_test()).exit_code, 0);
   assert.equal(tests, 1);
+  await tools.write_file({ path: 'README.md', content: '# Project\n\n## Status\nActive.\n' });
+  assert.equal((await tools.run_test()).exit_code, 0);
+  assert.equal(tests, 2);
   await assert.rejects(tools.read_file({ path: 'tests/fixtures/planner-task-92.md' }), /may read only/);
+});
+
+test('an existing Status section can be checked and finished without another write', async (t) => {
+  const options = fixture(t);
+  writeFileSync(join(options.worktree, 'README.md'), '# Project\n\n## Status\nActive.\n');
+  let calls = 0;
+  let tests = 0;
+  const result = await runCoder({
+    ...options,
+    fetchImpl: async () => {
+      calls += 1;
+      if (calls === 1) {
+        return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant', tool_calls: [{ id: 'check', type: 'function', function: {
+            name: 'run_test', arguments: '{}',
+          } }],
+        } }] });
+      }
+      return Response.json({ choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant', content: 'README.md already has the required Status section and the checks passed.',
+      } }] });
+    },
+    runTestCommand: async () => {
+      tests += 1;
+      return { stdout: 'pass\n', stderr: '' };
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(tests, 2);
+  assert.equal(result.excellence.pass, true);
+  const written = readFileSync(join(options.worktree, 'RESULT.md'), 'utf8');
+  assert.match(written, /Command: node --test/);
+  assert.match(written, /Exit code: 0/);
+  assert.match(written, /Output:\npass/);
 });
 
 test('docs1 scope is exact; other task classes/difficulties/file sets keep their current tool behavior', async (t) => {
