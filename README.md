@@ -6,6 +6,13 @@ GitHub Issues and PRs are the [board and forge](docs/BOARD.md). Roster is not
 a thin CLI wrapper, Hermes Kanban, a Git host, or a separate Kanban database;
 it does not replace Git.
 
+## Status
+
+Roster is under active development. The single-process, sequential delivery
+loop runs today for the planner, coder, and reviewer seats against a configured
+vLLM endpoint, and the same commands fall back to the deterministic offline
+stub when no model endpoint is set.
+
 ## Delivery lifecycle
 
 1. **Ask:** a human states an ask in the `roster` shell or a GitHub issue.
