@@ -71,7 +71,8 @@ test('the context bar is empty when usage is unknown and colours each occupancy 
   assert.match(formatContextBar(990, 1000), /\x1b\[91m/);
   assert.deepEqual([0, 999, 5200, 1048576, undefined].map(formatTokens), ['0', '999', '5.2k', '1.0m', '-']);
   assert.equal(formatContext(undefined, 1048576, { color: false }), '- / 1.0m');
-  assert.equal(formatContext(5200, 1048576, { color: false }), '[#---------] 5.2k / 1.0m');
+  assert.equal(formatContext(5200, 1048576, { color: false }), '5.2k/1.0m [----------] 0%');
+  assert.equal(formatContext(314572, 1048576, { color: false }), '314.6k/1.0m [###-------] 30%');
 });
 
 test('the banner prints once with every fact and keeps an unknown fact as a dash', async () => {
@@ -136,7 +137,7 @@ test('seat and test events update the cached display without running another sea
   assert.equal(shell.state.display.branch, 'issue-108');
   await shell.dispatch('/usage');
   assert.match(messages, /Model: served\nEndpoint: localhost/);
-  assert.match(messages, /Prompt tokens: -\nCompletion tokens: -/);
+  assert.match(messages, /Prompt tokens: -\nCached prompt tokens: -\nCompletion tokens: -/);
   assert.match(messages, /Tool calls: 0\n/);
   await shell.dispatch('/statusbar off');
   assert.equal(shell.state.statusbar, false);

@@ -94,8 +94,15 @@ tool calls when present, and `usage` is the provider's usage object or
 `null` if omitted. The low-level client rejects unsupported finish reasons with
 an error that names only the reason, never the response body. Its `lastResponse`
 retains the real response model and reported usage even on that error.
-Extra non-streaming request fields, such as `temperature` and `max_tokens`,
-pass through. Streaming is not supported.
+Extra request fields, such as `temperature` and `max_tokens`, pass through.
+A request may set `stream: true`; the client then adds
+`stream_options: { include_usage: true }`, assembles the server-sent chunks
+into the same `{ message, usage }` result and reads `usage` from the final
+chunk. After every call that reports usage, streaming or not, the client emits
+one `usage` event with the server's prompt and completion tokens, plus the
+cached prompt tokens when the endpoint reports them. Token counts are never
+estimated from message length, and the event reaches the rail and `/usage`
+only, never the run log or a trailer.
 
 The shared builtin adapter accepts `stop` and `tool_calls` and grants one
 `length` retry per chat instance (the coder keeps one instance for its run).

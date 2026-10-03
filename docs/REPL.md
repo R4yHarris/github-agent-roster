@@ -27,13 +27,23 @@ bright-cyan `roster> ` prompt, for example
 `#108 draft │ deepseek-v4.1-flash l │ - / 1.0m │ 7m26s`. It carries the issue
 and phase, the configured model id with its effort letter, the context counts
 and elapsed time; an idle session shows `idle` and `-`. Unknown usage prints
-`- / 1.0m` with no bar; a real count prints `5.2k / 1.0m` behind a ten-cell bar
-that is green under 50%, yellow to 80%, orange to 95% and red at or above 95%.
-Token counts are never estimated from character length. A failed seat turns the
+`- / 1.0m` with no bar; a real count prints used, max, a ten-cell bar and the
+percent, such as `12.4k/1.0m [----------] 1%`. The bar fills a cell only once
+the percent rounds to ten or more, so a 1% prompt keeps an empty bar and the
+percent carries the signal. The bar and percent are green under 50%, yellow to
+80%, orange to 95% and red at or above 95%. The used figure is
+`usage.prompt_tokens` from the server for the last call, so a later call
+replaces it rather than adding to it, and the denominator is `max_model_len`
+from `GET /v1/models` when the endpoint reports it and the configured
+`llm.context_max` when it does not. Completion tokens, session input and output
+totals and cached prompt tokens stay off the rail and appear in `/usage`.
+Token counts are never estimated from character length, and a zero-price local
+endpoint prints no cost rather than `$0.00`. A failed seat turns the
 first field red and replaces elapsed with the finish reason, and `/debug on`
 adds a trailing `*`. The endpoint, the branch and the word `debug` stay off the
-rail. Narrow terminals drop the context field, then the model, keeping the
-issue and elapsed fields. Values are
+rail. At 76 columns or more the rail carries the full context field; from 52 to
+75 columns it keeps the percent without the bar; below 52 columns it drops the
+context field, then the model, keeping the issue and elapsed fields. Values are
 white, waiting and warnings are bright yellow, failures bright red and passes
 bright green; no other colours, dim text or emoji are used. The rail repaints on
 seat, tool and test events without a keypress, and redraws preserve Ctrl+C,
@@ -53,9 +63,14 @@ loop, the tool runner and the shell. Only five kinds of event may touch the
 screen: a phase (`plan`, `draft`, `test`, `review`) with the issue number, a
 tool with its name and target, a wait rewritten in place with elapsed seconds,
 a verdict with pass or fail, the finish reason and the files written or
-`no write`, and usage. Usage updates the rail bar and `/usage` only and never
-prints a transcript line; unknown usage leaves the bar empty and shows `-`
-rather than an estimate from character length. Repeated tool events coalesce
+`no write`, and usage. The chat adapter emits one usage event when a call ends,
+built from the server `usage` object: a streaming request sets
+`stream_options.include_usage` so vLLM sends the final usage chunk, and a
+non-streaming body carries the same object. Usage updates the rail bar and
+`/usage` only; it never prints a transcript line and never reaches the durable
+run log, the debug log rows or a commit trailer. Unknown usage leaves the bar
+empty and shows `-` rather than an estimate from character length. Repeated
+tool events coalesce
 within 200 ms and the rail ticks at most once a second, so painting never waits
 on the network. `/debug on` adds one `thinking … │ max_tokens …` line under the
 rail, never inside the prompt body.
@@ -87,7 +102,7 @@ agents and CI.
 | `/recap` | Print one human metadata line with TASK outcome/files, last test exit, review and finish reason. Never print RESULT completion text. |
 | `/btw QUESTION` | Ask the configured model one read-only question about current task metadata. It offers no tools, refuses tool requests, and prints only the answer; no task, memory, measured-seat state or publication body is changed. It can answer alongside a running seat without steering it. Truncation fails rather than making a second request. |
 | `/context` | Show this process's last response-backed seat: provider, actual model, actual request effort, input/output counts, declared context capacity, finish reason, character pack budget and whether prior feedback was included. Missing counts are `-`; no body or environment usage is substituted. Side questions do not replace the measured seat. |
-| `/usage` | Print one read-only panel for the current session: full model, endpoint, prompt and completion tokens, context max, effort, finish reason, tool calls, elapsed time, whether thinking was disabled and the outbound completion cap. Unknown values are `-`. |
+| `/usage` | Print one read-only panel for the current session: full model, endpoint, prompt tokens, the cached share of those prompt tokens, completion tokens, context max, effort, finish reason, tool calls, elapsed time, whether thinking was disabled and the outbound completion cap. Unknown values are `-`, and a zero-price endpoint prints no cost rather than `$0.00`. |
 | `/map` | Write ignored `.roster/map.md` with TASK-named paths and the top two directory levels, capped at 80 filename-only lines (no file bodies). Protected/private paths and symlinks are omitted. Non-docs difficulty4+ coders may load/read it; low difficulty and all docs tasks cannot. It grants no extra product path permissions and coder writes are always refused. |
 | `/checkpoints` | List the current task's pre-write checkpoint number, coder seat, short status and time. |
 | `/rewind N` or `/undo` | Restore checkpoint-covered product files and remove newly created files in that same task scope. Keep PLAN, TASK, recipe, result and logs. Undo selects the latest checkpoint only. Stop the seat first; any open/closed/merged PR on the branch refuses rewind, and unavailable PR verification fails closed. Verification/review are invalidated after restoration. |

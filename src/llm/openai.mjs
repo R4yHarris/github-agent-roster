@@ -3,6 +3,7 @@ import { resolveSecret } from '../lib/secrets.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
 import { defaultRequestFetch } from './http.mjs';
 import { UnsupportedFinishReasonError } from './finish-reason.mjs';
+import { readChatStream } from './stream.mjs';
 import { isRunCancelled, throwIfCancelled } from '../runtime/cancel.mjs';
 import { ChatError, isLocalLlmHost, LlmTimeoutError, resolveRequestTimeout, validateRetryCommand,
   withRequestTimeout } from './request.mjs';
@@ -61,6 +62,22 @@ function parseCompletion(payload, requestedModel) {
   };
 }
 
+function cachedTokens(usage) {
+  const value = usage?.prompt_tokens_details?.cached_tokens;
+  return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+export function reportedUsage(usage) {
+  if (!isObject(usage) || !Number.isSafeInteger(usage.prompt_tokens) || usage.prompt_tokens < 0) return null;
+  const cached = cachedTokens(usage);
+  return {
+    input: usage.prompt_tokens,
+    ...(Number.isSafeInteger(usage.completion_tokens) && usage.completion_tokens >= 0
+      ? { output: usage.completion_tokens } : {}),
+    ...(cached === undefined ? {} : { cached }),
+  };
+}
+
 export function createChat(config = {}, {
   fetch: suppliedFetch, env = process.env, vault, onEvent, retryCommand, clock,
   signal,
@@ -95,16 +112,19 @@ export function createChat(config = {}, {
     }
     const model = request.model ?? llm.model;
     if (typeof model !== 'string' || !model.trim()) throw new TypeError('A chat model is required.');
-    if (request.stream !== undefined && request.stream !== false) {
-      throw new TypeError('Streaming chat responses are not supported.');
+    if (request.stream !== undefined && typeof request.stream !== 'boolean') {
+      throw new TypeError('A streaming chat request must set stream to a boolean.');
     }
+    const streaming = request.stream === true;
     let body;
     try {
       body = JSON.stringify({
         ...(llm.reasoning_effort === undefined ? {} : { reasoning_effort: llm.reasoning_effort }),
         ...(llm.max_tokens === undefined ? {} : { max_tokens: llm.max_tokens }),
         ...(llm.chat_template_kwargs === undefined ? {} : { chat_template_kwargs: llm.chat_template_kwargs }),
-        ...request, model, stream: false,
+        ...request, model, stream: streaming,
+        // vLLM only reports prompt_tokens on a stream when the final chunk is requested.
+        ...(streaming ? { stream_options: { include_usage: true } } : {}),
       });
     } catch {
       throw new TypeError('The chat request must be JSON serializable.');
@@ -149,8 +169,9 @@ export function createChat(config = {}, {
         }
         let payload;
         try {
-          payload = await response.json();
-        } catch {
+          payload = streaming ? await readChatStream(response, model) : await response.json();
+        } catch (error) {
+          if (error instanceof ChatError) throw error;
           throw new ChatError('The LLM response was not valid JSON.');
         }
         signal.throwIfAborted();
@@ -158,6 +179,8 @@ export function createChat(config = {}, {
         await onEvent?.({ type: 'model',
           model: key ? completion.model.split(key).join('[redacted]') : completion.model, host });
         await onEvent?.({ type: 'http', phase: 'ok', status });
+        const reported = reportedUsage(completion.usage);
+        if (reported) await onEvent?.({ type: 'usage', ...reported });
         return completion;
       }
     }

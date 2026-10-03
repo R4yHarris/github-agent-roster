@@ -285,8 +285,9 @@ test('invalid and non-serializable requests fail before resolving secrets or mak
   const chat = client(() => assert.fail('Must not fetch'), {
     vault: { get: () => assert.fail('Must not read secrets') },
   });
-  for (const request of [null, {}, { messages: [] }, { messages: [{}] }, { messages, model: '' }, { messages, stream: true }]) {
-    await assert.rejects(chat(request), (error) => safeError(error, /request|model|Streaming/));
+  for (const request of [null, {}, { messages: [] }, { messages: [{}] }, { messages, model: '' },
+    { messages, stream: 'yes' }]) {
+    await assert.rejects(chat(request), (error) => safeError(error, /request|model|streaming/i));
   }
   await assert.rejects(chat({
     messages,
@@ -339,6 +340,7 @@ test('live HTTP events expose only model, host, phase, and status without reques
     { type: 'http', phase: 'start' },
     { type: 'model', model: 'actual-model', host: 'localhost:8000' },
     { type: 'http', phase: 'ok', status: 200 },
+    { type: 'usage', input: 4, output: 6 },
   ]);
   for (const sensitive of [secret, messages[0].content, completion.choices[0].message.content, '/private/v1']) {
     assert.ok(!JSON.stringify(events).includes(sensitive));

@@ -14,6 +14,7 @@ export function formatUsage(display = {}, measured = null, { now = Date.now() } 
     ['Model', clean(measured?.model ?? display.model)],
     ['Endpoint', clean(display.host)],
     ['Prompt tokens', count(measured?.input ?? display.contextUsed)],
+    ['Cached prompt tokens', count(display.cachedTokens)],
     ['Completion tokens', count(measured?.output ?? display.outputTokens)],
     ['Context max', count(measured?.contextMax ?? display.contextMax)],
     ['Effort', clean(efforts[effort] ?? effort)],
