@@ -232,14 +232,8 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         calls = [];
       } else if (finalSummaryOnly && checksPassedAfterWrite && Array.isArray(message.tool_calls) &&
           message.tool_calls.length) {
-        const onlyCall = message.tool_calls.length === 1 ? message.tool_calls[0] : null;
-        let sameProduct = false;
-        if (onlyCall?.function?.name === 'write_file' && singleAllowedFile &&
-            typeof onlyCall.function.arguments === 'string') {
-          try { sameProduct = JSON.parse(onlyCall.function.arguments)?.path === singleAllowedFile; }
-          catch { sameProduct = false; }
-        }
-        const returnToDraft = !sameProduct && !lateWriteReturned && onlyCall?.function?.name === 'write_file';
+        const returnToDraft = !lateWriteReturned && message.tool_calls.length === 1 &&
+          message.tool_calls[0]?.function?.name === 'write_file';
         if (returnToDraft) {
           lateWriteReturned = true;
           finalSummaryOnly = false;
