@@ -8,13 +8,12 @@ import { ensurePrivateFilesIgnored, readPrivateFile, writePrivateDocuments } fro
 import { ensureLocalPath, resolveProjectRoot } from '../lib/paths.mjs';
 import { resolvePublishModel } from '../metrics/run.mjs';
 import { redactEvidence } from '../runtime/excellence.mjs';
+import { reportedContextMax } from '../llm/window.mjs';
 import { checkAppIdentity, formatAppIdentity } from './app.mjs';
 
 const installation = fileURLToPath(new URL('../../', import.meta.url));
 const defaultBaseUrl = 'http://127.0.0.1:8000/v1';
 const probeTimeoutMs = 5_000;
-const contextFields = ['max_model_len', 'max_context_length', 'max_context_len',
-  'context_length', 'context_window', 'context_max'];
 
 class ModelProbeError extends Error {}
 
@@ -71,8 +70,7 @@ export async function probeModelDetails(baseUrl, {
       const models = new Map();
       for (const entry of payload.data) {
         const id = modelId(entry?.id, env, apiKeyEnv);
-        const contextMax = contextFields.map((field) => entry?.[field])
-          .find((value) => Number.isSafeInteger(value) && value > 0);
+        const contextMax = reportedContextMax(entry);
         if (!models.has(id) || models.get(id).context_max === undefined && contextMax !== undefined) {
           models.set(id, Object.freeze({ id, ...(contextMax === undefined ? {} : { context_max: contextMax }) }));
         }

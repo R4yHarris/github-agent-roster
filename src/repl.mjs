@@ -31,6 +31,7 @@ import { formatSessionStatus } from './shell/status.mjs';
 import { getFleetProfile, loadFleet, withFleetProfile } from './lib/fleet.mjs';
 import { runFleet } from './lib/fleet-cli.mjs';
 import { probeModelDetails } from './onboard/wizard.mjs';
+import { contextMaxForModel } from './llm/window.mjs';
 import { splitArguments } from './lib/arguments.mjs';
 import { formatIssueSummary, listOpenIssues, readDiffNames } from './lib/board.mjs';
 import { checkDoctor, formatDoctor, warmDoctor } from './lib/doctor.mjs';
@@ -163,6 +164,30 @@ export function createDispatcher({
       outputTokens: undefined, toolCount: undefined, thinking: undefined, maxTokens: undefined,
     }, transcript: null };
   const notify = () => onStateChange(state);
+  const contextWindows = new Map();
+  const windowKey = (llm = state.config.llm) => `${llm.base_url ?? ''}|${llm.model ?? ''}`;
+  function applyContextWindow() {
+    const reported = contextWindows.get(windowKey());
+    if (reported !== undefined) state.display.contextMax = reported;
+  }
+  async function ensureContextWindow() {
+    const llm = state.config.llm;
+    const key = windowKey(llm);
+    if (!llm.base_url || contextWindows.has(key)) {
+      applyContextWindow();
+      return;
+    }
+    contextWindows.set(key, undefined);
+    try {
+      const models = await api.probeModelDetails(llm.base_url, { env, apiKeyEnv: llm.api_key_env });
+      const reported = contextMaxForModel(models, llm.model, undefined);
+      if (reported !== undefined) contextWindows.set(key, reported);
+    } catch {
+      // An endpoint that does not report a window keeps the configured context max as the denominator.
+    }
+    applyContextWindow();
+    notify();
+  }
   const sink = createEventSink({ issue: () => state.display.issue,
     emit: createShellPainter({ transcript: () => state.transcript, display: state.display, notify }) });
   const receiveEvent = (event) => {
@@ -171,8 +196,10 @@ export function createDispatcher({
     if (event.type === 'seat-measurement') {
       state.lastMeasuredSeat = Object.fromEntries(['seat', 'provider', 'model', 'effort', 'input', 'output',
         'contextMax', 'finishReason', 'packBudgetChars', 'priorFeedbackIncluded'].map((key) => [key, event[key]]));
+      applyContextWindow();
       return;
     }
+    if (event.type === 'usage') return;
     display.seat = event.seat;
     if (['finish-reason', 'completion'].includes(event.type)) display.lastFinishReason = event.reason;
     if (event.type === 'tool') display.toolCount = (display.toolCount ?? 0) + 1;
@@ -196,6 +223,7 @@ export function createDispatcher({
       if (event.verdict) display.state = event.verdict === 'pass' ? 'passed' : 'failed';
       if (event.verdict) display.review = event.verdict;
     }
+    applyContextWindow();
     notify();
   };
   const currentRoot = () => state.lastRun?.repoRoot ?? api.repositoryRoot(cwd);
@@ -209,6 +237,7 @@ export function createDispatcher({
   const syncModelDisplay = () => {
     Object.assign(state.display, { model: state.config.llm.model, host: host(), effort: state.config.llm.effort,
       contextMax: state.config.llm.context_max, contextUsed: undefined });
+    applyContextWindow();
     notify();
   };
   async function selectModel(value, save = false) {
@@ -275,6 +304,8 @@ export function createDispatcher({
       lastFinishReason: null, lastTestName: null, review: null });
     state.display.mode = options.planMode ? 'plan' : null;
     notify();
+    // The window probe repaints the rail when it answers; it never delays the seat.
+    ensureContextWindow().catch(() => {});
     try {
       state.lastRun = await run({
         cwd, repoRoot, config: state.config, env, publish: false, debug: state.debug, ...options,

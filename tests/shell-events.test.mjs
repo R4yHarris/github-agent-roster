@@ -84,13 +84,13 @@ test('usage updates the rail and /usage without printing a transcript line or an
   assert.equal(display.thinking, false);
   assert.equal(display.maxTokens, 512);
   const panel = formatUsage(display, null);
-  assert.match(panel, /Prompt tokens: -\nCompletion tokens: -\nContext max: -/);
+  assert.match(panel, /Prompt tokens: -\nCached prompt tokens: -\nCompletion tokens: -\nContext max: -/);
   assert.match(panel, /Thinking: disabled\nMax completion tokens: 512/);
   assert.equal(stripVTControlCharacters(formatTray(display, { color: false }).rail).includes('- / -'), true);
   paint({ kind: 'usage', input: 524288, output: 40, contextMax: 1048576, finishReason: 'stop' });
   assert.match(stripVTControlCharacters(formatTray(display, { color: false, now: 0 }).rail),
-    /\[#####-----\] 524\.3k \/ 1\.0m/);
-  assert.match(formatUsage(display, null), /Prompt tokens: 524288\nCompletion tokens: 40/);
+    /524\.3k\/1\.0m \[#####-----\] 50%/);
+  assert.match(formatUsage(display, null), /Prompt tokens: 524288\nCached prompt tokens: -\nCompletion tokens: 40/);
   assert.equal(written.length, 0);
 });
 

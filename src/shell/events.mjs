@@ -84,6 +84,10 @@ export function createEventSink({ emit, issue = () => null, clock = Date.now, co
             contextMax: count(event.contextMax),
             finishReason: typeof event.finishReason === 'string' ? event.finishReason : undefined });
           return;
+        case 'usage':
+          emit({ kind: 'usage', input: count(event.input), output: count(event.output),
+            cached: count(event.cached) });
+          return;
         case 'seat-end':
           if (event.verdict) verdict(event.verdict === 'pass' ? 'pass' : 'fail');
           else flushTool();
@@ -120,6 +124,7 @@ export function createShellPainter({ transcript, display, notify = () => {} } = 
         if (!display) return;
         if (event.input !== undefined) display.contextUsed = event.input;
         if (event.output !== undefined) display.outputTokens = event.output;
+        if (event.cached !== undefined) display.cachedTokens = event.cached;
         if (event.contextMax !== undefined) display.contextMax = event.contextMax;
         if (event.finishReason !== undefined) display.lastFinishReason = event.finishReason;
         if (event.thinking !== undefined) display.thinking = event.thinking;

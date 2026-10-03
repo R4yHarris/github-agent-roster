@@ -177,6 +177,12 @@ export async function createRunLog({
     let effort;
     let finishReason;
     const onEvent = async (event) => {
+      // Usage counts reach the rail and /usage only; the durable run log never records token numbers.
+      if (event?.type === 'usage') {
+        await observe?.({ ...event, seat: name });
+        await debug.record({ repoRoot, issue, seat: name, event });
+        return;
+      }
       const text = eventText(event);
       if (event.type === 'http' && event.phase === 'start') effort = event.effort;
       if (['completion', 'finish-reason'].includes(event.type)) finishReason = event.reason;

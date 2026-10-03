@@ -62,7 +62,7 @@ test('context keeps the measured seat and usage adds a read-only session panel',
   text = '';
   await shell.dispatch('/usage');
   assert.match(text, /^Model: measured-model\n/);
-  assert.match(text, /Prompt tokens: 17\nCompletion tokens: 9\nContext max: 1048576/);
+  assert.match(text, /Prompt tokens: 17\nCached prompt tokens: -\nCompletion tokens: 9\nContext max: 1048576/);
   assert.match(text, /Finish reason: stop\nTool calls: -\nElapsed: -\nThinking: -\nMax completion tokens: -/);
   assert.doesNotMatch(text, /different-session-model/);
 });

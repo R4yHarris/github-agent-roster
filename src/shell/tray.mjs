@@ -7,6 +7,8 @@ const colors = { label: '\x1b[96m', white: '\x1b[97m', yellow: '\x1b[93m',
 const phases = { idle: 'idle', planning: 'plan', drafting: 'draft', testing: 'test',
   reviewing: 'review', passed: 'pass', failed: 'fail', published: 'done' };
 const BAR_CELLS = 10;
+const FULL_COLUMNS = 76;
+const PERCENT_COLUMNS = 52;
 const RULE = '\u2500';
 const SEPARATOR = ' \u2502 ';
 
@@ -21,10 +23,23 @@ export function formatTokens(value) {
   return String(value);
 }
 
-export function formatContext(used, max, { color = true } = {}) {
+export function contextTone(used, max) {
+  if (!(Number.isSafeInteger(used) && used >= 0 && Number.isSafeInteger(max) && max > 0)) return null;
+  const percent = Math.min(100, (used / max) * 100);
+  return percent >= 95 ? 'red' : percent >= 80 ? 'orange' : percent >= 50 ? 'yellow' : 'green';
+}
+
+export function formatContextPercent(used, max) {
   const known = Number.isSafeInteger(used) && used >= 0 && Number.isSafeInteger(max) && max > 0;
-  const text = `${known ? formatTokens(used) : '-'} / ${formatTokens(max)}`;
-  return known ? `${formatContextBar(used, max, { color })} ${text}` : text;
+  return known ? `${Math.round(Math.min(100, (used / max) * 100))}%` : '-';
+}
+
+export function formatContext(used, max, { color = true, detail = 'full' } = {}) {
+  const tone = contextTone(used, max);
+  if (detail === 'percent') return tone === null ? '-' : paint(formatContextPercent(used, max), tone, color);
+  if (tone === null) return `- / ${formatTokens(max)}`;
+  return `${formatTokens(used)}/${formatTokens(max)} ${formatContextBar(used, max, { color })} ` +
+    paint(formatContextPercent(used, max), tone, color);
 }
 
 export function formatElapsed(startedAt, now) {
@@ -36,16 +51,16 @@ export function formatElapsed(startedAt, now) {
 }
 
 export function formatContextBar(used, max, { color = true } = {}) {
-  const known = Number.isSafeInteger(used) && used >= 0 && Number.isSafeInteger(max) && max > 0;
-  if (!known) return `[${'-'.repeat(BAR_CELLS)}]`;
+  const tone = contextTone(used, max);
+  if (tone === null) return `[${'-'.repeat(BAR_CELLS)}]`;
   const percent = Math.min(100, (used / max) * 100);
-  const filled = Math.min(BAR_CELLS, Math.max(percent > 0 ? 1 : 0, Math.round((percent / 100) * BAR_CELLS)));
-  const tone = percent >= 95 ? 'red' : percent >= 80 ? 'orange' : percent >= 50 ? 'yellow' : 'green';
+  const filled = Math.min(BAR_CELLS, Math.round((percent / 100) * BAR_CELLS));
   return `[${paint('#'.repeat(filled), tone, color)}${'-'.repeat(BAR_CELLS - filled)}]`;
 }
 
 export function formatTray(display = {}, { columns = 80, color = true, now = Date.now(), debug = false } = {}) {
   const width = Math.max(8, Number.isSafeInteger(columns) ? columns - 1 : 79);
+  const terminal = Number.isSafeInteger(columns) ? columns : 80;
   const state = clean(display.state) || 'idle';
   const phase = phases[state] ?? state;
   const issue = display.issue === null || display.issue === undefined ? 'local' : `#${display.issue}`;
@@ -56,15 +71,18 @@ export function formatTray(display = {}, { columns = 80, color = true, now = Dat
   const failed = state === 'failed';
   const tail = failed && display.lastFinishReason ? clean(display.lastFinishReason)
     : state === 'idle' ? '-' : formatElapsed(display.startedAt, now);
+  const detailLevel = terminal >= FULL_COLUMNS ? 'full' : terminal >= PERCENT_COLUMNS ? 'percent' : 'none';
+  const context = detailLevel === 'none' ? null
+    : formatContext(display.contextUsed, display.contextMax, { color, detail: detailLevel });
   const fields = [
     paint(where, failed ? 'red' : state === 'passed' ? 'green' : 'white', color),
     paint(model, 'white', color),
-    formatContext(display.contextUsed, display.contextMax, { color }),
+    ...(context === null ? [] : [context]),
     paint(tail, failed ? 'red' : 'white', color) + (debug ? paint('*', 'label', color) : ''),
   ];
   let rail = fields.join(SEPARATOR);
-  for (const index of [2, 1]) {
-    if (length(rail) <= width) break;
+  for (const index of [context === null ? -1 : 2, 1]) {
+    if (index < 0 || length(rail) <= width) continue;
     fields.splice(index, 1);
     rail = fields.join(SEPARATOR);
   }
