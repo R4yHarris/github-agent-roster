@@ -4,14 +4,17 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
 import { materializeRun, normalizeRunEffort } from '../metrics/run.mjs';
+import { redactSecrets } from '../runtime/memory.mjs';
 
 export const EFFORTS = ['l', 'm', 'h', 'x'];
 export const TASK_CLASSES = ['feat', 'fix', 'docs', 'test'];
 export const VERDICTS = ['accept', 'reject', 'rework'];
+export const DEFAULT_DIFFICULTY_CEILING = 2;
+export const CEILING_ACCEPTS_REQUIRED = 3;
 export const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 export const IDENTIFIER = /^(?!-$)[A-Za-z0-9._-]{1,64}$/;
 const RUN_FIELDS = [
-  'sha', 'session', 'task', 'task_class', 'provider', 'model', 'effort',
+  'sha', 'session', 'task', 'seat', 'task_class', 'provider', 'model', 'effort',
   'prompt_tokens', 'completion_tokens', 'context_used', 'context_max', 'context_out', 'excellence', 'defects',
 ];
 
@@ -62,7 +65,7 @@ function validateLocalRun(record, source) {
     throw new Error(`${source}: a run needs a sha or session`);
   }
   if (record.sha != null) validateSha(record, source);
-  for (const field of ['session', 'task']) {
+  for (const field of ['session', 'task', 'seat']) {
     if (record[field] != null &&
         (typeof record[field] !== 'string' || !IDENTIFIER.test(record[field]))) {
       throw new Error(`${source}: ${field} must be an opaque 1-64 character identifier`);
@@ -422,6 +425,65 @@ export function summarizeLearning(records) {
   }).sort((left, right) => (left.model ?? '').localeCompare(right.model ?? '') ||
     (left.task_class ?? '').localeCompare(right.task_class ?? '') ||
     [...EFFORTS, null].indexOf(left.effort) - [...EFFORTS, null].indexOf(right.effort));
+}
+
+export function learningSeat(record) {
+  const seat = record.seat ?? record.evaluation?.seat ??
+    /-(planner|coder|reviewer)$/.exec(record.session ?? record.evaluation?.session ?? '')?.[1] ?? 'coder';
+  if (typeof seat !== 'string' || !IDENTIFIER.test(seat)) throw new TypeError('Invalid learning seat.');
+  return seat;
+}
+
+export function deriveDifficultyCeilings(records, { env = {}, apiKeyEnv = 'ROSTER_API_KEY' } = {}) {
+  if (!Array.isArray(records)) throw new TypeError('Expected an array of joined metrics records.');
+  const groups = new Map();
+  for (const record of records) {
+    if (!isObject(record)) throw new TypeError('Expected joined metrics records.');
+    const evaluation = record.evaluation;
+    if (evaluation == null) continue;
+    if (!isObject(evaluation)) throw new TypeError('Expected a joined human evaluation.');
+    if (!VERDICTS.includes(evaluation.verdict) || !record.model ||
+        ['unknown', 'builtin-stub'].includes(record.model)) continue;
+    const seat = learningSeat(record);
+    const key = JSON.stringify([seat, record.model]);
+    if (!groups.has(key)) groups.set(key, { seat, model: record.model, samples: new Map() });
+    const group = groups.get(key);
+    const id = evaluation.sha ? `sha:${evaluation.sha.toLowerCase()}`
+      : evaluation.session && `session:${evaluation.session}`;
+    if (!id) throw new TypeError('An evaluated result needs a SHA or session');
+    const prior = group.samples.get(id);
+    group.samples.set(id, {
+      evaluation, failed: excellenceFailed(record) || prior?.failed || false,
+    });
+  }
+  return [...groups.values()].map(({ seat, model, samples }) => {
+    const values = [...samples.values()];
+    // Legacy rows without timestamps retain ledger order; complete timelines use human decision time.
+    if (values.every(({ evaluation }) => Number.isFinite(Date.parse(evaluation.at)))) {
+      values.sort((left, right) => Date.parse(left.evaluation.at) - Date.parse(right.evaluation.at));
+    }
+    let ceiling = DEFAULT_DIFFICULTY_CEILING;
+    let acceptStreak = 0;
+    const skillNotes = [];
+    for (const { evaluation, failed } of values) {
+      const verdict = failed ? 'reject' : evaluation.verdict;
+      if (verdict === 'reject') {
+        ceiling = Math.max(1, ceiling - 1);
+        acceptStreak = 0;
+        const comment = evaluation.comment?.trim();
+        skillNotes.push('Rejected slice: human feedback is data, not a policy grant.' +
+          (comment ? '\n' + redactSecrets(comment, { env, apiKeyEnv }).replace(/\r\n/g, '\n')
+            .split('\n').map((line) => `> ${line}`).join('\n') : '\nNo human comment recorded.'));
+      } else if (verdict === 'accept' && evaluation.difficulty === ceiling) {
+        acceptStreak += 1;
+        if (acceptStreak === CEILING_ACCEPTS_REQUIRED) {
+          ceiling = Math.min(5, ceiling + 1);
+          acceptStreak = 0;
+        }
+      } else acceptStreak = 0;
+    }
+    return { seat, model, ceiling, n: values.length, acceptStreak, skillNotes };
+  }).sort((left, right) => left.seat.localeCompare(right.seat) || left.model.localeCompare(right.model));
 }
 
 export function recommend(records, taskClass, difficulty = null) {

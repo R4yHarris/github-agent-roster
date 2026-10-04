@@ -133,6 +133,7 @@ export async function recordEvaluation(target, verdict, difficulty, again, {
     evaluation.session ??= record.session ?? null;
     evaluation.model = ['unknown', 'builtin-stub'].includes(record.model) ? null : record.model ?? null;
     evaluation.task_class = record.task_class ?? inferTaskClass(record.task) ?? null;
+    if (record.seat != null) evaluation.seat = record.seat;
   }
   validateLocalEvaluation(evaluation, 'AI-Eval');
   const directory = resolve(root, '.roster');

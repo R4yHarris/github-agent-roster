@@ -232,6 +232,34 @@ uses qualifying capacity evidence and carries forward redacted human feedback.
 One acceptance can seed an otherwise unconfigured baseline, not a recommendation.
 See [routing](ROUTING.md).
 
+## Derived difficulty ceilings and skill notes (FEATURE_SPEC 5.6)
+
+`deriveDifficultyCeilings` reads joined human evaluations without writing a
+new store. Each **seat + model** starts at ceiling **2**. Three consecutive
+clean accepts at exactly the current ceiling raise it by one (maximum 5);
+each reject lowers it by one (minimum 1) and resets the streak. Off-level
+accepts and `rework` (accepted with defects) reset the streak and never raise
+it. Recorded excellence defects turn an evaluated acceptance into a derived
+reject, without changing the human verdict. Automatic-only runs do not
+establish ceiling evidence.
+
+Decisions are deduplicated by evaluation SHA (case-insensitive) or session,
+across task classes and efforts. Existing join rules retain the latest human
+correction and failure evidence. Complete evaluation timelines are ordered by
+human `at` timestamps; legacy timelines missing timestamps use ledger order.
+Explicit `seat` metadata wins, otherwise a session ending in `-planner`,
+`-coder`, or `-reviewer` identifies the seat. Older unlabelled runs use the
+coder bucket; unknown/stub models do not establish a ceiling.
+
+Each derived reject adds a skill note containing the human comment, redacted
+with the existing feedback redactor and blockquoted as **data, not a policy
+grant**. Missing comments are stated, not invented. Notes are derived from
+the existing local ledger, not written into executable skills or a new DB.
+Fleet routing checks the requested seat (coder by default) ceiling in both
+evidence and prior tiers; no evaluations for that seat/model preserve prior
+routing behavior. Existing median difficulty, context, and sample thresholds
+still apply. Ceiling evidence does not pool another seat's performance.
+
 Both `.roster/runs/` and `.roster/evals.jsonl` are ignored by this repository.
 When running Roster against another repository, ignore these paths there
 before recording seats or evaluations. Keep human free-text feedback local;

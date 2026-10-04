@@ -271,3 +271,13 @@ test('a bot identity cannot post AI-Eval comments', async (t) => {
   }), /human GitHub identity/);
   assert.equal(loadLearning({ cwd }).evaluations.length, 1);
 });
+
+test('human evaluations retain an explicitly recorded seat for later ceiling derivation', async (t) => {
+  const { cwd, options } = fixture(t);
+  const result = await recordEvaluation('named-seat-session', 'reject', '2', 'n', {
+    ...options, metricsLoader: () => [{ session: 'named-seat-session', seat: 'planner',
+      model: 'seat-model', task_class: 'fix' }],
+  });
+  assert.equal(result.seat, 'planner');
+  assert.equal(loadLearning({ cwd }).evaluations[0].seat, 'planner');
+});

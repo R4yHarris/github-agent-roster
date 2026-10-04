@@ -1,6 +1,8 @@
 import { loadCapabilities, validateCapabilities } from './capabilities.mjs';
 import { getFleetProfile, loadFleet, validateFleet } from './fleet.mjs';
-import { EFFORTS, formatRecommendation, summarizeLearning, TASK_CLASSES } from './learn.mjs';
+import {
+  deriveDifficultyCeilings, EFFORTS, formatRecommendation, IDENTIFIER, learningSeat, summarizeLearning, TASK_CLASSES,
+} from './learn.mjs';
 import { hardwareCost } from './hardware.mjs';
 import { resolveProjectRoot } from './paths.mjs';
 
@@ -13,7 +15,7 @@ function contextFit(profile) {
 }
 
 export function chooseRoute({
-  fleet, capabilities, records = [], taskClass, difficulty = 2, contextRequired = 0, profileId,
+  fleet, capabilities, records = [], taskClass, difficulty = 2, contextRequired = 0, profileId, seat = 'coder',
 }) {
   if (!TASK_CLASSES.includes(taskClass)) throw new TypeError('Routing task class must be feat, fix, docs, or test');
   if (!Number.isInteger(difficulty) || difficulty < 1 || difficulty > 5) {
@@ -27,10 +29,17 @@ export function chooseRoute({
     (record.evaluation != null && (typeof record.evaluation !== 'object' || Array.isArray(record.evaluation))))) {
     throw new TypeError('Routing requires joined run/evaluation records');
   }
+  if (typeof seat !== 'string' || !IDENTIFIER.test(seat)) {
+    throw new TypeError('Routing seat must be an opaque 1-64 character identifier');
+  }
+  const ceilings = new Map(deriveDifficultyCeilings(records).filter((entry) => entry.seat === seat)
+    .map((entry) => [entry.model, entry.ceiling]));
   const catalog = validateFleet(fleet);
   const priors = validateCapabilities(capabilities).capabilities;
-  const profiles = profileId === undefined ? catalog.profiles : [getFleetProfile(catalog, profileId)];
-  const human = records.filter(({ evaluation }) => evaluation != null);
+  const profiles = (profileId === undefined ? catalog.profiles : [getFleetProfile(catalog, profileId)])
+    .filter((profile) => !ceilings.has(profile.model) || ceilings.get(profile.model) >= difficulty);
+  const human = records.filter((record) => record.evaluation != null &&
+    learningSeat(record) === seat);
   const groups = summarizeLearning(human).filter((group) =>
     group.task_class === taskClass && group.n >= 3 &&
     group.medianDifficulty !== null && group.medianDifficulty >= difficulty);

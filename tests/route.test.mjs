@@ -25,10 +25,10 @@ const capabilities = { capabilities: [
 const samples = (model, n = 3) => Array.from({ length: n }, (_, index) => ({
   model, task_class: 'fix', effort: 'h', session: `${model.replace('/', '-')}-${index}`,
   evaluation: { session: `${model.replace('/', '-')}-${index}`,
-    verdict: 'accept', difficulty: 4, again: true, minutes: 10 },
+    verdict: 'accept', difficulty: 2, again: true, minutes: 10 },
 }));
 const select = (options = {}) => chooseRoute({
-  fleet, capabilities, taskClass: 'fix', difficulty: 3, records: [], ...options,
+  fleet, capabilities, taskClass: 'fix', difficulty: 2, records: [], ...options,
 });
 
 test('three distinct human evaluations win over a stronger capability prior', () => {
@@ -117,13 +117,52 @@ test('CLI recommend prints the same read-only choice as route.mjs without changi
   writeFileSync(join(cwd, '.roster', 'evals.jsonl'), evaluations.map((row) => JSON.stringify(row)).join('\n') + '\n');
   const joined = samples('owner/steady');
   const choice = await routeTask({ cwd, installationRoot: installation, taskClass: 'fix',
-    difficulty: 3, records: joined });
+    difficulty: 2, records: joined });
   const result = spawnSync(process.execPath, [join(installation, 'src', 'cli.mjs'),
-    'recommend', '--task-class', 'fix', '--difficulty', '3'], {
+    'recommend', '--task-class', 'fix', '--difficulty', '2'], {
     cwd, encoding: 'utf8', timeout: 10_000,
   });
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, formatRoute(choice, 'fix', parseConfig(example)));
   assert.equal(readFileSync(join(cwd, '.roster', 'config.yml'), 'utf8'), example);
+});
+
+test('ceilings gate both human evidence and prior fallbacks, including explicit profiles', () => {
+  const accepted = samples('owner/fast');
+  assert.equal(select({ records: accepted, difficulty: 3 }).source, 'prior');
+  assert.equal(select({ records: accepted, difficulty: 4 }), null);
+  const rejected = samples('owner/fast', 1);
+  rejected[0].evaluation.verdict = 'reject';
+  assert.equal(select({ records: rejected }), null);
+  assert.equal(select({ records: rejected, profileId: 'fast' }), null);
+  assert.equal(select({ records: rejected, difficulty: 1 }).source, 'prior');
+  assert.equal(select({ records: [], difficulty: 5 }).profile.id, 'fast');
+});
+
+test('routing uses only the requested seat evidence and never borrows another seat capacity', () => {
+  const planner = samples('owner/fast', 1).map((record) => ({ ...record, seat: 'planner',
+    evaluation: { ...record.evaluation, verdict: 'reject' } }));
+  assert.equal(select({ records: planner }).profile.id, 'fast');
+  assert.equal(select({ records: planner, seat: 'planner' }), null);
+  const plannerAccepts = samples('owner/steady').map((record) => ({ ...record, seat: 'planner' }));
+  assert.equal(select({ records: plannerAccepts }).source, 'prior');
+  assert.equal(select({ records: plannerAccepts, seat: 'planner' }).profile.id, 'steady');
+  assert.throws(() => select({ seat: '' }), /Routing seat/);
+});
+
+test('a defect-backed acceptance lowers the ceiling even when a strong prior remains', () => {
+  const records = samples('owner/fast');
+  records[2].defects = ['Protected path touched'];
+  assert.equal(select({ records }), null);
+  records[2].defects = [];
+  records[2].evaluation.verdict = 'rework';
+  assert.equal(select({ records, difficulty: 3 }), null);
+});
+
+
+test('higher-level accepts cannot skip earning the current ceiling', () => {
+  const records = samples('owner/fast').map((record) => ({ ...record,
+    evaluation: { ...record.evaluation, difficulty: 4 } }));
+  assert.equal(select({ records, difficulty: 4, profileId: 'fast' }), null);
 });
