@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { buildPublishEnv, buildRun, resolvePublishModel, RUN_ENV_NAMES } from '../metrics/run.mjs';
 import { cleanAskText, renderAssignment, taskFilesAllowed } from '../planner/stub.mjs';
+import { assertSeatCovers, parseRecipe } from './recipe.mjs';
+import { taskSkillNames } from '../runtime/skills.mjs';
 import { runCoder } from '../seats/coder.mjs';
 import { acceptPlannerPlan, preparePlannerHandoff, readPlannerHandoff, readPlannerTask, readPreviousReview, runPlanner } from '../seats/planner.mjs';
 import { requirePassingReview, runReviewer } from '../seats/reviewer.mjs';
@@ -570,7 +572,10 @@ async function runBuiltinAssignment(issueNumber, {
       planningOnly: true, failed: false, archivePath, logPath: liveLog.path, logSession: liveLog.session };
   }
   if (planner.error) log(`Planning failed: ${planner.error}\nRECIPE/TASK stubs are unverified; no configured coder will run.`);
-  const coderConfig = selectReasoning({ ...activeConfig, llm: {
+  const recipeCoder = parseRecipe(planner.recipe).seats.find(({ id }) => id === 'coder');
+  const coderConfig = selectReasoning({ ...activeConfig,
+    seat: { ...activeConfig.seat, ...(recipeCoder.tools === undefined ? {} : { recipe_tools: recipeCoder.tools }) },
+    llm: {
     ...activeConfig.llm, model: planner.metadata.model || activeConfig.llm.model,
     ...(planner.error ? { base_url: '' } : {}),
     effort: planner.feedback?.effort ?? activeConfig.llm.effort,
@@ -600,11 +605,16 @@ async function runBuiltinAssignment(issueNumber, {
     await recordSeat(sessions.reviewer, reviewerRun);
     return { review, reviewerRun };
   };
-  const coderSeat = (priorFeedback = planner.feedback?.context) =>
-    liveLog.seat('coder', sessions.coder, coderConfig, (onEvent) => runCoder({
+  const coderSeat = (priorFeedback = planner.feedback?.context) => {
+    assertSeatCovers(recipeCoder, {
+      ...(recipeCoder.max_difficulty === undefined ? {} : { difficulty: readTaskMetadata(planner.task).difficulty }),
+      ...(recipeCoder.skills === undefined ? {} : { skills: taskSkillNames(planner.task) }),
+    });
+    return liveLog.seat('coder', sessions.coder, coderConfig, (onEvent) => runCoder({
       worktree: worktreePath, repoRoot, config: coderConfig, task: prepared.task, session: sessions.coder,
       fetchImpl, env, vault, runTestCommand, priorFeedback, onEvent, askKind, retryCommand, signal, steeringControl,
     }));
+  };
   let result;
   try {
     result = await coderSeat();

@@ -8,7 +8,7 @@ import { runLoop } from '../runtime/loop.mjs';
 import { appendMemory, coderMemoryRecord, seatMemoryPath } from '../runtime/memory.mjs';
 import { runResearch } from '../runtime/research.mjs';
 import { loadSkills, previewSkills } from '../runtime/skills.mjs';
-import { createTools } from '../runtime/tools.mjs';
+import { createTools, ToolAccessError } from '../runtime/tools.mjs';
 import { statusSectionPresent } from '../runtime/readme-status.mjs';
 import { isLlmTimeout, retryCommandForTask } from '../llm/request.mjs';
 import { selectReasoning } from '../llm/reasoning.mjs';
@@ -55,7 +55,7 @@ export async function runCoder({
     config = selectReasoning({ ...config, llm: { ...config.llm, model: metadata.model } },
       { kind: askKind ?? 'slice', taskClass: metadata.task_class, difficulty: metadata.difficulty });
     result.model = config.llm.base_url ? metadata.model : 'builtin-stub';
-    const tools = await createTools({
+    const availableTools = await createTools({
       worktree, allowedFiles, memoryPath,
       apiKeyEnv: config.llm.api_key_env, env: withoutLlmKeys(env, config), runCommand: runTestCommand,
       allowRunTest: config.tools?.run_test !== false,
@@ -77,6 +77,14 @@ export async function runCoder({
       signal,
       onEvent,
     });
+    const tools = config.seat.recipe_tools === undefined ? availableTools : Object.fromEntries(
+      Object.entries(availableTools).map(([name, execute]) => [name, async (args) => {
+        if (!config.seat.recipe_tools.includes(name)) {
+          throw new ToolAccessError(`Seat coder tools allow-list denies ${name}`);
+        }
+        return execute(args);
+      }]),
+    );
     if (!context.minimalDocs) {
       research = await runResearch({
         worktree, tools, expectedTask: context.task, config, fetchImpl, env, vault, onEvent, retryCommand, signal,
