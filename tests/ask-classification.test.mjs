@@ -50,6 +50,33 @@ test('whole systems classify initiative; features and multiple outcomes are plan
   assert.throws(() => classifyAsk(''), /Ask must be nonempty/);
 });
 
+test('spec ask taxonomy is additive and never changes legacy planning kinds', () => {
+  for (const [ask, kind, specKind] of [
+    ['Update README.md.', 'slice', 'slice'],
+    ['Implement the profile feature.', 'feature', 'story'],
+    ['Build a standalone platform.', 'initiative', 'epic'],
+    ['Why is README.md structured this way?', 'slice', 'question'],
+    ['How does the planner work?', 'clarify', 'question'],
+    ['Fix the bug.', 'clarify', null],
+    ['Can you update README.md?', 'slice', 'slice'],
+    ['Add a feature to explain how things work.', 'feature', 'story'],
+  ]) {
+    const classification = classifyAsk(ask);
+    assert.equal(classification.kind, kind, ask);
+    assert.equal(classification.specKind, specKind, ask);
+    assert.equal(typeof classification.reason, 'string');
+  }
+  for (const signal of ['OUTAGE', 'prod down', 'production is down', 'regression', 'hotfix']) {
+    assert.equal(classifyAsk(`Fix ${signal} in README.md.`).kind, 'slice');
+    assert.equal(classifyAsk(`Fix ${signal} in README.md.`).specKind, 'incident');
+    assert.equal(classifyAsk(signal).kind, 'clarify');
+    assert.equal(classifyAsk(signal).specKind, 'incident');
+  }
+  assert.equal(classifyAsk('What caused the outage?').specKind, 'incident');
+  assert.equal(classifyAsk('Different body.', { title: 'Why is README.md structured this way?' }).specKind, 'question');
+  assert.equal(classifyAsk('Update README.md.\n\n## Acceptance checks\n- Explain the outage').specKind, 'slice');
+});
+
 test('initiative stub retains all eight declared outcomes without truncating child drafts or invalid wave labels', async () => {
   const outcomes = Array.from({ length: 8 }, (_, index) => `Outcome ${index + 1}`);
   const ask = 'build an orchestrator\n\n## Outcomes\n' + outcomes.map((outcome) => `- ${outcome}`).join('\n');
