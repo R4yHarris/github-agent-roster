@@ -128,8 +128,7 @@ export function ensureOriginalAsk(task, title) {
 }
 
 export function parseTaskDocument(task, { expectedAsk, issueTitle, issueBody } = {}) {
-  const stamped = ensureOriginalAsk(task, issueTitle);
-  const parsed = taskSections(stamped);
+  const parsed = taskSections(task);
   const ask = parsed.sections.find(({ name }) => name === 'ask')?.content;
   const normalized = ask ? normalizeAsk(ask) : '';
   if (!normalized) {

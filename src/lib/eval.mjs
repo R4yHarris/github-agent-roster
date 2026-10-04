@@ -143,7 +143,8 @@ export async function recordEvaluation(target, verdict, difficulty, again, {
     throw error;
   });
   if (existing.split(/\r?\n/).filter(Boolean).some((line) => {
-    const saved = JSON.parse(line);
+    let saved;
+    try { saved = JSON.parse(line); } catch { return false; }
     return saved.session === evaluation.session && saved.sha === evaluation.sha;
   })) {
     return { ...evaluation, path: recordPath, duplicate: true };

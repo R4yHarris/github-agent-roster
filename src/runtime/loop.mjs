@@ -301,7 +301,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         try {
           result = await tools[call.function.name](call.args);
         } catch (error) {
-          if (!(error instanceof ToolAccessError)) throw error;
+          if (!(error instanceof ToolAccessError) || !/not allowed by TASK\.md slice scope/.test(error.message)) throw error;
           messages.push({ role: 'tool', tool_call_id: call.id, content: `Denied: ${error.message}` });
           await onEvent?.({ type: 'tool-result', name: call.function.name, status: 'denied' });
           continue;
