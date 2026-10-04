@@ -5,6 +5,7 @@ import path from 'node:path';
 import { TextDecoder, promisify } from 'node:util';
 import { createBuiltinChat } from '../lib/llm.mjs';
 import { ensureLocalPath } from '../lib/paths.mjs';
+import { mergeUsage } from '../metrics/run.mjs';
 import { taskFilesAllowed } from '../planner/stub.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
 import { taskContextPolicy } from '../runtime/context-policy.mjs';
@@ -44,6 +45,16 @@ async function readRegularText(worktree, name) {
 function reviewLine(value) {
   return typeof value === 'string' && value.trim() && value === value.trim() &&
     value.length <= 500 && !/[\x00-\x1f\x7f]/.test(value);
+}
+
+function responseContent(response) {
+  if (!['stop', null, undefined].includes(response.finish_reason) ||
+      response.message?.tool_calls !== undefined ||
+      response.message?.function_call !== undefined ||
+      typeof response.message?.content !== 'string') {
+    throw new Error('Reviewer cannot request tools or omit its structured response');
+  }
+  return response.message.content;
 }
 
 function parseResponse(content) {
@@ -188,19 +199,28 @@ export async function runReviewer({
       }
       const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand, signal, stream: true });
       queried = true;
-      const response = await chat({ messages: [
+      const messages = [
         { role: 'system', content: instructions + (principal ? `\n\n${principal.content.trim()}` : '') },
         { role: 'user', content: evidence },
-      ] });
+      ];
+      let response = await chat({ messages, response_format: { type: 'json_object' } });
       usage = response.usage;
       lastResponse = chat.lastResponse;
-      if (!['stop', null, undefined].includes(response.finish_reason) ||
-          response.message?.tool_calls !== undefined ||
-          response.message?.function_call !== undefined ||
-          typeof response.message?.content !== 'string') {
-        throw new Error('Reviewer cannot request tools or omit its structured response');
+      const content = responseContent(response);
+      try {
+        report = parseResponse(content);
+      } catch (error) {
+        if (!(error instanceof Error)) throw error;
+        messages.push(
+          { role: 'assistant', content },
+          { role: 'user', content: `Invalid reviewer JSON (${error.message}). Return only JSON with exactly ` +
+            'verdict, reasons, and security_notes. Do not repeat prose or request tools.' },
+        );
+        response = await chat({ messages, response_format: { type: 'json_object' } });
+        usage = mergeUsage(usage, response.usage);
+        lastResponse = chat.lastResponse;
+        report = parseResponse(responseContent(response));
       }
-      report = parseResponse(response.message.content);
       if (docsOnly && report.verdict === 'pass' && /https:\/\//.test(parsed.acceptance_checks.join('\n'))) {
         const note = await readRegularText(worktree, parsed.files_allowed[0]).catch(() => '');
         if (!/https:\/\/\S+/.test(note)) {

@@ -50,6 +50,7 @@ test('reviewer reads the diff, RESULT, and acceptance checks without receiving a
       assert.equal(String(url), 'http://localhost:1234/v1/chat/completions');
       const body = JSON.parse(request.body);
       assert.equal(body.tools, undefined);
+      assert.deepEqual(body.response_format, { type: 'json_object' });
       assert.match(body.messages[0].content, /You are the builtin reviewer seat/);
       assert.match(body.messages[0].content, /Do not request `write_file`/);
       assert.match(body.messages[1].content, /app exports ready/);
@@ -139,16 +140,46 @@ test('stub and malformed reviewer responses fail without deleting coder work', a
   assert.equal(readFileSync(stub.source, 'utf8'), 'export const ready = true;\n');
 
   const malformed = fixture(context);
+  let malformedCalls = 0;
   const malformedReview = await runReviewer({
     ...malformed, config, env: {},
-    fetchImpl: async () => ({ status: 200, json: async () => ({
-      choices: [{ finish_reason: 'stop', message: { role: 'assistant',
-        content: '{"verdict":"pass","reasons":[]}' } }],
-    }) }),
+    fetchImpl: async () => {
+      malformedCalls += 1;
+      return { status: 200, json: async () => ({
+        choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+          content: '{"verdict":"pass","reasons":[]}' } }],
+      }) };
+    },
   });
+  assert.equal(malformedCalls, 2);
   assert.equal(malformedReview.verdict, 'fail');
   assert.match(malformedReview.content, /security_notes/);
   assert.equal(readFileSync(malformed.source, 'utf8'), 'export const ready = true;\n');
+});
+
+test('reviewer repairs malformed JSON once without rerunning the coder', async (context) => {
+  const options = fixture(context);
+  let calls = 0;
+  const review = await runReviewer({
+    ...options, config, env: {},
+    fetchImpl: async (_url, request) => {
+      calls += 1;
+      const body = JSON.parse(request.body);
+      if (calls === 1) {
+        return Response.json({ choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant', content: 'The change looks good.',
+        } }] });
+      }
+      assert.match(body.messages.at(-1).content, /Invalid reviewer JSON/);
+      return Response.json({ choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant', content: JSON.stringify({ verdict: 'pass', reasons: [], security_notes: [] }),
+      } }] });
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(review.verdict, 'pass');
+  assert.match(review.content, /Verdict: pass/);
+  assert.equal(readFileSync(options.source, 'utf8'), 'export const ready = true;\n');
 });
 
 test('an incomplete diff or bounded-context failure cannot become a passing review', async (context) => {

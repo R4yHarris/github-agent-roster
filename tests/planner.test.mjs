@@ -73,7 +73,8 @@ test('board metadata seeds the stub task and supplies defaults to an LLM plan', 
 });
 
 test('a routed planner cannot silently switch to a model outside the selected fleet profile', async () => {
-  const config = { ...llmConfig, planner: { turn_budget: 1 } };
+  const config = { ...llmConfig, llm: { ...llmConfig.llm, model: 'selected-model' },
+    planner: { turn_budget: 1 } };
   await assert.rejects(planAsk('Update README.md.', {
     config, env: {}, lockedModel: 'selected-model',
     fetchImpl: async () => ({ status: 200, json: async () => ({
@@ -313,6 +314,49 @@ test('planner gives the model another turn after writing an incomplete TASK.md',
   assert.equal(calls, 2);
   assert.deepEqual(JSON.parse(repairMessage), { path: 'TASK.md', bytes: 13 });
   assert.match(result.task, /## Files allowed/);
+});
+
+test('planner stops after one no-progress correction for an invalid written TASK', async (t) => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'roster-planner-no-progress-'));
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  const worktree = join(repoRoot, 'worktree');
+  mkdirSync(worktree);
+  let calls = 0;
+  const result = await runPlanner({
+    worktree, repoRoot, issue: { number: 42, title: 'Update README', body: 'Update `README.md`.' },
+    config: { ...llmConfig, planner: { turn_budget: 2 } }, env: {}, fetchImpl: async () => {
+      calls += 1;
+      if (calls === 1) return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+        role: 'assistant', tool_calls: [{ id: 'draft', type: 'function', function: {
+          name: 'write_file', arguments: JSON.stringify({ path: 'TASK.md', content: '# Draft task\n' }),
+        } }],
+      } }], model: 'test-model' });
+      return Response.json({ choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant', content: 'Planning is complete.',
+      } }], model: 'test-model' });
+    },
+  });
+  assert.equal(calls, 3);
+  assert.equal(result.mode, 'stub');
+  assert.match(result.error, /tool-call error after one retry/);
+  assert.match(result.error, /Acceptance Checks/);
+});
+
+test('routed planner rejects a served model outside the selected profile', async (t) => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'roster-planner-served-model-'));
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  const worktree = join(repoRoot, 'worktree');
+  mkdirSync(worktree);
+  await assert.rejects(runPlanner({
+    worktree, repoRoot, issue: { number: 42, title: 'Update README', body: 'Update `README.md`.' },
+    config: { ...llmConfig, planner: { turn_budget: 1 } }, lockedModel: 'selected-model', env: {},
+    fetchImpl: async () => Response.json({
+      choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
+        title: 'Update README', acceptance_checks: ['node --test exits 0'], files_allowed: ['README.md'],
+      }) } }],
+      model: 'different-served-model',
+    }),
+  }), /selected fleet model/);
 });
 
 test('planner tool errors redact known credentials before another model turn', async (t) => {

@@ -174,6 +174,7 @@ export async function planAsk(ask, {
   const callIds = new Set();
   let repairUsed = false;
   let awaitingRepair = false;
+  let validationRepairUsed = false;
   const fallback = (reason, turn) => {
     const error = `LLM planner tool-call error after one retry: ${reason}. Unverified stub; coding and publication are disabled.`;
     const stub = planStub(cleanAsk, { reference, title: fixedTitle, metadata: {
@@ -188,11 +189,14 @@ export async function planAsk(ask, {
     awaitingRepair = true;
     messages.push({ role: 'user', content: 'Emit only tool_calls for write_file with JSON string arguments.' });
   };
-  for (let turn = 1; turn <= budget + Number(repairUsed); turn += 1) {
+  for (let turn = 1; turn <= budget + Number(repairUsed) + Number(validationRepairUsed); turn += 1) {
     const response = await (await import('../lib/llm.mjs')).chatCompletion({ config, fetchImpl, env, vault, messages, onEvent, retryCommand, signal, stream: true,
       ...(tools ? { tools: plannerToolDefinitions } : {}) });
     lastResponse = response.response;
     onResponse?.(lastResponse);
+    if (lockedModel && lastResponse?.model && lastResponse.model !== lockedModel) {
+      throw new TypeError('The routed planner must keep the selected fleet model');
+    }
     usages.push(response?.usage ?? null);
     let choice = response?.choices?.[0];
     let message = choice?.message;
@@ -365,6 +369,16 @@ export async function planAsk(ask, {
         failure = error.message;
       }
       if (built) return finish({ ...built, usage: mergeUsage(...usages), turns: turn, response: lastResponse });
+    }
+    if (tools && taskDraft !== undefined) {
+      if (validationRepairUsed) return fallback(failure, turn);
+      validationRepairUsed = true;
+      messages.push(
+        { role: 'assistant', content: message.content },
+        { role: 'user', content: `The written TASK.md is invalid (${failure}). ` +
+          'Return only the required JSON task plan so the harness can finalize the validated artifacts.' },
+      );
+      continue;
     }
     if (turn >= budget + Number(repairUsed)) {
       if (repairUsed) return fallback(failure, turn);
