@@ -616,19 +616,7 @@ async function runBuiltinAssignment(issueNumber, {
   }
   let coderRun = result.run;
   await recordSeat(sessions.coder, coderRun, result.excellence);
-  let { review, reviewerRun } = await reviewSeat(result);
-  const boundedTask = taskFilesAllowed(planner.task).length === 1;
-  if (boundedTask && result.excellence.pass && review.queried && review.verdict === 'fail') {
-    await archiveRunArtifacts(worktreePath, {
-      task: prepared.task,
-      git: (args) => git(worktreePath, args, commandEnv),
-      preserve: ['RECIPE.yml', 'TASK.md', 'ESTIMATE.md'],
-    });
-    result = await coderSeat(review.content);
-    coderRun = result.run;
-    await recordSeat(sessions.coder, coderRun, result.excellence);
-    ({ review, reviewerRun } = await reviewSeat(result));
-  }
+  const { review, reviewerRun } = await reviewSeat(result);
   await ensureUnchanged(planner.recipePath, planner.recipe);
   await ensureUnchanged(planner.taskPath, planner.task);
   await ensureUnchanged(planner.estimatePath, planner.estimate);

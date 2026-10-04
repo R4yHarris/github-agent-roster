@@ -69,6 +69,8 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     ? parsedTask.files_allowed[0] : null;
   const boundedTask = singleAllowedFile !== null;
   const repairBudget = repairBudgetFor(context.task, boundedTask);
+  const explorationBudget = Math.min(config.seat.turn_budget,
+    Math.max(4, parsedTask.files_allowed.length * 2));
 
   const verification = verificationDecision(parsedTask.files_allowed);
   const docsOnly = isDocsOnlyScope(parsedTask.files_allowed);
@@ -85,8 +87,11 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   const definitions = toolDefinitions.filter((tool) =>
     (config.seat.tools.includes(tool.function.name) ||
       ['edit_file', 'glob_files', ...(requiresWebSearch || requiresWebFetch ? [] : ['run_command'])].includes(tool.function.name) ||
-      (config.tools?.internet === true && ['web_search', 'web_fetch'].includes(tool.function.name))) &&
+      (config.tools?.internet === true &&
+        (tool.function.name === 'web_search' && requiresWebSearch ||
+          tool.function.name === 'web_fetch' && requiresWebFetch))) &&
     (tool.function.name !== 'run_test' || verification.run && config.tools?.run_test !== false) &&
+    (!sliceReadsOnly || !['list_dir', 'glob_files', 'search_text'].includes(tool.function.name)) &&
     (!boundedTask || ['read_file', 'write_file', 'edit_file', 'run_test', 'web_search', 'web_fetch'].includes(tool.function.name))).map((tool) =>
     !boundedTask || tool.function.name === 'run_test' || tool.function.name === 'web_search' || tool.function.name === 'web_fetch' ? tool : {
       ...tool, function: { ...tool.function, parameters: { ...tool.function.parameters,
@@ -311,11 +316,17 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     }
     if (calls.length) {
       if (finalSummaryOnly) throw new Error('Coder requested tools instead of the required final summary after green repair tests');
-      if (progress.testRepairs === 0 && attemptTurns === config.seat.turn_budget + Number(repaired)) {
-        const exploring = calls.every((call) => ['read_file', 'list_dir', 'search_text'].includes(call.function.name));
-        if (exploring && !progress.writeForced) {
+      if (progress.testRepairs === 0) {
+        const exploring = calls.every((call) =>
+          ['read_file', 'list_dir', 'search_text', 'web_search', 'web_fetch'].includes(call.function.name));
+        const turnBudgetSpent = attemptTurns === config.seat.turn_budget + Number(repaired);
+        const explorationSpent = attemptTurns >= explorationBudget;
+        if (exploring && progress.writeForced) {
+          throw new Error('Coder continued exploring after the bounded exploration budget was spent');
+        }
+        if (exploring && (turnBudgetSpent || explorationSpent)) {
           progress.writeForced = true;
-          attemptTurns = Math.max(0, config.seat.turn_budget - 3);
+          attemptTurns = 0;
           for (const call of calls) {
             messages.push({ role: 'tool', tool_call_id: call.id,
               content: 'Exploration budget is spent. Next response must be write_file for the allowed files only.' });
@@ -323,7 +334,9 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
           messages.push({ role: 'user', content: 'Stop reading and searching. Write the allowed files now, then summarize.' });
           continue;
         }
-        throw new Error(`Coder turn budget (${config.seat.turn_budget}) exhausted before a summary`);
+        if (turnBudgetSpent) {
+          throw new Error(`Coder turn budget (${config.seat.turn_budget}) exhausted before a summary`);
+        }
       }
       if (finishReason === 'stop') throw new Error('LLM coder stopped while requesting tools');
       calls.forEach((call) => ids.add(call.id));
@@ -334,7 +347,8 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       for (const [index, call] of calls.entries()) {
         const savesNamedFileLater = singleAllowedFile && call.function.name === 'run_test' &&
           calls.slice(index + 1).some((pending) =>
-            pending.function.name === 'write_file' && pending.args.path === singleAllowedFile);
+            ['write_file', 'edit_file'].includes(pending.function.name) &&
+              pending.args.path === singleAllowedFile);
         if (!wroteSingleAllowedFile && savesNamedFileLater) {
           messages.push({ role: 'tool', tool_call_id: call.id,
             content: `Deferred until ${singleAllowedFile} is saved.` });
@@ -384,7 +398,8 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         });
         if (call.function.name === 'web_search') webSearchDone = true;
         if (call.function.name === 'web_fetch') webFetchDone = true;
-        if (call.function.name === 'write_file' && result.path === singleAllowedFile) {
+        if (['write_file', 'edit_file'].includes(call.function.name) &&
+            result.path === singleAllowedFile) {
           wroteSingleAllowedFile = true;
           continue;
         }

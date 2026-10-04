@@ -149,8 +149,7 @@ test('an explicit task waiver runs without offering or automatically invoking di
     ...options, env: {},
     fetchImpl: async (_url, request) => {
       assert.deepEqual(JSON.parse(request.body).tools.map(({ function: tool }) => tool.name),
-        ['read_file', 'write_file', 'edit_file', 'glob_files', 'run_command', 'list_dir', 'search_text',
-          'web_search', 'web_fetch']);
+        ['read_file', 'write_file', 'edit_file', 'run_command']);
       return { status: 200, json: async () => ({
         choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Inspected README.' } }],
       }) };
@@ -177,7 +176,7 @@ test('LLM coder uses only offered tools within the turn budget, then verifies te
     assert.ok(sent.messages[0].content.length <= options.config.seat.context_chars);
     assert.equal(options.config.seat.context_chars, 200000);
     assert.deepEqual(sent.tools.map((tool) => tool.function.name),
-      ['read_file', 'write_file', 'edit_file', 'glob_files', 'run_command', 'list_dir', 'run_test', 'search_text']);
+      ['read_file', 'write_file', 'edit_file', 'run_command', 'run_test']);
     if (calls === 1) {
       return { status: 200, json: async () => ({
         choices: [{ finish_reason: 'tool_calls', message: {
@@ -253,7 +252,7 @@ test('named vLLM profile performs one worktree tool call then stops on a passing
       const sent = JSON.parse(request.body);
       assert.equal(sent.model, 'served-model');
       assert.deepEqual(sent.tools.map(({ function: tool }) => tool.name),
-        ['read_file', 'write_file', 'edit_file', 'glob_files', 'run_command', 'list_dir', 'run_test', 'search_text']);
+        ['read_file', 'write_file', 'edit_file', 'run_command', 'run_test']);
       assert.match(sent.messages[0].content, /Principal coder:[\s\S]*## TASK\.md[\s\S]*Task skills/);
       if (turns === 1) return { status: 200, json: async () => ({
         choices: [{ finish_reason: 'tool_calls', message: {
@@ -706,36 +705,41 @@ test('budget exhaustion and a failed final test stop without claiming success', 
     /Checks: FAIL[\s\S]*one test failed[\s\S]*Test repair budget \(4\) exhausted/);
 });
 
-test('coder stops exploring and asks for a write before the turn budget is spent', async () => {
-  const task = planStub('Update README.md.').task;
-  let reads = 0;
-  let turns = 0;
-  let forcedMessage;
-  const result = await runLoop({
-    config: { ...llmConfig, seat: { ...llmConfig.seat, turn_budget: 3 } },
-    context: { task, pack: task }, env: {},
-    tools: {
-      read_file: async () => { reads += 1; return 'file'; },
-      run_test: async () => ({ exit_code: 0, stdout: 'pass', stderr: '' }),
-    },
-    fetchImpl: async (_url, request) => {
-      turns += 1;
-      const body = JSON.parse(request.body);
-      if (turns === 4) {
-        forcedMessage = body.messages.at(-1).content;
-        return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Blocked before an edit.' } }] });
-      }
-      return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
-        role: 'assistant', tool_calls: [{ id: `read-${turns}`, type: 'function', function: {
-          name: 'read_file', arguments: JSON.stringify({ path: 'README.md' }),
-        } }],
-      } }] });
-    },
-    verify: () => ({ pass: true, reasons: [] }),
-  });
-  assert.equal(reads, 2);
-  assert.equal(turns, 4);
-  assert.equal(result.error, undefined, result.error?.stack);
-  assert.match(forcedMessage, /Stop reading and searching\. Write the allowed files now/);
-  assert.match(result.summary, /Blocked before an edit/);
+test('coder stops after ignoring the forced-write instruction', async () => {
+  for (const [task, expectedReads, expectedTurns] of [
+    [planStub('Update README.md.').task, 3, 5],
+    [planStub('Update README.md.').task.replace('- `README.md`',
+      '- `src/runtime/loop.mjs`\n- `src/runtime/remediation.mjs`\n- `tests/remediation.test.mjs`\n- `tests/runtime.test.mjs`'), 7, 9],
+  ]) {
+    let reads = 0;
+    let turns = 0;
+    let forcedMessage;
+    const result = await runLoop({
+      config: { ...llmConfig, tools: { ...llmConfig.tools, internet: true },
+        seat: { ...llmConfig.seat, turn_budget: 1000 } },
+      context: { task, pack: task }, env: {},
+      tools: {
+        read_file: async () => { reads += 1; return 'file'; },
+        run_test: async () => ({ exit_code: 0, stdout: 'pass', stderr: '' }),
+      },
+      fetchImpl: async (_url, request) => {
+        turns += 1;
+        const body = JSON.parse(request.body);
+        assert.doesNotMatch(body.tools.map(({ function: tool }) => tool.name).join(','), /web_search|web_fetch/);
+        if (turns === expectedTurns) forcedMessage = body.messages.at(-1).content;
+        return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant', tool_calls: [{ id: `read-${turns}`, type: 'function', function: {
+            name: 'read_file', arguments: JSON.stringify({
+              path: expectedReads === 3 ? 'README.md' : 'src/runtime/loop.mjs',
+            }),
+          } }],
+        } }] });
+      },
+      verify: () => ({ pass: true, reasons: [] }),
+    });
+    assert.match(result.error?.message ?? '', /continued exploring after the bounded exploration budget/);
+    assert.equal(reads, expectedReads);
+    assert.equal(turns, expectedTurns);
+    assert.match(forcedMessage, /Stop reading and searching\. Write the allowed files now/);
+  }
 });

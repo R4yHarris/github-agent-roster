@@ -532,7 +532,7 @@ test('test budget exhaustion runs all four repairs and stops before review', asy
   }
 });
 
-test('a bounded docs review returns to draft once, reviews again, and then stops', async (context) => {
+test('a bounded docs review failure does not start a second coder', async (context) => {
   const options = fixture(context);
   options.issue.body = renderIssueBody(options.issue.body, {
     task_class: 'docs', difficulty: 1, estimate_min: 10,
@@ -584,10 +584,10 @@ test('a bounded docs review returns to draft once, reviews again, and then stops
       return { stdout: 'pass', stderr: '' };
     },
   });
-  assert.equal(result.review.verdict, 'pass');
-  assert.equal(reviews, 2);
-  assert.equal(coderCalls, 4);
-  assert.match(readFileSync(path.join(result.worktreePath, 'README.md'), 'utf8'), /## Status\nActive\./);
+  assert.equal(result.review.verdict, 'fail');
+  assert.equal(reviews, 1);
+  assert.equal(coderCalls, 2);
+  assert.match(readFileSync(path.join(result.worktreePath, 'README.md'), 'utf8'), /## Status\nDraft\./);
 });
 
 test('a repaired failing test passes excellence, read-only review, and declared-scope publication staging', async (context) => {
@@ -750,7 +750,7 @@ test('a configured direct ask implements and reviews the slice after its streame
   assert.match(logs.join('\n'), /Human AI-Eval|human AI-Eval/);
 });
 
-test('docs slice retry after failed review remains reasoning-free at 8192', async (context) => {
+test('docs slice does not start a second coder after a failed review', async (context) => {
   const options = fixture(context);
   options.issue.body = renderIssueBody(options.issue.body, { task_class: 'docs', difficulty: 1 });
   const config = { ...llmConfig, llm: { ...llmConfig.llm, model: 'deepseek-v4.1-flash',
@@ -789,6 +789,7 @@ test('docs slice retry after failed review remains reasoning-free at 8192', asyn
       }, runTestCommand: () => assert.fail('Docs-only changes do not run node --test'),
     });
     assert.equal(result.review.verdict, 'fail');
+    assert.equal(coderTurns, 2);
     assert.equal(result.runs.coder.metrics.effort, { low: 'l', high: 'h', max: 'x', none: '-' }[effort]);
     assert.equal(recordedCoderRun({ repoRoot: options.target, run: result.runs.coder }).line, result.runs.coder.line);
     assert.doesNotMatch(options.stderr, new RegExp(`Drafting at ${effort} effort`));

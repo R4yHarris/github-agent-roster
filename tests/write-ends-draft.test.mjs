@@ -67,6 +67,65 @@ test('a named-file write ends the draft as a write and proceeds to tests, not a 
   assert.doesNotMatch(readFileSync(result.resultPath, 'utf8'), /tool_calls/);
 });
 
+test('a named-file edit runs task checks and requests only the final summary', async (context) => {
+  const options = fixture(context);
+  const routeTest = path.join(options.worktree, 'tests', 'route.test.mjs');
+  mkdirSync(path.dirname(routeTest), { recursive: true });
+  writeFileSync(routeTest, "test('route summary', () => {});\n");
+  writeFileSync(path.join(options.worktree, 'TASK.md'), `# Task: Add a route summary regression test
+
+difficulty: 1
+estimate_min: 15
+task_class: test
+model: local-model
+
+## Acceptance checks
+- \`node --test tests\\route.test.mjs\` exits 0
+
+## Files allowed
+- \`tests/route.test.mjs\`
+
+## Ask
+Add a route summary regression test.
+`);
+  let calls = 0;
+  let testRuns = 0;
+  const result = await runCoder({
+    ...options, env: {},
+    fetchImpl: async (_url, request) => {
+      calls += 1;
+      const sent = JSON.parse(request.body);
+      if (calls === 1) {
+        return response({ role: 'assistant', content: 'I updated the file.', tool_calls: [{
+          id: 'edit', type: 'function', function: {
+            name: 'edit_file',
+            arguments: JSON.stringify({
+              path: 'tests/route.test.mjs',
+              old_string: "test('route summary', () => {});\n",
+              new_string: "test('route summary exposes the profile', () => {});\n",
+            }),
+          },
+        }] });
+      }
+      assert.deepEqual(sent.tools, []);
+      assert.match(sent.messages.at(-1).content, /Task checks passed after the sole allowed file was saved/);
+      return Response.json({ model: 'local-model', usage: { prompt_tokens: 12, completion_tokens: 5 },
+        choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant', content: 'Updated the route summary regression test.',
+        } }] });
+    },
+    runTestCommand: async () => {
+      testRuns += 1;
+      return { stdout: 'pass', stderr: '', exit_code: 0 };
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(testRuns, 1);
+  assert.equal(result.excellence.pass, true, result.excellence.reasons.join('\n'));
+  assert.match(readFileSync(routeTest, 'utf8'), /exposes the profile/);
+  assert.doesNotMatch(readFileSync(result.resultPath, 'utf8'), /timed out|tool_calls/);
+});
+
 test('content deltas append the new text without overlapping prior text', () => {
   const writes = [];
   const transcript = createTranscript({ color: false,
