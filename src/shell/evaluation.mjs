@@ -1,7 +1,7 @@
 import { splitArguments } from '../lib/arguments.mjs';
 import { parseEvaluationArgs } from '../lib/eval.mjs';
 
-export const shellEvaluationUsage = 'Use /eval TARGET accept|reject|rework --minutes N --difficulty 1-5 "TEXT".';
+export const shellEvaluationUsage = 'Use /eval SESSION accept|reject|rework 1-5 y|n --minutes N --note "what should have been done differently, and how the model performed".';
 
 export function parseShellEvaluationArgs(text) {
   const args = splitArguments(text, shellEvaluationUsage);

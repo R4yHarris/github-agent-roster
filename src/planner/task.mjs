@@ -118,6 +118,15 @@ export function normalizeAsk(value) {
   return askContentLines(value).join(' ');
 }
 
+export function ensureOriginalAsk(task, title) {
+  const required = String(title ?? '').trim();
+  if (!required || normalizeAsk(task).includes(normalizeAsk(required))) return task;
+  if (/^## (?:Original Ask|Ask)\s*$/im.test(task)) {
+    return task.replace(/^## (?:Original Ask|Ask)\s*$/im, (heading) => `${heading}\n\n${required}`);
+  }
+  return `${String(task).trim()}\n\n## Original Ask\n\n${required}\n`;
+}
+
 export function parseTaskDocument(task, { expectedAsk, issueTitle, issueBody } = {}) {
   const parsed = taskSections(task);
   const ask = parsed.sections.find(({ name }) => name === 'ask')?.content;
