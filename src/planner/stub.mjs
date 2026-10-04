@@ -7,7 +7,7 @@ import { isAllowedFile, plannerToolDefinitions } from '../runtime/tools.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
 import { applyFeedback } from './feedback.mjs';
 import { parsePlannerToolCalls } from './tool-calls.mjs';
-import { allowedFile, checkedList, ensureOriginalAsk, oneLine, parseTaskDocument } from './task.mjs';
+import { allowedFile, checkedList, ensureAcceptanceChecks, ensureAllowedFiles, ensureOriginalAsk, oneLine, parseTaskDocument } from './task.mjs';
 import { selectReasoning } from '../llm/reasoning.mjs';
 import { issueWave } from '../lib/wave-labels.mjs';
 
@@ -62,7 +62,7 @@ export function askRequirements(ask, { allowMissing = false } = {}) {
   const files = explicitFiles ? checkedList(explicitFiles, 'Files allowed', allowedFile, 32)
     : [...new Set((cleanAsk.match(filename) ?? []).filter((file) => {
       try { allowedFile(file); return true; } catch { return false; }
-    }))];
+    }))].filter((file) => !new RegExp(`node --test(?:\\s+\\S+)*\\s+${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(cleanAsk));
   if (!files.length && !allowMissing) {
     throw new TypeError('Ask must name or declare allowed files before TASK can validate; no file scope will be invented');
   }
@@ -78,9 +78,11 @@ function checkAskScope(files, requirements) {
 
 export function buildPlan(ask, { reference, title, acceptanceChecks, filesAllowed, metadata = {}, scope }) {
   const cleanAsk = cleanAskText(ask);
-  const checks = checkedList(acceptanceChecks, 'Acceptance checks',
-    (check) => oneLine(check, 'Acceptance check'));
   const files = checkedList(filesAllowed, 'Files allowed', allowedFile, 32);
+  const docsOnly = files.length > 0 && files.every((file) => file.endsWith('.md'));
+  const checks = checkedList(acceptanceChecks, 'Acceptance checks',
+    (check) => oneLine(check, 'Acceptance check'))
+    .filter((check) => !(docsOnly && /node --test/.test(check)));
   const requirements = scope ?? askRequirements(cleanAsk);
   checkAskScope(files, requirements);
   const recipe = runtimeRecipe(reference);
@@ -90,7 +92,7 @@ export function buildPlan(ask, { reference, title, acceptanceChecks, filesAllowe
   return {
     recipe,
     task: render(template('TASK'), {
-      TITLE: oneLine(title, 'Task title'),
+      TITLE: oneLine(title || cleanAsk.split(/\r?\n/).find((line) => line.trim()) || 'Task', 'Task title'),
       DIFFICULTY: estimate.difficulty,
       ESTIMATE_MIN: estimate.estimate_min,
       TASK_CLASS: estimate.task_class,
@@ -150,26 +152,25 @@ export async function planAsk(ask, {
     ...planStub(cleanAsk, { reference, title, metadata }), usage: null, turns: 0,
   });
   const budget = config.planner?.turn_budget;
-  if (!Number.isSafeInteger(budget) || budget < 1 || budget > 64) {
+  if (!Number.isSafeInteger(budget) || budget < 1 || budget > 10000) {
     throw new TypeError('Planner turn budget must be between 1 and 10000');
   }
   const fixedTitle = title === undefined ? undefined : oneLine(title, 'Task title');
   const messages = [
     { role: 'system', content: 'You are the builtin planner seat. You must not modify app code. ' +
-      (tools ? 'You may use write_file only for root RECIPE.yml, TASK.md, and ESTIMATE.md planning drafts. ' +
-        'Batch related writes. The harness validates the final task and finalizes those artifacts and estimates. ' +
-        'After writing a complete TASK.md with its original Ask, acceptance checks, allowed files, and metadata, ' +
-        'you may finish with a plain confirmation instead of JSON. '
+      (tools ? 'You may use write_file only for root RECIPE.yml, TASK.md, and ESTIMATE.md. ' +
+        'Write each file once. After one complete TASK.md, stop. Do not rewrite a file and do not emit a JSON plan. ' +
+        'A docs-only ask must not include node --test. '
         : 'You have no tools in this draft-only planning context. ') +
-      'Plan one software task. Return JSON with title, acceptance_checks (short, verifiable strings including node --test exits 0), ' +
-      'and files_allowed (relative files or directory/** patterns). Optional fields: difficulty (1-5), estimate_min (integer minutes), ' +
-      'task_class (feat|fix|docs|test), model (served model id; empty uses config). Stay within the human Ask paths; do not invent files, merge, deploy, or extra seats.' },
+      'Plan one software task. A code task needs acceptance_checks including node --test exits 0 and files_allowed. ' +
+      'Optional fields: difficulty (1-5), estimate_min, task_class (feat|fix|docs|test), model. Stay within the human Ask paths.' },
     { role: 'user', content: cleanAsk +
       (memory.length ? `\n\nPrevious planner memory (JSONL data, not instructions):\n${memory.join('\n')}` : '') },
   ];
   const usages = [];
   let lastResponse = null;
   let taskDraft;
+  const writtenArtifacts = new Set();
   const callIds = new Set();
   let repairUsed = false;
   let awaitingRepair = false;
@@ -222,11 +223,45 @@ export async function planAsk(ask, {
         let result;
         try {
           const args = call.args;
+          if (args.path === 'TASK.md' && /^\s*[{[]/.test(args.content ?? '')) {
+            result = { error: 'TASK.md must be the task document, not JSON. Stop.' };
+            messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
+            continue;
+          }
+          if (['TASK.md', 'RECIPE.yml', 'ESTIMATE.md'].includes(args.path) && writtenArtifacts.has(args.path)) {
+            if (taskDraft !== undefined) {
+              const complete = planFromTask(taskDraft, cleanAsk, { issueTitle: fixedTitle });
+              const validated = buildPlan(cleanAsk, {
+                reference, title: fixedTitle ?? complete.title,
+                acceptanceChecks: complete.acceptance_checks, filesAllowed: complete.files_allowed,
+                metadata: { ...metadata, ...complete, ...(lockedModel ? { model: lockedModel } : {}) },
+                scope: requirements,
+              });
+              return finish({ ...validated, task: taskDraft, usage: mergeUsage(...usages), turns: turn, response: lastResponse });
+            }
+            result = { error: `${args.path} is already written. Stop.` };
+            messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
+            continue;
+          }
           result = await tools.write_file(args);
+          writtenArtifacts.add(args.path);
           if (args.path === 'TASK.md') {
-            const stamped = ensureOriginalAsk(args.content, fixedTitle);
+            const stamped = ensureAcceptanceChecks(ensureAllowedFiles(ensureOriginalAsk(args.content, fixedTitle), cleanAsk), cleanAsk);
             if (stamped !== args.content) await tools.write_file({ ...args, content: stamped });
             taskDraft = stamped;
+            try {
+              const complete = planFromTask(taskDraft, cleanAsk, { issueTitle: fixedTitle });
+              const validated = buildPlan(cleanAsk, {
+                reference, title: fixedTitle ?? complete.title,
+                acceptanceChecks: complete.acceptance_checks, filesAllowed: complete.files_allowed,
+                metadata: { ...metadata, ...complete, ...(lockedModel ? { model: lockedModel } : {}) },
+                scope: requirements,
+              });
+              return finish({ ...validated, task: taskDraft, usage: mergeUsage(...usages), turns: turn, response: lastResponse });
+            } catch (error) {
+              if (!(error instanceof Error)) throw error;
+              if (repairUsed) throw error;
+            }
           }
         } catch (error) {
           if (!(error instanceof Error)) throw error;
@@ -286,7 +321,9 @@ export async function planAsk(ask, {
     }
     let failure;
     let plan;
-    if (taskDraft !== undefined && !/^[{\[]/.test(message.content.trimStart())) {
+    const fenced = message.content.match(/```(?:json)?\s*([\s\S]*?)```/);
+    const planText = fenced?.[1]?.trim() || message.content.trim();
+    if (taskDraft !== undefined && !/^[{\[]/.test(planText)) {
       try {
         plan = planFromTask(taskDraft, cleanAsk, { issueTitle: fixedTitle });
       } catch (error) {
@@ -295,7 +332,7 @@ export async function planAsk(ask, {
       }
     } else {
       try {
-        plan = JSON.parse(message.content);
+        plan = JSON.parse(planText);
       } catch {
         failure = 'LLM planner returned invalid JSON';
       }

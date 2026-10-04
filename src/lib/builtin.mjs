@@ -253,7 +253,8 @@ export async function runBuiltinTask({
   await record(result);
   let { review, reviewRun } = await reviewSeat(result);
   const boundedTask = taskFilesAllowed(taskSource).length === 1;
-  if (boundedTask && result.excellence.pass && review.queried && review.verdict === 'fail') {
+  const docsOnly = boundedTask && taskFilesAllowed(taskSource).every((file) => file.endsWith('.md'));
+  if (boundedTask && !docsOnly && result.excellence.pass && review.queried && review.verdict === 'fail') {
     await archiveRunArtifacts(worktreePath, {
       task,
       git: (args) => git(worktreePath, args, withoutLlmKeys(env, config)),
@@ -346,10 +347,13 @@ async function reusePreparedAssignment(run, { cwd, config, runCommand, ask, issu
 
 function taskSummary(planner, effort) {
   const document = parseTaskDocument(planner.task);
+  const docsOnly = document.files_allowed.length > 0 && document.files_allowed.every((file) => file.endsWith('.md'));
+  const checks = document.acceptance_checks.filter((check) => !(docsOnly && /node --test/.test(check)));
+  const shownEffort = effort === 'none' && docsOnly ? 'l' : effort;
   return `Task summary:\nOutcome: ${document.title}\n` +
     `Allowed files: ${document.files_allowed.join(', ')}\n` +
-    `Checks:\n${document.acceptance_checks.map((check) => `- ${check}`).join('\n')}\n` +
-    `Effort: ${effort}\n`;
+    `Checks:\n${checks.map((check) => `- ${check}`).join('\n')}\n` +
+    `Effort: ${shownEffort}\n`;
 }
 
 async function runBuiltinAssignment(issueNumber, {

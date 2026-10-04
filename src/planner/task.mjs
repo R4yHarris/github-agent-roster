@@ -125,6 +125,29 @@ export function ensureOriginalAsk(task, title) {
   return `${String(task).trim()}\n\n## Original Ask\n\n${required}\n`;
 }
 
+const namedPath = /(?:[\w.@-]+\/)+[\w.@-]+|[\w.@-]+\.(?:md|mjs|js|cjs|json|yml|yaml|txt)/g;
+
+export function filesNamedByAsk(ask) {
+  const text = String(ask ?? '');
+  const window = text.match(/(?:allowed files|files allowed|only edit|edit only|do not edit any other file)[^\n]*/gi)?.join('\n') ?? text;
+  return [...new Set(window.match(namedPath) ?? [])].slice(0, 32);
+}
+
+export function ensureAllowedFiles(task, ask) {
+  if (/^## +(?:Allowed Files|Files allowed)\s*$/im.test(task)) return task;
+  const files = filesNamedByAsk(ask);
+  if (!files.length) return task;
+  return `${String(task).trim()}\n\n## Allowed Files\n\n${files.map((file) => `- ${file}`).join('\n')}\n`;
+}
+
+export function ensureAcceptanceChecks(task, ask) {
+  if (/^## +(?:Acceptance Checks|acceptance_checks)\s*$/im.test(task)) return task;
+  const checks = String(ask ?? '').split(/\r?\n/).map((line) => line.trim())
+    .filter((line) => /^[-*] /.test(line)).map((line) => line.replace(/^[-*] /, '')).slice(0, 16);
+  if (!checks.length) return task;
+  return `${String(task).trim()}\n\n## Acceptance Checks\n\n${checks.map((check) => `- ${check}`).join('\n')}\n`;
+}
+
 export function parseTaskDocument(task, { expectedAsk, issueTitle, issueBody } = {}) {
   const parsed = taskSections(task);
   const ask = parsed.sections.find(({ name }) => name === 'ask')?.content;

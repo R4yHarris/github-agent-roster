@@ -1,6 +1,6 @@
 import { createBuiltinChat } from '../lib/llm.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
-import { taskAndRepairFiles, toolDefinitions, ToolAccessError } from './tools.mjs';
+import { taskAndRepairFiles, toolDefinitions, ToolAccessError, verificationDecision, isDocsOnlyScope } from './tools.mjs';
 import { redactEvidence, taskSkipsTests } from './excellence.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
 import { readTaskMetadata } from './estimate.mjs';
@@ -70,27 +70,25 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   const boundedTask = singleAllowedFile !== null;
   const repairBudget = repairBudgetFor(context.task, boundedTask);
 
+  const verification = verificationDecision(parsedTask.files_allowed);
+  const docsOnly = isDocsOnlyScope(parsedTask.files_allowed);
   const messages = [
     { role: 'system', content: context.pack },
     { role: 'user', content: 'Complete this task using only the offered tools. ' +
-      (context.minimalDocs ? 'Use only the Ask, TASK.md, allowed files, read-before-write, and small-diff. ' +
-        'Read task-allowed files before edits; no principal or research pack is needed. '
-        : 'Read RESEARCH.md for the pre-edit inventory and gaps. ') +
-      (readmeOnlyDocs ? 'Read only TASK.md or README.md; write README.md before tests or finishing. ' : '') +
-      (boundedTask && !readmeOnlyDocs
-        ? `Read TASK.md or ${singleAllowedFile}; update an existing file with edit_file, not write_file. ` : '') +
-      'Use edit_file for an existing file. write_file is for a new file only. ' +
-      (sliceReadsOnly ? 'Reads, listings, and searches are limited to TASK.md and TASK-allowed paths. ' : '') +
-      'Do not claim acceptance checks passed without evidence. ' +
+      (docsOnly ? 'This is a docs-only change. Do not run or edit tests. Check the written file. ' : '') +
+      (!docsOnly && verification.run ? `Run and update only these tests: ${verification.update.join(', ')}. ` : '') +
+      'A failing test outside Allowed Files is pre-existing: report it and do not edit it. ' +
       'Finish with a concise summary of changes, test results, and blockers.' },
   ];
+  const requiresWebSearch = /\bweb_search\b/.test(context.task);
+  const requiresWebFetch = /\bweb_fetch\b/.test(context.task);
   const definitions = toolDefinitions.filter((tool) =>
     (config.seat.tools.includes(tool.function.name) ||
-      ['edit_file', 'glob_files', 'run_command'].includes(tool.function.name) ||
+      ['edit_file', 'glob_files', ...(requiresWebSearch || requiresWebFetch ? [] : ['run_command'])].includes(tool.function.name) ||
       (config.tools?.internet === true && ['web_search', 'web_fetch'].includes(tool.function.name))) &&
-    (tool.function.name !== 'run_test' || config.tools?.run_test !== false) &&
-    (!boundedTask || ['read_file', 'write_file', 'edit_file', 'run_test'].includes(tool.function.name))).map((tool) =>
-    !boundedTask || tool.function.name === 'run_test' ? tool : {
+    (tool.function.name !== 'run_test' || verification.run && config.tools?.run_test !== false) &&
+    (!boundedTask || ['read_file', 'write_file', 'edit_file', 'run_test', 'web_search', 'web_fetch'].includes(tool.function.name))).map((tool) =>
+    !boundedTask || tool.function.name === 'run_test' || tool.function.name === 'web_search' || tool.function.name === 'web_fetch' ? tool : {
       ...tool, function: { ...tool.function, parameters: { ...tool.function.parameters,
         properties: { ...tool.function.parameters.properties,
           path: { type: 'string', enum: tool.function.name === 'read_file'
@@ -112,6 +110,8 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   let checksPassedAfterWrite = false;
   let lateWriteReturned = false;
   let steeringMessage;
+  let webSearchDone = false;
+  let webFetchDone = false;
   progress.testRepairs = 0;
   progress.testRepairBudget = repairBudget;
   progress.repairFiles = [];
@@ -125,11 +125,29 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       await onEvent?.({ type: 'contracts-uninitialized' });
       throw new ContractsSubmoduleError({ tests: { exit_code: tests.exit_code } });
     }
-    progress.repairFiles = taskAndRepairFiles([], tests.repair_files ?? progress.repairFiles);
+    progress.repairFiles = (tests.repair_files ?? []).filter((file) => parsedTask.files_allowed.includes(file));
+    const outside = (tests.repair_files ?? []).filter((file) => !parsedTask.files_allowed.includes(file));
     const output = redactEvidence([tests.stdout, tests.stderr].filter(Boolean).join('\n'), {
       env, apiKeyEnv: config.llm.api_key_env,
     }).slice(0, 4096);
     const failure = `Final node --test failed (exit ${tests.exit_code}):\n${output}`;
+    if (outside.length && !progress.repairFiles.length) {
+      progress.baselineFailures = outside;
+      if (progress.outsideRefocus) {
+        await onEvent?.({ type: 'remediation-offer', files: outside });
+        messages.push({ role: 'user', content: `Baseline failures remain outside Allowed Files (${outside.join(', ')}). ` +
+          'Do not edit them. Summarize the task and say a separate remediation agent can take those files if the human asks.' });
+        return false;
+      }
+      progress.outsideRefocus = true;
+      attemptTurns = 0;
+      finalSummaryOnly = false;
+      await onEvent?.({ type: 'steering' });
+      messages.push({ role: 'user', content: `Steering: these failing tests are outside Allowed Files and are pre-existing: ${outside.join(', ')}. ` +
+        'Do not read or edit them. Continue only on the allowed files. ' +
+        'A remediation agent is a separate session and starts only if the human asks.' });
+      return true;
+    }
     if (progress.testRepairs === repairBudget) {
       progress.repairBudgetExhausted = true;
       throw new Error(`${failure}\nTest repair budget (${repairBudget}) exhausted`);
@@ -140,9 +158,10 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     checksPassedAfterWrite = false;
     await onEvent?.({ type: 'test-repair', attempt: progress.testRepairs, budget: repairBudget });
     messages.push({ role: 'user', content: `${failure}\n` +
-      `Repair ${progress.testRepairs} of ${repairBudget}. Read this failure summary and repair TASK-allowed files` +
-      (progress.repairFiles.length ? ` plus the failing tests: ${progress.repairFiles.join(', ')}` : '') +
-      '. Rerun node --test, then provide a new summary. No change is verified yet.' });
+      `Repair ${progress.testRepairs} of ${repairBudget}. Repair only TASK-allowed files` +
+      (progress.repairFiles.length ? `: ${progress.repairFiles.join(', ')}` : '') +
+      '. Do not edit a failing test outside Allowed Files. Report it as pre-existing. ' +
+      'Rerun node --test, then provide a new summary. No change is verified yet.' });
     return true;
   };
   await onEvent?.({ type: 'implementation', path: 'model' });
@@ -328,6 +347,26 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
           await onEvent?.({ type: 'tool-result', name: call.function.name, status: 'denied' });
           continue;
         }
+        if ((call.function.name === 'edit_file' || call.function.name === 'write_file') &&
+            /(?:^|\/)(?:test(?:[._-][^/]+)?|[^/]+[._-]test)\.[cm]?js$/.test(String(call.args.path ?? '')) &&
+            !verification.update.includes(String(call.args.path).replaceAll('\\', '/'))) {
+          messages.push({ role: 'tool', tool_call_id: call.id,
+            content: 'Denied. Update only a test that covers a file changed in this session.' });
+          await onEvent?.({ type: 'tool-result', name: call.function.name, status: 'denied' });
+          continue;
+        }
+        if (call.function.name === 'run_test' && progress.baselineFailures?.length) {
+          messages.push({ role: 'tool', tool_call_id: call.id,
+            content: 'Baseline failures were already reported. Do not run tests again. Return the summary only.' });
+          finalSummaryOnly = true;
+          continue;
+        }
+        if (call.function.name === 'run_test' && !verification.run) {
+          messages.push({ role: 'tool', tool_call_id: call.id,
+            content: 'Denied. This task requires web_search and web_fetch before tests. Record the query, title, and URL, then write the allowed file.' });
+          await onEvent?.({ type: 'tool-result', name: call.function.name, status: 'denied' });
+          continue;
+        }
         let result;
         try {
           result = await tools[call.function.name](call.args);
@@ -343,6 +382,8 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
             env, apiKeyEnv: config.llm.api_key_env,
           }),
         });
+        if (call.function.name === 'web_search') webSearchDone = true;
+        if (call.function.name === 'web_fetch') webFetchDone = true;
         if (call.function.name === 'write_file' && result.path === singleAllowedFile) {
           wroteSingleAllowedFile = true;
           continue;
@@ -361,7 +402,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       }
       if (failedTests) await repairTests(failedTests);
       if (wroteSingleAllowedFile) {
-        const testsSkipped = taskSkipsTests(context.task);
+        const testsSkipped = !verification.run || taskSkipsTests(context.task);
         const tests = testsSkipped ? undefined : await tools.run_test({});
         progress.tests = tests;
         if (tests && tests.exit_code !== 0) {
@@ -390,11 +431,19 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       }
     }
     const usage = mergeUsage(...usages);
-    const testsSkipped = taskSkipsTests(context.task);
+    const summary = deterministic ?? message.content.trim();
+    if (progress.baselineFailures?.length && !progress.repairFiles.length) {
+      return {
+        mode: 'llm', model: config.llm.model, summary, usage, turns: progress.turns,
+        tests: progress.tests, testsSkipped: false, baselineFailures: progress.baselineFailures,
+        implementationPath: progress.implementationPath ?? 'model',
+        testRepairs: progress.testRepairs, repairFiles: progress.repairFiles,
+      };
+    }
+    const testsSkipped = !verification.run || taskSkipsTests(context.task);
     const tests = checksPassedAfterWrite ? progress.tests
       : testsSkipped && progress.testRepairs === 0 ? undefined : await tools.run_test({});
     progress.tests = tests;
-    const summary = deterministic ?? message.content.trim();
     const result = {
       mode: 'llm', model: config.llm.model, summary, usage, turns: progress.turns, tests, testsSkipped,
       implementationPath: progress.implementationPath ?? 'model',
@@ -402,7 +451,8 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     };
     if (tests && tests.exit_code !== 0) {
       messages.push({ role: 'assistant', content: summary });
-      await repairTests(tests);
+      const again = await repairTests(tests);
+      if (!again && progress.baselineFailures?.length) return result;
       continue;
     }
     const excellence = await verify(result);

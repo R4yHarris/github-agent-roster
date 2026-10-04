@@ -6,8 +6,8 @@ import { ensurePrivateFilesIgnored, writePrivateDocuments } from './private-file
 import { resolvePublishModel } from '../metrics/run.mjs';
 
 const fields = ['id', 'base_url', 'model', 'provider', 'context_max', 'concurrency',
-  'hardware', 'task_class', 'notes'];
-const required = fields.filter((field) => field !== 'task_class');
+  'hardware', 'task_class', 'notes', 'api_key_env'];
+const required = fields.filter((field) => !['task_class', 'api_key_env'].includes(field));
 const taskClasses = ['feat', 'fix', 'docs', 'test'];
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -59,11 +59,15 @@ export function validateFleetProfile(profile) {
       profile.task_class.some((item) => !taskClasses.includes(item)))) {
     throw new TypeError('Fleet task_class must contain distinct feat, fix, docs, or test hints');
   }
+  if (profile.api_key_env !== undefined && !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(profile.api_key_env)) {
+    throw new TypeError('Fleet api_key_env must be a vault secret name');
+  }
   return Object.freeze({
     id, base_url: normalizeFleetBaseUrl(profile.base_url), model, provider: profile.provider,
     context_max: profile.context_max, concurrency: profile.concurrency,
     hardware: text(profile.hardware, 'hardware', { maximum: 120 }),
     ...(profile.task_class ? { task_class: Object.freeze([...profile.task_class]) } : {}),
+    ...(profile.api_key_env ? { api_key_env: profile.api_key_env } : {}),
     notes: text(profile.notes, 'notes', { empty: true }),
   });
 }
@@ -100,7 +104,7 @@ export function withFleetProfile(config, profile) {
     ...config, llm: {
       ...config.llm, profile: 'vllm-local', base_url: selected.base_url, model: selected.model,
       provider: selected.provider, context_max: selected.context_max,
-      api_key_env: config.profiles['vllm-local'].api_key_env,
+      api_key_env: selected.api_key_env ?? config.profiles['vllm-local'].api_key_env,
       api_key_optional: config.llm.api_key_optional ?? config.profiles['vllm-local'].api_key_optional,
     },
   };
