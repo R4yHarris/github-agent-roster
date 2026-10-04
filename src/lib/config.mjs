@@ -28,7 +28,7 @@ const fields = {
   loop: ['turns'],
   context: ['budget'],
 };
-const availableTools = ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text'];
+const availableTools = ['read_file', 'write_file', 'edit_file', 'glob_files', 'list_dir', 'run_test', 'run_command', 'search_text', 'web_search', 'web_fetch'];
 
 export class ConfigError extends Error {}
 
@@ -248,29 +248,29 @@ export function parseConfig(source) {
   seat.principal = stringValue(seat.principal, 'seat.principal');
   seat.turn_budget = integerValue(seat.turn_budget, 'seat.turn_budget');
   seat.context_chars = Object.hasOwn(seat, 'context_chars')
-    ? integerValue(seat.context_chars, 'seat.context_chars') : 8000;
+    ? integerValue(seat.context_chars, 'seat.context_chars') : 200000;
   if (seat.context_chars < 1) invalid('seat.context_chars must be positive');
-  if (seat.id !== 'coder' || seat.principal !== 'coder' || seat.turn_budget < 1 || seat.turn_budget > 64) {
-    invalid('seat must be coder with principal coder and turn_budget between 1 and 64');
+  if (seat.id !== 'coder' || seat.principal !== 'coder' || seat.turn_budget < 1 || seat.turn_budget > 10000) {
+    invalid('seat must be coder with principal coder and turn_budget between 1 and 10000');
   }
   const toolList = /^\[([^\[\]]*)\]$/.exec(seat.tools);
   if (!toolList) invalid('seat.tools must be an inline list of builtin tools');
   seat.tools = toolList[1].split(',').map((tool) => tool.trim());
   if (!seat.tools.length || new Set(seat.tools).size !== seat.tools.length ||
       seat.tools.some((tool) => !availableTools.includes(tool))) {
-    invalid('seat.tools may only contain distinct read_file, write_file, list_dir, run_test, search_text tools');
+    invalid('seat.tools may only contain distinct read_file, write_file, edit_file, glob_files, list_dir, run_test, run_command, search_text, web_search, web_fetch tools');
   }
   seat.tools = Object.freeze(seat.tools);
 
   const planner = config.planner;
   planner.turn_budget = roots.has('planner')
     ? integerValue(planner.turn_budget, 'planner.turn_budget') : 1;
-  if (planner.turn_budget < 1 || planner.turn_budget > 64) {
-    invalid('planner.turn_budget must be between 1 and 64');
+  if (planner.turn_budget < 1 || planner.turn_budget > 10000) {
+    invalid('planner.turn_budget must be between 1 and 10000');
   }
   if (roots.has('loop')) {
     config.loop.turns = integerValue(config.loop.turns, 'loop.turns');
-    if (config.loop.turns < 1 || config.loop.turns > 64) invalid('loop.turns must be between 1 and 64');
+    if (config.loop.turns < 1 || config.loop.turns > 10000) invalid('loop.turns must be between 1 and 10000');
     seat.turn_budget = config.loop.turns;
   }
   if (roots.has('context')) {

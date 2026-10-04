@@ -15,20 +15,28 @@ function fixture(t) {
 
 const config = { llm: { base_url: '', model: '' } };
 
-test('each test repair logs its exact attempt without failure output', async (t) => {
+test('each valid test repair logs its exact attempt while an out-of-budget event is skipped', async (t) => {
   const options = fixture(t);
   const logger = await createRunLog(options);
   await logger.seat('coder', options.session, config, async (onEvent) => {
     for (let attempt = 1; attempt <= 4; attempt += 1) {
       await onEvent({ type: 'test-repair', attempt, budget: 4, stdout: 'PRIVATE_TEST_OUTPUT' });
     }
-    await assert.rejects(onEvent({ type: 'test-repair', attempt: 5, budget: 4 }), /Invalid live test repair/);
+    await onEvent({ type: 'test-repair', attempt: 5, budget: 4 });
     return {};
   });
+  assert.equal(options.text, [
+    'Tests failed. Repair 1 of 4.',
+    'Tests failed. Repair 2 of 4.',
+    'Tests failed. Repair 3 of 4.',
+    'Tests failed. Repair 4 of 4.',
+    '',
+  ].join('\n'));
+  const log = readFileSync(logger.path, 'utf8');
   for (let attempt = 1; attempt <= 4; attempt += 1) {
-    assert.ok(options.text.includes(`Tests failed. Repair ${attempt} of 4.\n`));
+    assert.match(log, new RegExp(`seat coder test repair ${attempt}/4\\n`));
   }
-  assert.doesNotMatch(readFileSync(logger.path, 'utf8'), /PRIVATE_TEST_OUTPUT/);
+  assert.doesNotMatch(log, /test repair 5\/4|PRIVATE_TEST_OUTPUT/);
 });
 
 test('missing contracts prints the dependency diagnostic without listing vendor', async (t) => {
@@ -142,13 +150,17 @@ test('HTTP starts, reads, tests and waits leave the shell to the tray and stay i
   assert.match(log, /seat coder tool run_test/);
 });
 
-test('an unknown tool name is still rejected before anything is appended', async (t) => {
+test('an unknown tool name is normalized in the log and identified in the human stream', async (t) => {
   const options = fixture(t);
   const logger = await createRunLog(options);
-  await assert.rejects(logger.seat('coder', options.session, config, async (onEvent) => {
+  await logger.seat('coder', options.session, config, async (onEvent) => {
     await onEvent({ type: 'tool', name: 'delete_everything', path: 'README.md' });
     return {};
-  }), /Invalid live tool event/);
+  });
+  assert.equal(options.text, 'tool delete_everything\n');
+  const log = readFileSync(logger.path, 'utf8');
+  assert.match(log, /seat coder tool unknown path="README\.md"\n/);
+  assert.doesNotMatch(log, /delete_everything/);
 });
 
 test('waiting stays log-only while timeout keeps its human hint and the technical tail retains host, elapsed and retry', async (t) => {

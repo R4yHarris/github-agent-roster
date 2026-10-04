@@ -48,36 +48,19 @@ const writeCall = () => ({
   },
 });
 
-function failedTest() {
-  const error = new Error('fail');
-  error.code = 1;
-  error.stdout = '';
-  error.stderr = 'fail';
-  return error;
-}
-
 test('simple, medium, and hard one-file tasks finish on the same coder thread', async (context) => {
   const seen = [];
-  for (const [difficulty, failures, budget] of [[1, 0, 1], [3, 1, 2], [5, 2, 4]]) {
+  for (const difficulty of [1, 3, 5]) {
     const options = fixture(context, difficulty);
-    let testsRun = 0;
     const prompts = [];
     const events = [];
     const result = await runCoder({
       ...options, env: {}, onEvent: async (event) => events.push(event),
-      runTestCommand: async () => {
-        testsRun += 1;
-        if (testsRun <= failures) throw failedTest();
-        return { stdout: 'ok', stderr: '' };
-      },
+      runTestCommand: async () => assert.fail('Docs-only task checks must not run node --test'),
       fetchImpl: async (_url, request) => {
         const body = JSON.parse(request.body);
         prompts.push(body.messages.at(-1).content);
-        const repair = prompts.filter((prompt) => prompt.startsWith('Final node --test failed')).length;
-        if (repair > 0 && repair <= failures && body.messages.at(-1).content.startsWith('Final node --test failed')) {
-          return response('tool_calls', { role: 'assistant', content: null, tool_calls: [writeCall()] });
-        }
-        if (testsRun > failures) {
+        if (body.messages.at(-1).content.startsWith('Task checks passed after the sole allowed file was saved.')) {
           return response('stop', { role: 'assistant', content: 'Updated README Status.' });
         }
         return response('tool_calls', { role: 'assistant', content: null, tool_calls: [writeCall()] });
@@ -86,7 +69,8 @@ test('simple, medium, and hard one-file tasks finish on the same coder thread', 
     assert.equal(result.excellence.pass, true, result.excellence.reasons.join('\n'));
     assert.match(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), /## Status/);
     assert.equal(events.some((event) => event.type === 'checkpoint' && event.status === 'unavailable'), true);
-    if (failures) assert.match(prompts.join('\n'), new RegExp(`Repair ${failures} of ${budget}`));
+    assert.match(prompts.join('\n'), /Task checks passed after the sole allowed file was saved/);
+    assert.doesNotMatch(prompts.join('\n'), /Repair \d+ of \d+/);
     seen.push(difficulty);
   }
   assert.deepEqual(seen, [1, 3, 5]);

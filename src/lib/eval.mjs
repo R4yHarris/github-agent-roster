@@ -85,6 +85,7 @@ export async function recordEvaluation(target, verdict, difficulty, again, {
   env = process.env,
   minutes = null,
   comment = '',
+  idempotent = false,
   now = () => new Date(),
   metricsLoader = loadAvailableMetrics,
   commenter = commentEvaluation,
@@ -140,11 +141,21 @@ export async function recordEvaluation(target, verdict, difficulty, again, {
   } catch (error) {
     throw new Error(`Could not create ${directory}: ${failureDetail(error)}`, { cause: error });
   }
-  await appendJsonl(resolve(directory, 'evals.jsonl'), evaluation, validateLocalEvaluation, fileSystem);
+  const file = resolve(directory, 'evals.jsonl');
+  if (idempotent) {
+    const learning = await fileSystem.readFile(file, 'utf8').catch((error) => {
+      if (error.code === 'ENOENT') return '';
+      throw error;
+    });
+    const existing = learning.split('\n').filter(Boolean).map((line) => JSON.parse(line))
+      .find((item) => item.session === evaluation.session && item.session);
+    if (existing) return { ...existing, path: file, duplicate: true };
+  }
+  await appendJsonl(file, evaluation, validateLocalEvaluation, fileSystem);
   try {
     await commenter({ evaluation, record, cwd: root, run, env, log });
   } catch (error) {
     throw new Error(`AI-Eval was recorded locally, but the PR comment failed: ${failureDetail(error)}`, { cause: error });
   }
-  return evaluation;
+  return { ...evaluation, path: file };
 }

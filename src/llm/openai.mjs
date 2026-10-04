@@ -129,7 +129,18 @@ export function createChat(config = {}, {
     } catch {
       throw new TypeError('The chat request must be JSON serializable.');
     }
-    const key = await resolveSecret(llm.api_key_name ?? 'OPENAI_API_KEY', { env, vault });
+    const names = endpoint.includes('aperture')
+      ? ['APERTURE_API_KEY', llm.api_key_name ?? 'ROSTER_API_KEY']
+      : [llm.api_key_name ?? 'OPENAI_API_KEY'];
+    let key;
+    for (const name of names) {
+      try {
+        key = await resolveSecret(name, { env, vault });
+      } catch {
+        key = undefined;
+      }
+      if (key) break;
+    }
     if (!key && !optionalKey) {
       await onEvent?.({ type: 'http', phase: 'error', errorClass: 'authentication' });
       throw new ChatError('An LLM API key is required. Set the configured environment variable or vault entry.', 'authentication');

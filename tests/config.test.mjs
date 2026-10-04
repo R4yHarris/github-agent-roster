@@ -34,9 +34,9 @@ test('loads the tracked example when private config is absent', (context) => {
       lmstudio: { base_url: 'http://127.0.0.1:1234/v1', api_key_env: 'ROSTER_API_KEY' },
       openai: { base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY' },
     },
-    planner: { turn_budget: 2 },
+    planner: { turn_budget: 32 },
     seat: {
-      id: 'coder', principal: 'coder', turn_budget: 8, context_chars: 8000,
+      id: 'coder', principal: 'coder', turn_budget: 1000, context_chars: 200000,
       tools: ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text'],
     },
     paths: {
@@ -100,14 +100,14 @@ test('canonical review/loop/context fields normalize to existing runtime limits 
   assert.equal(config.context.budget, 16000);
   assert.equal(config.seat.context_chars, 16000);
   for (const source of [
-    canonical.replace('turns: 12', 'turns: 65'),
+    canonical.replace('turns: 12', 'turns: 0'),
     canonical.replace('budget: 16000', 'budget: 0'),
     canonical + 'reviewer:\n  required: true\n',
   ]) {
     assert.throws(() => parseConfig(source), ConfigError);
   }
   assert.equal(parseConfig(example).reviewer.required, true);
-  assert.equal(parseConfig(example).seat.turn_budget, 8);
+  assert.equal(parseConfig(example).seat.turn_budget, 1000);
 });
 
 test('project private settings are loaded and updated without modifying the installation config', async (t) => {
@@ -185,8 +185,8 @@ test('private config overrides the example without resolving or logging the API 
   writeFileSync(join(repoRoot, '.roster', 'config.yml'),
     example.replace('base_url: ""', 'base_url: "http://localhost:1234/v1"')
       .replace('model: ""', 'model: local-model')
-      .replace('turn_budget: 2', 'turn_budget: 4')
-      .replace('turn_budget: 8', 'turn_budget: 3'));
+      .replace('turn_budget: 32', 'turn_budget: 4')
+      .replace('turn_budget: 1000', 'turn_budget: 3'));
   const original = process.env.ROSTER_API_KEY;
   process.env.ROSTER_API_KEY = 'do-not-print-this-secret';
   try {
@@ -250,10 +250,10 @@ test('rejects invalid schema, fields, roles, paths, tool names, and endpoint set
       .replace('model: ""', 'model: chosen-model')
       .replace('base_url: ""', 'base_url: http://localhost:1234/v1')],
     ['tools', example.replace('search_text]', 'git_push]')],
-    ['budget', example.replace('turn_budget: 8', 'turn_budget: 0')],
-    ['context budget', example.replace('context_chars: 8000', 'context_chars: 0')],
-    ['planner budget', example.replace('turn_budget: 2', 'turn_budget: 65')],
-    ['planner missing budget', example.replace(/  turn_budget: 2[^\r\n]*\r?\n/, '')],
+    ['budget', example.replace('turn_budget: 1000', 'turn_budget: 0')],
+    ['context budget', example.replace('context_chars: 200000', 'context_chars: 0')],
+    ['planner budget', example.replace('turn_budget: 32', 'turn_budget: 10001')],
+    ['planner missing budget', example.replace(/  turn_budget: 32[^\r\n]*\r?\n/, '')],
     ['planner unknown field', example.replace('planner:', 'planner:\n  tools: [write_file]')],
     ['effort', example.replace('effort: m ', 'effort: max ')],
     ['traversal', example.replace('skills: skills', 'skills: ../outside')],
@@ -264,7 +264,7 @@ test('rejects invalid schema, fields, roles, paths, tool names, and endpoint set
     assert.throws(() => parseConfig(source), ConfigError, name);
   }
   assert.throws(() => parseConfig('x'.repeat(65_537)), /at most 64 KiB/);
-  const legacy = example.replace(/planner:\r?\n  turn_budget: 2[^\r\n]*\r?\n/, '');
+  const legacy = example.replace(/planner:\r?\n  turn_budget: 32[^\r\n]*\r?\n/, '');
   assert.equal(parseConfig(legacy).planner.turn_budget, 1);
   const withoutProfiles = example.replace(/  profile: ""[^\r\n]*\r?\n/, '')
     .replace(/profiles:\r?\n[\s\S]*?(?=planner:)/, '');
@@ -279,8 +279,8 @@ test('rejects invalid schema, fields, roles, paths, tool names, and endpoint set
 });
 
 test('older configs retain the default context budget and can explicitly set it', () => {
-  assert.equal(parseConfig(example.replace(/  context_chars:[^\r\n]*\r?\n/, '')).seat.context_chars, 8000);
-  assert.equal(parseConfig(example.replace('context_chars: 8000', 'context_chars: 16000'))
+  assert.equal(parseConfig(example.replace(/  context_chars:[^\r\n]*\r?\n/, '')).seat.context_chars, 200000);
+  assert.equal(parseConfig(example.replace('context_chars: 200000', 'context_chars: 16000'))
     .seat.context_chars, 16000);
 });
 

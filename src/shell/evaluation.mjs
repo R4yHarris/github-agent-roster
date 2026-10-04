@@ -5,27 +5,29 @@ export const shellEvaluationUsage = 'Use /eval SESSION accept|reject|rework 1-5 
 
 export function parseShellEvaluationArgs(text) {
   const args = splitArguments(text, shellEvaluationUsage);
-  if (/^[1-5]$/.test(args[2] ?? '') && ['y', 'n'].includes(args[3])) return parseEvaluationArgs(args);
-  if (args.length < 6 || !['accept', 'reject', 'rework'].includes(args[1])) {
-    throw new TypeError(shellEvaluationUsage);
-  }
+  if (!args[0] || args[0].startsWith('-')) throw new TypeError(shellEvaluationUsage);
+  if (!['accept', 'reject', 'rework'].includes(args[1])) throw new TypeError(shellEvaluationUsage);
+  if (!/^[1-5]$/.test(args[2] ?? '')) throw new TypeError(shellEvaluationUsage);
+  if (!['y', 'n'].includes(args[3])) throw new TypeError(shellEvaluationUsage);
   const options = {};
-  let comment = '';
-  for (let index = 2; index < args.length;) {
+  for (let index = 4; index < args.length; index += 2) {
     const flag = args[index];
-    if (!['--minutes', '--difficulty'].includes(flag)) {
-      if (index !== args.length - 1 || flag.startsWith('--')) throw new TypeError(shellEvaluationUsage);
-      comment = flag;
-      break;
-    }
-    const key = flag.slice(2);
     const value = args[index + 1];
-    if (Object.hasOwn(options, key) || typeof value !== 'string' ||
-        (key === 'difficulty' ? !/^[1-5]$/.test(value) : !/^(?:0|[1-9]\d*)$/.test(value)) ||
-        !Number.isSafeInteger(Number(value))) throw new TypeError(shellEvaluationUsage);
-    options[key] = Number(value);
-    index += 2;
+    if (!['--minutes', '--note'].includes(flag) || value === undefined || value.startsWith('--') ||
+        Object.hasOwn(options, flag.slice(2))) throw new TypeError(shellEvaluationUsage);
+    if (flag === '--minutes') {
+      if (!/^(?:0|[1-9]\d*)$/.test(value) || !Number.isSafeInteger(Number(value))) {
+        throw new TypeError(shellEvaluationUsage);
+      }
+      options.minutes = Number(value);
+    } else options.note = value;
   }
-  if (options.minutes === undefined || options.difficulty === undefined) throw new TypeError(shellEvaluationUsage);
-  return { values: [args[0], args[1], String(options.difficulty), 'n'], options: { minutes: options.minutes, comment } };
+  if (options.minutes === undefined) throw new TypeError(shellEvaluationUsage);
+  if (['reject', 'rework'].includes(args[1]) && !options.note?.trim()) {
+    throw new TypeError('A reject or rework requires --note before any evaluation is written.');
+  }
+  return {
+    values: args.slice(0, 4),
+    options: { minutes: options.minutes, comment: options.note ?? '', idempotent: true },
+  };
 }

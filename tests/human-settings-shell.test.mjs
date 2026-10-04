@@ -25,10 +25,10 @@ function fixture(t, source = example, env = {}, services = {}) {
   return { root, file, ...shell, get text() { return text; }, reset() { text = ''; } };
 }
 
-test('new eval flags feed the existing human writer and help names minutes and difficulty', async () => {
-  const parsed = parseShellEvaluationArgs('abcdef12 accept --minutes 18 --difficulty 2 "Meets the  checks."');
+test('eval arguments feed the existing human writer and help names minutes and difficulty', async () => {
+  const parsed = parseShellEvaluationArgs('abcdef12 accept 2 n --minutes 18 --note "Meets the checks."');
   assert.deepEqual(parsed, { values: ['abcdef12', 'accept', '2', 'n'],
-    options: { minutes: 18, comment: 'Meets the  checks.' } });
+    options: { minutes: 18, comment: 'Meets the checks.', idempotent: true } });
   assert.match(formatHelp('eval'), /--minutes N/);
   assert.match(formatHelp('eval'), /--difficulty 1-5/);
   let received;
@@ -36,13 +36,14 @@ test('new eval flags feed the existing human writer and help names minutes and d
     repositoryBranch: () => 'main', repositoryRoot: () => process.cwd(),
     recordEvaluation: async (...args) => { received = args; return { sha: args[0] }; },
   }, output: { write() {} }, errorOutput: { write() {} } });
-  await shell.dispatch('/eval abcdef12 rework --difficulty 4 --minutes 30 "Keep the regression test."');
+  await shell.dispatch('/eval abcdef12 rework 4 n --minutes 30 --note "Keep the regression test."');
   assert.deepEqual(received.slice(0, 4), ['abcdef12', 'rework', '4', 'n']);
   assert.equal(received[4].minutes, 30);
   assert.equal(received[4].comment, 'Keep the regression test.');
-  for (const text of ['abcdef12 accept --minutes 2 "missing difficulty"',
-    'abcdef12 accept --minutes 2 --difficulty 6 "bad"',
-    'abcdef12 accept --minutes 2 --difficulty 2 --minutes 4']) {
+  assert.equal(received[4].idempotent, true);
+  for (const text of ['abcdef12 accept n --minutes 2 --note "missing difficulty"',
+    'abcdef12 accept 6 n --minutes 2 --note "bad"',
+    'abcdef12 accept 2 n --minutes 2 --minutes 4']) {
     assert.throws(() => parseShellEvaluationArgs(text), /Use \/eval/);
   }
 });
@@ -52,7 +53,7 @@ test('an agent seat cannot invoke even an injected human eval writer', async () 
     output: { write() {} }, errorOutput: { write() {} }, services: {
       repositoryBranch: () => 'main', recordEvaluation: () => assert.fail('Agents must not evaluate themselves'),
     } });
-  await assert.rejects(shell.dispatch('/eval abcdef12 accept --minutes 1 --difficulty 1 "Good"'), /human-only/);
+  await assert.rejects(shell.dispatch('/eval abcdef12 accept 1 n --minutes 1 --note "Good"'), /human-only/);
 });
 
 test('config display omits secret material and PEM paths; path prints only the private config path', async (t) => {

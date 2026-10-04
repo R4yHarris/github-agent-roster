@@ -9,7 +9,7 @@ import { ensurePrivateFilesIgnored, readPrivateFile, writePrivateDocuments } fro
 const installation = fileURLToPath(new URL('../../', import.meta.url));
 const usage = 'Use roster fleet list, add --id NAME --base-url URL [--model MODEL] [--context N] ' +
   '[--concurrency N] [--hardware TEXT] [--task-class feat,fix,docs,test], ' +
-  'probe ID [--set-model [MODEL]], default ID, remove ID, or assist.';
+  'probe ID [--set-model [MODEL]], hardware ID SKU, default ID, remove ID, or assist.';
 
 function argumentsFor(args) {
   if (!Array.isArray(args) || !args.length || args.some((value) => typeof value !== 'string')) {
@@ -18,6 +18,9 @@ function argumentsFor(args) {
   const [command, ...rest] = args;
   if (command === 'list' && !rest.length) return { command };
   if (command === 'assist' && !rest.length) return { command };
+  if (command === 'hardware' && rest.length === 2) {
+    return { command, id: validateFleetId(rest[0]), hardware: rest[1] };
+  }
   if (['default', 'remove'].includes(command) && rest.length === 1) {
     return { command, id: validateFleetId(rest[0]) };
   }
@@ -111,6 +114,17 @@ export async function runFleet(args, {
         }
       }
       return { command: options.command, fleet };
+    }
+    if (options.command === 'hardware') {
+      const { describeHardware } = await import('./hardware.mjs');
+      const hardware = describeHardware(options.hardware);
+      const profile = getFleetProfile(fleet, options.id);
+      const selected = { ...profile, hardware: hardware.id };
+      const updated = validateFleet({ profiles: fleet.profiles.map((item) =>
+        item.id === profile.id ? selected : item) });
+      await writeFleet(updated, { repoRoot, expectedSource: previousFleet });
+      output.write(`Hardware for ${profile.id}: ${hardware.id} (${hardware.memory_gb}GB, ${hardware.nodes} node(s)). Endpoint unchanged.\n`);
+      return { command: options.command, fleet: updated, profile: getFleetProfile(updated, profile.id) };
     }
     if (options.command === 'add') {
       if (fleet.profiles.some(({ id }) => id === options.id)) throw new Error('Fleet profile ID already exists');

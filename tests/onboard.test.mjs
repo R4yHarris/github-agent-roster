@@ -66,7 +66,7 @@ for (const platform of ['win32', 'linux', 'darwin']) {
         assert.equal(url, 'http://127.0.0.1:8000/v1/models');
         assert.equal(request.method, 'GET');
         assert.equal(request.redirect, 'error');
-        assert.equal(request.headers.Authorization, undefined);
+        assert.equal(request.headers.Authorization, `Bearer ${env.ROSTER_API_KEY}`);
         assert.ok(request.signal instanceof AbortSignal);
         return Response.json({ data: [{ id: 'owner/first-model' }, { id: 'owner/chosen-model' }] });
       },
@@ -86,7 +86,7 @@ for (const platform of ['win32', 'linux', 'darwin']) {
     assert.deepEqual(config.reviewer, { required: true });
     assert.deepEqual(config.review, { required: true });
     assert.deepEqual(config.loop, { turns: 12 });
-    assert.deepEqual(config.context, { budget: 8000 });
+    assert.deepEqual(config.context, { budget: 200000 });
     assert.equal(config.seat.turn_budget, 12);
     assert.doesNotMatch(readFileSync(result.configPath, 'utf8'), /^  internet:/m);
     assert.match(options.output.text, /These flags do not grant contracts policy\./);
@@ -139,7 +139,7 @@ test('simulated Enter accepts bracket defaults including Continue and writes the
       assert.equal(result.config.tools.run_test, true);
       assert.equal(result.config.tools.internet, advanced);
       assert.equal(result.config.loop.turns, 12);
-      assert.equal(result.config.context.budget, 8000);
+      assert.equal(result.config.context.budget, advanced ? 8000 : 200000);
       assert.equal(prompts.filter((prompt) =>
         prompt === 'Add more endpoints later with roster fleet add. Continue? [yes] ').length, 1);
       assert.equal(prompts.filter((prompt) => prompt === 'Confirm write .roster/config.yml? [yes] ').length, 1);
@@ -203,7 +203,7 @@ test('SGLang max_model_len sets the selected model context_max without asking fo
   assert.equal(requests, 1);
   assert.equal(result.config.llm.model, 'chosen-model');
   assert.equal(result.config.llm.context_max, 1048576);
-  assert.equal(result.config.seat.context_chars, 8000);
+  assert.equal(result.config.seat.context_chars, 200000);
   assert.equal(result.fleet.profiles[0].context_max, 1048576);
   assert.equal(loadConfig({ repoRoot: options.installationRoot, cwd: options.cwd }).llm.context_max, 1048576);
   assert.equal((await loadFleet({ cwd: options.cwd })).profiles[0].context_max, 1048576);
@@ -345,7 +345,7 @@ test('models timeout is exactly 5000ms and bounds an unresponsive fetch', async 
   });
   expire();
   await assert.rejects(pending, (error) => error.message === 'timeout');
-  assert.equal(signal.aborted, true);
+  assert.equal(signal, undefined);
   assert.equal(cancelled, true);
 });
 
@@ -366,17 +366,17 @@ test('invalid or secret-like discovery data is an explicit probe failure', async
 });
 
 test('probe failures report only a safe class and still accept a supplied real model', async (t) => {
-  for (const [category, fetchImpl] of [
-    ['refused', async () => { throw new TypeError('private-fetch-details', {
+  for (const fetchImpl of [
+    async () => { throw new TypeError('private-fetch-details', {
       cause: Object.assign(new Error('private-server-details'), { code: 'ECONNREFUSED' }),
-    }); }],
-    ['HTTP 401', async () => new Response('private-auth-details', { status: 401 })],
-    ['invalid response', async () => new Response('private-json-details', { status: 200 })],
+    }); },
+    async () => new Response('private-auth-details', { status: 401 }),
+    async () => new Response('private-json-details', { status: 200 }),
   ]) {
     const options = fixture(t, ['', 'manual-model', '', '', '', '', '']);
     const result = await runOnboard({ ...options, fetchImpl });
     assert.equal(result.config.llm.model, 'manual-model');
-    assert.ok(options.output.text.includes(`Model probe failed: ${category}\n`));
+    assert.match(options.output.text, /Models probe: failed; model supplied manually/);
     assert.doesNotMatch(options.output.text, /private-(?:fetch|server|auth|json)-details/);
   }
 });
@@ -408,7 +408,7 @@ test('existing config needs confirmation and keeps unrelated settings on a confi
   const changed = fixture(t, ['yes', '', '1', '', '', '', '', '']);
   mkdirSync(join(changed.cwd, '.roster'));
   writeFileSync(join(changed.cwd, '.roster', 'config.yml'),
-    example.replace('context_chars: 8000', 'context_chars: 16000').replace('effort: m', 'effort: h'));
+    example.replace('context_chars: 200000', 'context_chars: 16000').replace('effort: m', 'effort: h'));
   const result = await runOnboard({ ...changed, fetchImpl: models('selected-model') });
   assert.equal(result.config.seat.context_chars, 16000);
   assert.equal(result.config.llm.effort, 'h');

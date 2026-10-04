@@ -44,7 +44,7 @@ test("help lists every prompt's command", () => {
   assert.match(result.stdout, /roster\s+eval/);
   assert.match(result.stdout, /roster\s+recommend\s+--task-class/);
   assert.match(result.stdout, /roster\s+ask/);
-  assert.match(result.stdout, /^  roster run --issue N \[--runtime builtin\] \[--seats planner,coder,reviewer\] \[--auto-model\] \[--publish\] \[--skip-review\] \[--confirm\] \[--plan\]$/m);
+  assert.match(result.stdout, /^  roster run --issue N \[--runtime builtin\] \[--auto-model\] \[--seats planner,coder,reviewer\] \[--saved\] \[--publish\] \[--skip-review\] \[--confirm\] \[--plan\]$/m);
   assert.match(result.stdout, /--auto-model/);
   assert.match(result.stdout, /^  roster prepare --issue N$/m);
 });
@@ -98,7 +98,9 @@ test("ask CLI creates an offline draft with a create command when gh is missing"
     assert.match(recipe, /^RECIPE: .*RECIPE\.yml$/);
     assert.match(task, /^TASK: .*TASK\.md$/);
     assert.match(readFileSync(recipe.slice("RECIPE: ".length), "utf8"), /worker: builtin/);
-    assert.match(readFileSync(task.slice("TASK: ".length), "utf8"), /node --test exits 0/);
+    const taskText = readFileSync(task.slice("TASK: ".length), "utf8");
+    assert.match(taskText, /- The requested behavior in the Ask is implemented/);
+    assert.match(taskText, /## Files allowed\n- `README\.md`/);
     assert.match(command, /^Next: gh issue create --title .+ --body-file .+$/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -131,10 +133,18 @@ test("builtin CLI defaults to paired seats, rejects unsupported selections, and 
   assert.match(bareRun.stderr, /Issue number must be a positive safe integer/);
   const legacySeat = run(["run", "--issue", "n/a", "--seat", "coder", "--runtime", "builtin"]);
   assert.match(legacySeat.stderr, /Issue number must be a positive safe integer/);
-  const noPublish = run(["run", "--issue", "42", "--runtime", "builtin", "--publish"],
-    { ...process.env, AI_MODEL: "", ROSTER_MODEL: "" });
-  assert.notEqual(noPublish.status, 0);
-  assert.match(noPublish.stderr, /set model/);
+  const noModel = mkdtempSync(join(tmpdir(), "roster-no-model-"));
+  try {
+    cpSync(join(root, "src"), join(noModel, "src"), { recursive: true });
+    cpSync(join(root, "examples"), join(noModel, "examples"), { recursive: true });
+    cpSync(join(root, "roster.config.example.yml"), join(noModel, "roster.config.example.yml"));
+    const noPublish = run(["run", "--issue", "42", "--runtime", "builtin", "--publish"],
+      { ...process.env, AI_MODEL: "", ROSTER_MODEL: "" }, join(noModel, "src", "cli.mjs"), undefined, noModel);
+    assert.notEqual(noPublish.status, 0);
+    assert.match(noPublish.stderr, /set model|registered fleet profile/);
+  } finally {
+    rmSync(noModel, { recursive: true, force: true });
+  }
 });
 
 test("the leading --debug flag enables the process without changing non-TTY shell behavior", () => {
@@ -161,11 +171,11 @@ test("bare run uses the builtin planner and coder while prepare keeps manual han
   const bareRun = run(["run", "--issue", "42"], env, fixtureCli, undefined, fixtureRoot);
   assert.ifError(bareRun.error);
   assert.equal(bareRun.status, 1);
-  assert.match(bareRun.stderr, /set model/);
+  assert.match(bareRun.stderr, /registered fleet profile/);
   assert.equal(bareRun.stdout, "");
   const explicitBuiltin = run(["run", "--issue", "42", "--runtime", "builtin"],
     env, fixtureCli, undefined, fixtureRoot);
-  assert.match(explicitBuiltin.stderr, /set model/);
+  assert.match(explicitBuiltin.stderr, /registered fleet profile/);
   const manual = run(["prepare", "--issue", "0"], env, fixtureCli, undefined, fixtureRoot);
   assert.match(manual.stderr, /Issue number must be a positive safe integer/);
   const invalid = run(["run", "--issue", "42", "--runtime", "prepare"],

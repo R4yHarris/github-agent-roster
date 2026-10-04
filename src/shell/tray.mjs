@@ -93,6 +93,16 @@ export function formatTray(display = {}, { columns = 80, color = true, now = Dat
   return { rule, rail, detail, prompt };
 }
 
+function queueLines(asks, width, color) {
+  if (!asks?.length) return [];
+  const commands = paint('/queue list  ·  /queue drop N  ·  /queue clear', 'label', color);
+  const rows = asks.slice(0, 8).map((ask, index) => {
+    const text = `${index + 1}. ${String(ask).replace(/\s+/g, ' ')}`;
+    return paint(text.length > width ? `${text.slice(0, Math.max(1, width - 1))}…` : text, 'white', color);
+  });
+  return [commands, ...rows];
+}
+
 export function createTray({ output, state, shell, env = process.env, cwd = process.cwd(), services = {} }) {
   let visible = false;
   let lastRows = 1;
@@ -133,8 +143,10 @@ export function createTray({ output, state, shell, env = process.env, cwd = proc
 
   function redraw() {
     const { rule, rail, detail, prompt } = frame();
-    barLines = state.statusbar ? detail === null ? 3 : 4 : 0;
-    if (barLines) output.write(`${rule}\n${rail}\n${rule}\n${detail === null ? '' : `${detail}\n`}`);
+    const queued = queueLines(state.askQueue, output.columns ?? 80, output.isTTY === true);
+    const queueBlock = queued.length ? `${queued.join('\n')}\n` : '';
+    barLines = state.statusbar ? (detail === null ? 3 : 4) + queued.length : queued.length;
+    if (barLines) output.write(`${queueBlock}${state.statusbar ? `${rule}\n${rail}\n${rule}\n${detail === null ? '' : `${detail}\n`}` : ''}`);
     cursorTo(output, 0);
     clearLine(output, 0);
     flush();
@@ -157,10 +169,7 @@ export function createTray({ output, state, shell, env = process.env, cwd = proc
   function resize() {
     if (state.pendingSecret !== null || state.pendingQuestion || shell.closed) return;
     pause();
-    cursorTo(output, 0, 0);
-    clearScreenDown(output);
     visible = false;
-    if (bannerText) output.write(bannerText);
     redraw();
   }
 

@@ -9,6 +9,7 @@ const metricsJsonl = readFileSync(new URL("./fixtures/metrics.jsonl", import.met
 const evalsJsonl = readFileSync(new URL("./fixtures/evals.jsonl", import.meta.url), "utf8");
 const evalsPath = fileURLToPath(new URL("./fixtures/evals.jsonl", import.meta.url));
 const contractsPath = resolve("sibling-contracts");
+const emptyCwd = resolve("tests", "fixtures", "no-local-metrics");
 const sampleLine = metricsJsonl.split("\n")[0];
 const sample = JSON.parse(sampleLine);
 const sampleEval = JSON.parse(evalsJsonl.split("\n")[0]);
@@ -60,6 +61,7 @@ test("exports local AI-Run records, joins local evals by full SHA, and prints mo
 test("does not read evals unless a path is provided", () => {
   const records = loadMetrics({
     contractsPath,
+    cwd: emptyCwd,
     run: () => metricsJsonl,
     readFile: () => { throw new Error("unexpected eval read"); },
   });
@@ -68,10 +70,14 @@ test("does not read evals unless a path is provided", () => {
 });
 
 test("accepts empty export and SHA-256 commit IDs", () => {
-  assert.deepEqual(loadMetrics({ contractsPath, run: () => "" }), []);
+  assert.deepEqual(loadMetrics({ contractsPath, cwd: emptyCwd, run: () => "" }), []);
   assert.equal(formatMetrics(summarizeMetrics([])), "No AI-Run records found.\n");
   const sha = "f".repeat(64);
-  assert.equal(loadMetrics({ contractsPath, run: () => jsonl({ ...sample, sha }) })[0].sha, sha);
+  assert.equal(loadMetrics({
+    contractsPath,
+    cwd: emptyCwd,
+    run: () => jsonl({ ...sample, sha }),
+  })[0].sha, sha);
 });
 
 test("reports exporter failures with their stderr and original cause", () => {

@@ -18,7 +18,7 @@
     "vendor/github-agent-contracts/scripts/"
   ],
   "scripts": {
-    "test": "node --test tests/*.test.mjs"
+    "test": "node scripts/run-tests.mjs"
   },
   "engines": {
     "node": ">=20"

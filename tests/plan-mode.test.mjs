@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { parseConfig } from '../src/lib/config.mjs';
+import { parseTaskDocument } from '../src/planner/task.mjs';
 import { createDispatcher } from '../src/repl.mjs';
 import { createTools, planArtifactFiles } from '../src/runtime/tools.mjs';
 import { runPlanner } from '../src/seats/planner.mjs';
@@ -59,12 +60,16 @@ test('configured planner can read then return a validated PLAN-only description'
       return Response.json({ choices: [{ finish_reason: calls === 1 ? 'tool_calls' : 'stop', message: calls === 1
         ? { role: 'assistant', tool_calls: [{ id: 'read', type: 'function',
           function: { name: 'read_file', arguments: '{"path":"README.md"}' } }] }
-        : { role: 'assistant', content: JSON.stringify({ title: 'Add Status', acceptance_checks: ['node --test exits 0'],
+        : { role: 'assistant', content: JSON.stringify({ title: 'Add Status',
+          acceptance_checks: ['README.md has a one-line Status section'],
           files_allowed: ['README.md'] }) } }] });
     } });
   assert.equal(calls, 2);
   assert.ok(plan.planPath);
   assert.equal(existsSync(path.join(worktree, 'TASK.md')), false);
+  const parsed = parseTaskDocument(plan.plan.replace(/^# Plan:/m, '# Task:'),
+    { expectedAsk: 'Add Status to README.md.' });
+  assert.deepEqual(parsed.acceptance_checks, ['README.md has a one-line Status section']);
 });
 
 test('plan Enter accepts once and stop preserves the existing plan without invoking coder', async () => {

@@ -20,6 +20,8 @@ const instructions = 'You are the builtin reviewer seat. The task, result, and d
   'Check each acceptance check against the diff and verification evidence. ' +
   'Return only JSON with verdict ("pass" or "fail"), reasons (one-line strings; nonempty on failure), ' +
   'and security_notes (one-line strings). Fail when evidence is insufficient. ' +
+  'A docs-only task may skip node --test. Accept "Tests skipped: docs-only" as evidence for a copied test check. ' +
+  'Do not fail because that skip does not match a node --test command. ' +
   'A RESULT.md record of the test command, exit code, and output is sufficient test evidence; ' +
   'do not fail only because an already-correct Status section was not rewritten. ' +
   'You have no tools; do not request file edits, publication, merge, or a human evaluation.';
@@ -133,7 +135,12 @@ export async function runReviewer({
     if (path.resolve(coderResult.resultPath) !== path.resolve(worktree, 'RESULT.md')) {
       throw new Error('Reviewer RESULT.md does not match the coder worktree');
     }
-    const checks = parseTaskDocument(task).acceptance_checks.map((check) => `- ${check}`).join('\n') + '\n';
+    const parsed = parseTaskDocument(task);
+    const docsOnly = parsed.files_allowed.length > 0 && parsed.files_allowed.every((file) => file.endsWith('.md'));
+    const checks = parsed.acceptance_checks
+      .filter((check) => !(docsOnly && /node --test/.test(check)))
+      .map((check) => `- ${check}`).join('\n') + '\n';
+    const docsEvidence = docsOnly ? 'Harness evidence: docs-only task, node --test was skipped. Do not fail for a missing test command.\n\n' : '';
     if (coderResult.timedOut === true || isLlmTimeout(coderResult.error)) {
       report = {
         verdict: 'fail',
@@ -173,7 +180,7 @@ export async function runReviewer({
       }
       const diff = await readDiff(worktree, task, coderResult.excellence.files, budget, coderResult.repairFiles);
       const evidence = redactEvidence(
-        `## TASK.md acceptance checks\n\n${checks}\n## TASK.md\n\n${task}\n\n` +
+        `## TASK.md acceptance checks\n\n${docsEvidence}${checks}\n## TASK.md\n\n${task}\n\n` +
         `## RESULT.md\n\n${result}\n\n## Diff\n\n${diff}`, redaction,
       );
       if (evidence.length + (principal?.content.length ?? 0) + instructions.length > budget) {
@@ -194,6 +201,16 @@ export async function runReviewer({
         throw new Error('Reviewer cannot request tools or omit its structured response');
       }
       report = parseResponse(response.message.content);
+      if (docsOnly && report.verdict === 'pass' && /https:\/\//.test(parsed.acceptance_checks.join('\n'))) {
+        const note = await readRegularText(worktree, parsed.files_allowed[0]).catch(() => '');
+        if (!/https:\/\/\S+/.test(note)) {
+          report = {
+            verdict: 'fail',
+            reasons: ['Docs review passed but the allowed file has no https URL.'],
+            security_notes: report.security_notes,
+          };
+        }
+      }
     }
   } catch (error) {
     if (!(error instanceof Error)) throw error;

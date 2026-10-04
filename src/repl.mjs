@@ -50,6 +50,7 @@ import { runOnlyReview } from './lib/review.mjs';
 import { waveBoard } from './lib/waves.mjs';
 import { writeRepoMap } from './lib/repo-map.mjs';
 import { createSteeringControl } from './runtime/steering.mjs';
+import { remediationTask, selectRemediationProfile } from './runtime/remediation.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const unknownCommand = 'Unknown command. /help lists commands.\n';
@@ -155,7 +156,7 @@ export function createDispatcher({
     routeNext: false, fleetProfileId: null, pendingQuestion: false,
     sideController: null,
     lastMeasuredSeat: null,
-    steeringControl: null, queuedInput: [],
+    steeringControl: null, queuedInput: [], askQueue: [],
     statusbar: true, controller: null, history: [], issueCache: new Map(), display: {
       issue: null, branch: api.repositoryBranch(cwd), seat: config.seat.id, state: 'idle', busy: false,
       model: config.llm.model, host: config.llm.base_url ? new URL(config.llm.base_url).host : '',
@@ -167,6 +168,7 @@ export function createDispatcher({
   const contextWindows = new Map();
   const windowKey = (llm = state.config.llm) => `${llm.base_url ?? ''}|${llm.model ?? ''}`;
   function applyContextWindow() {
+    if (state.display.model && state.display.model !== state.config.llm.model) return;
     const reported = contextWindows.get(windowKey());
     if (reported !== undefined) state.display.contextMax = reported;
   }
@@ -199,7 +201,12 @@ export function createDispatcher({
       applyContextWindow();
       return;
     }
-    if (event.type === 'usage' || event.type === 'delta') return;
+    if (event.type === 'route') {
+      Object.assign(display, { model: event.model, host: event.host, contextMax: event.contextMax,
+        hardware: event.hardware, contextUsed: undefined });
+      notify();
+      return;
+    }
     display.seat = event.seat;
     if (['finish-reason', 'completion'].includes(event.type)) display.lastFinishReason = event.reason;
     if (event.type === 'tool') display.toolCount = (display.toolCount ?? 0) + 1;
@@ -251,6 +258,25 @@ export function createDispatcher({
     state.routeNext = !model;
     syncModelDisplay();
     safeWrite(`Model: ${model || '(unset)'}\nHost: ${host()}\n`);
+  }
+
+  function queueAsk(text) {
+    const ask = text.trim();
+    if (!ask || ask.length > 4096 || redactEvidence(ask, { env, apiKeyEnv: state.config.llm.api_key_env }) !== ask) {
+      throw new TypeError('Queued Ask is empty, longer than 4096 characters, or contains secret material.');
+    }
+    if (state.askQueue.length === 8) throw new TypeError('Ask queue is full (8). Use /queue drop N or /queue clear.');
+    state.askQueue.push(ask);
+    output.write(`Queued Ask ${state.askQueue.length}: ${ask.slice(0, 120)}\n`);
+    notify();
+  }
+
+  function listAskQueue() {
+    if (!state.askQueue.length) {
+      output.write('No Asks queued.\n');
+      return;
+    }
+    output.write(state.askQueue.map((ask, index) => `${index + 1}. ${ask}`).join('\n') + '\n');
   }
 
   function queueInput(line) {
@@ -359,6 +385,11 @@ export function createDispatcher({
       : state.lastRun.failed
       ? 'Planning failed; stubs are unverified and publication is disabled. Fix the endpoint output, then retry.\n'
       : 'Use /publish to publish reviewed changes with --merge-when-green.\n');
+    if (state.askQueue.length && !state.pendingConfirm && !state.lastRun.planMode && !state.lastRun.planningOnly && !state.lastRun.failed) {
+      const next = state.askQueue.shift();
+      output.write(`Starting queued Ask: ${next}\n`);
+      return runRequest({ kind: 'ask', text: next, options: {} });
+    }
     return true;
   }
 
@@ -391,10 +422,23 @@ export function createDispatcher({
     const text = line.trim();
     if (!text) {
       if (state.pendingConfirm) return runRequest(state.pendingConfirm, { retry: true, continueConfirmed: true });
+      if (state.askQueue.length && state.controller === null) {
+        const next = state.askQueue.shift();
+        output.write(`Starting queued Ask: ${next}\n`);
+        return runRequest({ kind: 'ask', text: next, options: {} });
+      }
       return true;
     }
     if (text === 'exit') { cancel(); return false; }
-    if (state.controller !== null && !text.startsWith('/')) { queueInput(text); return true; }
+    if (state.controller !== null && !text.startsWith('/')) {
+      if (state.display.seat === 'coder' && state.steeringControl?.waiting) {
+        state.steeringControl.steer(text);
+        output.write('Steering the coder.\n');
+        return true;
+      }
+      queueAsk(text);
+      return true;
+    }
     if (text === '/') { output.write(formatHelp()); return true; }
     if (!text.startsWith('/')) return runRequest({ kind: 'ask', text, options: {} });
     const match = /^\/([a-z]+)(?:\s+(.*))?$/.exec(text);
@@ -620,6 +664,26 @@ export function createDispatcher({
         output.write(lines.length ? `${lines.join('\n')}\n` : 'No stored commands.\n');
         return true;
       }
+      case 'queue': {
+        if (!args || args === 'list') { listAskQueue(); return true; }
+        if (args === 'clear') {
+          state.askQueue = [];
+          output.write('Ask queue cleared.\n');
+          notify();
+          return true;
+        }
+        const drop = /^drop\s+([1-8])$/.exec(args);
+        if (drop) {
+          const index = Number(drop[1]) - 1;
+          if (!state.askQueue[index]) throw new TypeError('No queued Ask at that number. Use /queue list.');
+          const [removed] = state.askQueue.splice(index, 1);
+          output.write(`Dropped ${index + 1}. ${removed}\n`);
+          notify();
+          return true;
+        }
+        queueAsk(args);
+        return true;
+      }
       case 'ask': {
         if (!args) throw new TypeError('Use /ask TEXT.');
         return runRequest({ kind: 'ask', text: args, options: {} });
@@ -702,12 +766,12 @@ export function createDispatcher({
       case 'run': {
         const issue = /^(?:--issue\s+)?([1-9]\d*)((?:\s+--[a-z-]+)*)$/.exec(args);
         const flags = issue?.[2].trim().split(/\s+/).filter(Boolean) ?? [];
-        if (!issue || flags.some((flag) => !['--auto-model', '--confirm', '--plan'].includes(flag)) ||
+        if (!issue || flags.some((flag) => !['--auto-model', '--saved', '--confirm', '--plan'].includes(flag)) ||
             new Set(flags).size !== flags.length) {
-          throw new TypeError('Use /run N [--auto-model] [--confirm|--plan] or /run --issue N [--auto-model] [--confirm|--plan].');
+          throw new TypeError('Use /run N [--saved] [--confirm|--plan] or /run --issue N [--saved] [--confirm|--plan].');
         }
         return runRequest({ kind: 'run', issue: issue[1], options: {
-          autoModel: flags.includes('--auto-model'), confirm: flags.includes('--confirm'),
+          autoModel: !flags.includes('--saved'), confirm: flags.includes('--confirm'),
           planMode: flags.includes('--plan'),
         } });
       }
@@ -736,11 +800,25 @@ export function createDispatcher({
         output.write(api.formatStatus(status));
         return true;
       }
+      case 'remediate': {
+        const files = args.split(/\s+/).filter(Boolean);
+        const failing = files.length ? files : state.lastRun?.baselineFailures ?? [];
+        const task = remediationTask(failing, currentRoot());
+        const profile = selectRemediationProfile(state.fleet?.profiles, state.fleetProfileId);
+        if (profile) {
+          state.fleetProfileId = profile.id;
+          state.config = api.withFleetProfile(state.config, profile);
+          syncModelDisplay();
+        }
+        safeWrite(`Remediation agent for ${currentRoot()}\nFiles: ${task.files.join(', ')}\n` +
+          `Profile: ${profile?.id ?? state.fleetProfileId ?? 'current'}\n`);
+        return runRequest({ kind: 'ask', text: task.ask, options: {} });
+      }
       case 'eval': {
         if (env.ROSTER_SEAT) throw new Error('AI-Eval is human-only; an agent seat cannot record an evaluation.');
         const { values, options } = parseShellEvaluationArgs(args);
         const evaluation = await api.recordEvaluation(...values, { ...options, cwd: currentRoot(), env });
-        output.write(`Recorded AI-Eval for ${evaluation.sha ?? evaluation.session}.\n`);
+        output.write(`Recorded AI-Eval for ${evaluation.sha ?? evaluation.session} verdict ${evaluation.verdict} difficulty ${evaluation.difficulty} minutes ${evaluation.minutes ?? '-'} path ${evaluation.path}\n`);
         return true;
       }
       case 'log': {

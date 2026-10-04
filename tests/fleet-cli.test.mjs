@@ -113,18 +113,23 @@ test('local Ollama registration GETs models and stores max_model_len beside the 
   await runFleet(['default', 'default'], options);
   const configPath = join(options.cwd, '.roster', 'config.yml');
   const before = readFileSync(configPath, 'utf8');
+  const apiKey = 'local-test-key';
   let requests = 0;
+  let requestDetails;
   const result = await runFleet(['add', '--id', 'ollama-local', '--base-url', 'http://127.0.0.1:11434/v1',
     '--model', 'local-test-model', '--hardware', 'local-host'], {
-    ...options, fetchImpl: async (url, request) => {
+    ...options, env: { ROSTER_API_KEY: apiKey }, fetchImpl: async (url, request) => {
       requests += 1;
-      assert.equal(url, 'http://127.0.0.1:11434/v1/models');
-      assert.equal(request.method, 'GET');
-      assert.equal(request.headers.Authorization, undefined);
+      requestDetails = { url, method: request.method, authorization: request.headers.Authorization };
       return Response.json({ data: [{ id: 'local-test-model', max_model_len: 1048576 }] });
     },
   });
   assert.equal(requests, 1);
+  assert.deepEqual(requestDetails, {
+    url: 'http://127.0.0.1:11434/v1/models',
+    method: 'GET',
+    authorization: `Bearer ${apiKey}`,
+  });
   assert.equal(result.profile.context_max, 1048576);
   assert.equal(result.profile.base_url, 'http://127.0.0.1:11434/v1');
   assert.equal(readFileSync(configPath, 'utf8'), before);

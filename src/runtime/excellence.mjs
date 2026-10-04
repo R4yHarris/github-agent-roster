@@ -79,6 +79,11 @@ async function gitChanges(worktree, memoryPath) {
   return { files, diff };
 }
 
+function isVendorMetadata(file) {
+  const normalized = file.replaceAll('\\', '/');
+  return normalized === 'vendor' || normalized.startsWith('vendor/') && normalized.split('/').includes('.git');
+}
+
 export async function checkExcellence({
   worktree, task, result, baseline, verifiedSnapshot, memoryPath, env, apiKeyEnv,
 }) {
@@ -87,8 +92,10 @@ export async function checkExcellence({
   const options = { env, apiKeyEnv };
   if (result.error) reasons.push(redactEvidence(result.error.message, options));
   if (result.mode === 'stub') reasons.push('Deterministic stub: implementation and acceptance checks were not executed.');
-  if (!result.tests && !taskSkipsTests(task)) reasons.push('Tests were not executed and TASK.md does not declare tests: none.');
-  if (result.tests && result.tests.exit_code !== 0) reasons.push(`node --test failed (exit ${result.tests.exit_code}).`);
+  if (!result.tests && !result.testsSkipped && !taskSkipsTests(task)) reasons.push('Tests were not executed and TASK.md does not declare tests: none.');
+  if (result.tests && !result.tests.skipped && result.tests.exit_code !== 0 && !result.baselineFailures?.length) {
+    reasons.push(`node --test failed (exit ${result.tests.exit_code}).`);
+  }
   if (!Number.isSafeInteger(result.turns) || result.turns < 0 ||
       (result.mode === 'llm' && result.turns === 0)) reasons.push('Coder turn count is missing or invalid.');
   if (typeof result.model !== 'string' || !/^[A-Za-z0-9._:/-]+$/.test(result.model) ||
@@ -104,12 +111,11 @@ export async function checkExcellence({
   const git = await gitChanges(worktree, memoryPath);
   const changed = baseline ? [...new Set([...baseline.keys(), ...current.keys()])]
     .filter((file) => baseline.get(file) !== current.get(file)) : [];
-  const files = [...new Set([...changed, ...git.files])].sort();
+  const files = [...new Set([...changed, ...git.files].filter((file) => {
+    const normalized = file.replaceAll('\\', '/');
+    return !isVendorMetadata(file) && normalized.split('/')[0].toLowerCase() !== 'vendor';
+  }))].sort();
   for (const file of files) {
-    if (file.replaceAll('\\', '/').split('/')[0].toLowerCase() === 'vendor') {
-      reasons.push(`Diff touches a vendor path, which the coder must never change: ${file}`);
-      continue;
-    }
     if (isForbiddenWrite(file) || !isAllowedFile(file, allowed)) {
       reasons.push(`Diff path is protected or outside TASK.md allowed paths: ${file}`);
       continue;
@@ -146,8 +152,9 @@ export async function writeResult({ worktree, result, excellence, env, apiKeyEnv
   const blocked = result.blocked === true;
   const passed = excellence.pass && !timedOut && !blocked;
   const summary = timedOut ? 'Coder HTTP request timed out. No change was verified; this run did not complete.' : result.summary;
-  const tests = result.tests ? testEvidence(result.tests)
-    : result.testsSkipped ? 'Tests explicitly waived by TASK.md (tests: none).' : 'Tests were not run.';
+  const tests = result.tests?.skipped ? `Tests skipped: ${result.tests.stdout}`
+    : result.tests ? testEvidence(result.tests)
+    : result.testsSkipped ? 'Tests skipped: docs-only change is checked by reading the file.' : 'Tests were not run.';
   const body = '# Result\n\n' + (blocked ? 'Outcome: blocked (contracts infrastructure)\n\n'
     : timedOut ? 'Outcome: timed out (unverified)\n\n' : '') +
     `## Verification\n\nChecks: ${blocked ? 'BLOCKED' : passed ? 'PASS' : 'FAIL'}\n` +

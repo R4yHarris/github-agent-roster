@@ -30,7 +30,7 @@ test('stub creates an executable planner/coder/reviewer recipe and task without 
     ],
   });
   assert.match(plan.task, /^# Task: Update project status/m);
-  assert.match(plan.task, /- node --test exits 0/);
+  assert.match(plan.task, /- The requested behavior in the Ask is implemented/);
   assert.match(plan.task, /## Ask\nAdd a Status section to `README\.md`/);
   assert.deepEqual(taskFilesAllowed(plan.task), ['README.md']);
   assert.equal(plan.usage, null);
@@ -174,7 +174,7 @@ test('planner repairs invalid JSON within its configured budget and fails when e
     usage: { prompt_tokens: 2, completion_tokens: 2 } });
 
   const singleTurn = parseConfig(configExample.replace('base_url: ""', 'base_url: http://localhost:1234/v1')
-    .replace('model: ""', 'model: test-model').replace('turn_budget: 2', 'turn_budget: 1'));
+    .replace('model: ""', 'model: test-model').replace('turn_budget: 32', 'turn_budget: 1'));
   let failures = 0;
   await assert.rejects(planAsk('Update README.md.', {
     config: singleTurn, env: {}, vault: { get: async () => undefined },
@@ -257,6 +257,62 @@ test('planner can finalize validated JSON after writing a planning draft', async
   assert.equal(calls, 2);
   assert.match(result.task, /# Task: Update README/);
   assert.equal(readFileSync(result.taskPath, 'utf8'), result.task);
+});
+
+test('planner rejects a fenced JSON plan on the same turn as an incomplete TASK.md', async (t) => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'roster-planner-same-turn-json-'));
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  const worktree = join(repoRoot, 'worktree');
+  mkdirSync(worktree);
+  let calls = 0;
+  await assert.rejects(runPlanner({
+    worktree, repoRoot, issue: {
+      number: 169, title: 'record a human retrospective from the roster shell',
+      body: '## Allowed files\n- src/repl.mjs\n- tests/eval.test.mjs\n\n## Checks\n- node --test exits 0.',
+    },
+    config: { ...llmConfig, planner: { turn_budget: 1 } }, env: {},
+    fetchImpl: async () => {
+      calls += 1;
+      return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+        role: 'assistant',
+        content: '```json\n{"title":"Record /eval human retrospective for a session","acceptance_checks":["node --test exits 0."],"files_allowed":["src/repl.mjs","tests/eval.test.mjs"],"task_class":"feat","difficulty":3,"estimate_min":45}\n```',
+        tool_calls: [{ id: 'draft', type: 'function', function: {
+          name: 'write_file', arguments: JSON.stringify({ path: 'TASK.md', content: '# Draft task\n\n## Original Ask\n\nrecord a human retrospective from the roster shell\n' }),
+        } }],
+      } }] });
+    },
+  }), /Planner turn budget \(1\) exhausted: TASK\.md must contain an Allowed Files list/);
+  assert.equal(calls, 1);
+  assert.equal(existsSync(join(worktree, 'RECIPE.yml')), false);
+  assert.equal(existsSync(join(worktree, 'ESTIMATE.md')), false);
+});
+
+test('planner gives the model another turn after writing an incomplete TASK.md', async (t) => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'roster-planner-heading-repair-'));
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  const worktree = join(repoRoot, 'worktree');
+  mkdirSync(worktree);
+  let calls = 0;
+  let repairMessage;
+  const result = await runPlanner({
+    worktree, repoRoot, issue: { number: 42, title: 'Update README', body: 'Update `README.md`.' },
+    config: llmConfig, env: {}, fetchImpl: async (_url, request) => {
+      calls += 1;
+      const body = JSON.parse(request.body);
+      if (calls === 1) return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+        role: 'assistant', tool_calls: [{ id: 'draft', type: 'function', function: {
+          name: 'write_file', arguments: JSON.stringify({ path: 'TASK.md', content: '# Draft task\n' }),
+        } }],
+      } }] });
+      repairMessage = body.messages.at(-1).content;
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
+        title: 'Update README', acceptance_checks: ['node --test exits 0'], files_allowed: ['README.md'],
+      }) } }] });
+    },
+  });
+  assert.equal(calls, 2);
+  assert.deepEqual(JSON.parse(repairMessage), { path: 'TASK.md', bytes: 13 });
+  assert.match(result.task, /## Files allowed/);
 });
 
 test('planner tool errors redact known credentials before another model turn', async (t) => {
@@ -348,13 +404,12 @@ test('malformed calls use only one repair even with a one-turn configured budget
   assert.equal(JSON.parse(readFileSync(join(repoRoot, '.roster', 'memory', 'planner.jsonl'), 'utf8')).status, 'failed');
 });
 
-test('written TASK validation rejects a changed Ask, protected paths, and routed-model drift', async (t) => {
+test('written TASK validation rejects a changed Ask and protected paths', async (t) => {
   const ask = 'Update README.md.';
   const task = planStub(ask, { reference: 'issue:42', title: 'Update README' }).task;
   for (const [content, expected] of [
     [task.replace('## Ask\nUpdate README.md.', '## Ask\nA different task.'), /unchanged Ask/],
     [task.replace('- `README.md`', '- `.github/workflows/ci.yml`'), /protected files/],
-    [task.replace(/^model:.*$/m, 'model: other-model'), /selected fleet model/],
   ]) {
     const repoRoot = mkdtempSync(join(tmpdir(), 'roster-planner-invalid-draft-'));
     t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
@@ -363,7 +418,7 @@ test('written TASK validation rejects a changed Ask, protected paths, and routed
     let calls = 0;
     await assert.rejects(runPlanner({
       worktree, repoRoot, issue: { number: 42, title: 'Update README', body: ask },
-      config: llmConfig, lockedModel: 'test-model', env: {},
+      config: { ...llmConfig, planner: { turn_budget: 1 } }, lockedModel: 'test-model', env: {},
       fetchImpl: async () => {
         calls += 1;
         return Response.json({ choices: [calls === 1 ? { finish_reason: 'tool_calls', message: {
@@ -373,12 +428,40 @@ test('written TASK validation rejects a changed Ask, protected paths, and routed
         } } : { finish_reason: 'stop', message: { role: 'assistant', content: 'Ready.' } }] });
       },
     }), expected);
-    assert.equal(calls, 2);
+    assert.equal(calls, 1);
     assert.equal(existsSync(join(worktree, 'RECIPE.yml')), false);
     assert.equal(existsSync(join(worktree, 'ESTIMATE.md')), false);
     assert.equal(existsSync(join(worktree, '.github')), false);
     assert.equal(JSON.parse(readFileSync(join(repoRoot, '.roster', 'memory', 'planner.jsonl'), 'utf8')).status, 'failed');
   }
+});
+
+test('a locked routed model accepts a written TASK model drift and keeps the draft observable', async (t) => {
+  const ask = 'Update README.md.';
+  const task = planStub(ask, { reference: 'issue:42', title: 'Update README' }).task
+    .replace(/^model:.*$/m, 'model: other-model');
+  const repoRoot = mkdtempSync(join(tmpdir(), 'roster-planner-routed-draft-'));
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  const worktree = join(repoRoot, 'worktree');
+  mkdirSync(worktree);
+  let calls = 0;
+  const result = await runPlanner({
+    worktree, repoRoot, issue: { number: 42, title: 'Update README', body: ask },
+    config: { ...llmConfig, planner: { turn_budget: 1 } }, lockedModel: 'test-model', env: {},
+    fetchImpl: async () => {
+      calls += 1;
+      return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+        role: 'assistant', tool_calls: [{ id: 'task', type: 'function', function: {
+          name: 'write_file', arguments: JSON.stringify({ path: 'TASK.md', content: task }),
+        } }],
+      } }] });
+    },
+  });
+  assert.equal(calls, 1);
+  assert.match(result.task, /^model: other-model$/m);
+  assert.equal(readFileSync(result.taskPath, 'utf8'), result.task);
+  assert.equal(result.run.metrics.model, 'test-model');
+  assert.equal(JSON.parse(readFileSync(join(repoRoot, '.roster', 'memory', 'planner.jsonl'), 'utf8')).status, 'llm');
 });
 
 test('planner denies src writes and reports the error to the model without creating app directories', async (t) => {

@@ -58,7 +58,8 @@ test('the Ask may include surrounding text but must contain the issue text', () 
 });
 
 test('canonical Ask sections still retain embedded issue headings and metadata-looking text as Ask data', () => {
-  const original = 'Update README.md.\nmodel: ignored-ask-value\n\n## Acceptance checks\n- node --test exits 0\n\n' +
+  const original = 'Update README.md.\nmodel: ignored-ask-value\n\n## Acceptance checks\n' +
+    '- README.md documents the requested update\n\n' +
     '## Files allowed\n- `README.md`';
   const canonical = planStub(original, { reference: 'issue:92' }).task;
   assert.equal(parseTaskDocument(canonical, { expectedAsk: original }).ask, original);

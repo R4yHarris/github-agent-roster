@@ -4,12 +4,14 @@ import { fileURLToPath } from 'node:url';
 import { formatConfig, parseConfig, readConfigFile, validateBaseUrl } from '../lib/config.mjs';
 import { checkDoctor, formatDoctor } from '../lib/doctor.mjs';
 import { formatFleet, normalizeFleetBaseUrl, parseFleet, validateFleet } from '../lib/fleet.mjs';
+import { discoverEndpoints, discoveryCandidates, wslCandidates } from './discover.mjs';
 import { ensurePrivateFilesIgnored, readPrivateFile, writePrivateDocuments } from '../lib/private-files.mjs';
 import { ensureLocalPath, resolveProjectRoot } from '../lib/paths.mjs';
 import { resolvePublishModel } from '../metrics/run.mjs';
 import { redactEvidence } from '../runtime/excellence.mjs';
 import { reportedContextMax } from '../llm/window.mjs';
 import { checkAppIdentity, formatAppIdentity } from './app.mjs';
+import { resolveSecret } from '../lib/secrets.mjs';
 
 const installation = fileURLToPath(new URL('../../', import.meta.url));
 const defaultBaseUrl = 'http://127.0.0.1:8000/v1';
@@ -45,16 +47,31 @@ export async function probeModelDetails(baseUrl, {
     timer = schedule(() => {
       controller.abort();
       reject(new ModelProbeError('timeout'));
-    }, probeTimeoutMs);
+    }, url.hostname === '127.0.0.1' || url.hostname === 'localhost' ? probeTimeoutMs : 60_000);
   });
   const request = async () => {
+    const aperture = url.hostname.includes('aperture');
+    const names = aperture ? ['APERTURE_API_KEY', 'ROSTER_API_KEY'] : [apiKeyEnv];
+    let source = 'missing';
+    let key;
+    for (const name of names) {
+      try {
+        key = await resolveSecret(name, { env });
+      } catch {
+        key = undefined;
+      }
+      if (key) {
+        source = env[name] ? 'env' : 'vault';
+        break;
+      }
+    }
+    const headers = { Accept: 'application/json', ...(key ? { Authorization: `Bearer ${key}` } : {}) };
     const response = await fetchImpl(url.href, {
-      method: 'GET', headers: { Accept: 'application/json' },
-      signal: controller.signal, redirect: 'error',
+      method: 'GET', headers, signal: controller.signal, redirect: 'error',
     });
     if (!Number.isInteger(response.status) || response.status < 200 || response.status >= 300) {
       throw new ModelProbeError(Number.isInteger(response.status)
-        ? `HTTP ${response.status}` : 'invalid response');
+        ? `HTTP ${response.status} auth=${source}` : 'invalid response');
     }
     let payload;
     try {
@@ -116,7 +133,7 @@ export async function runOnboard({
   cwd = process.cwd(), installationRoot = installation,
   input = process.stdin, output = process.stdout, errorOutput = process.stderr,
   platform = process.platform, env = process.env, fetchImpl = globalThis.fetch,
-  question, doctor = checkDoctor,
+  question, doctor = checkDoctor, discover = false,
 } = {}) {
   if (!input.isTTY || !output.isTTY) {
     errorOutput.write('roster onboard needs a terminal\n');
@@ -188,9 +205,43 @@ export async function runOnboard({
     }
     output.write('\n2. LLM endpoint\n');
     output.write('WSL talking to a Windows-hosted server may need the Windows host IP, not localhost.\n');
+    let discoveredDefault = defaultBaseUrl;
+    if (discover) {
+      output.write('Scanning local, LAN, and ROSTER_DISCOVER_HOSTS endpoints.\n');
+      let extraUrls = [];
+      if (platform === 'win32' && await yesNo('Allow a read-only model probe inside WSL', false)) {
+        try {
+          extraUrls = await wslCandidates();
+          output.write(extraUrls.length
+            ? `WSL answered on ${extraUrls.join(', ')}.\n`
+            : 'WSL probe found no local OpenAI-compatible server.\n');
+        } catch (error) {
+          output.write(`WSL probe skipped: ${error instanceof Error ? error.message : 'unavailable'}.\n`);
+        }
+      }
+      const found = await discoverEndpoints({ env, fetchImpl, candidates: discoveryCandidates(env, extraUrls) });
+      if (!found.length) output.write('No OpenAI-compatible server answered. Enter a base URL manually.\n');
+      found.forEach((entry, index) => {
+        output.write(`  ${index + 1}. ${entry.baseUrl} models=${entry.models.map(({ id, context_max: limit }) =>
+          `${id}${limit ? ` ctx=${limit}` : ' ctx=unreported'}`).join(', ')}\n`);
+      });
+      if (found.length) {
+        output.write('Name the hardware for each server. Detection cannot see the GPU.\n');
+        for (const entry of found) {
+          const fallback = entry.baseUrl.includes(':8888') ? 'DGX Spark'
+            : entry.baseUrl.includes('aperture') ? 'RTX 6000'
+              : entry.baseUrl.includes(':11435') ? 'RTX 3090' : 'unspecified';
+          entry.hardware = await answer(`Hardware for ${entry.baseUrl} [${fallback}]: `, fallback);
+        }
+      }
+      const preferred = found.find((entry) => entry.baseUrl.includes(':8888')) ?? found[0];
+      if (found.length && await yesNo(`Use ${preferred.baseUrl} as the default`, false)) {
+        discoveredDefault = preferred.baseUrl;
+      }
+    }
     let baseUrl;
     for (;;) {
-      const value = await answer(`vLLM base URL [${defaultBaseUrl}]: `, defaultBaseUrl);
+      const value = await answer(`vLLM base URL [${discoveredDefault}]: `, discoveredDefault);
       try {
         baseUrl = normalizeFleetBaseUrl(publicSetting(value, env, apiKeyEnv));
         if (/\/(?:models|chat\/completions)\/?$/.test(new URL(baseUrl).pathname)) {

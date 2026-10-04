@@ -233,7 +233,7 @@ test('configured seat respects the task model and materializes artifacts before 
   assert.deepEqual(result.usage, { prompt_tokens: 6, completion_tokens: 3 });
   assert.equal(result.turns, 2);
   assert.equal(result.research.turns, 1);
-  assert.equal(JSON.parse(readFileSync(memoryPath, 'utf8')).tests, 'node --test exited 0');
+  assert.equal(JSON.parse(readFileSync(memoryPath, 'utf8')).tests, 'Not run.');
 });
 
 test('a post-research skill change fails before writes and saves the partial-stage result', async (context) => {
