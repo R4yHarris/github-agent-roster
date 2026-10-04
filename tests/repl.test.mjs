@@ -112,7 +112,7 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
       formatStatus: (status) => `Issue: #${status.issue.number}\nOpen PR: none\n` +
         `Worktree: ${status.worktreePath}\n`,
       recordEvaluation: async (target, verdict, difficulty, again, options) => {
-        calls.push(['eval', target, verdict, difficulty, again, options.cwd]);
+        calls.push(['eval', target, verdict, difficulty, again, options.minutes, options.comment, options.cwd]);
         return { session: target };
       },
       resolveContractsPath: () => 'contracts',
@@ -150,7 +150,7 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
   assert.equal(state.lastRun.task, 'issue-42');
   await dispatch('/status');
   await dispatch('/status --offline');
-  await dispatch('/eval roster-42-coder accept 3 n');
+  await dispatch('/eval roster-42-coder accept 3 n --minutes 12 --note "The model met the requested behavior."');
   await dispatch('/stats HEAD');
   await dispatch('/recommend feat');
   await dispatch('/vault');
@@ -167,7 +167,7 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
   assert.deepEqual(calls, [
     ['local-ask', 'Add a status section.'],
     ['run', '42', false, true, 'local-model', 'h'],
-    ['eval', 'roster-42-coder', 'accept', '3', 'n', cwd],
+    ['eval', 'roster-42-coder', 'accept', '3', 'n', 12, 'The model met the requested behavior.', cwd],
     ['stats', 'HEAD'],
     ['recommend-metrics'],
     ['recommend', 'feat'],
@@ -203,7 +203,7 @@ test('/eval passes quoted feedback and actual minutes to the human-only writer',
       },
     },
   });
-  await shell.dispatch('/eval roster-42-coder rework 4 n --minutes 25 --comment "Keep the  regression test."');
+  await shell.dispatch('/eval roster-42-coder rework 4 n --minutes 25 --note "Keep the  regression test."');
 });
 
 test('/recommend forwards requested capacity and displays the actual config default on insufficient data', async () => {

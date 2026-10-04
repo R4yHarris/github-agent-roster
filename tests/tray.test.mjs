@@ -327,7 +327,7 @@ test('a rewritten waiting tick never consumes a line the user already submitted'
   tray.close();
 });
 
-test('a resize clears from the banner down and later ticks keep one rail at the new width', async (t) => {
+test('a resize preserves scrollback and later ticks keep one rail at the new width', async (t) => {
   t.mock.timers.enable(['setInterval']);
   const screen = fakeScreen({ columns: 40 });
   const output = Object.assign(new EventEmitter(), {
@@ -345,12 +345,12 @@ test('a resize clears from the banner down and later ticks keep one rail at the 
 
   output.columns = 80;
   output.emit('resize');
-  assert.equal(screen.lines.filter((line) => line === '\u2500'.repeat(39)).length, 0);
-  assert.equal(screen.lines.filter((line) => line === '\u2500'.repeat(79)).length, 2);
+  assert.equal(screen.lines.filter((line) => line === '\u2500'.repeat(39)).length, 2);
+  assert.equal(screen.lines.filter((line) => line.endsWith('\u2500'.repeat(79))).length, 2);
   assert.equal(screen.lines.filter((line) => line.startsWith('github-agent-roster')).length, 1);
 
   t.mock.timers.tick(1000);
-  assert.equal(screen.lines.filter((line) => line === '\u2500'.repeat(39)).length, 0);
+  assert.equal(screen.lines.filter((line) => line === '\u2500'.repeat(39)).length, 2);
   assert.equal(screen.lines.filter((line) => line === '\u2500'.repeat(79)).length, 2);
   tray.close();
 });

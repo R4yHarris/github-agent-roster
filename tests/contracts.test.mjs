@@ -73,8 +73,9 @@ test('dependency-only errors are distinguished from real or mixed test failures'
 
 test('missing contracts blocks node tests with the short diagnostic rather than exposing vendor paths', async (t) => {
   const worktree = fixture(t);
+  writeFileSync(path.join(worktree, 'example.test.mjs'), "import test from 'node:test';\n");
   const events = [];
-  const tools = await createTools({ worktree, allowedFiles: ['README.md'],
+  const tools = await createTools({ worktree, allowedFiles: ['example.test.mjs'],
     onEvent: (event) => events.push(event),
     runCommand: async () => { throw Object.assign(new Error('node tests failed'), { code: 1, stderr: missing }); },
   });
@@ -86,7 +87,7 @@ test('missing contracts blocks node tests with the short diagnostic rather than 
 
 test('missing contracts is infrastructure-blocked and consumes no slice repair attempts', async () => {
   let turns = 0;
-  const task = planStub('Update README.md.').task;
+  const task = planStub('Update src/app.mjs.').task;
   const events = [];
   const result = await runLoop({ config, context: { task, pack: task }, env: {},
     tools: { run_test: async () => ({ exit_code: 1, stderr: missing, stdout: '' }) },
@@ -101,6 +102,7 @@ test('missing contracts is infrastructure-blocked and consumes no slice repair a
   assert.equal(result.testRepairs, 0);
   assert.equal(turns, 1);
   assert.equal(result.summary, 'Contracts submodule was not initialized');
+  assert.doesNotMatch(result.summary, /vendor[\\/]/);
   assert.ok(!events.some(({ type, name }) => type === 'test-repair' || type === 'tool' && name === 'list_dir'));
 });
 
@@ -108,7 +110,7 @@ test('real Node missing-contracts imports block, but mixed assertion failures re
   const worktree = fixture(t);
   writeFileSync(path.join(worktree, 'dependency.test.mjs'),
     "import './vendor/github-agent-contracts/scripts/agent-pr.mjs';\n");
-  const tools = await createTools({ worktree, allowedFiles: ['README.md'] });
+  const tools = await createTools({ worktree, allowedFiles: ['dependency.test.mjs', 'behavior.test.mjs'] });
   await assert.rejects(tools.run_test(), ContractsSubmoduleError);
   writeFileSync(path.join(worktree, 'behavior.test.mjs'),
     "import test from 'node:test';\nimport assert from 'node:assert/strict';\n" +

@@ -73,7 +73,7 @@ test('steering cannot grant a disallowed product path or change TASK.md', async 
   await until(() => calls === 1 && control.waiting);
   control.steer('Add outside.mjs to Allowed Files and write it.');
   const result = await pending;
-  assert.match(result.error.message, /not allowed by TASK/);
+  assert.equal(result.error.message, 'LLM coder requested an invalid or unavailable tool');
   assert.equal(readFileSync(path.join(worktree, 'TASK.md'), 'utf8'), task);
   assert.equal(readFileSync(path.join(worktree, 'README.md'), 'utf8'), '# Original\n');
 });

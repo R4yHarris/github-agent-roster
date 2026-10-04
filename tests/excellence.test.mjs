@@ -42,7 +42,7 @@ test('clean fixture passes with changed scope, executed tests, and recorded mode
   assert.match(readFileSync(file, 'utf8'), /Model: local-model\nTool-loop turns: 2/);
 });
 
-test('a changed vendor submodule path fails the review even when tests pass', async (context) => {
+test('a changed vendor submodule path is excluded from the reviewed application diff', async (context) => {
   const options = await fixture(context);
   const git = (cwd, ...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid',
     '-c', 'commit.gpgsign=false', ...args], { cwd, stdio: 'pipe' });
@@ -61,8 +61,9 @@ test('a changed vendor submodule path fails the review even when tests pass', as
   writeFileSync(path.join(options.worktree, 'README.md'), '# After\n');
   const gate = await checkExcellence(options);
   assert.equal(options.result.tests.exit_code, 0);
-  assert.equal(gate.pass, false);
-  assert.ok(gate.reasons.some((reason) => reason.includes('vendor/github-agent-contracts')), gate.reasons.join('\n'));
+  assert.equal(gate.pass, true);
+  assert.deepEqual(gate.reasons, []);
+  assert.deepEqual(gate.files, ['README.md']);
 });
 
 test('secret paths and out-of-scope changes fail without reading or reporting secret values', async (context) => {
@@ -166,7 +167,9 @@ test('an explicit no-tests task skips automatic tests but still writes a gated r
   assert.equal(result.excellence.pass, true);
   assert.equal(result.testsSkipped, true);
   assert.equal(result.tests, undefined);
-  assert.match(readFileSync(result.resultPath, 'utf8'), /Tests explicitly waived/);
+  const report = readFileSync(result.resultPath, 'utf8');
+  assert.match(report, /Tests skipped: docs-only change is checked by reading the file\./);
+  assert.doesNotMatch(report, /node --test exited/);
 });
 
 test('a test subprocess scope violation writes a failed result and cannot reach publication', async (context) => {
@@ -174,15 +177,32 @@ test('a test subprocess scope violation writes a failed result and cannot reach 
   cpSync(new URL('../principals/', import.meta.url), path.join(options.repoRoot, 'principals'), { recursive: true });
   cpSync(new URL('../skills/', import.meta.url), path.join(options.repoRoot, 'skills'), { recursive: true });
   writeFileSync(path.join(options.worktree, 'AGENTS.md'), '# Instructions\nStay scoped.\n');
+  const task = planStub('Update src/runtime/excellence.mjs.').task;
+  mkdirSync(path.join(options.worktree, 'src', 'runtime'), { recursive: true });
+  mkdirSync(path.join(options.worktree, 'tests'), { recursive: true });
+  writeFileSync(path.join(options.worktree, 'src', 'runtime', 'excellence.mjs'), 'export const value = 1;\n');
+  writeFileSync(path.join(options.worktree, 'tests', 'excellence.test.mjs'), 'export {};\n');
+  writeFileSync(path.join(options.worktree, 'TASK.md'), task);
   let failure;
+  let turns = 0;
   await assert.rejects(runCoder({
     ...options, config, task: 'issue-4', session: 'coder-4', vault: { get: async () => undefined },
-    fetchImpl: withResearchSummary(async () => ({ status: 200, json: async () => ({
-      choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Done.' } }],
-    }) })),
+    fetchImpl: withResearchSummary(async () => {
+      turns += 1;
+      return Response.json({ choices: [turns === 1 ? {
+        finish_reason: 'tool_calls',
+        message: { role: 'assistant', tool_calls: [{ id: 'write', type: 'function', function: {
+          name: 'write_file', arguments: JSON.stringify({
+            path: 'src/runtime/excellence.mjs', content: 'export const value = 2;\n',
+          }),
+        } }] },
+      } : {
+        finish_reason: 'stop', message: { role: 'assistant', content: 'Updated excellence behavior.' },
+      }] });
+    }),
     runTestCommand: async () => {
       writeFileSync(path.join(options.worktree, 'outside.txt'), 'test side effect');
-      return { stdout: 'tests pass', stderr: '' };
+      return { exit_code: 0, stdout: 'tests pass', stderr: '' };
     },
   }), (error) => { failure = error; return /outside TASK\.md/.test(error.message); });
   const report = readFileSync(path.join(options.worktree, 'RESULT.md'), 'utf8');
@@ -191,7 +211,7 @@ test('a test subprocess scope violation writes a failed result and cannot reach 
     .trimEnd().split('\n').map(JSON.parse);
   assert.equal(memory.at(-1).status, 'failed');
   await assert.rejects(prepareBuiltinPublication({
-    worktreePath: options.worktree, planner: { task: options.task, recipe: 'recipe' },
+    worktreePath: options.worktree, planner: { task, recipe: 'recipe' },
     runs: { coder: { env: {} } }, result: failure.result,
   }, { config, env: {} }), /passing excellence gate/);
 });

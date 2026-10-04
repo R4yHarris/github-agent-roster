@@ -238,7 +238,9 @@ test('a live builtin coder can be steered into its next scoped instruction witho
       const body = JSON.parse(request.body);
       if (body.messages[0].content.startsWith('You are the builtin planner seat.')) {
         return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
-          content: JSON.stringify({ title: 'Add Status', acceptance_checks: ['node --test exits 0'], files_allowed: ['README.md'] }) } }] });
+          content: JSON.stringify({ title: 'Add Status',
+            acceptance_checks: ['The requested behavior in the Ask is implemented'],
+            files_allowed: ['README.md'] }) } }] });
       }
       if (body.messages[0].content.startsWith('You are the builtin reviewer seat.')) {
         return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
@@ -253,7 +255,7 @@ test('a live builtin coder can be steered into its next scoped instruction witho
             arguments: '{"path":"README.md","content":"# Example\\n\\n## Status\\nReady.\\n"}' } }] } }] });
       }
       return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Added Status.' } }] });
-    }, runTestCommand: async () => ({ stdout: 'pass', stderr: '' }) });
+    }, runTestCommand: () => assert.fail('Documentation-only changes do not run node --test') });
   for (let index = 0; index < 1000 && !firstSignal; index += 1) await new Promise((resolve) => setTimeout(resolve, 10));
   assert.ok(firstSignal && steeringControl.waiting);
   steeringControl.steer('Keep the change scoped to README.md.');
@@ -428,7 +430,7 @@ test('a valid existing issue-92 RECIPE/TASK skips the planner and starts the sco
         } }],
       } } : { finish_reason: 'stop', message: { role: 'assistant', content: 'Added a one-line Status section.' } }] });
     },
-    runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+    runTestCommand: () => assert.fail('Documentation-only changes do not run node --test'),
   });
   assert.equal(calls, 2, 'Only coder turns should reach this mock');
   assert.equal(result.askKind, 'slice');
@@ -483,7 +485,7 @@ test('an inferred-scope slice continues after the task summary without a second 
   assert.equal(first.planningOnly, undefined);
   assert.equal(existsSync(path.join(first.worktreePath, 'RESULT.md')), true);
   assert.equal(existsSync(path.join(first.worktreePath, 'REVIEW.md')), true);
-  assert.match(logs.join('\n'), /Task summary:\nOutcome: .+\nAllowed files: README\.md\nChecks:\n- .+\n- .+\nEffort: [lmhx]/);
+  assert.match(logs.join('\n'), /Task summary:\nOutcome: .+\nAllowed files: README\.md\nChecks:\n- The requested behavior in the Ask is implemented\nEffort: [lmhx]/);
   assert.doesNotMatch(logs.join('\n'), /then \/run 42/);
   const next = await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {} });
   assert.equal(next.planner.reused, true);
@@ -712,7 +714,8 @@ test('a configured direct ask implements and reviews the slice after its streame
       if (system.startsWith('You are the builtin planner seat.')) {
         return Response.json({ choices: [{ finish_reason: 'stop', message: {
           role: 'assistant', content: JSON.stringify({
-            title: 'Add Status to README', acceptance_checks: ['node --test exits 0'],
+            title: 'Add Status to README',
+            acceptance_checks: ['The requested behavior in the Ask is implemented'],
             files_allowed: ['README.md'],
           }),
         } }] });
@@ -741,7 +744,7 @@ test('a configured direct ask implements and reviews the slice after its streame
   assert.equal(result.result.mode, 'llm');
   assert.equal(result.result.excellence.pass, true);
   assert.equal(result.review.verdict, 'pass');
-  assert.ok(tests > 0);
+  assert.equal(tests, 0);
   assert.match(readFileSync(path.join(result.worktreePath, 'README.md'), 'utf8'), /## Status\nReady/);
   assert.equal(readFileSync(path.join(options.target, 'README.md'), 'utf8'), '# Example\n');
   assert.match(logs.join('\n'), /Human AI-Eval|human AI-Eval/);
@@ -762,7 +765,8 @@ test('docs slice retry after failed review remains reasoning-free at 8192', asyn
           assert.equal(body.reasoning_effort, 'none');
           assert.equal(body.max_tokens, 8192);
           return Response.json({ choices: [{ message: { role: 'assistant', content: JSON.stringify({
-            title: options.issue.title, acceptance_checks: ['node --test exits 0'],
+            title: options.issue.title,
+            acceptance_checks: ['The requested behavior in the Ask is implemented'],
             files_allowed: ['README.md'], task_class: 'docs', difficulty: 1,
           }) } }] });
         }
@@ -782,7 +786,7 @@ test('docs slice retry after failed review remains reasoning-free at 8192', asyn
               arguments: JSON.stringify({ path: 'README.md', content: `# Example\n\n## Status\n${effort} ${Date.now()}.\n` }) } }],
           } : { role: 'assistant', content: 'Changed the scoped README.', reasoning_content: 'PRIVATE_CODER_THINKING' },
         }] });
-      }, runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+      }, runTestCommand: () => assert.fail('Docs-only changes do not run node --test'),
     });
     assert.equal(result.review.verdict, 'fail');
     assert.equal(result.runs.coder.metrics.effort, { low: 'l', high: 'h', max: 'x', none: '-' }[effort]);
@@ -839,7 +843,7 @@ test('cold endpoint timeout preserves a valid TASK and retry skips planner rathe
           role: 'assistant', content: 'No change needed.',
         } }] });
     },
-    runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+    runTestCommand: () => assert.fail('Documentation-only changes do not run node --test'),
   });
   assert.equal(retried.planner.reused, true);
   assert.equal(retried.failed, false);
@@ -1053,7 +1057,9 @@ test('a configured rerun recovers from previous planner failure in the same issu
       if (body.messages[0].content.startsWith('You are the builtin planner seat.')) {
         return Response.json({ choices: [{ finish_reason: 'stop', message: {
           role: 'assistant', content: JSON.stringify({
-            title: options.issue.title, acceptance_checks: ['node --test exits 0'], files_allowed: ['README.md'],
+            title: options.issue.title,
+            acceptance_checks: ['The requested behavior in the Ask is implemented'],
+            files_allowed: ['README.md'],
           }),
         } }] });
       }
@@ -1064,7 +1070,7 @@ test('a configured rerun recovers from previous planner failure in the same issu
         } }],
       } } : { finish_reason: 'stop', message: { role: 'assistant', content: 'Added Status.' } }] });
     },
-    runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+    runTestCommand: () => assert.fail('Documentation-only changes do not run node --test'),
   });
   assert.equal(result.reused, true);
   assert.equal(result.failed, false);
@@ -1418,7 +1424,7 @@ test('fleet priors change endpoint/model only for explicit auto-model and never 
 });
 
 test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the SDK only with --publish', async (context) => {
-  const options = multiFileFixture(context);
+  const options = fixture(context);
   const logs = [];
   let completion = 0;
   let published = 0;
@@ -1435,8 +1441,8 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
       return { ok: true, status: 200, json: async () => ({
         choices: [{ message: { role: 'assistant', content: JSON.stringify({
           title: 'Add Status to README',
-          acceptance_checks: ['node --test exits 0', 'README has a Status section'],
-          files_allowed: multiFileScope,
+          acceptance_checks: ['README has a Status section'],
+          files_allowed: ['README.md'],
         }) } }],
         model: 'actual-planner-model',
         usage: { prompt_tokens: 5, completion_tokens: 2 },
@@ -1446,8 +1452,6 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
       assert.match(body.messages[0].content, /## TASK\.md\n\n# Outcome: Add Status to README/);
       assert.match(readFileSync(path.join(options.target, '.worktrees', 'issue-42', 'ESTIMATE.md'), 'utf8'),
         /model: local-model/);
-      assert.deepEqual(body.tools.map(({ function: tool }) => tool.name),
-        ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text']);
       return { ok: true, status: 200, json: async () => ({
         choices: [{ finish_reason: 'tool_calls', message: {
           role: 'assistant',
@@ -1471,6 +1475,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
       AI_CONTEXT_USED: '1000000', AI_CONTEXT_MAX: '1000000', AI_CONTEXT_OUT: '999',
       GITHUB_APP_PRIVATE_KEY_PATH: path.join(options.base, 'app.pem') },
     publish: true, log: (line) => logs.push(line), fetchImpl,
+    runTestCommand: () => assert.fail('Documentation-only changes do not run node --test'),
     publisher: async (program, args, publication) => {
       published += 1;
       assert.equal(program, process.execPath);
@@ -1480,6 +1485,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
           subject: 'feat: issue 42', model: 'actual-coder-model',
           summary: 'Updated README; tests pass.', issueNumber: 42,
           seats: 'planner, coder, reviewer (pass)',
+          testsSkipped: true,
         }), '--model', 'actual-coder-model', '--merge-when-green',
       ]);
       assert.equal(publication.cwd, path.join(options.target, '.worktrees', 'issue-42'));
@@ -1514,7 +1520,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
   assert.equal(commented, 1);
   assert.equal(completion, 3);
   assert.match(readFileSync(path.join(result.worktreePath, 'README.md'), 'utf8'), /## Status\nReady/);
-  assert.equal(result.result.tests.exit_code, 0);
+  assert.equal(result.result.tests, undefined);
   assert.equal(result.run.line, packAgentRun(result.run.env));
   assert.equal(result.review.verdict, 'pass');
   assert.match(readFileSync(result.review.reviewPath, 'utf8'), /Verdict: pass/);
@@ -1637,7 +1643,8 @@ test('publication refuses a REVIEW.md changed after a passing reviewer without s
         choices: [{ finish_reason: turns === 2 ? 'tool_calls' : 'stop', message: {
           role: 'assistant',
           content: turns === 1 ? JSON.stringify({
-            title: 'Add status', acceptance_checks: ['node --test exits 0'],
+            title: 'Add status',
+            acceptance_checks: ['The requested behavior in the Ask is implemented'],
             files_allowed: ['README.md'],
           }) : turns === 2 ? null : 'README updated.',
           ...(turns === 2 ? { tool_calls: [{ id: 'write', type: 'function',
@@ -1670,7 +1677,8 @@ test('a merged PR still receives an issue comment when publisher local cleanup f
       turns += 1;
       if (turns === 1) return { status: 200, json: async () => ({ choices: [{
         message: { role: 'assistant', content: JSON.stringify({
-          title: 'Add status', acceptance_checks: ['node --test exits 0'],
+          title: 'Add status',
+          acceptance_checks: ['The requested behavior in the Ask is implemented'],
           files_allowed: ['README.md'],
         }) },
       }] }) };
@@ -1684,7 +1692,7 @@ test('a merged PR still receives an issue comment when publisher local cleanup f
         finish_reason: 'stop', message: { role: 'assistant', content: 'Done.' },
       }] }) };
     },
-    runTestCommand: async () => ({ stdout: 'passed', stderr: '' }),
+    runTestCommand: () => assert.fail('Documentation-only changes do not run node --test'),
     publisher: async () => { throw Object.assign(new Error('publisher failed'), {
       stderr: 'PR #7 was merged; local cleanup is incomplete.',
     }); },
@@ -1700,7 +1708,7 @@ test('a merged PR still receives an issue comment when publisher local cleanup f
   assert.equal(commented, true);
 });
 
-test('default planner/coder run preserves the task handoff while the coder edits only allowed code', async (context) => {
+test('default planner/coder run preserves the task handoff and reports denied out-of-scope writes', async (context) => {
   const options = fixture(context);
   options.issue.title = 'Implement the app';
   options.issue.body = 'Add src/app.mjs.\n\n## Acceptance checks\n- node --test exits 0\n' +
@@ -1736,31 +1744,32 @@ test('default planner/coder run preserves the task handoff while the coder edits
       }] }) };
     }
     assert.equal(completion, 3);
-    assert.match(body.messages.at(-3).content, /src\/app\.mjs/);
-    assert.match(body.messages.at(-2).content, /not allowed/);
-    assert.match(body.messages.at(-1).content, /not allowed/);
+    assert.match(JSON.stringify(body.messages.slice(1)), /src\/app\.mjs/);
+    assert.match(JSON.stringify(body.messages.slice(1)), /not allowed/);
     return { ok: true, status: 200, json: async () => ({
       choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Implemented the planned task.' } }],
     }) };
   };
-  await assert.rejects(runBuiltinIssue(42, {
+  const result = await runBuiltinIssue(42, {
     ...options, config: llmConfig, fetchImpl, log: () => {},
     vault: { get: async () => undefined },
     runTestCommand: () => assert.fail('Denied writes must stop before tests'),
-  }), /Writing RECIPE\.yml is not allowed/);
-  assert.equal(completion, 2);
+  });
+  assert.equal(completion, 3);
+  assert.equal(result.result.excellence.pass, true);
   assert.deepEqual(parseRecipe(readFileSync(path.join(worktreePath, 'RECIPE.yml'), 'utf8')).seats.map(({ id }) => id),
     ['planner', 'coder', 'reviewer']);
   assert.equal(readFileSync(path.join(worktreePath, 'src', 'app.mjs'), 'utf8'),
     'export const ready = true;\n');
   assert.deepEqual(['RECIPE.yml', 'TASK.md'].map((name) => readFileSync(path.join(worktreePath, name), 'utf8')), handoff);
-  assert.equal(existsSync(path.join(worktreePath, 'REVIEW.md')), false);
+  assert.equal(existsSync(path.join(worktreePath, 'REVIEW.md')), true);
+  assert.equal(result.review.verdict, 'pass');
   assert.equal(options.calls.filter(({ program, args }) =>
     program === 'git' && args[0] === 'worktree' && args[1] === 'add').length, 1);
 });
 
 test('a tool-writing planner hands validated artifacts to the scoped coder and read-only reviewer', async (context) => {
-  const options = multiFileFixture(context);
+  const options = fixture(context);
   const draft = planStub(options.issue.body, { reference: 'issue:42', title: options.issue.title });
   let plannerTurns = 0;
   let coderTurns = 0;
@@ -1786,8 +1795,6 @@ test('a tool-writing planner hands validated artifacts to the scoped coder and r
         } }] });
       }
       coderTurns += 1;
-      assert.deepEqual(body.tools.map(({ function: tool }) => tool.name),
-        ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text']);
       if (coderTurns === 1) return Response.json({
         choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant',
           tool_calls: [{ id: 'readme', type: 'function', function: {
@@ -1801,7 +1808,7 @@ test('a tool-writing planner hands validated artifacts to the scoped coder and r
         role: 'assistant', content: 'Added the Status section; tests pass.',
       } }] });
     },
-    runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+    runTestCommand: () => assert.fail('Documentation-only changes do not run node --test'),
   });
   assert.equal(plannerTurns, 1);
   assert.equal(coderTurns, 2);
@@ -1813,7 +1820,7 @@ test('a tool-writing planner hands validated artifacts to the scoped coder and r
   assert.doesNotMatch(options.stderr, /http chat|model=|host=|elapsed_ms=|\d{4}-\d\d-\d\dT/);
   assert.match(liveLog, /seat planner tool write_file path="TASK\.md"/);
   assert.match(liveLog, /seat coder tool write_file path="README\.md"/);
-  assert.match(liveLog, /seat coder tool run_test/);
+  assert.doesNotMatch(liveLog, /seat coder tool run_test/);
   for (const seat of ['planner', 'coder', 'reviewer']) {
     assert.match(liveLog, new RegExp(`seat ${seat} http chat\\.completions ok status=200`));
     assert.match(liveLog, new RegExp(`seat ${seat} elapsed_ms=\\d+ mode=llm`));

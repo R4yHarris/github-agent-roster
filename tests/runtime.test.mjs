@@ -19,7 +19,7 @@ function runCoder(options) {
 const example = readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8');
 const stubConfig = parseConfig(example);
 const llmConfig = parseConfig(example.replace('base_url: ""', 'base_url: http://localhost:3456/v1')
-  .replace('model: ""', 'model: local-model').replace('turn_budget: 8', 'turn_budget: 3'));
+  .replace('model: ""', 'model: local-model').replace('turn_budget: 1000', 'turn_budget: 3'));
 
 function fixture(context, config = stubConfig) {
   const repoRoot = mkdtempSync(path.join(tmpdir(), 'roster-runtime-'));
@@ -149,7 +149,8 @@ test('an explicit task waiver runs without offering or automatically invoking di
     ...options, env: {},
     fetchImpl: async (_url, request) => {
       assert.deepEqual(JSON.parse(request.body).tools.map(({ function: tool }) => tool.name),
-        ['read_file', 'write_file', 'list_dir', 'search_text']);
+        ['read_file', 'write_file', 'edit_file', 'glob_files', 'run_command', 'list_dir', 'search_text',
+          'web_search', 'web_fetch']);
       return { status: 200, json: async () => ({
         choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Inspected README.' } }],
       }) };
@@ -174,8 +175,9 @@ test('LLM coder uses only offered tools within the turn budget, then verifies te
     assert.equal(sent.messages[0].content,
       readFileSync(path.join(options.worktree, 'CONTEXT.md'), 'utf8'));
     assert.ok(sent.messages[0].content.length <= options.config.seat.context_chars);
+    assert.equal(options.config.seat.context_chars, 200000);
     assert.deepEqual(sent.tools.map((tool) => tool.function.name),
-      ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text']);
+      ['read_file', 'write_file', 'edit_file', 'glob_files', 'run_command', 'list_dir', 'run_test', 'search_text']);
     if (calls === 1) {
       return { status: 200, json: async () => ({
         choices: [{ finish_reason: 'tool_calls', message: {
@@ -214,6 +216,7 @@ test('LLM coder uses only offered tools within the turn budget, then verifies te
   });
   assert.equal(result.mode, 'llm');
   assert.equal(result.turns, 2);
+  assert.equal(result.packBudgetChars, 200000);
   assert.equal(tests, 2);
   assert.deepEqual(result.usage, { prompt_tokens: 46, completion_tokens: 17 });
   assert.deepEqual(result.response, { model: options.config.llm.model,
@@ -250,7 +253,7 @@ test('named vLLM profile performs one worktree tool call then stops on a passing
       const sent = JSON.parse(request.body);
       assert.equal(sent.model, 'served-model');
       assert.deepEqual(sent.tools.map(({ function: tool }) => tool.name),
-        ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text']);
+        ['read_file', 'write_file', 'edit_file', 'glob_files', 'run_command', 'list_dir', 'run_test', 'search_text']);
       assert.match(sent.messages[0].content, /Principal coder:[\s\S]*## TASK\.md[\s\S]*Task skills/);
       if (turns === 1) return { status: 200, json: async () => ({
         choices: [{ finish_reason: 'tool_calls', message: {
@@ -344,7 +347,7 @@ test('garbage coder arguments get one repair then the scoped README Status fallb
   const options = fixture(context, llmConfig);
   writeFileSync(path.join(options.worktree, 'TASK.md'),
     planStub('Update `README.md` with a Status section.',
-      { reference: 'issue:4', metadata: { task_class: 'feat', difficulty: 4 } }).task);
+      { reference: 'issue:4', metadata: { task_class: 'docs', difficulty: 1 } }).task);
   let turns = 0;
   let tests = 0;
   const events = [];
@@ -361,7 +364,8 @@ test('garbage coder arguments get one repair then the scoped README Status fallb
     runTestCommand: async () => { tests += 1; return { stdout: 'pass', stderr: '' }; },
   });
   assert.equal(turns, 2);
-  assert.equal(tests, 1);
+  assert.equal(tests, 0);
+  assert.equal(result.testsSkipped, true);
   assert.equal(result.excellence.pass, true);
   assert.deepEqual(result.excellence.files, ['README.md']);
   assert.equal(result.implementationPath, 'deterministic-readme');
@@ -370,15 +374,16 @@ test('garbage coder arguments get one repair then the scoped README Status fallb
   assert.ok(events.some((event) => event.type === 'implementation' && event.path === 'deterministic-readme'));
 });
 
-test('model-requested path escape is terminal, not a repairable failed test', async (context) => {
+test('model-requested path escape is denied before an allowed edit succeeds', async (context) => {
   const options = fixture(context, llmConfig);
   const outside = path.join(options.repoRoot, 'escape.md');
   let turns = 0;
-  await assert.rejects(runCoder({
+  const result = await runCoder({
     ...options, env: {},
     fetchImpl: async (_url, request) => {
       turns += 1;
       if (turns < 3) {
+        if (turns === 2) assert.match(JSON.parse(request.body).messages.at(-1).content, /outside the worktree/);
         return { status: 200, json: async () => ({
           choices: [{ finish_reason: 'tool_calls', message: {
             role: 'assistant', tool_calls: [{ id: `edit-${turns}`, type: 'function', function: {
@@ -395,11 +400,11 @@ test('model-requested path escape is terminal, not a repairable failed test', as
       }) };
     },
     runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
-  }), /outside the worktree/);
-  assert.equal(turns, 1);
+  });
+  assert.equal(turns, 3);
   assert.equal(existsSync(outside), false);
-  assert.equal(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), '# Example\n');
-  assert.match(readFileSync(path.join(options.worktree, 'RESULT.md'), 'utf8'), /Checks: FAIL/);
+  assert.match(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), /## Status\nReady/);
+  assert.equal(result.excellence.pass, true);
 });
 
 test('failed final tests receive another turn before acceptance while usage and errors stay truthful', async (context) => {
@@ -604,6 +609,7 @@ test('a nonzero run_test returns captured output for the coder to fix in the nex
   const options = fixture(context, llmConfig);
   let turns = 0;
   let testRuns = 0;
+  let repairMessages;
   const fetchImpl = async (_url, request) => {
     turns += 1;
     const sent = JSON.parse(request.body);
@@ -617,10 +623,7 @@ test('a nonzero run_test returns captured output for the coder to fix in the nex
       }) };
     }
     if (turns === 2) {
-      assert.match(sent.messages.at(-1).content, /Repair 1 of 4/);
-      assert.deepEqual(JSON.parse(sent.messages.at(-2).content), {
-        exit_code: 1, stdout: 'not ok', stderr: 'assertion failed',
-      });
+      repairMessages = sent.messages.slice(-2);
       return { status: 200, json: async () => ({
         choices: [{ finish_reason: 'tool_calls', message: {
           role: 'assistant', content: null,
@@ -640,7 +643,7 @@ test('a nonzero run_test returns captured output for the coder to fix in the nex
     ...options, env: { ROSTER_API_KEY: 'test-only-key' }, fetchImpl,
     runTestCommand: async (_program, _args, { timeout }) => {
       testRuns += 1;
-      assert.equal(timeout, 300_000);
+      assert.equal(timeout, 60_000);
       if (testRuns === 1) throw Object.assign(new Error('tests failed'), {
         code: 1, stdout: 'not ok', stderr: 'assertion failed',
       });
@@ -650,6 +653,10 @@ test('a nonzero run_test returns captured output for the coder to fix in the nex
   assert.equal(result.mode, 'llm');
   assert.equal(result.turns, 3);
   assert.equal(testRuns, 2);
+  assert.match(repairMessages.at(-1).content, /Repair 1 of 4/);
+  assert.deepEqual(JSON.parse(repairMessages.at(-2).content), {
+    exit_code: 1, stdout: 'not ok', stderr: 'assertion failed',
+  });
   assert.equal(result.tests.exit_code, 0);
   assert.match(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), /## Status\nReady/);
   assert.equal(JSON.parse(readFileSync(options.memoryPath, 'utf8')).status, 'llm');
@@ -657,7 +664,7 @@ test('a nonzero run_test returns captured output for the coder to fix in the nex
 
 test('budget exhaustion and a failed final test stop without claiming success', async (context) => {
   const budget = parseConfig(example.replace('base_url: ""', 'base_url: http://localhost:3456/v1')
-    .replace('model: ""', 'model: local-model').replace('turn_budget: 8', 'turn_budget: 1'));
+    .replace('model: ""', 'model: local-model').replace('turn_budget: 1000', 'turn_budget: 1'));
   const options = fixture(context, budget);
   await assert.rejects(runCoder({
     ...options, vault: { get: async () => undefined },
@@ -703,8 +710,9 @@ test('coder stops exploring and asks for a write before the turn budget is spent
   const task = planStub('Update README.md.').task;
   let reads = 0;
   let turns = 0;
+  let forcedMessage;
   const result = await runLoop({
-    config: { ...llmConfig, seat: { ...llmConfig.seat, turn_budget: 8 } },
+    config: { ...llmConfig, seat: { ...llmConfig.seat, turn_budget: 3 } },
     context: { task, pack: task }, env: {},
     tools: {
       read_file: async () => { reads += 1; return 'file'; },
@@ -713,9 +721,8 @@ test('coder stops exploring and asks for a write before the turn budget is spent
     fetchImpl: async (_url, request) => {
       turns += 1;
       const body = JSON.parse(request.body);
-      if (turns === 4) assert.match(body.messages.at(-1).content, /Exploration budget used/);
-      if (turns === 5) {
-        assert.match(body.messages.at(-1).content, /exploration budget used/i);
+      if (turns === 4) {
+        forcedMessage = body.messages.at(-1).content;
         return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Blocked before an edit.' } }] });
       }
       return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
@@ -726,8 +733,9 @@ test('coder stops exploring and asks for a write before the turn budget is spent
     },
     verify: () => ({ pass: true, reasons: [] }),
   });
-  assert.equal(reads, 3);
-  assert.equal(turns, 5);
+  assert.equal(reads, 2);
+  assert.equal(turns, 4);
+  assert.equal(result.error, undefined, result.error?.stack);
+  assert.match(forcedMessage, /Stop reading and searching\. Write the allowed files now/);
   assert.match(result.summary, /Blocked before an edit/);
-  assert.equal(result.error, undefined);
 });

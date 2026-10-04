@@ -98,7 +98,9 @@ test("ask CLI creates an offline draft with a create command when gh is missing"
     assert.match(recipe, /^RECIPE: .*RECIPE\.yml$/);
     assert.match(task, /^TASK: .*TASK\.md$/);
     assert.match(readFileSync(recipe.slice("RECIPE: ".length), "utf8"), /worker: builtin/);
-    assert.match(readFileSync(task.slice("TASK: ".length), "utf8"), /node --test exits 0/);
+    const taskText = readFileSync(task.slice("TASK: ".length), "utf8");
+    assert.match(taskText, /- The requested behavior in the Ask is implemented/);
+    assert.match(taskText, /## Files allowed\n- `README\.md`/);
     assert.match(command, /^Next: gh issue create --title .+ --body-file .+$/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -134,7 +136,8 @@ test("builtin CLI defaults to paired seats, rejects unsupported selections, and 
   const noModel = mkdtempSync(join(tmpdir(), "roster-no-model-"));
   try {
     cpSync(join(root, "src"), join(noModel, "src"), { recursive: true });
-    writeFileSync(join(noModel, "roster.config.yml"), "llm:\n  model: \"\"\n  base_url: \"\"\n");
+    cpSync(join(root, "examples"), join(noModel, "examples"), { recursive: true });
+    cpSync(join(root, "roster.config.example.yml"), join(noModel, "roster.config.example.yml"));
     const noPublish = run(["run", "--issue", "42", "--runtime", "builtin", "--publish"],
       { ...process.env, AI_MODEL: "", ROSTER_MODEL: "" }, join(noModel, "src", "cli.mjs"), undefined, noModel);
     assert.notEqual(noPublish.status, 0);
