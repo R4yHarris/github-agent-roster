@@ -24,6 +24,16 @@ in `.roster/fleet.yml`:
    class hints, then higher declared concurrency as a **weak tie-break**,
    then stable ID ordering. No throughput or benchmark claim is made.
 
+Both tiers exclude a model when its derived **seat + model** difficulty
+ceiling is below the task difficulty, even if a capability prior is stronger.
+`chooseRoute` accepts a `seat` (default `coder`) and uses only that seat's
+human evaluations in the evidence tier. A model with no evaluations for that
+seat keeps its existing prior behavior; automatic-only runs do not establish
+a ceiling. The [learning ledger](LEARNING.md)
+starts at 2, raises only after three consecutive clean at-level accepts, and
+lowers on reject (FEATURE_SPEC 5.6). Median difficulty and the three-sample
+threshold still apply; a ceiling does not replace them.
+
 A route caller can supply a minimum token context requirement. A declared
 limit must meet that exact threshold. Unknown `context_max: 0` cannot
 satisfy a positive requirement or qualify the human-evidence tier.
