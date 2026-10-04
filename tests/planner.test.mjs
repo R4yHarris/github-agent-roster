@@ -259,6 +259,63 @@ test('planner can finalize validated JSON after writing a planning draft', async
   assert.equal(readFileSync(result.taskPath, 'utf8'), result.task);
 });
 
+test('planner accepts a fenced JSON plan on the same turn as an incomplete TASK.md', async (t) => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'roster-planner-same-turn-json-'));
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  const worktree = join(repoRoot, 'worktree');
+  mkdirSync(worktree);
+  let calls = 0;
+  const result = await runPlanner({
+    worktree, repoRoot, issue: {
+      number: 169, title: 'record a human retrospective from the roster shell',
+      body: '## Allowed files\n- src/repl.mjs\n- tests/eval.test.mjs\n\n## Checks\n- node --test exits 0.',
+    },
+    config: { ...llmConfig, planner: { turn_budget: 1 } }, env: {},
+    fetchImpl: async () => {
+      calls += 1;
+      return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+        role: 'assistant',
+        content: '```json\n{"title":"Record /eval human retrospective for a session","acceptance_checks":["node --test exits 0."],"files_allowed":["src/repl.mjs","tests/eval.test.mjs"],"task_class":"feat","difficulty":3,"estimate_min":45}\n```',
+        tool_calls: [{ id: 'draft', type: 'function', function: {
+          name: 'write_file', arguments: JSON.stringify({ path: 'TASK.md', content: '# Draft task\n\n## Original Ask\n\nrecord a human retrospective from the roster shell\n' }),
+        } }],
+      } }] });
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.turns, 1);
+  assert.match(result.task, /## Files allowed/);
+  assert.match(result.task, /src\/repl\.mjs/);
+  assert.doesNotMatch(result.task, /# Draft task/);
+  assert.equal(readFileSync(result.taskPath, 'utf8'), result.task);
+});
+
+test('planner tells the model which TASK.md heading is missing before the budget ends', async (t) => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'roster-planner-heading-repair-'));
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  const worktree = join(repoRoot, 'worktree');
+  mkdirSync(worktree);
+  let calls = 0;
+  const result = await runPlanner({
+    worktree, repoRoot, issue: { number: 42, title: 'Update README', body: 'Update `README.md`.' },
+    config: llmConfig, env: {}, fetchImpl: async (_url, request) => {
+      calls += 1;
+      const body = JSON.parse(request.body);
+      if (calls === 1) return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+        role: 'assistant', tool_calls: [{ id: 'draft', type: 'function', function: {
+          name: 'write_file', arguments: JSON.stringify({ path: 'TASK.md', content: '# Draft task\n' }),
+        } }],
+      } }] });
+      assert.match(body.messages.at(-1).content, /Files allowed/);
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
+        title: 'Update README', acceptance_checks: ['node --test exits 0'], files_allowed: ['README.md'],
+      }) } }] });
+    },
+  });
+  assert.equal(calls, 2);
+  assert.match(result.task, /## Files allowed/);
+});
+
 test('planner tool errors redact known credentials before another model turn', async (t) => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'roster-planner-safe-tool-errors-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));

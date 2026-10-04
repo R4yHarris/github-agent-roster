@@ -26,12 +26,12 @@ profiles:
     base_url: https://api.openai.com/v1
     api_key_env: OPENAI_API_KEY
 planner:
-  turn_budget: 2         # maximum planner responses; no file tools
+  turn_budget: 32        # maximum planner responses; no file tools
 seat:
   id: coder
   principal: coder      # contracts role; no merge, no deploy
-  turn_budget: 8
-  context_chars: 8000    # context-pack budget without a tokenizer
+  turn_budget: 1000
+  context_chars: 200000  # context-pack budget in characters, not tokens
   tools: [read_file, write_file, list_dir, run_test, search_text]
 paths:
   memory: .roster/memory/coder.jsonl

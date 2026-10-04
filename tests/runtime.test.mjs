@@ -698,3 +698,36 @@ test('budget exhaustion and a failed final test stop without claiming success', 
   assert.match(readFileSync(path.join(failing.worktree, 'RESULT.md'), 'utf8'),
     /Checks: FAIL[\s\S]*one test failed[\s\S]*Test repair budget \(4\) exhausted/);
 });
+
+test('coder stops exploring and asks for a write before the turn budget is spent', async () => {
+  const task = planStub('Update README.md.').task;
+  let reads = 0;
+  let turns = 0;
+  const result = await runLoop({
+    config: { ...llmConfig, seat: { ...llmConfig.seat, turn_budget: 8 } },
+    context: { task, pack: task }, env: {},
+    tools: {
+      read_file: async () => { reads += 1; return 'file'; },
+      run_test: async () => ({ exit_code: 0, stdout: 'pass', stderr: '' }),
+    },
+    fetchImpl: async (_url, request) => {
+      turns += 1;
+      const body = JSON.parse(request.body);
+      if (turns === 4) assert.match(body.messages.at(-1).content, /Exploration budget used/);
+      if (turns === 5) {
+        assert.match(body.messages.at(-1).content, /exploration budget used/i);
+        return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Blocked before an edit.' } }] });
+      }
+      return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+        role: 'assistant', tool_calls: [{ id: `read-${turns}`, type: 'function', function: {
+          name: 'read_file', arguments: JSON.stringify({ path: 'README.md' }),
+        } }],
+      } }] });
+    },
+    verify: () => ({ pass: true, reasons: [] }),
+  });
+  assert.equal(reads, 3);
+  assert.equal(turns, 5);
+  assert.match(result.summary, /Blocked before an edit/);
+  assert.equal(result.error, undefined);
+});

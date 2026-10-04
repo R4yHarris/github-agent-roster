@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { parseEvaluationArgs, recordEvaluation } from '../src/lib/eval.mjs';
+import { parseShellEvaluationArgs } from '../src/shell/evaluation.mjs';
 import { loadLearning } from '../src/lib/learn.mjs';
 
 const cli = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
@@ -33,6 +34,25 @@ function fixture(t) {
   };
 }
 
+test('shell retrospective records one note and does not duplicate the session', async (t) => {
+  const { cwd, options } = fixture(t);
+  const parsed = parseShellEvaluationArgs('session-169 accept 1 n --minutes 15 --note "prefer a smaller diff next time; model stayed on scope"');
+  const first = await recordEvaluation(...parsed.values, { ...options, ...parsed.options });
+  assert.equal(first.verdict, 'accept');
+  assert.equal(first.difficulty, 1);
+  assert.equal(first.minutes, 15);
+  assert.match(first.comment, /smaller diff/);
+  assert.match(first.path, /evals\.jsonl$/);
+  const second = await recordEvaluation(...parsed.values, { ...options, ...parsed.options });
+  assert.equal(second.duplicate, true);
+  assert.equal(readFileSync(join(cwd, '.roster', 'evals.jsonl'), 'utf8').trim().split('\n').length, 1);
+  assert.throws(() => parseShellEvaluationArgs('session-169 reject 2 n --minutes 15'), /requires --note/);
+  assert.throws(() => parseShellEvaluationArgs(' reject 2 n --minutes 15 --note "x"'), /Use \/eval/);
+  assert.throws(() => parseShellEvaluationArgs('session-169 accept 6 n --minutes 15 --note "x"'), /Use \/eval/);
+  assert.throws(() => parseShellEvaluationArgs('session-169 accept 1 n --note "x"'), /Use \/eval/);
+  assert.equal(existsSync(join(cwd, '.roster', 'evals.jsonl')), true);
+});
+
 test('appends human accept/reject/rework decisions by full SHA or session', async (t) => {
   const { cwd, calls, options } = fixture(t);
   const records = [
@@ -40,7 +60,7 @@ test('appends human accept/reject/rework decisions by full SHA or session', asyn
     await recordEvaluation('human-session', 'reject', '1', 'y', options),
     await recordEvaluation('human-session', 'rework', '5', 'n', options),
     await recordEvaluation('B'.repeat(64), 'accept', '2', 'y', options),
-  ];
+  ].map(({ path, ...record }) => record);
   assert.deepEqual(records, [
     { ...emptyMetadata, sha: 'a'.repeat(40), verdict: 'accept', difficulty: 3, again: false },
     { ...emptyMetadata, session: 'human-session', verdict: 'reject', difficulty: 1, again: true },
@@ -58,7 +78,8 @@ test('appends to fixture history without rewriting earlier human decisions', asy
   const file = join(cwd, '.roster', 'evals.jsonl');
   writeFileSync(file, evaluations.trimEnd());
   const record = await recordEvaluation('feat-one', 'rework', '4', 'n', options);
-  assert.equal(readFileSync(file, 'utf8'), `${evaluations.trimEnd()}\n${JSON.stringify(record)}\n`);
+  const { path, ...stored } = record;
+  assert.equal(readFileSync(file, 'utf8'), `${evaluations.trimEnd()}\n${JSON.stringify(stored)}\n`);
   assert.equal(loadLearning({ cwd }).evaluations.at(-1).verdict, 'rework');
 });
 
@@ -92,6 +113,7 @@ test('resolves abbreviated commit IDs without interpreting them as command optio
   };
   assert.deepEqual(await recordEvaluation('ABCDEF1', 'accept', '3', 'n', options), {
     ...emptyMetadata, sha: 'abcdef12'.repeat(5), verdict: 'accept', difficulty: 3, again: false,
+    path: join(cwd, '.roster', 'evals.jsonl'),
   });
 });
 
@@ -206,11 +228,13 @@ test('records actual run identity and posts the exact human AI-Eval and Minutes 
       return '';
     },
   });
-  assert.deepEqual(evaluation, {
+  const { path, ...stored } = evaluation;
+  assert.equal(path.endsWith('evals.jsonl'), true);
+  assert.deepEqual(stored, {
     sha, session: 'roster-42-coder', model: 'served-model', task_class: 'fix',
     verdict: 'accept', difficulty: 3, again: false, minutes: 18, comment: 'Local retrospective only.', at,
   });
-  assert.deepEqual(loadLearning({ cwd }).evaluations, [evaluation]);
+  assert.deepEqual(loadLearning({ cwd }).evaluations, [stored]);
   assert.equal(calls.filter(([program, args]) => program === 'gh' && args[1] === 'comment').length, 1);
 });
 

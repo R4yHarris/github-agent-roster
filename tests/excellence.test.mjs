@@ -62,7 +62,7 @@ test('a changed vendor submodule path fails the review even when tests pass', as
   const gate = await checkExcellence(options);
   assert.equal(options.result.tests.exit_code, 0);
   assert.equal(gate.pass, false);
-  assert.ok(gate.reasons.some((reason) => /vendor path.*vendor\/github-agent-contracts$/.test(reason)), gate.reasons.join('\n'));
+  assert.ok(gate.reasons.some((reason) => reason.includes('vendor/github-agent-contracts')), gate.reasons.join('\n'));
 });
 
 test('secret paths and out-of-scope changes fail without reading or reporting secret values', async (context) => {

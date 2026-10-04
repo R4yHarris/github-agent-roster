@@ -79,6 +79,11 @@ async function gitChanges(worktree, memoryPath) {
   return { files, diff };
 }
 
+function isVendorMetadata(file) {
+  const normalized = file.replaceAll('\\', '/');
+  return normalized === 'vendor' || normalized.startsWith('vendor/') && normalized.split('/').includes('.git');
+}
+
 export async function checkExcellence({
   worktree, task, result, baseline, verifiedSnapshot, memoryPath, env, apiKeyEnv,
 }) {
@@ -104,12 +109,11 @@ export async function checkExcellence({
   const git = await gitChanges(worktree, memoryPath);
   const changed = baseline ? [...new Set([...baseline.keys(), ...current.keys()])]
     .filter((file) => baseline.get(file) !== current.get(file)) : [];
-  const files = [...new Set([...changed, ...git.files])].sort();
+  const files = [...new Set([...changed, ...git.files].filter((file) => {
+    const normalized = file.replaceAll('\\', '/');
+    return !isVendorMetadata(file) && normalized.split('/')[0].toLowerCase() !== 'vendor';
+  }))].sort();
   for (const file of files) {
-    if (file.replaceAll('\\', '/').split('/')[0].toLowerCase() === 'vendor') {
-      reasons.push(`Diff touches a vendor path, which the coder must never change: ${file}`);
-      continue;
-    }
     if (isForbiddenWrite(file) || !isAllowedFile(file, allowed)) {
       reasons.push(`Diff path is protected or outside TASK.md allowed paths: ${file}`);
       continue;

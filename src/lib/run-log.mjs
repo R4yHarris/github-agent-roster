@@ -8,7 +8,7 @@ import { createDebugLog } from './debug-log.mjs';
 import { buildRun } from '../metrics/run.mjs';
 
 const seats = ['planner', 'coder', 'reviewer'];
-const tools = ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text'];
+const tools = ['read_file', 'write_file', 'edit_file', 'glob_files', 'list_dir', 'run_test', 'run_command', 'search_text', 'web_search', 'web_fetch'];
 const artifacts = ['RECIPE.yml', 'TASK.md', 'PLAN.md', 'ESTIMATE.md', 'RESULT.md', 'REVIEW.md'];
 const httpErrors = ['authentication', 'network', 'timeout', 'http', 'response', 'abort'];
 const maximumLineBytes = 2048;
@@ -83,7 +83,7 @@ export async function createRunLog({
     if (event.type === 'tool-refused') return 'Refused: outside the worktree.';
     if (event.type === 'test-repair') return `Tests failed. Repair ${event.attempt} of ${event.budget}.`;
     if (event.type === 'timeout') return 'The model did not answer in time. It may still be waking.';
-    if (event.type === 'tool' && !tools.includes(event.name)) throw new TypeError('Invalid live tool event');
+    if (event.type === 'tool' && !tools.includes(event.name)) return `tool ${event.name ?? 'unknown'}`;
     return null;
   }
 
@@ -150,23 +150,29 @@ export async function createRunLog({
           (event.phase === 'error' ? ` class=${event.errorClass}` : '');
       }
       case 'tool': {
-        if (!tools.includes(event.name)) throw new TypeError('Invalid live tool event');
+        const name = tools.includes(event.name) ? event.name : 'unknown';
         const location = typeof event.path === 'string' ? safe(event.path).slice(0, 512) : '[invalid]';
-        return `tool ${event.name}` + (event.path === undefined ? '' : ` path=${JSON.stringify(location)}`);
+        return `tool ${name}` + (event.path === undefined ? '' : ` path=${JSON.stringify(location)}`);
       }
-      case 'tool-result':
-        if (!tools.includes(event.name) || !['ok', 'error', 'denied'].includes(event.status)) {
-          throw new TypeError('Invalid live tool result event');
-        }
-        return `tool result ${event.name} ${event.status}`;
+      case 'tool-result': {
+        const name = tools.includes(event.name) ? event.name : 'unknown';
+        const status = ['ok', 'error', 'denied'].includes(event.status) ? event.status : 'error';
+        return `tool result ${name} ${status}`;
+      }
       case 'wrote':
-        if (!artifacts.includes(event.path)) throw new TypeError('Invalid live artifact event');
-        return `wrote ${event.path}`;
+        if (typeof event.path !== 'string' || !event.path || event.path.length > 512 ||
+            /[\x00-\x1f\x7f]/.test(event.path)) {
+          throw new TypeError('Invalid live artifact event');
+        }
+        return `wrote ${safe(event.path)}`;
       case 'implementation':
         if (!['model', 'deterministic-readme'].includes(event.path)) throw new TypeError('Invalid implementation path');
         return `implementation ${event.path}`;
       default:
-        throw new TypeError('Unsupported live run event');
+        if (typeof event.type !== 'string' || !/^[a-z-]{1,40}$/.test(event.type)) {
+          throw new TypeError('Unsupported live run event');
+        }
+        return `event ${event.type}`;
     }
   }
 
@@ -189,7 +195,14 @@ export async function createRunLog({
         await debug.record({ repoRoot, issue, seat: name, event });
         return;
       }
-      const text = eventText(event);
+      let text;
+      try {
+        text = eventText(event);
+      } catch (error) {
+        text = `event ${event?.type ?? 'unknown'} log-skipped`;
+        await observe?.({ ...event, seat: name, logSkipped: true });
+        return;
+      }
       if (event.type === 'http' && event.phase === 'start') effort = event.effort;
       if (['completion', 'finish-reason'].includes(event.type)) finishReason = event.reason;
       await observe?.({ ...event, seat: name });

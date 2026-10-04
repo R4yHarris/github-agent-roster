@@ -71,6 +71,20 @@ test('declared context capacity is tested exactly and an unknown prior cannot sa
     contextRequired: 1 }), null);
 });
 
+test('a sufficient dedicated profile beats a cluster profile for an ordinary task', () => {
+  const local = { ...fast, id: 'spark', model: 'deepseek-v4.1-flash', base_url: 'http://192.168.1.48:8888/v1',
+    hardware: 'DGX Spark', context_max: 1048576, concurrency: 1, task_class: ['feat'] };
+  const remote = { ...fast, id: 'aperture-qwen', model: 'qwen3.8-27b',
+    base_url: 'https://aperture.example/v1', hardware: 'RTX 6000', context_max: 262144, concurrency: 8,
+    task_class: ['feat'] };
+  const rows = { capabilities: ['spark', 'aperture-qwen'].map((profile_id) => ({
+    profile_id, task_class: 'feat', suggested_difficulty: 3, context_max: 262144, concurrency: 1,
+    notes: 'Starting guess.',
+  })) };
+  assert.equal(select({ fleet: { profiles: [local, remote] }, capabilities: rows, taskClass: 'feat' }).profile.id,
+    'aperture-qwen');
+});
+
 test('task-class hints precede declared concurrency as a weak deterministic tie-break', () => {
   const other = { ...fast, id: 'wider', model: 'owner/wider', concurrency: 8 };
   const rows = { capabilities: [...capabilities.capabilities,

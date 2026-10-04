@@ -1,7 +1,16 @@
 import { loadCapabilities, validateCapabilities } from './capabilities.mjs';
 import { getFleetProfile, loadFleet, validateFleet } from './fleet.mjs';
 import { EFFORTS, formatRecommendation, summarizeLearning, TASK_CLASSES } from './learn.mjs';
+import { hardwareCost } from './hardware.mjs';
 import { resolveProjectRoot } from './paths.mjs';
+
+function preference(profile, difficulty) {
+  return -hardwareCost(profile, difficulty);
+}
+
+function contextFit(profile) {
+  return profile.context_max > 0 ? profile.context_max : Number.MAX_SAFE_INTEGER;
+}
 
 export function chooseRoute({
   fleet, capabilities, records = [], taskClass, difficulty = 2, contextRequired = 0, profileId,
@@ -45,11 +54,13 @@ export function chooseRoute({
     if (prior ? prior.suggested_difficulty < difficulty : !hinted) return [];
     return [{
       profile, source: 'prior', recommendation: null, hinted,
-      reason: `${prior ? 'capability prior' : 'fleet task-class hint'}; starting guess, not a benchmark` +
+      reason: `${prior ? 'capability prior' : 'fleet task-class hint'}; smallest sufficient hardware; starting guess, not a benchmark` +
         (profile.context_max === 0 ? '; context capacity remains unknown' : ''),
     }];
   });
   candidates.sort((left, right) => Number(right.hinted) - Number(left.hinted) ||
+    Number(preference(right.profile, difficulty)) - Number(preference(left.profile, difficulty)) ||
+    contextFit(left.profile) - contextFit(right.profile) ||
     right.profile.concurrency - left.profile.concurrency || left.profile.id.localeCompare(right.profile.id));
   if (!candidates.length) return null;
   const { hinted, ...choice } = candidates[0];

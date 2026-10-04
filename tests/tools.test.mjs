@@ -191,7 +191,7 @@ test('a README-only task runs only the shell test file with a 60s cap and strips
       GITHUB_APP_ID: '1', GITHUB_APP_PRIVATE_KEY_PATH: 'key.pem' },
     runCommand: async (program, args, received) => {
       assert.equal(program, process.execPath);
-      assert.deepEqual(args, ['--test', 'tests/repl.test.mjs'], 'README-only tasks must not spawn the full suite');
+      assert.deepEqual(args, ['--test', '--test-concurrency', '8', 'tests/repl.test.mjs'], 'README-only tasks must not spawn the full suite');
       options = received;
       return { stdout: 'tests pass', stderr: '' };
     },
@@ -216,7 +216,7 @@ test('a README-only task runs only the shell test file with a 60s cap and strips
   });
   const timedOut = await createTools({ worktree, allowedFiles: ['README.md'],
     runCommand: async () => { throw Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }); } });
-  await assert.rejects(timedOut.run_test(), /node --test tests\/repl\.test\.mjs timed out after 60 seconds/);
+  await assert.rejects(timedOut.run_test(), /node --test(?: --test-concurrency \d+)? tests\/repl\.test\.mjs timed out after 60 seconds/);
 });
 
 test('a code slice keeps the full suite with a 5 minute cap', async (context) => {
@@ -226,15 +226,15 @@ test('a code slice keeps the full suite with a 5 minute cap', async (context) =>
   const tools = await createTools({ worktree, allowedFiles: ['src/**'],
     runCommand: async (_program, args, options) => { received = { args, timeout: options.timeout }; return { stdout: '', stderr: '' }; } });
   await tools.run_test();
-  assert.deepEqual(received, { args: ['--test'], timeout: 300_000 });
+  assert.deepEqual(received, { args: ['--test', '--test-concurrency', '8'], timeout: 300_000 });
   const otherRepo = fixture(context);
   const fallback = await createTools({ worktree: otherRepo, allowedFiles: ['README.md'],
     runCommand: async (_program, args, options) => { received = { args, timeout: options.timeout }; return { stdout: '', stderr: '' }; } });
   await fallback.run_test();
-  assert.deepEqual(received, { args: ['--test'], timeout: 300_000 }, 'a repo without the shell test keeps its full suite');
+  assert.deepEqual(received, { args: ['--test', '--test-concurrency', '8'], timeout: 300_000 }, 'a repo without the shell test keeps its full suite');
   const timedOut = await createTools({ worktree, allowedFiles: ['src/**'],
     runCommand: async () => { throw Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }); } });
-  await assert.rejects(timedOut.run_test(), /^Error: node --test timed out after 300 seconds$/m);
+  await assert.rejects(timedOut.run_test(), /node --test(?: --test-concurrency \d+)? timed out after 300 seconds/);
 });
 
 test('every tool refuses "..", vendor, and absolute paths before it runs', async (context) => {

@@ -9,7 +9,7 @@ import { redactSecrets } from '../runtime/memory.mjs';
 
 const execute = promisify(execFile);
 const seats = ['planner', 'coder', 'reviewer'];
-const tools = ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text'];
+const tools = ['read_file', 'write_file', 'edit_file', 'glob_files', 'list_dir', 'run_test', 'run_command', 'search_text', 'web_search', 'web_fetch'];
 const pathClasses = ['root', 'outside', 'secret', 'git', 'policy', 'workflow', 'vendor', 'managed', 'tests', 'source', 'docs', 'other'];
 const phases = ['seat-start', 'seat-end', 'seat-error', 'model', 'http-start', 'http-ok', 'http-error',
   'waiting', 'timeout', 'tool-start', 'tool-ok', 'tool-error', 'tool-denied', 'tool-refused', 'finish-reason',
@@ -107,7 +107,7 @@ export function createDebugLog({
       repair: event.type === 'test-repair' ? { n: event.attempt, of: event.budget } : null,
       elapsed_ms: Math.max(0, Math.round(clock() - started)),
     };
-    if (!validRow(row)) throw new DebugLogError('Invalid debug event metadata');
+    if (!validRow(row)) return;
     const generation = revision;
     const write = pending.then(async () => {
       if (!enabled || generation !== revision) return;

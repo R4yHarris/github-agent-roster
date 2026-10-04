@@ -166,7 +166,7 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
 
   assert.deepEqual(calls, [
     ['local-ask', 'Add a status section.'],
-    ['run', '42', false, false, 'local-model', 'h'],
+    ['run', '42', false, true, 'local-model', 'h'],
     ['eval', 'roster-42-coder', 'accept', '3', 'n', cwd],
     ['stats', 'HEAD'],
     ['recommend-metrics'],
@@ -335,7 +335,7 @@ test('/run accepts either flag order, auto-continues by default, and rejects dup
   for (const args of ['42', '42 --auto-model --confirm', '--issue 42 --confirm --auto-model']) {
     await shell.dispatch(`/run ${args}`);
   }
-  assert.deepEqual(seen, [[false, false], [true, true], [true, true]]);
+  assert.deepEqual(seen, [[true, false], [true, true], [true, true]]);
   for (const args of ['42 --auto', '42 --confirm --confirm', '42 --unknown']) {
     await assert.rejects(shell.dispatch(`/run ${args}`), /Use \/run N/);
   }

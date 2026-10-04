@@ -13,7 +13,7 @@ const help = `Usage:
   roster --help
   roster doctor [--warm]
   roster init
-  roster onboard
+  roster onboard [--discover]
   roster fleet list
   roster fleet assist
   roster fleet add --id NAME --base-url URL [--model MODEL] [--context N] [--concurrency N] [--hardware TEXT] [--task-class feat,fix,docs,test]
@@ -21,7 +21,7 @@ const help = `Usage:
   roster fleet default ID
   roster fleet remove ID
   roster ask "..."
-  roster run --issue N [--runtime builtin] [--seats planner,coder,reviewer] [--auto-model] [--publish] [--skip-review] [--confirm] [--plan]
+  roster run --issue N [--runtime builtin] [--auto-model] [--seats planner,coder,reviewer] [--saved] [--publish] [--skip-review] [--confirm] [--plan]
   roster run --seat coder --runtime builtin
   roster prepare --issue N
   roster run --ask-file PATH --runtime builtin
@@ -120,9 +120,9 @@ async function main(args) {
   } else if (args.length === 1 && args[0] === 'init') {
     const { formatInit, initializeRoster } = await import('./lib/init.mjs');
     process.stdout.write(formatInit(await initializeRoster()));
-  } else if (args.length === 1 && args[0] === 'onboard') {
+  } else if (args[0] === 'onboard' && args.length <= 2 && (args.length === 1 || args[1] === '--discover')) {
     const { runOnboard } = await import('./onboard/wizard.mjs');
-    process.exitCode = (await runOnboard({ installationRoot: rosterRoot })).exitCode;
+    process.exitCode = (await runOnboard({ installationRoot: rosterRoot, discover: args[1] === '--discover' })).exitCode;
   } else if (args[0] === 'fleet') {
     const { runFleet } = await import('./lib/fleet-cli.mjs');
     const result = await runFleet(args.slice(1), { installationRoot: rosterRoot });
@@ -241,17 +241,18 @@ async function main(args) {
     const options = {};
     const seen = new Set();
     const usage = 'Use roster run --issue N [--runtime builtin] [--seats planner,coder,reviewer] ' +
-      '[--auto-model] [--publish] [--skip-review] [--confirm] [--plan], ' +
+      '[--saved] [--publish] [--skip-review] [--confirm] [--plan], ' +
       'or roster run --seat coder --runtime builtin for an existing TASK.md.';
     for (let index = 0; index < args.length; index += 1) {
       const flag = args[index];
-      if (!['--issue', '--seat', '--seats', '--runtime', '--auto-model', '--publish', '--skip-review', '--confirm', '--plan'].includes(flag) ||
+      if (!['--issue', '--seat', '--seats', '--runtime', '--auto-model', '--saved', '--publish', '--skip-review', '--confirm', '--plan'].includes(flag) ||
           seen.has(flag)) {
         throw new TypeError(usage);
       }
       seen.add(flag);
       if (flag === '--publish') options.publish = true;
       else if (flag === '--auto-model') options.autoModel = true;
+      else if (flag === '--saved') options.saved = true;
       else if (flag === '--skip-review') options.skipReview = true;
       else if (flag === '--confirm') options.confirm = true;
       else if (flag === '--plan') options.plan = true;
@@ -270,7 +271,7 @@ async function main(args) {
         (options.seat !== undefined && options.seats !== undefined)) {
       throw new TypeError(usage);
     }
-    return { ...options, seats: 'planner,coder,reviewer' };
+    return { ...options, autoModel: options.saved ? false : options.autoModel !== false, seats: 'planner,coder,reviewer' };
   }
 }
 

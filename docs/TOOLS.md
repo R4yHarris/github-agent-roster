@@ -62,6 +62,10 @@ tool-only instruction. Another failure produces a visible error and unverified
 planning stubs, not an exception that ends `/run` in the shell.
 It accepts the existing JSON plan format or a complete written TASK, which
 finishes planning in that tool response without another confirmation turn.
+A fenced or raw JSON plan in the same assistant message is enough when the
+written TASK.md is missing a heading; the harness then finalizes TASK.md.
+An incomplete draft with turns remaining gets an explicit heading repair
+instead of a silent success from write_file.
 Written tasks accept case-insensitive title, `Original Ask`/`Ask`,
 `Acceptance Checks`/`acceptance_checks`, and `Allowed Files`/`Files allowed`
 headings in any order, with other sections such as Scope retained. They must

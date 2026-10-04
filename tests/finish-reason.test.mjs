@@ -105,6 +105,26 @@ test('length gets exactly one retry with a smaller cap and no truncated body rep
     [{ type: 'finish-reason', reason: 'length', retry: true }]);
 });
 
+test('deepseek thinking length raises the cap and disables thinking instead of shrinking it', async () => {
+  const deepseek = parseConfig(readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8')
+    .replace('base_url: ""', 'base_url: http://127.0.0.1:8888/v1')
+    .replace('model: ""', 'model: deepseek-v4.1-flash')
+    .replace('max_tokens: 2048', 'max_tokens: 2048'));
+  const requests = [];
+  const chat = createBuiltinChat({ ...deepseek, llm: { ...deepseek.llm, effort: 'h' } }, { env: {}, fetchImpl: async (_url, request) => {
+    requests.push(JSON.parse(request.body));
+    return completion(requests.length === 1 ? 'length' : 'stop', 'PRIVATE_TRUNCATED_BODY');
+  } });
+  const response = await chat({ messages: [{ role: 'user', content: 'Implement the task.' }] });
+  assert.deepEqual(requests.map(({ max_tokens }) => max_tokens), [8192, 8192]);
+  assert.equal(requests[0].chat_template_kwargs.thinking, true);
+  assert.equal(requests[1].chat_template_kwargs.thinking, false);
+  assert.equal(requests[1].reasoning_effort, 'none');
+  assert.match(requests[1].messages.at(-1).content, /Thinking is off/);
+  assert.doesNotMatch(JSON.stringify(requests[1]), /PRIVATE_TRUNCATED_BODY/);
+  assert.equal(response.finish_reason, 'stop');
+});
+
 test('a second length response fails by name and cannot consume another retry', async () => {
   let calls = 0;
   const chat = createBuiltinChat(config, { env: {}, fetchImpl: async () => {

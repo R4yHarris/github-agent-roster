@@ -410,7 +410,7 @@ test('a sole README save runs the docs check before refusing a later empty searc
     },
     runTestCommand: async (_program, args) => {
       tests += 1;
-      assert.deepEqual(args, ['--test', 'tests/repl.test.mjs']);
+      assert.deepEqual(args, ['--test', '--test-concurrency', '8', 'tests/repl.test.mjs']);
       assert.match(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /## Status/);
       return { stdout: 'pass', stderr: '' };
     },

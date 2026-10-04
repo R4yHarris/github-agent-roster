@@ -59,6 +59,8 @@ export async function runCoder({
       worktree, allowedFiles, memoryPath,
       apiKeyEnv: config.llm.api_key_env, env: withoutLlmKeys(env, config), runCommand: runTestCommand,
       allowRunTest: config.tools?.run_test !== false,
+      allowInternet: config.tools?.internet === true,
+      fetchImpl,
       readmeOnlyDocs: context.contextPolicy.readmeOnlyDocs,
       sliceReadsOnly: context.contextPolicy.sliceReadsOnly,
       allowRepoMap: context.contextPolicy.repoMap,
@@ -93,6 +95,11 @@ export async function runCoder({
       ...tools,
       async write_file(args) {
         const written = await tools.write_file(args);
+        changedFiles.add(written.path);
+        return written;
+      },
+      async edit_file(args) {
+        const written = await tools.edit_file(args);
         changedFiles.add(written.path);
         return written;
       },

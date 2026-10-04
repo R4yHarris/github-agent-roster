@@ -450,7 +450,7 @@ async function runBuiltinAssignment(issueNumber, {
   let autoRecommendation = null;
   let route = null;
   if (autoModel) {
-    const taskClass = prepared.metadata?.task_class ?? inferTaskClass(prepared.issue.title);
+    const taskClass = prepared.metadata?.task_class ?? inferTaskClass(prepared.issue.title) ?? 'feat';
     if (taskClass) {
       route = await routeTask({
         cwd: prepared.repoRoot, installationRoot: repoRoot, fleet,
@@ -464,10 +464,15 @@ async function runBuiltinAssignment(issueNumber, {
       activeConfig = { ...selected, llm: Object.freeze({
         ...selected.llm, effort: autoRecommendation?.effort ?? config.llm.effort,
       }) };
-      log(`Auto-model: ${formatRoute(route, taskClass).trimEnd()}`);
+      log(`Route: ${formatRoute(route, taskClass).trimEnd()}`);
+      onRunEvent?.({ type: 'route', model: route.profile.model,
+        host: new URL(route.profile.base_url).host, contextMax: route.profile.context_max,
+        hardware: route.profile.hardware });
+    } else if (config.llm.base_url && config.llm.model) {
+      log(`Route: no eligible fleet profile; keeping saved ${config.llm.model}`);
     } else {
       activeConfig = { ...config, llm: Object.freeze({ ...config.llm, base_url: '', model: '' }) };
-      log(`Auto-model: ${taskClass ? 'no eligible fleet profile or evidence' : 'no recognized task class'}; deterministic stub`);
+      log('Route: no eligible fleet profile or evidence; deterministic stub');
     }
   }
   const existing = !planMode && !acceptPlan && prepared.reused && ['slice', 'clarify'].includes(classification.kind) ? await readPlannerHandoff({
