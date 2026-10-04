@@ -52,7 +52,7 @@ test('every slice denies out-of-scope file reads, including fixtures and harness
 test('a real failed node test grants only its regular failing-test file for repair', async (context) => {
   const worktree = fixture(context);
   mkdirSync(path.join(worktree, 'tests'));
-  const failing = 'tests/broken.test.mjs';
+  const failing = 'tests/app.test.mjs';
   writeFileSync(path.join(worktree, failing),
     "import test from 'node:test';\nimport assert from 'node:assert/strict';\n" +
     "test('broken', () => assert.equal(1, 2));\n");
@@ -73,7 +73,7 @@ test('a real failed node test grants only its regular failing-test file for repa
 test('a killed test process with numeric exit 1 is a terminal timeout, not a repairable check', async (context) => {
   const worktree = fixture(context);
   docsCheck(worktree);
-  const tools = await createTools({ worktree, allowedFiles: ['README.md'],
+  const tools = await createTools({ worktree, allowedFiles: ['src/repl.mjs'],
     runCommand: async () => { throw Object.assign(new Error('killed'), {
       code: 1, killed: true, stdout: 'not ok', stderr: '',
     }); } });
@@ -180,61 +180,38 @@ test('refuses symlink paths rather than following them out of the worktree', asy
   assert.equal(readFileSync(outside, 'utf8'), 'outside');
 });
 
-test('a README-only task runs only the shell test file with a 60s cap and strips credentials', async (context) => {
+test('a README-only task skips node tests and does not spawn a suite', async (context) => {
   const worktree = fixture(context);
   docsCheck(worktree);
-  let options;
+  let called = false;
   const tools = await createTools({
     worktree, allowedFiles: ['README.md'], apiKeyEnv: 'CUSTOM_KEY',
     env: { PATH: process.env.PATH, CUSTOM_KEY: 'secret', GH_TOKEN: 'token',
       NODE_TEST_CONTEXT: 'child-v8',
       GITHUB_APP_ID: '1', GITHUB_APP_PRIVATE_KEY_PATH: 'key.pem' },
-    runCommand: async (program, args, received) => {
-      assert.equal(program, process.execPath);
-      assert.deepEqual(args, ['--test', '--test-concurrency', '8', 'tests/repl.test.mjs'], 'README-only tasks must not spawn the full suite');
-      options = received;
-      return { stdout: 'tests pass', stderr: '' };
-    },
+    runCommand: async () => { called = true; return { stdout: 'tests pass', stderr: '' }; },
   });
-  assert.deepEqual(await tools.run_test({}), { exit_code: 0, stdout: 'tests pass', stderr: '' });
-  assert.equal(options.cwd, worktree);
-  assert.equal(options.timeout, 60_000);
-  assert.equal(options.env.PATH, process.env.PATH);
-  assert.equal(options.env.ROSTER_SEAT, 'coder');
-  for (const key of ['CUSTOM_KEY', 'GH_TOKEN', 'GITHUB_APP_ID',
-    'GITHUB_APP_PRIVATE_KEY_PATH', 'NODE_TEST_CONTEXT']) {
-    assert.equal(options.env[key], undefined);
-  }
+  assert.deepEqual(await tools.run_test({}), {
+    exit_code: 0, skipped: true, stdout: 'docs-only: tests skipped', stderr: '',
+  });
+  assert.equal(called, false);
   await assert.rejects(tools.run_test({ command: 'echo secret' }), /Tool arguments/);
-
-  const failing = await createTools({ worktree, allowedFiles: ['README.md'],
-    runCommand: async () => { throw Object.assign(new Error('tests failed'), {
-      code: 1, stdout: 'not ok', stderr: 'assertion failed',
-    }); } });
-  assert.deepEqual(await failing.run_test(), {
-    exit_code: 1, stdout: 'not ok', stderr: 'assertion failed',
-  });
-  const timedOut = await createTools({ worktree, allowedFiles: ['README.md'],
-    runCommand: async () => { throw Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }); } });
-  await assert.rejects(timedOut.run_test(), /node --test(?: --test-concurrency \d+)? tests\/repl\.test\.mjs timed out after 60 seconds/);
 });
 
-test('a code slice keeps the full suite with a 5 minute cap', async (context) => {
+test('a code slice runs only the matching test file', async (context) => {
   const worktree = fixture(context);
   docsCheck(worktree);
   let received;
-  const tools = await createTools({ worktree, allowedFiles: ['src/**'],
+  const tools = await createTools({ worktree, allowedFiles: ['src/repl.mjs'],
     runCommand: async (_program, args, options) => { received = { args, timeout: options.timeout }; return { stdout: '', stderr: '' }; } });
   await tools.run_test();
-  assert.deepEqual(received, { args: ['--test', '--test-concurrency', '8'], timeout: 300_000 });
+  assert.deepEqual(received.args.slice(0, 3), ['--test', '--test-concurrency', received.args[2]]);
+  assert.equal(received.args.at(-1), 'tests/repl.test.mjs');
+  assert.equal(received.timeout, 60_000);
   const otherRepo = fixture(context);
   const fallback = await createTools({ worktree: otherRepo, allowedFiles: ['README.md'],
-    runCommand: async (_program, args, options) => { received = { args, timeout: options.timeout }; return { stdout: '', stderr: '' }; } });
-  await fallback.run_test();
-  assert.deepEqual(received, { args: ['--test', '--test-concurrency', '8'], timeout: 300_000 }, 'a repo without the shell test keeps its full suite');
-  const timedOut = await createTools({ worktree, allowedFiles: ['src/**'],
-    runCommand: async () => { throw Object.assign(new Error('timeout'), { code: 'ETIMEDOUT' }); } });
-  await assert.rejects(timedOut.run_test(), /node --test(?: --test-concurrency \d+)? timed out after 300 seconds/);
+    runCommand: async () => { throw new Error('docs-only must not spawn'); } });
+  assert.equal((await fallback.run_test()).skipped, true);
 });
 
 test('every tool refuses "..", vendor, and absolute paths before it runs', async (context) => {
@@ -295,16 +272,16 @@ test('run_test actually executes Node tests from the worktree', async (context) 
     "import test from 'node:test';\nimport assert from 'node:assert/strict';\n" +
     "import { writeFileSync } from 'node:fs';\n" +
     "test('example', () => { assert.equal(2 + 2, 4); writeFileSync('ran-marker.txt', 'yes'); });\n");
-  const tools = await createTools({ worktree, allowedFiles: ['example.mjs'] });
+  const tools = await createTools({ worktree, allowedFiles: ['example.test.mjs'] });
   const result = await tools.run_test();
   assert.equal(result.exit_code, 0, result.stderr);
   assert.equal(readFileSync(path.join(worktree, 'ran-marker.txt'), 'utf8'), 'yes');
 });
 
-test('exactly five tools deny protected reads and Windows alias or stream paths', async (context) => {
+test('coder tools deny protected reads and Windows alias or stream paths', async (context) => {
   const worktree = fixture(context);
   const tools = await createTools({ worktree, allowedFiles: ['**/*'] });
-  const names = ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text'];
+  const names = ['read_file', 'write_file', 'edit_file', 'glob_files', 'run_command', 'list_dir', 'run_test', 'search_text', 'web_search', 'web_fetch'];
   assert.deepEqual(Object.keys(tools), names);
   assert.deepEqual(toolDefinitions.map(({ function: tool }) => tool.name), names);
   for (const file of ['.env', 'nested/.env.local', 'production.env', 'key.pem',

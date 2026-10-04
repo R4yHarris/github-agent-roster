@@ -424,8 +424,7 @@ export async function createTools({
 
   function readable(file, directory = false) {
     if (!sliceReadsOnly || file === 'TASK.md' || isAllowedFile(file, scopedFiles()) || importedByAllowed(file)) return true;
-    if (readmeOnlyDocs) return false;
-    return !isForbiddenRead(file);
+    return false;
   }
 
   function locate(input, { directory = false, write = false } = {}) {
@@ -459,10 +458,18 @@ export async function createTools({
         ? `Planner write_file allows only root ${plannerArtifacts.join(', ').replace(/, ([^,]+)$/, ', and $1')}`
         : `Writing ${normalized} is not allowed by TASK.md or worktree policy`);
     }
+    if (!write && !mapRead && isForbiddenRead(normalized)) {
+      throw new ToolAccessError('Tool access to secrets, Git metadata, policy, workflows, contracts, or debug logs is refused');
+    }
     if (write && isForbiddenRead(normalized) && !mapRead) {
       throw new ToolAccessError('Tool access to secrets, Git metadata, policy, workflows, contracts, or debug logs is refused');
     }
-    if (!write && !mapRead && readmeOnlyDocs && !readable(normalized, directory)) {
+    const underAllowed = sliceReadsOnly && scopedFiles().some((allowed) => {
+      const target = allowed.replaceAll('\\', '/');
+      return target === normalized || target.startsWith(`${normalized}/`);
+    });
+    if (!write && !mapRead && (readmeOnlyDocs || sliceReadsOnly) && !readable(normalized, directory) &&
+        !(directory && (normalized === '.' || normalized === '' || underAllowed))) {
       throw new ToolAccessError(`Reading ${normalized} is not allowed by TASK.md slice scope`);
     }
     return { file, relative, normalized };
@@ -696,7 +703,8 @@ export async function createTools({
       return entries.filter((item) => {
         const child = path.posix.join(normalized, item.name);
         return !isProtectedSurface(child) && (!plannerReads || !partsOf(child).includes('.roster')) &&
-          readable(child, item.isDirectory());
+          (readable(child, item.isDirectory()) || (sliceReadsOnly && scopedFiles().some((allowed) =>
+            allowed.replaceAll('\\', '/').startsWith(`${child}/`) || child.startsWith(`${allowed}/`))));
       })
         .map((item) => ({
         name: item.name,
