@@ -5,6 +5,22 @@ import { taskSections } from '../planner/task.mjs';
 
 const fields = ['difficulty', 'estimate_min', 'task_class', 'model'];
 
+function estimateConfidence(samples, accepted) {
+  if (samples < 3 || accepted < 1) return 'low';
+  return accepted >= 5 ? 'high' : 'medium';
+}
+
+export function needsReestimate(estimate, currentFiles) {
+  const fileSet = (files) => {
+    if (!Array.isArray(files) || files.some((file) => typeof file !== 'string' || !file.trim())) {
+      throw new TypeError('Re-estimation files must be arrays of nonempty file paths');
+    }
+    return new Set(files.map((file) => file.replace(/\\/g, '/')));
+  };
+  const estimated = fileSet(estimate?.files);
+  return [...fileSet(currentFiles)].some((file) => !estimated.has(file));
+}
+
 export function estimateTask(metadata = {}, evaluations = [], defaultModel = '') {
   const { difficulty = 2, estimate_min = 15, task_class = 'feat', model = '' } = metadata;
   if (!Number.isInteger(difficulty) || difficulty < 1 || difficulty > 5) {
@@ -41,6 +57,7 @@ export function estimateTask(metadata = {}, evaluations = [], defaultModel = '')
     difficulty, estimate_min: history ? Math.round(median(accepted)) : estimate_min,
     task_class, model: selectedModel, source: history ? 'history' : 'task/default',
     n: samples.length, accepted: accepted.length,
+    confidence: estimateConfidence(samples.length, accepted.length),
   };
 }
 
@@ -88,15 +105,20 @@ export async function writeEstimate(task, {
     if (recommendation.model !== metadata.model || !Number.isSafeInteger(recommendation.n) || recommendation.n < 3) {
       throw new Error('Recommended estimate must match the selected model with at least three samples');
     }
+    if (!Number.isSafeInteger(recommendation.accepted) || recommendation.accepted < 0 ||
+        recommendation.accepted > recommendation.n) {
+      throw new TypeError('Recommended estimate accepted samples must be an integer from 0 to n');
+    }
     estimateTask({ ...metadata, estimate_min: recommendation.estimate_min });
     Object.assign(metadata, { estimate_min: recommendation.estimate_min, source: 'recommendation',
-      n: recommendation.n, accepted: recommendation.accepted });
+      n: recommendation.n, accepted: recommendation.accepted,
+      confidence: estimateConfidence(recommendation.n, recommendation.accepted) });
   }
   const updatedTask = updateTaskMetadata(task, metadata);
   const evidence = metadata.source === 'recommendation'
     ? `Recommendation samples: ${metadata.n}\nAccepted samples: ${metadata.accepted}\n`
     : `Matching timed evaluations: ${metadata.n}\nAccepted timed evaluations: ${metadata.accepted}\n`;
-  const estimate = `# Estimate\n\n${formatMetadata(metadata)}\n\nSource: ${metadata.source}\n${evidence}\n` +
+  const estimate = `# Estimate\n\n${formatMetadata(metadata)}\nconfidence: ${metadata.confidence}\n\nSource: ${metadata.source}\n${evidence}\n` +
     'A story-point style estimate, not a delivery promise. Compare with human-reported actuals.\n';
   const estimatePath = join(worktree, 'ESTIMATE.md');
   if (writeArtifact) await writeArtifact({ path: 'ESTIMATE.md', content: estimate });

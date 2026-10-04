@@ -41,6 +41,30 @@ An effort-specific recommendation's reported estimate is preserved and labeled
 `Source: recommendation`; missing accepted timing does not invent an actual.
 The resulting fields are written back to `TASK.md`, and `ESTIMATE.md` records
 the estimate, source, and sample counts in the worktree **before** coding.
+`estimateTask()` also returns deterministic `confidence`, recorded in
+`ESTIMATE.md`: `low` with fewer than three matching timed evaluations or no
+accepted timing, `medium` with at least three evaluations and one accepted
+timing, and `high` with at least five accepted timings. Corrections and
+rejections follow the evidence rules above; recommendation confidence uses
+that recommendation's sample counts. Confidence does not change task metadata
+or routing.
+
+For [FEATURE_SPEC.md section 5.3](FEATURE_SPEC.md#53-work-breakdown),
+[classifyAsk()](../src/planner/classify.mjs) preserves legacy `kind` values and
+adds `specKind`: `slice`, `story` (feature), `epic` (initiative), `incident`
+(clear outage, prod down, regression, or hotfix signals), or `question`
+(interrogative ask without a change verb). Unresolved `clarify` asks have
+`specKind: null` unless a question or incident signal is present. This is
+additive taxonomy, not a routing change.
+
+The exported pure `needsReestimate({ files: estimatedFiles }, currentFiles)`
+helper reports any touched path absent from the original estimated file
+snapshot, even when the total count stays unchanged. It ignores duplicates,
+order, and slash direction; empty sets are valid, malformed inputs throw.
+Use concrete repository-relative paths, not allow-list globs. Callers supply
+and retain the snapshot; this helper does not widen scope, rewrite estimates,
+or automatically trigger coder execution. Runtime integration is deferred.
+
 The coder may read but not rewrite either document. They are rechecked after
 coding and before publication; generated estimates are not staged as app code.
 No model usage or elapsed time is fabricated, and no evaluation is written.

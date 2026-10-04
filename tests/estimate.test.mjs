@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { parseConfig } from '../src/lib/config.mjs';
 import { planStub } from '../src/planner/stub.mjs';
-import { estimateTask, writeEstimate } from '../src/runtime/estimate.mjs';
+import { estimateTask, needsReestimate, writeEstimate } from '../src/runtime/estimate.mjs';
 
 const config = parseConfig(readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8')
   .replace('model: ""', 'model: served-model'));
@@ -18,7 +18,7 @@ const evaluations = (minutes) => minutes.map((value, index) => ({
 test('first estimates use defaults and preserve explicit task estimates below three samples', () => {
   assert.deepEqual(estimateTask(), {
     difficulty: 2, estimate_min: 15, task_class: 'feat', model: '',
-    source: 'task/default', n: 0, accepted: 0,
+    source: 'task/default', n: 0, accepted: 0, confidence: 'low',
   });
   assert.equal(estimateTask(metadata, evaluations([10, 20])).estimate_min, 15);
   assert.equal(estimateTask({ ...metadata, estimate_min: 40 }, evaluations([10, 20])).estimate_min, 40);
@@ -54,6 +54,38 @@ test('estimation separates models/classes and counts corrected targets once', ()
   assert.equal(linked.accepted, 2);
 });
 
+test('confidence uses distinct matching timed evidence and accepted samples', () => {
+  for (const [minutes, confidence] of [
+    [[], 'low'], [[10, 20], 'low'], [[10, 20, 30], 'medium'],
+    [[10, 20, 30, 40], 'medium'], [[10, 20, 30, 40, 50], 'high'],
+  ]) assert.equal(estimateTask(metadata, evaluations(minutes)).confidence, confidence);
+  const history = evaluations([10, 20, 30, 40, 50]);
+  assert.equal(estimateTask({ ...metadata, model: 'other-model' }, history).confidence, 'low');
+  assert.equal(estimateTask({ ...metadata, task_class: 'docs' }, history).confidence, 'low');
+  assert.equal(estimateTask(metadata, Array(5).fill(history[0])).confidence, 'low');
+  assert.equal(estimateTask(metadata, [...history, { ...history[4], verdict: 'reject' }]).confidence, 'medium');
+  assert.equal(estimateTask(metadata, history.map((row) => ({ ...row, verdict: 'reject' }))).confidence, 'low');
+  assert.equal(estimateTask(metadata, history.map((row) => ({ ...row, excellence: 'fail' }))).confidence, 'low');
+});
+
+test('re-estimation detects new touched paths, not duplicate entries or count alone', () => {
+  const estimate = { files: ['README.md', 'src/code.mjs'] };
+  assert.equal(needsReestimate(estimate, []), false);
+  assert.equal(needsReestimate(estimate, ['README.md']), false);
+  assert.equal(needsReestimate(estimate, ['src/code.mjs', 'README.md', 'README.md']), false);
+  assert.equal(needsReestimate(estimate, ['src/code.mjs', 'src/extra.mjs']), true);
+  assert.equal(needsReestimate(estimate, [...estimate.files, 'src/extra.mjs']), true);
+  assert.equal(needsReestimate({ files: [] }, ['README.md']), true);
+  assert.equal(needsReestimate({ files: [] }, []), false);
+  assert.equal(needsReestimate(estimate, ['src\\code.mjs']), false);
+  assert.equal(needsReestimate({ files: ['src\\code.mjs'] }, ['src/code.mjs']), false);
+  for (const invalid of [undefined, null, 'README.md', [null], [''], ['  ']]) {
+    assert.throws(() => needsReestimate({ files: invalid }, []), /file paths/);
+    assert.throws(() => needsReestimate(estimate, invalid), /file paths/);
+  }
+  assert.throws(() => needsReestimate(undefined, []), /file paths/);
+});
+
 test('invalid metadata and timing fail explicitly instead of becoming defaults', () => {
   for (const invalid of [{ difficulty: 6 }, { difficulty: 0 }, { estimate_min: 1.5 },
     { estimate_min: -1 }, { task_class: 'chore' }, { model: 'unknown' }, { model: 'not a model' }]) {
@@ -85,6 +117,8 @@ test('ESTIMATE.md and TASK fields use repository history, including legacy joine
   assert.equal(readFileSync(join(worktree, 'ESTIMATE.md'), 'utf8'), result.estimate);
   assert.match(result.estimate, /Matching timed evaluations: 3/);
   assert.match(result.estimate, /Accepted timed evaluations: 2/);
+  assert.equal(result.metadata.confidence, 'medium');
+  assert.match(result.estimate, /confidence: medium/);
   await assert.rejects(writeEstimate(source, { worktree, learningRoot: root, config, env: {} }), /EEXIST/);
 });
 
@@ -95,8 +129,30 @@ test('missing history is a baseline and malformed JSONL is not silently ignored'
   const result = await writeEstimate(source, { worktree: root, learningRoot: root, config, env: {} });
   assert.match(result.task, /difficulty: 2\nestimate_min: 15\ntask_class: docs\nmodel: served-model\n/);
   assert.equal(result.metadata.n, 0);
+  assert.equal(result.metadata.confidence, 'low');
+  assert.match(result.estimate, /confidence: low/);
   mkdirSync(join(root, '.roster'));
   writeFileSync(join(root, '.roster', 'evals.jsonl'), '{\n');
   await assert.rejects(writeEstimate(source, { worktree: root, learningRoot: root, config, env: {} }),
     /evals\.jsonl:1: invalid JSON/);
+});
+
+
+test('recommendation confidence follows its evidence rather than the broader history', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'roster-estimate-confidence-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const task = planStub('Fix README.md.', { title: 'fix: typo' }).task;
+  for (const accepted of [undefined, -1, 1.5, 6]) {
+    await assert.rejects(writeEstimate(task, { worktree: root, learningRoot: root, config, env: {},
+      recommendation: { model: 'served-model', estimate_min: 20, n: 5, accepted } }), /accepted samples/);
+  }
+  for (const [n, accepted, confidence] of [[3, 0, 'low'], [3, 1, 'medium'], [5, 5, 'high']]) {
+    const worktree = join(root, `samples-${n}-${accepted}`);
+    mkdirSync(worktree);
+    const result = await writeEstimate(task, { worktree, learningRoot: root, config, env: {},
+      recommendation: { model: 'served-model', estimate_min: 20, n, accepted } });
+    assert.equal(result.metadata.source, 'recommendation');
+    assert.equal(result.metadata.confidence, confidence);
+    assert.match(result.estimate, new RegExp(`confidence: ${confidence}`));
+  }
 });
