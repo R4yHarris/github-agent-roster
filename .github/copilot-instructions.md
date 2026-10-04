@@ -1,5 +1,8 @@
 Follow root [AGENTS.md](../AGENTS.md). Implement only the current prompt in
-[prompts/](../prompts/). Do not add a Kanban DB. Zero runtime deps unless a prompt
+[prompts/](../prompts/). Ground all work in the product spec,
+[docs/FEATURE_SPEC.md](../docs/FEATURE_SPEC.md): tie each change to a section 5
+feature, honor sections 3 and 7, cite the section in the PR body, and do not
+contradict the spec.  Do not add a Kanban DB. Zero runtime deps unless a prompt
 says otherwise. Node 20 ESM.
 
 Require the `v0.2.0` Git submodule at

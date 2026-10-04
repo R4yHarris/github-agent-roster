@@ -11,6 +11,14 @@ only. This repo does not replace git.
 The GitHub App is the authenticated principal; neither the model, a GHCP
 subagent name, nor `AI_*` metadata grants policy capabilities.
 
+## Product spec
+
+[docs/FEATURE_SPEC.md](docs/FEATURE_SPEC.md) is the product intent. Every change
+must trace to a feature in its section 5, respect the principles (section 3) and
+the "what not to build" list (section 7), and move toward the harness
+acceptance criteria (section 8). Cite the spec section in the PR body. If a
+change contradicts the spec, stop and ask a human to amend the spec first.
+
 ## Hard boundaries
 
 - Work only in this repository unless a task says to read the contracts pack as a dependency.

@@ -41,6 +41,8 @@ or GUI. No Hermes, Claude Code, or Copilot worker is required.
 
 ## Status / what runs today
 
+Product intent lives in the [feature spec](docs/FEATURE_SPEC.md); all
+development is grounded in it.
 The harness is a [delivery feedback loop](docs/FEEDBACK_LOOP.md), not a chat UI:
 [principals](docs/PRINCIPALS.md) bound each seat, [estimates](docs/ESTIMATION.md)
 precede work, and tools, research, tests, and excellence checks produce delivery
