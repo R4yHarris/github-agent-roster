@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
-import { promises as fs } from 'node:fs';
+import { promises as fs, readFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
@@ -34,10 +35,17 @@ export function isReadmeOnlyScope(allowedFiles) {
   return Array.isArray(allowedFiles) && allowedFiles.length === 1 && allowedFiles[0] === 'README.md';
 }
 
-export function testCommandFor(allowedFiles) {
+export function testConcurrency(available = os.availableParallelism()) {
+  return Math.max(1, Math.floor(Number(available) / 2));
+}
+
+export function testCommandFor(allowedFiles, available = os.availableParallelism()) {
+  const jobs = String(testConcurrency(available));
   return isReadmeOnlyScope(allowedFiles)
-    ? { args: ['--test', ...docsTestFiles], timeoutMs: docsTestTimeoutMs, label: `node --test ${docsTestFiles.join(' ')}` }
-    : { args: ['--test'], timeoutMs: fullTestTimeoutMs, label: 'node --test' };
+    ? { args: ['--test', '--test-concurrency', jobs, ...docsTestFiles], timeoutMs: docsTestTimeoutMs,
+      label: `node --test --test-concurrency ${jobs} ${docsTestFiles.join(' ')}` }
+    : { args: ['--test', '--test-concurrency', jobs], timeoutMs: fullTestTimeoutMs,
+      label: `node --test --test-concurrency ${jobs}` };
 }
 
 export const plannerArtifactFiles = Object.freeze(['RECIPE.yml', 'TASK.md', 'ESTIMATE.md']);
@@ -183,11 +191,51 @@ export const toolDefinitions = [
     type: 'function',
     function: {
       name: 'write_file',
-      description: 'Create or replace a UTF-8 file allowed by TASK.md inside the worktree.',
+      description: 'Create a new UTF-8 file allowed by TASK.md. Do not use this to change an existing source file; use edit_file.',
       parameters: {
         type: 'object',
         properties: { path: { type: 'string' }, content: { type: 'string' } },
         required: ['path', 'content'], additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'edit_file',
+      description: 'Replace one exact unique old_string in an existing worktree file. Read the file first. This is the tool for updating code.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          old_string: { type: 'string' },
+          new_string: { type: 'string' },
+        },
+        required: ['path', 'old_string', 'new_string'], additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'glob_files',
+      description: 'Find worktree files by a simple name pattern such as src/**/*.mjs. Returns at most 100 paths.',
+      parameters: {
+        type: 'object',
+        properties: { pattern: { type: 'string' } },
+        required: ['pattern'], additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'run_command',
+      description: 'Run an allowlisted command in the worktree: git status, git diff, or node --test. No shell syntax.',
+      parameters: {
+        type: 'object',
+        properties: { argv: { type: 'array', items: { type: 'string' } } },
+        required: ['argv'], additionalProperties: false,
       },
     },
   },
@@ -219,6 +267,30 @@ export const toolDefinitions = [
         type: 'object',
         properties: { query: { type: 'string' }, path: { type: 'string' } },
         required: ['query'], additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'web_search',
+      description: 'Search the public web. Returns titles and URLs. Requires tools.internet. No credentials are sent.',
+      parameters: {
+        type: 'object',
+        properties: { query: { type: 'string' } },
+        required: ['query'], additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'web_fetch',
+      description: 'Fetch a public http(s) page and return plain text. Blocks private hosts and credentials in the URL.',
+      parameters: {
+        type: 'object',
+        properties: { url: { type: 'string' } },
+        required: ['url'], additionalProperties: false,
       },
     },
   },
@@ -257,6 +329,8 @@ export async function createTools({
   onEvent, signal,
   beforeWrite,
   allowRepoMap = false,
+  allowInternet = false,
+  fetchImpl = globalThis.fetch,
 } = {}) {
   if (!['planner', 'coder'].includes(seat)) throw new TypeError('Only planner and coder seats have file tools');
   if (seat === 'planner' && (!Array.isArray(plannerArtifacts) || !plannerArtifacts.length ||
@@ -300,14 +374,27 @@ export async function createTools({
     throw new TypeError('TASK.md must list files allowed for writing');
   }
 
+  function importedByAllowed(file) {
+    const normalized = file.replaceAll('\\', '/');
+    if (!normalized.endsWith('.mjs') && !normalized.endsWith('.js')) return false;
+    for (const allowed of scopedFiles()) {
+      if (allowed.includes('*')) continue;
+      let text;
+      try { text = readFileSync(path.join(root, allowed), 'utf8'); }
+      catch { continue; }
+      for (const match of text.matchAll(/from\s+['"](\.[^'"]+)['"]/g)) {
+        const target = path.posix.normalize(path.posix.join(path.posix.dirname(allowed), match[1]));
+        const withExt = /\.[cm]?js$/.test(target) ? target : `${target}.mjs`;
+        if (withExt === normalized) return true;
+      }
+    }
+    return false;
+  }
+
   function readable(file, directory = false) {
-    if (!sliceReadsOnly || file === 'TASK.md' || isAllowedFile(file, scopedFiles())) return true;
-    if (!directory) return false;
-    const candidate = process.platform === 'win32' ? file.toLowerCase() : file;
-    return !candidate || scopedFiles().some((pattern) => {
-      const allowed = process.platform === 'win32' ? pattern.toLowerCase() : pattern;
-      return allowed.startsWith(`${candidate}/`);
-    });
+    if (!sliceReadsOnly || file === 'TASK.md' || isAllowedFile(file, scopedFiles()) || importedByAllowed(file)) return true;
+    if (readmeOnlyDocs) return false;
+    return !isForbiddenRead(file);
   }
 
   function locate(input, { directory = false, write = false } = {}) {
@@ -341,10 +428,10 @@ export async function createTools({
         ? `Planner write_file allows only root ${plannerArtifacts.join(', ').replace(/, ([^,]+)$/, ', and $1')}`
         : `Writing ${normalized} is not allowed by TASK.md or worktree policy`);
     }
-    if (isForbiddenRead(normalized) && !mapRead) {
+    if (write && isForbiddenRead(normalized) && !mapRead) {
       throw new ToolAccessError('Tool access to secrets, Git metadata, policy, workflows, contracts, or debug logs is refused');
     }
-    if (!write && !mapRead && !readable(normalized, directory)) {
+    if (!write && !mapRead && readmeOnlyDocs && !readable(normalized, directory)) {
       throw new ToolAccessError(`Reading ${normalized} is not allowed by TASK.md slice scope`);
     }
     return { file, relative, normalized };
@@ -417,9 +504,12 @@ export async function createTools({
       if (existing && !existing.isFile()) throw new Error('write_file requires a regular file');
       if (seat === 'coder') await beforeWrite?.({ path: normalized, allowedFiles: scopedFiles() });
       let content = args.content;
-      if (seat === 'coder' && existing?.isFile() && !content.endsWith('\n')) {
+      if (seat === 'coder' && existing?.isFile()) {
         const previousText = await fs.readFile(file, 'utf8').catch(() => '');
-        if (previousText.endsWith('\n')) content = `${content}\n`;
+        if (previousText.length > 2000 && content.length < previousText.length * 0.6) {
+          throw new ToolAccessError('Refusing to replace an existing file with a much shorter rewrite. Use edit_file with the exact old text.');
+        }
+        if (!content.endsWith('\n') && previousText.endsWith('\n')) content = `${content}\n`;
       }
       const previous = plannerWrites.get(normalized);
       if (seat === 'planner' && (existing && !previous || !existing && previous)) {
@@ -459,6 +549,79 @@ export async function createTools({
       }
       if (readmeOnlyDocs && normalized === 'README.md') readmeWritten = true;
       return { path: normalized, bytes: Buffer.byteLength(content, 'utf8') };
+    },
+
+    async edit_file(args) {
+      argumentsFor(args, ['path', 'old_string', 'new_string']);
+      if (typeof args.old_string !== 'string' || typeof args.new_string !== 'string' || !args.old_string) {
+        throw new TypeError('edit_file requires a nonempty old_string and a new_string');
+      }
+      if (args.old_string === args.new_string) throw new ToolAccessError('edit_file old_string and new_string are identical');
+      const { file, relative, normalized } = locate(args.path, { write: true });
+      await checkComponents(relative);
+      await checkParent(file);
+      const entry = await fs.lstat(file);
+      if (!entry.isFile()) throw new Error('edit_file requires an existing regular file');
+      if (seat === 'coder') await beforeWrite?.({ path: normalized, allowedFiles: scopedFiles() });
+      const text = await fs.readFile(file, 'utf8');
+      const count = text.split(args.old_string).length - 1;
+      if (count !== 1) {
+        throw new ToolAccessError(count === 0
+          ? 'edit_file old_string was not found. Read the file and copy the exact text.'
+          : 'edit_file old_string matched more than once. Include more surrounding lines.');
+      }
+      const content = text.replace(args.old_string, args.new_string);
+      await fs.writeFile(file, content, 'utf8');
+      return { path: normalized, replacements: 1 };
+    },
+
+    async glob_files(args) {
+      argumentsFor(args, ['pattern']);
+      if (typeof args.pattern !== 'string' || !args.pattern || /[\r\n\0]/.test(args.pattern)) {
+        throw new TypeError('glob_files pattern must be a nonempty single-line string');
+      }
+      const expression = new RegExp(`^${args.pattern.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
+      const found = [];
+      async function visit(input) {
+        const { file, relative, normalized } = locate(input, { directory: true });
+        if (relative) await checkComponents(relative);
+        const entry = await fs.lstat(file);
+        if (!entry.isDirectory()) return;
+        for (const child of await fs.readdir(file, { withFileTypes: true })) {
+          if (child.name === '.git' || child.name === 'node_modules' || child.name === 'vendor') continue;
+          const next = path.posix.join(normalized === '.' ? '' : normalized, child.name);
+          if (child.isDirectory()) await visit(next);
+          else if (child.isFile() && expression.test(next)) found.push(next);
+          if (found.length > 100) return;
+        }
+      }
+      await visit('.');
+      return { paths: found.slice(0, 100), truncated: found.length > 100 };
+    },
+
+    async run_command(args) {
+      argumentsFor(args, ['argv']);
+      if (!Array.isArray(args.argv) || args.argv.length < 1 || args.argv.length > 8 ||
+          args.argv.some((part) => typeof part !== 'string' || !part || /[\r\n\0;&|`$<>]/.test(part))) {
+        throw new ToolAccessError('run_command argv must be 1 to 8 plain strings with no shell syntax');
+      }
+      const [bin, ...rest] = args.argv;
+      const gitOk = bin === 'git' && ['status', 'diff'].includes(rest[0]);
+      const testOk = bin === 'node' && rest[0] === '--test';
+      if (!gitOk && !testOk) {
+        throw new ToolAccessError('run_command allows only git status, git diff, and node --test');
+      }
+      try {
+        const { stdout, stderr } = await execute(testOk ? process.execPath : 'git', rest, {
+          cwd: root, timeout: 60_000, encoding: 'utf8', maxBuffer: 1024 * 1024, signal,
+        });
+        return { exit_code: 0, stdout: stdout.slice(0, 8000), stderr: stderr.slice(0, 2000) };
+      } catch (error) {
+        if (typeof error.code === 'number') {
+          return { exit_code: error.code, stdout: String(error.stdout ?? '').slice(0, 8000), stderr: String(error.stderr ?? '').slice(0, 2000) };
+        }
+        throw new ToolAccessError(`run_command failed: ${error.message}`);
+      }
     },
 
     async list_dir(args = {}) {
@@ -573,6 +736,50 @@ export async function createTools({
       }
       await visit(args.path ?? '.');
       return { matches: matches.slice(0, 50), truncated: matches.length > 50 };
+    },
+
+    async web_search(args) {
+      argumentsFor(args, ['query']);
+      if (!allowInternet) throw new ToolAccessError('web_search is disabled until tools.internet is true');
+      if (typeof args.query !== 'string' || !args.query.trim() || args.query.length > 300) {
+        throw new ToolAccessError('web_search query must be 1-300 characters');
+      }
+      const endpoint = `https://api.duckduckgo.com/?q=${encodeURIComponent(args.query)}&format=json&no_html=1&skip_disambig=1`;
+      const response = await fetchImpl(endpoint, { signal });
+      if (!response.ok) throw new ToolAccessError(`web_search failed with HTTP ${response.status}`);
+      const body = await response.json();
+      const results = [];
+      if (body.AbstractText && body.AbstractURL) {
+        results.push({ title: body.Heading || args.query, url: body.AbstractURL, snippet: String(body.AbstractText).slice(0, 400) });
+      }
+      for (const topic of body.RelatedTopics ?? []) {
+        if (topic.Text && topic.FirstURL) {
+          results.push({ title: String(topic.Text).slice(0, 160), url: topic.FirstURL, snippet: String(topic.Text).slice(0, 400) });
+        }
+        if (results.length >= 8) break;
+      }
+      return { results: results.slice(0, 8) };
+    },
+
+    async web_fetch(args) {
+      argumentsFor(args, ['url']);
+      if (!allowInternet) throw new ToolAccessError('web_fetch is disabled until tools.internet is true');
+      let target;
+      try { target = new URL(args.url); } catch { throw new ToolAccessError('web_fetch requires an http(s) URL'); }
+      if (!['http:', 'https:'].includes(target.protocol) || target.username || target.password) {
+        throw new ToolAccessError('web_fetch requires an http(s) URL without credentials');
+      }
+      const host = target.hostname.toLowerCase();
+      if (host === 'localhost' || host.endsWith('.local') || host === '0.0.0.0' ||
+          /^(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[0-1])\.)/.test(host)) {
+        throw new ToolAccessError('web_fetch refuses private or local hosts');
+      }
+      const response = await fetchImpl(target, { signal, redirect: 'follow' });
+      if (!response.ok) throw new ToolAccessError(`web_fetch failed with HTTP ${response.status}`);
+      const text = await response.text();
+      const plain = text.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+      return { url: target.href, text: plain.slice(0, 8000), truncated: plain.length > 8000 };
     },
   };
   const guarded = Object.fromEntries(Object.entries(tools).map(([name, execute]) => [name, async (args) => {

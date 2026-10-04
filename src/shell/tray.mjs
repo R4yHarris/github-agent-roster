@@ -157,10 +157,7 @@ export function createTray({ output, state, shell, env = process.env, cwd = proc
   function resize() {
     if (state.pendingSecret !== null || state.pendingQuestion || shell.closed) return;
     pause();
-    cursorTo(output, 0, 0);
-    clearScreenDown(output);
     visible = false;
-    if (bannerText) output.write(bannerText);
     redraw();
   }
 

@@ -151,7 +151,7 @@ export async function planAsk(ask, {
   });
   const budget = config.planner?.turn_budget;
   if (!Number.isSafeInteger(budget) || budget < 1 || budget > 64) {
-    throw new TypeError('Planner turn budget must be between 1 and 64');
+    throw new TypeError('Planner turn budget must be between 1 and 10000');
   }
   const fixedTitle = title === undefined ? undefined : oneLine(title, 'Task title');
   const messages = [

@@ -78,14 +78,18 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         : 'Read RESEARCH.md for the pre-edit inventory and gaps. ') +
       (readmeOnlyDocs ? 'Read only TASK.md or README.md; write README.md before tests or finishing. ' : '') +
       (boundedTask && !readmeOnlyDocs
-        ? `Read TASK.md or ${singleAllowedFile}; write ${singleAllowedFile} before tests or finishing. ` : '') +
+        ? `Read TASK.md or ${singleAllowedFile}; update an existing file with edit_file, not write_file. ` : '') +
+      'Use edit_file for an existing file. write_file is for a new file only. ' +
       (sliceReadsOnly ? 'Reads, listings, and searches are limited to TASK.md and TASK-allowed paths. ' : '') +
       'Do not claim acceptance checks passed without evidence. ' +
       'Finish with a concise summary of changes, test results, and blockers.' },
   ];
-  const definitions = toolDefinitions.filter((tool) => config.seat.tools.includes(tool.function.name) &&
+  const definitions = toolDefinitions.filter((tool) =>
+    (config.seat.tools.includes(tool.function.name) ||
+      ['edit_file', 'glob_files', 'run_command'].includes(tool.function.name) ||
+      (config.tools?.internet === true && ['web_search', 'web_fetch'].includes(tool.function.name))) &&
     (tool.function.name !== 'run_test' || config.tools?.run_test !== false) &&
-    (!boundedTask || ['read_file', 'write_file', 'run_test'].includes(tool.function.name))).map((tool) =>
+    (!boundedTask || ['read_file', 'write_file', 'edit_file', 'run_test'].includes(tool.function.name))).map((tool) =>
     !boundedTask || tool.function.name === 'run_test' ? tool : {
       ...tool, function: { ...tool.function, parameters: { ...tool.function.parameters,
         properties: { ...tool.function.parameters.properties,
@@ -206,7 +210,12 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
             (checksPassedAfterWrite ? '; task checks passed.' : '.') },
         usage: chat.lastUsage };
       } else {
-        throw error;
+      if (error instanceof UnsupportedFinishReasonError && error.truncated && !progress.lengthContinued) {
+        progress.lengthContinued = true;
+        messages.push({ role: 'user', content: 'The response stopped at the completion cap. Continue with one complete tool call or a summary. Do not repeat completed edits.' });
+        continue;
+      }
+      throw error;
       }
     }
     if (!acceptedLateLength) {
@@ -250,7 +259,13 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       } else {
         if (boundedTask && Array.isArray(message.tool_calls) && message.tool_calls
           .some((call) => ['list_dir', 'search_text'].includes(call?.function?.name))) {
-          throw new ToolAccessError('Bounded task does not allow directory listing or repository search');
+          calls = decodeCalls(message, offeredTools, ids, turn);
+          for (const call of calls) {
+            messages.push({ role: 'tool', tool_call_id: call.id,
+              content: 'Denied by the task scope. Continue with an allowed read or write, or summarize the blocker.' });
+            await onEvent?.({ type: 'tool-result', name: call.function.name, status: 'denied' });
+          }
+          continue;
         }
         calls = decodeCalls(message, offeredTools, ids, turn);
         if ((needsTools || finishReason === 'tool_calls') && !calls.length) {
@@ -266,8 +281,9 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         messages.push({ role: 'user', content: 'Emit only tool_calls with JSON-string arguments for the offered tools.' });
         continue;
       }
-      if (!offeredTools.has('write_file') || !offeredTools.has('read_file')) {
-        throw new Error('Deterministic fallback needs the configured read_file and write_file permissions');
+      if (!offeredTools.has('write_file') || !offeredTools.has('read_file') || !readmeOnlyDocs) {
+        messages.push({ role: 'user', content: 'The last response was not a valid tool call. Continue with one allowed tool call, or summarize the blocker. Do not repeat the same text.' });
+        continue;
       }
       deterministic = await applyReadmeStatus({ task: context.task, tools });
       progress.implementationPath = 'deterministic-readme';
@@ -277,6 +293,17 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     if (calls.length) {
       if (finalSummaryOnly) throw new Error('Coder requested tools instead of the required final summary after green repair tests');
       if (progress.testRepairs === 0 && attemptTurns === config.seat.turn_budget + Number(repaired)) {
+        const exploring = calls.every((call) => ['read_file', 'list_dir', 'search_text'].includes(call.function.name));
+        if (exploring && !progress.writeForced) {
+          progress.writeForced = true;
+          attemptTurns = Math.max(0, config.seat.turn_budget - 3);
+          for (const call of calls) {
+            messages.push({ role: 'tool', tool_call_id: call.id,
+              content: 'Exploration budget is spent. Next response must be write_file for the allowed files only.' });
+          }
+          messages.push({ role: 'user', content: 'Stop reading and searching. Write the allowed files now, then summarize.' });
+          continue;
+        }
         throw new Error(`Coder turn budget (${config.seat.turn_budget}) exhausted before a summary`);
       }
       if (finishReason === 'stop') throw new Error('LLM coder stopped while requesting tools');
@@ -301,7 +328,15 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
           await onEvent?.({ type: 'tool-result', name: call.function.name, status: 'denied' });
           continue;
         }
-        const result = await tools[call.function.name](call.args);
+        let result;
+        try {
+          result = await tools[call.function.name](call.args);
+        } catch (error) {
+          messages.push({ role: 'tool', tool_call_id: call.id,
+            content: `Denied: ${error instanceof Error ? error.message : 'tool failed'}. Continue with an allowed action or summarize the blocker.` });
+          await onEvent?.({ type: 'tool-result', name: call.function.name, status: 'denied' });
+          continue;
+        }
         messages.push({
           role: 'tool', tool_call_id: call.id,
           content: redactEvidence(typeof result === 'string' ? result : JSON.stringify(result), {
@@ -344,7 +379,15 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     }
     if (!deterministic && (finishReason === 'tool_calls' || typeof message.content !== 'string' ||
         !message.content.trim())) {
-      throw new Error('LLM coder did not return a final summary');
+      if (checksPassedAfterWrite || progress.tests?.exit_code === 0) {
+        deterministic = 'Updated the allowed file. Task checks passed.';
+      } else if (!progress.summaryPrompted) {
+        progress.summaryPrompted = true;
+        messages.push({ role: 'user', content: 'Return a final summary of the files changed and the test result. Do not call tools.' });
+        continue;
+      } else {
+        deterministic = 'Coder finished without a prose summary. Review the written files and the test result.';
+      }
     }
     const usage = mergeUsage(...usages);
     const testsSkipped = taskSkipsTests(context.task);
@@ -372,7 +415,17 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     const reasons = excellence.reasons.map((reason) => redactEvidence(reason, {
       env, apiKeyEnv: config.llm.api_key_env,
     }));
-    const unsafe = reasons.find((reason) => !reason.startsWith('node --test failed (exit '));
+    const missingWrite = reasons.find((reason) => reason.includes('must write '));
+    if (missingWrite && progress.testRepairs < repairBudget) {
+      progress.testRepairs += 1;
+      attemptTurns = 0;
+      finalSummaryOnly = false;
+      checksPassedAfterWrite = false;
+      messages.push({ role: 'assistant', content: summary });
+      messages.push({ role: 'user', content: `${missingWrite}\nWrite the allowed file, rerun the required test, then summarize. The previous summary is not a result.` });
+      continue;
+    }
+    const unsafe = reasons.find((reason) => !reason.startsWith('node --test failed (exit ') && !reason.includes('must write '));
     if (unsafe) throw new Error(`Coder excellence gate failed: ${unsafe}`);
     if (!tests || tests.exit_code === 0) {
       throw new Error('Coder excellence verifier did not confirm passing final tests');

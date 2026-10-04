@@ -2,11 +2,9 @@ import { splitTaskFrontmatter } from '../runtime/skills.mjs';
 import { isForbiddenWrite, planArtifactFiles, plannerArtifactFiles } from '../runtime/tools.mjs';
 
 export function oneLine(value, label) {
-  if (typeof value !== 'string' || !value.trim() ||
-      /[\x00-\x1f\x7f]/.test(value) || value.length > 240) {
-    throw new TypeError(`${label} must be one nonempty line (at most 240 characters)`);
-  }
-  return value.trim();
+  const collapsed = typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim() : '';
+  if (!collapsed) throw new TypeError(`${label} must be one nonempty line (at most 240 characters)`);
+  return collapsed.slice(0, 240);
 }
 
 export function allowedFile(value) {
@@ -42,7 +40,7 @@ export function taskSections(task) {
   if (text.includes('\r')) throw new TypeError('TASK.md contains a lone carriage return');
   const titleHeading = /^# +(.+?)[ \t]*$/m.exec(text);
   if (!titleHeading || text.slice(0, titleHeading.index).trim()) throw new TypeError('TASK.md needs a title heading');
-  const title = oneLine(titleHeading[1].replace(/^(?:task|title):[ \t]*/i, ''), 'Task title');
+  const title = oneLine(titleHeading[1].replace(/^(?:task|title):[ \t]*/i, '') || 'Task', 'Task title');
   const starts = [];
   const known = new Set();
   let offset = 0;
