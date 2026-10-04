@@ -23,8 +23,8 @@ export function parseEvaluationArgs(input) {
   for (let index = 4; index < args.length; index += 2) {
     const flag = args[index];
     const value = args[index + 1];
-    if (!['--minutes', '--comment', '--note'].includes(flag) || value === undefined ||
-        Object.hasOwn(options, flag === '--note' ? 'comment' : flag.slice(2))) throw new TypeError(usage);
+    if (!['--minutes', '--comment'].includes(flag) || value === undefined ||
+        Object.hasOwn(options, flag.slice(2))) throw new TypeError(usage);
     if (flag === '--minutes') {
       if (!/^(?:0|[1-9]\d*)$/.test(value) || !Number.isSafeInteger(Number(value))) {
         throw new TypeError('minutes must be a nonnegative integer');
@@ -98,9 +98,7 @@ export async function recordEvaluation(target, verdict, difficulty, again, {
     throw new TypeError('difficulty must be an integer from 1 to 5');
   }
   if (!['y', 'n'].includes(again)) throw new TypeError('again must be y or n');
-  if (['reject', 'rework'].includes(verdict) && !comment.trim()) {
-    throw new TypeError('A reject or rework evaluation requires a note before any record is written');
-  }
+  if (typeof comment !== 'string') throw new TypeError('comment must be text');
   const evaluation = {
     sha: SHA.test(target) ? target.toLowerCase() : null,
     session: SHA.test(target) ? null : target,
@@ -137,28 +135,16 @@ export async function recordEvaluation(target, verdict, difficulty, again, {
   }
   validateLocalEvaluation(evaluation, 'AI-Eval');
   const directory = resolve(root, '.roster');
-  const recordPath = resolve(directory, 'evals.jsonl');
-  const existing = await fileSystem.readFile(recordPath, 'utf8').catch((error) => {
-    if (error.code === 'ENOENT') return '';
-    throw error;
-  });
-  if (existing.split(/\r?\n/).filter(Boolean).some((line) => {
-    let saved;
-    try { saved = JSON.parse(line); } catch { return false; }
-    return saved.session === evaluation.session && saved.sha === evaluation.sha;
-  })) {
-    return { ...evaluation, path: recordPath, duplicate: true };
-  }
   try {
     await fileSystem.mkdir(directory, { recursive: true, mode: 0o700 });
   } catch (error) {
     throw new Error(`Could not create ${directory}: ${failureDetail(error)}`, { cause: error });
   }
-  await appendJsonl(recordPath, evaluation, validateLocalEvaluation, fileSystem);
+  await appendJsonl(resolve(directory, 'evals.jsonl'), evaluation, validateLocalEvaluation, fileSystem);
   try {
     await commenter({ evaluation, record, cwd: root, run, env, log });
   } catch (error) {
     throw new Error(`AI-Eval was recorded locally, but the PR comment failed: ${failureDetail(error)}`, { cause: error });
   }
-  return { ...evaluation, path: recordPath };
+  return evaluation;
 }
