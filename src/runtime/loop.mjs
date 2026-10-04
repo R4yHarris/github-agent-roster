@@ -85,6 +85,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   const requiresWebSearch = /\bweb_search\b/.test(context.task);
   const requiresWebFetch = /\bweb_fetch\b/.test(context.task);
   const definitions = toolDefinitions.filter((tool) =>
+    (config.seat.recipe_tools === undefined || config.seat.recipe_tools.includes(tool.function.name)) &&
     (config.seat.tools.includes(tool.function.name) ||
       ['edit_file', 'glob_files', ...(requiresWebSearch || requiresWebFetch ? [] : ['run_command'])].includes(tool.function.name) ||
       (config.tools?.internet === true &&

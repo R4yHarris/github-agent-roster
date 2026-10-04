@@ -143,3 +143,46 @@ test('a response without usage leaves the context field unknown', async () => {
   const rail = stripVTControlCharacters(formatTray(display, { columns: 120, color: false, now: 0 }).rail);
   assert.match(rail, /- \/ 1\.0m/);
 });
+
+
+test('an explicit recipe tool list restricts automatically offered tools without widening access', async (context) => {
+  const task = planStub('Update `README.md` with documentation.',
+    { reference: 'issue:4', metadata: { task_class: 'docs', difficulty: 2 } }).task;
+  const options = fixture(context, task);
+  let calls = 0;
+  const result = await runCoder({ ...options, env: {},
+    config: { ...config, seat: { ...config.seat, recipe_tools: ['write_file', 'web_search'] } },
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      assert.deepEqual(body.tools.map((tool) => tool.function.name), calls === 0 ? ['write_file'] : []);
+      return ++calls === 1
+        ? response('tool_calls', { role: 'assistant', content: null, tool_calls: [writeCall()] })
+        : response('stop', { role: 'assistant', content: 'Updated README.' });
+    },
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(result.excellence.pass, true);
+});
+
+test('an explicitly empty recipe tool list denies even automatic write tools', async (context) => {
+  const task = planStub('Update `README.md` with documentation.',
+    { reference: 'issue:4', metadata: { task_class: 'docs', difficulty: 2 } }).task;
+  const options = fixture(context, task);
+  await assert.rejects(runCoder({ ...options, env: {},
+    config: { ...config, seat: { ...config.seat, recipe_tools: [] } },
+    fetchImpl: async (_url, request) => {
+      assert.deepEqual(JSON.parse(request.body).tools, []);
+      return response('tool_calls', { role: 'assistant', content: null, tool_calls: [writeCall()] });
+    },
+  }), /invalid or unavailable tool/);
+  assert.equal(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), '# Example\n');
+});
+
+test('recipe tools deny research reads before implementation', async (context) => {
+  const options = fixture(context);
+  await assert.rejects(runCoder({ ...options, env: {},
+    config: { ...config, seat: { ...config.seat, recipe_tools: [] } },
+    fetchImpl() { assert.fail('denied research must not contact the LLM'); },
+  }), /allow-list denies read_file/);
+  assert.equal(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), '# Example\n');
+});

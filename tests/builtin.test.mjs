@@ -2058,3 +2058,23 @@ test('staging refuses changes outside the task scope', async (context) => {
   await assert.rejects(stageReviewedFiles(worktree, ['src/**']), /outside TASK.md scope/);
   assert.equal(git(worktree, 'diff', '--cached', '--name-only'), '');
 });
+
+
+for (const [capability, failure] of [
+  ['max_difficulty: 1', /max_difficulty 1/],
+  ['skills: []', /does not cover task skills/],
+]) {
+  test(`recipe ${capability} blocks the coder before it starts`, async (context) => {
+    const options = fixture(context);
+    const first = await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {} });
+    const recipe = readFileSync(first.recipePath, 'utf8').replace('  - id: coder\n',
+      `  - id: coder\n    ${capability}\n`);
+    writeFileSync(first.recipePath, recipe);
+    await assert.rejects(runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {},
+      onRunEvent(event) { assert.notEqual(event.seat, 'coder'); },
+      fetchImpl() { assert.fail('blocked assignment must not contact an LLM'); },
+    }), failure);
+    assert.equal(existsSync(path.join(first.worktreePath, 'RESULT.md')), false);
+    assert.equal(existsSync(path.join(first.worktreePath, 'REVIEW.md')), false);
+  });
+}

@@ -1,6 +1,12 @@
 import { lstatSync, readFileSync } from "node:fs";
 import { TextDecoder } from "node:util";
 
+import { toolDefinitions } from "../runtime/tools.mjs";
+
+const SKILLS = ["research", "implement", "test", "review", "incident", "docs",
+  "implement-task", "read-before-write", "result-report", "run-tests", "small-diff"];
+const TOOLS = toolDefinitions.map(({ function: tool }) => tool.name);
+
 const MAX_RECIPE_BYTES = 65_536;
 const SEAT_IDS = ["planner", "coder", "reviewer"];
 const WORKERS = ["copilot", "hermes", "builtin"];
@@ -14,6 +20,32 @@ export class RecipeError extends Error {}
 
 function invalidRecipe() {
   throw new RecipeError("Invalid or unsupported recipe; expected the strict version 1 format in docs/SEATS.md.");
+}
+
+function capabilityList(value, known) {
+  const list = /^\[([^\[\]]*)\]$/.exec(value);
+  if (!list) invalidRecipe();
+  const names = list[1].trim() ? list[1].split(",").map((name) => name.trim()) : [];
+  if (names.some((name) => !known.includes(name)) || new Set(names).size !== names.length) invalidRecipe();
+  return Object.freeze(names);
+}
+
+export function assertSeatCovers(seat, task) {
+  if (seat.max_difficulty !== undefined) {
+    if (!Number.isInteger(task.difficulty) || task.difficulty < 1 || task.difficulty > 5) {
+      throw new RecipeError("Task difficulty must be an integer from 1 to 5 for a bounded seat.");
+    }
+    if (task.difficulty > seat.max_difficulty) {
+      throw new RecipeError(`Seat ${seat.id} max_difficulty ${seat.max_difficulty} cannot cover task difficulty ${task.difficulty}.`);
+    }
+  }
+  if (seat.skills !== undefined) {
+    if (!Array.isArray(task.skills) || task.skills.some((skill) => typeof skill !== "string")) {
+      throw new RecipeError("Task skills must be a list for a skill-bounded seat.");
+    }
+    const missing = task.skills.filter((skill) => !seat.skills.includes(skill));
+    if (missing.length) throw new RecipeError(`Seat ${seat.id} does not cover task skills: ${missing.join(", ")}.`);
+  }
 }
 
 export function parseRecipe(source) {
@@ -41,10 +73,19 @@ export function parseRecipe(source) {
     const builtin = fields.worker === "builtin";
     if (builtin !== Object.hasOwn(fields, "sequence") ||
         (builtin && fields.sequence !== `[${BUILTIN_SEQUENCES[fields.id].join(", ")}]`)) invalidRecipe();
+    const capabilities = {};
+    for (const [key, known] of [["skills", SKILLS], ["tools", TOOLS]]) {
+      if (Object.hasOwn(fields, key)) capabilities[key] = capabilityList(fields[key], known);
+    }
+    if (Object.hasOwn(fields, "max_difficulty")) {
+      if (!/^[1-5]$/.test(fields.max_difficulty)) invalidRecipe();
+      capabilities.max_difficulty = Number(fields.max_difficulty);
+    }
     seats.push(Object.freeze({
       id: fields.id,
       principal: fields.principal,
       worker: fields.worker,
+      ...capabilities,
       ...(builtin ? { sequence: Object.freeze([...BUILTIN_SEQUENCES[fields.id]]) } : {}),
     }));
     seatIds.add(fields.id);
@@ -80,7 +121,7 @@ export function parseRecipe(source) {
       continue;
     }
 
-    const item = /^  - (id|principal|worker|sequence): (.*)$/.exec(line);
+    const item = /^  - (id|principal|worker|sequence|skills|tools|max_difficulty): (.*)$/.exec(line);
     if (item) {
       if (!inSeats) invalidRecipe();
       finishSeat();
@@ -89,7 +130,7 @@ export function parseRecipe(source) {
       continue;
     }
 
-    const field = /^    (id|principal|worker|sequence): (.*)$/.exec(line);
+    const field = /^    (id|principal|worker|sequence|skills|tools|max_difficulty): (.*)$/.exec(line);
     if (!field || !inSeats || !fields) invalidRecipe();
     addField(field[1], field[2]);
   }

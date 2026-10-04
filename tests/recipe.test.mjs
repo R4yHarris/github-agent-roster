@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { parseRecipe, RecipeError, validateRecipe } from "../src/lib/recipe.mjs";
+import { assertSeatCovers, parseRecipe, RecipeError, validateRecipe } from "../src/lib/recipe.mjs";
 
 const example = `version: 1
 ask: issue:42
@@ -177,4 +177,46 @@ test("refuses a symlink even when its target is a valid recipe", (context) => {
     throw error;
   }
   assert.throws(() => validateRecipe(link), /not a symlink/);
+});
+
+
+test("parses and freezes optional capabilities without changing omitted fields", () => {
+  const source = example + "    skills: [implement-task, run-tests]\n    tools: [read_file, edit_file]\n    max_difficulty: 3\n";
+  const seat = parseRecipe(source).seats[1];
+  assert.deepEqual(seat.skills, ["implement-task", "run-tests"]);
+  assert.deepEqual(seat.tools, ["read_file", "edit_file"]);
+  assert.equal(seat.max_difficulty, 3);
+  assert.ok(Object.isFrozen(seat.skills));
+  assert.ok(Object.isFrozen(seat.tools));
+  assert.equal(Object.hasOwn(parseRecipe(example).seats[1], "tools"), false);
+  for (const max of [1, 5]) {
+    assert.equal(parseRecipe(example + `    max_difficulty: ${max}\n`).seats[1].max_difficulty, max);
+  }
+  assert.deepEqual(parseRecipe(example + "    tools: []\n    skills: []\n").seats[1].tools, []);
+  assert.deepEqual(parseRecipe(example.replace("  - id: coder", "  - tools: []\n    id: coder")).seats[1].tools, []);
+});
+
+test("rejects unknown, duplicate, malformed capabilities and out-of-range difficulty", () => {
+  for (const field of [
+    "skills: [unknown]", "skills: [implement-task, implement-task]", "skills: implement-task",
+    'skills: ["docs"]', "skills: [docs,]", "tools: [merge]", "tools: [shell]",
+    "tools: [read_file, read_file]", "tools: {}", "max_difficulty: 0", "max_difficulty: 6",
+    "max_difficulty: 2.5", "max_difficulty: 03", 'max_difficulty: "3"', "max_difficulty: high",
+    "tools: []\n    tools: [read_file]", "skills: []\n    skills: [docs]",
+    "max_difficulty: 3\n    max_difficulty: 4",
+  ]) assert.throws(() => parseRecipe(example + `    ${field}\n`), RecipeError, field);
+});
+
+test("coverage is pure, checks all skills and exact difficulty ceilings, and keeps legacy unbounded", () => {
+  const seat = parseRecipe(example + "    skills: [implement-task, run-tests]\n    max_difficulty: 3\n").seats[1];
+  const task = Object.freeze({ difficulty: 3, skills: Object.freeze(["implement-task", "run-tests"]) });
+  assert.doesNotThrow(() => assertSeatCovers(seat, task));
+  assert.throws(() => assertSeatCovers(seat, { ...task, difficulty: 4 }), /max_difficulty 3/);
+  assert.throws(() => assertSeatCovers(seat, { ...task, skills: ["implement-task", "docs"] }), /docs/);
+  assert.throws(() => assertSeatCovers(seat, { skills: [] }), /Task difficulty/);
+  assert.throws(() => assertSeatCovers(seat, { difficulty: 2 }), /Task skills/);
+  const empty = parseRecipe(example + "    skills: []\n").seats[1];
+  assert.doesNotThrow(() => assertSeatCovers(empty, { skills: [] }));
+  assert.throws(() => assertSeatCovers(empty, { skills: ["docs"] }), /docs/);
+  assert.doesNotThrow(() => assertSeatCovers(parseRecipe(example).seats[1], {}));
 });
