@@ -50,6 +50,17 @@ from GitHub and reports the local worktree path. `--offline` reads only the
 cached assignment and filesystem: it reports PR state as **unknown**, not
 `none`. The interactive shell offers the same behavior via `/status`.
 
+For an open assigned issue, online status also reports **work health**
+(FEATURE_SPEC.md section 5.8): **stranded** means no local `issue-N` branch
+or worktree, **stale** means a claim exists but no run-log heartbeat has been
+seen within 30 minutes, and **healthy** means the latest heartbeat is within
+that threshold (inclusive). Run-log timestamps are activity evidence, not
+proof that a worker is alive; a slow model is never killed. Offline status
+cannot confirm assignment or issue state and does not classify work health.
+This is read-only: issues stay open, branches and worktrees stay untouched.
+Roster currently records no worker lock/PID, so stale claims are reported
+without inventing locks or claiming crash recovery has released one.
+
 Ignored `.roster/memory/<seat>.jsonl` files are seat context; automatic seat
 `.roster/runs/*.jsonl` and human `.roster/evals.jsonl` are learning evidence.
 Worktrees and local Ask drafts are working material. None replaces the

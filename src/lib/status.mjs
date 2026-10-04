@@ -8,6 +8,7 @@ import { githubRepository } from './github-repository.mjs';
 import { loadLearning, repositoryRoot } from './learn.mjs';
 import { ensureLocalPath } from './paths.mjs';
 import { readIssueLogs } from './run-log.mjs';
+import { classifyStrandedWork, defaultStaleThresholdMs } from './stranded.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -57,6 +58,8 @@ export async function readStatus({
   config = loadConfig({ repoRoot: rosterRoot }),
   runCommand = execute,
   env = process.env,
+  now = Date.now(),
+  thresholdMs = defaultStaleThresholdMs,
 } = {}) {
   if (typeof offline !== 'boolean') throw new TypeError('offline must be a boolean');
   const root = repoRoot === undefined ? repositoryRoot(cwd) : path.resolve(repoRoot);
@@ -128,7 +131,7 @@ export async function readStatus({
   }
   const repository = githubRepository(origin.trim());
   const rawIssue = await runCommand('gh', [
-    'issue', 'view', String(number), '--repo', repository, '--json', 'number,title,state,url',
+    'issue', 'view', String(number), '--repo', repository, '--json', 'number,title,state,url,assignees,labels',
   ], root);
   let issue;
   try {
@@ -137,7 +140,8 @@ export async function readStatus({
     throw new Error(`gh issue view ${number} returned invalid JSON`);
   }
   if (issue?.number !== number || typeof issue.title !== 'string' || !issue.title ||
-      !['OPEN', 'CLOSED'].includes(issue.state) || typeof issue.url !== 'string' ||
+      !['OPEN', 'CLOSED'].includes(issue.state) || !Array.isArray(issue.assignees) ||
+      !Array.isArray(issue.labels) || typeof issue.url !== 'string' ||
       issue.url.toLowerCase() !== `https://github.com/${repository}/issues/${number}`.toLowerCase()) {
     throw new Error(`gh issue view ${number} returned incomplete issue details`);
   }
@@ -159,8 +163,20 @@ export async function readStatus({
     pr.url.toLowerCase() !== `https://github.com/${repository}/pull/${pr.number}`.toLowerCase())) {
     throw new Error(`gh pr list returned invalid open PRs for issue #${number}`);
   }
+  let workHealth;
+  if (issue.state === 'OPEN' && issue.assignees.length) {
+    const branches = (await runCommand('git', [
+      'for-each-ref', '--format=%(refname:short)', `refs/heads/issue-${number}`,
+    ], root)).trim().split(/\r?\n/).filter(Boolean);
+    [workHealth] = classifyStrandedWork({
+      issues: [issue], branches,
+      heartbeats: runLog ? [{ issue: number, timestamp: runLog.lastLine.slice(0, 24) }] : [],
+      now, thresholdMs,
+    });
+  }
   return { issue, openPr: prs[0] ?? null, worktreePath, worktreeExists, offline: false,
     ...local,
+    ...(workHealth ? { workHealth: { ...workHealth, thresholdMs } } : {}),
     ...(runLog ? { runLog } : {}) };
 }
 
@@ -176,6 +192,7 @@ export function formatStatus(status) {
   return `Issue: ${issue}\nOpen PR: ${pr}\n` +
     `Branch: ${status.branch ?? `issue-${status.issue.number}`}\n` +
     `Worktree: ${status.worktreePath} (${status.worktreeExists ? 'present' : 'missing'})\n` +
+    (status.workHealth ? `Work health: ${status.workHealth.status} (read-only; heartbeat threshold ${status.workHealth.thresholdMs / 60000}m)\n` : '') +
     `Last seat: ${status.runLog?.lastSeat ?? 'unknown (no run log)'}\n` +
     `Last log line: ${status.runLog?.lastLine ?? 'none'}\n` +
     `Last error class: ${status.runLog?.lastErrorClass ?? '-'}\n` +
