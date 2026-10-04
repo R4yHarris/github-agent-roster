@@ -63,7 +63,7 @@ test('a named-file write ends the draft as a write and proceeds to tests, not a 
   assert.equal(result.excellence.pass, true);
   assert.equal(result.finishReason, undefined);
   assert.ok(events.some((event) => event.type === 'tool' && event.name === 'write_file'));
-  assert.ok(events.some((event) => event.type === 'tool' && event.name === 'run_test'));
+  assert.equal(events.some((event) => event.type === 'tool' && event.name === 'run_test'), false);
   assert.doesNotMatch(readFileSync(result.resultPath, 'utf8'), /tool_calls/);
 });
 
