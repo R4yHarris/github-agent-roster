@@ -90,6 +90,37 @@ test('reviewer reads the diff, RESULT, and acceptance checks without receiving a
     /RESULT\.md changed after review/);
 });
 
+test('reviewer requires substantive public-path and seeded-secret evidence for test tasks', async (context) => {
+  const options = fixture(context);
+  writeFileSync(path.join(options.worktree, 'TASK.md'),
+    '# Task: Add route-summary regression\n\ndifficulty: 2\ntask_class: test\n\n' +
+    '## Acceptance checks\n- The public run summary exposes the selected route and profile\n' +
+    '- Seed a credential-like sentinel and assert it is absent from serialized output\n' +
+    '- node --test exits 0\n\n## Files allowed\n- `tests/route.test.mjs`\n\n' +
+    '## Ask\nAdd a public run-summary regression test that proves the selected route/profile are visible without leaking secrets.\n');
+  mkdirSync(path.join(options.worktree, 'tests'));
+  writeFileSync(path.join(options.worktree, 'tests', 'route.test.mjs'), 'test("route summary", () => {});\n');
+  options.coderResult.excellence.files = ['tests/route.test.mjs'];
+  let systemInstructions;
+  const review = await runReviewer({
+    ...options, config, env: {},
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      systemInstructions = body.messages[0].content;
+      return { status: 200, json: async () => ({ choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant', content: JSON.stringify({
+          verdict: 'pass', reasons: [], security_notes: [],
+        }),
+      } }] }) };
+    },
+  });
+  assert.equal(review.verdict, 'pass', review.content);
+  assert.match(systemInstructions, /exercise the public operation when the Ask names one/);
+  assert.match(systemInstructions, /exact sentinel is absent from\s+that code's serialized output/);
+  assert.match(systemInstructions, /generic keyword scan, or a sentinel the test removes itself, is insufficient/);
+  assert.match(systemInstructions, /built inside the test itself.*tautological/);
+});
+
 test('HTTP timeout cannot become a pass or completed review even if a caller supplies passing excellence', async (context) => {
   const options = fixture(context);
   const review = await runReviewer({ ...options, config, env: {},

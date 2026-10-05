@@ -1007,7 +1007,7 @@ test('an existing branch is reused when its issue worktree needs to be created',
   assert.equal(add.args.includes('-b'), false);
 });
 
-test('garbage planner arguments retry once then write visible stubs without coding or publishing', async (context) => {
+test('garbage planner arguments retry once then stop before coder, reviewer, tests, or publishing', async (context) => {
   const options = fixture(context);
   const logs = [];
   let calls = 0;
@@ -1032,13 +1032,84 @@ test('garbage planner arguments retry once then write visible stubs without codi
   });
   assert.equal(calls, 2);
   assert.equal(result.failed, true);
-  assert.equal(result.result.mode, 'stub');
+  assert.equal(result.planningOnly, true);
+  assert.equal(result.result, undefined);
+  assert.equal(result.review, undefined);
+  assert.deepEqual(result.runs, { planner: result.runs.planner, coder: null, reviewer: null });
   assert.equal(result.command, null);
   assert.match(readFileSync(result.taskPath, 'utf8'), /## Planning failure[\s\S]*after one retry/);
   assert.deepEqual(parseRecipe(readFileSync(result.recipePath, 'utf8')).seats.map(({ id }) => id),
     ['planner', 'coder', 'reviewer']);
   assert.equal(readFileSync(path.join(result.worktreePath, 'README.md'), 'utf8'), originalReadme);
-  assert.match(logs.join('\n'), /Planning failed:[\s\S]*Publication skipped/);
+  assert.match(logs.join('\n'), /Planning failed:[\s\S]*coder, reviewer, tests, and publication did not run/);
+});
+
+test('an issue-176-shaped planner response reaches coder, real tests, and reviewer without replanning', async (context) => {
+  const options = fixture(context);
+  options.issue.title = 'Add a smoke regression test';
+  options.issue.body = 'Add one passing regression in smoke.test.mjs. Do not change other files.';
+  const content = "import test from 'node:test';\nimport assert from 'node:assert/strict';\n" +
+    "test('smoke regression', () => assert.equal(2 + 2, 4));\n";
+  let plannerCalls = 0;
+  let coderCalls = 0;
+  let reviewCalls = 0;
+  let testCalls = 0;
+  const result = await runIssueWithSeats(42, {
+    ...options, config: { ...llmConfig, planner: { turn_budget: 1 } }, log: () => {},
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      const system = body.messages[0].content;
+      if (system.startsWith('You are the builtin planner seat.')) {
+        plannerCalls += 1;
+        return Response.json({ model: 'served-planner', choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant', content: 'Plan written.\n```json\n' + JSON.stringify({
+            task: options.issue.title, files_allowed: ['smoke.test.mjs'],
+            task_class: 'test', difficulty: 2, estimate_min: 45,
+            steps: ['Add a deterministic regression', 'Run node --test'],
+            acceptance_checks: ['node --test exits 0', 'One passing regression is added'],
+            notes: 'No network or wall-clock dependency.',
+          }) + '\n```',
+          tool_calls: [{ id: 'draft', type: 'function', function: {
+            name: 'write_file', arguments: JSON.stringify({ path: 'TASK.md', content: '# Draft\n' }),
+          } }],
+        } }] });
+      }
+      if (system.startsWith('You are the builtin reviewer seat.')) {
+        reviewCalls += 1;
+        assert.equal(testCalls, 1);
+        assert.match(body.messages[1].content, /smoke\.test\.mjs/);
+        return Response.json({ model: 'served-reviewer', choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant', content: JSON.stringify({ verdict: 'pass',
+            reasons: ['The scoped regression passed node --test.'], security_notes: ['No protected files changed.'] }),
+        } }] });
+      }
+      coderCalls += 1;
+      assert.match(system, /smoke\.test\.mjs/);
+      return Response.json({ model: 'served-coder', choices: [{ finish_reason: coderCalls === 1 ? 'tool_calls' : 'stop',
+        message: coderCalls === 1 ? { role: 'assistant', tool_calls: [{ id: 'regression', type: 'function', function: {
+          name: 'write_file', arguments: JSON.stringify({ path: 'smoke.test.mjs', content }),
+        } }] } : { role: 'assistant', content: 'Added the scoped smoke regression.' },
+      }] });
+    },
+    runTestCommand: async (program, args, commandOptions) => {
+      testCalls += 1;
+      assert.equal(program, process.execPath);
+      assert.equal(args[0], '--test');
+      assert.equal(args.at(-1), 'smoke.test.mjs');
+      return { stdout: execFileSync(program, args, { ...commandOptions, encoding: 'utf8' }), stderr: '' };
+    },
+  });
+  assert.equal(plannerCalls, 1);
+  assert.equal(coderCalls, 2);
+  assert.equal(result.failed, false);
+  assert.equal(result.result.excellence.pass, true, JSON.stringify(result.result.excellence.reasons));
+  assert.equal(result.review.verdict, 'pass', JSON.stringify(result.review.reasons));
+  assert.equal(reviewCalls, 1);
+  assert.equal(result.runs.planner.metrics.model, 'served-planner');
+  assert.equal(result.runs.coder.metrics.model, 'served-coder');
+  assert.equal(result.runs.reviewer.metrics.model, 'served-reviewer');
+  assert.equal(readFileSync(path.join(result.worktreePath, 'smoke.test.mjs'), 'utf8'), content);
+  assert.equal(git(result.worktreePath, 'diff', '--name-only'), 'smoke.test.mjs');
 });
 
 test('a configured rerun recovers from previous planner failure in the same issue worktree', async (context) => {
@@ -1222,7 +1293,11 @@ test('a failed planner journals its last measured response rather than aggregate
     },
   });
   assert.equal(result.failed, true);
-  assert.equal(result.result.mode, 'stub');
+  assert.equal(result.planningOnly, true);
+  assert.equal(result.result, undefined);
+  assert.equal(result.review, undefined);
+  assert.equal(result.runs.coder, null);
+  assert.equal(result.runs.reviewer, null);
   assert.equal(requests, 2);
   const records = loadLearning({ cwd: options.target }).runs;
   assert.deepEqual(records[0], {
@@ -1230,7 +1305,7 @@ test('a failed planner journals its last measured response rather than aggregate
     model: 'actual-planner-2', effort: 'm', prompt_tokens: 100, completion_tokens: 40,
     context_used: 100, context_out: 40,
   });
-  assert.equal(records.slice(1).every(({ model }) => model === undefined), true);
+  assert.equal(records.length, 1);
 });
 
 test('live unprofiled seats report their backend and usage without inheriting Copilot provenance', async (context) => {
@@ -1560,6 +1635,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
 test('a failed reviewer keeps coder changes but blocks publication unless explicitly bypassed', async (context) => {
   for (const [skipReview, reviewRequired] of [[false, true], [true, true], [false, false]]) {
     const options = multiFileFixture(context);
+    const logs = [];
     let coderTurns = 0;
     let published = 0;
     const fetchImpl = async (_url, request) => {
@@ -1603,7 +1679,7 @@ test('a failed reviewer keeps coder changes but blocks publication unless explic
     };
     const args = {
       ...options, config: { ...llmConfig, review: { required: reviewRequired } },
-      publish: true, skipReview, fetchImpl, log: () => {},
+      publish: true, skipReview, fetchImpl, log: (message) => logs.push(message),
       env: { ...options.env, GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'app.pem' },
       runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
       publisher: async (_program, params, publication) => {
@@ -1623,6 +1699,12 @@ test('a failed reviewer keeps coder changes but blocks publication unless explic
       await assert.rejects(runIssueWithSeats(42, args), /passing REVIEW\.md/);
     }
     assert.equal(published, skipReview || !reviewRequired ? 1 : 0);
+    assert.match(logs.join('\n'), /Review failure: The diff lacks sufficient evidence/);
+    if (skipReview || !reviewRequired) {
+      assert.match(logs.join('\n'), /WARNING: review failed; publication is permitted only because[\s\S]*These changes are not approved/);
+    } else {
+      assert.doesNotMatch(logs.join('\n'), /WARNING: review failed; publication is permitted/);
+    }
     const worktree = path.join(options.target, '.worktrees', 'issue-42');
     assert.match(readFileSync(path.join(worktree, 'README.md'), 'utf8'), /## Status/);
     assert.match(readFileSync(path.join(worktree, 'RESULT.md'), 'utf8'), /Checks: PASS/);

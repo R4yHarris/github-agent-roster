@@ -556,6 +556,15 @@ async function runBuiltinAssignment(issueNumber, {
   }, { cwd: prepared.repoRoot, env: { ...metricEnv, ...run?.env }, createDirectory: true, run });
   const plannerRun = planner.run;
   if (!planner.reused) await recordSeat(sessions.planner, plannerRun);
+  if (planner.error) {
+    log(`Planning failed: ${planner.error}\nRECIPE/TASK stubs are unverified; coder, reviewer, tests, and publication did not run.`);
+    return {
+      ...prepared, askKind, classification, recipePath: planner.recipePath, taskPath: planner.taskPath,
+      planner, sessions, runs: { planner: plannerRun, coder: null, reviewer: null },
+      run: null, command: null, route, autoRecommendation, archivePath, failed: true, planningOnly: true,
+      logPath: liveLog.path, logSession: liveLog.session,
+    };
+  }
   if (planMode && askKind === 'slice') {
     log(`PLAN: ${planner.planPath}\nPlan mode: no TASK, recipe, product edits, coder, tests, reviewer, or publisher ran.`);
     return { ...prepared, askKind, classification, planner, planPath: planner.planPath, planMode: true,
@@ -569,10 +578,8 @@ async function runBuiltinAssignment(issueNumber, {
       runs: { planner: plannerRun, coder: null, reviewer: null }, run: null, command: null,
       planningOnly: true, failed: false, archivePath, logPath: liveLog.path, logSession: liveLog.session };
   }
-  if (planner.error) log(`Planning failed: ${planner.error}\nRECIPE/TASK stubs are unverified; no configured coder will run.`);
   const coderConfig = selectReasoning({ ...activeConfig, llm: {
     ...activeConfig.llm, model: planner.metadata.model || activeConfig.llm.model,
-    ...(planner.error ? { base_url: '' } : {}),
     effort: planner.feedback?.effort ?? activeConfig.llm.effort,
   } }, { kind: askKind, taskClass: planner.metadata.task_class, difficulty: planner.metadata.difficulty });
   if (!planner.error) {
@@ -636,6 +643,9 @@ async function runBuiltinAssignment(issueNumber, {
     `Live log: ${liveLog.path}\n` +
     `RECIPE: ${planner.recipePath}\nTASK: ${planner.taskPath}\nESTIMATE: ${planner.estimatePath}\n` +
     `RESULT: ${result.resultPath}\nREVIEW: ${review.reviewPath} (${review.verdict})\n` +
+    (review.verdict === 'fail' ? `Review failure: ${redactEvidence(review.reasons.join('; '), {
+      env, apiKeyEnv: config.llm.api_key_env,
+    })}\n` : '') +
     `Planner session: ${sessions.planner}\n` +
     (plannerRun ? `AI-Run: ${plannerRun.line}\n` : '') +
     `Coder session: ${sessions.coder}\n` +
@@ -645,7 +655,10 @@ async function runBuiltinAssignment(issueNumber, {
       : 'Stub run: no AI-Run metadata and no code to publish.\n') +
     `Reviewer session: ${sessions.reviewer}\n` +
     (reviewerRun ? `AI-Run: ${reviewerRun.line}\n` : '') +
-    (command ? `From the worktree root, publish only after reviewing changes:\n` +
+    (command ? (review.verdict === 'fail'
+      ? `WARNING: review failed; publication is permitted only because ${skipReview
+        ? '--skip-review explicitly bypasses the gate' : 'the configured review gate is disabled'}. These changes are not approved.\n`
+      : '') + `From the worktree root, publish only after reviewing changes:\n` +
       formatPublishCommand({
         message: prepared.local ? 'feat: local ask' : `feat: issue ${prepared.issue.number}`,
         model,
@@ -666,11 +679,10 @@ async function runBuiltinAssignment(issueNumber, {
   const completed = {
     ...prepared, askKind, classification, recipePath: planner.recipePath, taskPath: planner.taskPath,
     planner, result, review, sessions, runs, run: coderRun, command, autoRecommendation, route, archivePath,
-    failed: Boolean(planner.error),
+    failed: false,
     logPath: liveLog.path, logSession: liveLog.session,
   };
-  if (publish && planner.error) log('Publication skipped: planning failed; inspect the stub and rerun the issue.');
-  if (publish && !planner.error) {
+  if (publish) {
     const { contractsPath, publishEnv, model: publishModel } = await prepareBuiltinPublication(completed, {
       cwd, config: coderConfig, env, skipReview,
     });

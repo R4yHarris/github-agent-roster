@@ -8,6 +8,46 @@ import { readMemory, redactSecrets } from './memory.mjs';
 import { loadSkills, previewSkills } from './skills.mjs';
 import { taskContextPolicy } from './context-policy.mjs';
 import { readRepoMap } from '../lib/repo-map.mjs';
+import { isForbiddenRead } from './tools.mjs';
+
+// Export signatures of modules that allowed JS files import directly; the coder may read these.
+export async function readPublicSeams(worktree, files, { limit = 2400 } = {}) {
+  const root = path.resolve(worktree);
+  const modules = new Set();
+  for (const file of files) {
+    if (file.includes('*') || !/\.[cm]?js$/.test(file)) continue;
+    let text;
+    try { text = await requiredFile(path.join(root, file), root); } catch { continue; }
+    for (const match of text.matchAll(/from\s+['"](\.[^'"]+)['"]/g)) {
+      const target = path.posix.normalize(path.posix.join(path.posix.dirname(file.replaceAll('\\', '/')), match[1]));
+      if (target.startsWith('..') || isForbiddenRead(target) || files.includes(target)) continue;
+      modules.add(/\.[cm]?js$/.test(target) ? target : `${target}.mjs`);
+    }
+  }
+  const blocks = [];
+  const stems = new Set(files.map((file) => path.posix.basename(file.replaceAll('\\', '/')).replace(/\.(test|spec)?\.?[cm]?js$/, '')));
+  const stem = (module) => path.posix.basename(module).replace(/\.[cm]?js$/, '');
+  for (const module of [...modules].sort((a, b) => Number(stems.has(stem(b))) - Number(stems.has(stem(a))) || a.localeCompare(b))) {
+    let text;
+    try { text = await requiredFile(path.join(root, module), root); } catch { continue; }
+    const lines = text.split('\n');
+    const signatures = [];
+    for (const [index, line] of lines.entries()) {
+      if (!/^export\s+(?:default\s+)?(?:async\s+)?(?:function\*?|class|const|let)\s+[A-Za-z_$][\w$]*/.test(line)) continue;
+      let signature = line;
+      for (let next = index + 1; next < Math.min(lines.length, index + 6) &&
+        (signature.match(/\(/g) ?? []).length > (signature.match(/\)/g) ?? []).length; next += 1) {
+        signature += ` ${lines[next].trim()}`;
+      }
+      signature = signature.replace(/\s+/g, ' ').replace(/\s*(=>\s*)?\{\s*\}?\s*$/, '').trim();
+      signatures.push(`- ${signature.length > 200 ? `${signature.slice(0, 197)}...` : signature}`);
+      if (signatures.length === 30) break;
+    }
+    if (signatures.length) blocks.push(`\`${module}\`\n${signatures.join('\n')}`);
+  }
+  const body = blocks.join('\n\n');
+  return body.length > limit ? `${body.slice(0, body.lastIndexOf('\n', limit))}\n[Truncated]` : body;
+}
 
 async function requiredFile(file, worktree) {
   await ensureLocalPath(file, worktree);
@@ -100,6 +140,11 @@ export async function loadContext({ worktree, memoryPath, repoRoot, config, prin
   ];
   const repoMap = policy.repoMap ? await readRepoMap(worktree, { env, apiKeyEnv: config?.llm?.api_key_env }) : null;
   if (repoMap) sections.push({ heading: 'Repo map (filenames only)', body: repoMap.trim(), required: false });
+  const seams = await readPublicSeams(worktree, files);
+  if (seams) {
+    sections.push({ heading: 'Public seams (exports of direct imports; read the module before relying on a signature)',
+      body: redactSecrets(seams, { env, apiKeyEnv: config?.llm?.api_key_env }), required: false });
+  }
   const { pack, truncated } = boundedPack(sections, budget, minimalDocs);
   const contextPath = path.join(worktree, 'CONTEXT.md');
   await ensureLocalPath(contextPath, worktree);

@@ -5,6 +5,8 @@ import { RunCancelledError, throwIfCancelled } from '../runtime/cancel.mjs';
 export const localRequestTimeoutMs = 1_200_000;
 export const cloudRequestTimeoutMs = 120_000;
 export const waitingIntervalMs = 30_000;
+// A remote stream that sends no bytes this long is treated as stalled, aborted, and retried once.
+export const remoteStreamIdleTimeoutMs = 180_000;
 
 export class ChatError extends Error {
   constructor(message, category = 'response') {
@@ -33,6 +35,23 @@ export function resolveRequestTimeout(llm) {
   if (llm.request_timeout_ms !== undefined) return validateRequestTimeout(llm.request_timeout_ms);
   if (llm.timeout_ms !== undefined) return validateRequestTimeout(llm.timeout_ms, 'llm.timeout_ms');
   return isLocalLlmHost(new URL(llm.base_url).hostname) ? localRequestTimeoutMs : cloudRequestTimeoutMs;
+}
+
+// 0 disables the watchdog; local hosts may take minutes to load a model before the first byte.
+export function resolveStreamIdleTimeout(llm) {
+  if (llm.stream_idle_timeout_ms !== undefined) {
+    if (llm.stream_idle_timeout_ms === 0) return 0;
+    return validateRequestTimeout(llm.stream_idle_timeout_ms, 'llm.stream_idle_timeout_ms');
+  }
+  return isLocalLlmHost(new URL(llm.base_url).hostname) ? 0 : remoteStreamIdleTimeoutMs;
+}
+
+export class LlmStallError extends ChatError {
+  constructor({ host, idleMs }) {
+    super(`The LLM stream at host=${host} sent nothing for ${idleMs / 1000}s and was abandoned. ` +
+      'This is an endpoint stall, not a bad TASK.', 'timeout');
+    this.code = 'ROSTER_LLM_STALL';
+  }
 }
 
 export function retryCommandForTask(task) {
@@ -64,7 +83,7 @@ export class LlmTimeoutError extends ChatError {
 export function isLlmTimeout(error) {
   const seen = new Set();
   while (error instanceof Error && !seen.has(error)) {
-    if (error.code === 'ROSTER_LLM_TIMEOUT') return true;
+    if (error.code === 'ROSTER_LLM_TIMEOUT' || error.code === 'ROSTER_LLM_STALL') return true;
     seen.add(error);
     error = error.cause;
   }

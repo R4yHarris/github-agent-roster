@@ -81,6 +81,96 @@ function coderOptions(options, overrides = {}) {
   };
 }
 
+function testOnlyFixture(t) {
+  const options = fixture(t);
+  mkdirSync(path.join(options.worktree, 'src'));
+  mkdirSync(path.join(options.worktree, 'tests'));
+  const source = 'export const summary = (profile) => ({ profile });\n';
+  const original = "import test from 'node:test';\nimport assert from 'node:assert/strict';\n" +
+    "import { summary } from '../src/summary.mjs';\n" +
+    "test('existing', () => assert.equal(summary('base').profile, 'base'));\n";
+  writeFileSync(path.join(options.worktree, 'src', 'summary.mjs'), source);
+  writeFileSync(path.join(options.worktree, 'tests', 'summary.test.mjs'), original);
+  writeFileSync(path.join(options.worktree, 'TASK.md'), planStub(
+    'Add a public profile-summary regression in tests/summary.test.mjs.', {
+      metadata: { task_class: 'test', difficulty: 2 },
+    }).task);
+  execFileSync('git', ['add', '--all'], { cwd: options.worktree, stdio: 'pipe' });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+    'commit', '--quiet', '-m', 'test-only baseline'], { cwd: options.worktree });
+  return { ...options, source, original };
+}
+
+test('an identical rewrite with green tests gets one no-progress correction and reads the real imported API', async (t) => {
+  const options = testOnlyFixture(t);
+  let calls = 0;
+  let tests = 0;
+  const updated = options.original +
+    "test('selected profile is public', () => assert.deepEqual(summary('selected'), { profile: 'selected' }));\n";
+  const result = await runCoder(coderOptions(options, {
+    askKind: 'slice',
+    runTestCommand: async (program, args, commandOptions) => {
+      tests += 1;
+      return { stdout: execFileSync(program, args, { ...commandOptions, encoding: 'utf8' }), stderr: '' };
+    },
+    fetchImpl: async (_url, request) => {
+      calls += 1;
+      const body = JSON.parse(request.body);
+      if (calls === 1) {
+        assert.match(body.messages[1].content, /only direct imports needed[\s\S]*do not recursively trace transitive dependencies/);
+        assert.match(body.messages[1].content, /Batch independent reads[\s\S]*preserve existing imports and unrelated assertions/);
+      }
+      if (calls === 3) {
+        assert.match(body.messages.at(-1).content, /must produce an application diff[\s\S]*One no-progress correction/);
+        const read = body.tools.find(({ function: tool }) => tool.name === 'read_file').function.parameters.properties.path;
+        assert.equal(read.enum, undefined);
+        assert.match(read.description, /direct local imports/);
+        assert.deepEqual(body.tools.find(({ function: tool }) => tool.name === 'write_file')
+          .function.parameters.properties.path.enum, ['tests/summary.test.mjs']);
+        return completion('tool_calls', { role: 'assistant', tool_calls: [{
+          id: 'api', type: 'function', function: { name: 'read_file',
+            arguments: JSON.stringify({ path: 'src/summary.mjs' }) },
+        }] });
+      }
+      if (calls === 4) assert.equal(body.messages.at(-1).content, options.source);
+      if (calls === 1 || calls === 4) return completion('tool_calls', { role: 'assistant', tool_calls: [{
+        id: `write-${calls}`, type: 'function', function: { name: 'write_file',
+          arguments: JSON.stringify({ path: 'tests/summary.test.mjs', content: calls === 1 ? options.original : updated }) },
+      }] });
+      return completion('stop', { role: 'assistant', content: 'Added the profile-summary regression.' });
+    },
+  }));
+  assert.equal(calls, 5);
+  assert.equal(tests, 2);
+  assert.equal(result.noProgressRepairUsed, true);
+  assert.equal(result.testRepairs, 0);
+  assert.equal(result.excellence.pass, true);
+  assert.deepEqual(result.excellence.files, ['tests/summary.test.mjs']);
+  assert.equal(readFileSync(path.join(options.worktree, 'src', 'summary.mjs'), 'utf8'), options.source);
+  assert.match(readFileSync(result.resultPath, 'utf8'), /Test repairs: 0 of 1[\s\S]*No-progress corrections: 1 of 1/);
+});
+
+test('a second no-op cannot become a passing result or reach the reviewer', async (t) => {
+  const options = testOnlyFixture(t);
+  let calls = 0;
+  await assert.rejects(runBuiltinTask(coderOptions(options, {
+    cwd: options.worktree, askKind: 'slice', log: () => {},
+    fetchImpl: async (_url, request) => {
+      assert.ok(!isReviewer(JSON.parse(request.body)), 'No-op implementation cannot request reviewer inference');
+      calls += 1;
+      return calls % 2 === 1
+        ? completion('tool_calls', { role: 'assistant', tool_calls: [{
+          id: `noop-${calls}`, type: 'function', function: { name: 'write_file',
+            arguments: JSON.stringify({ path: 'tests/summary.test.mjs', content: options.original }) },
+        }] })
+        : completion('stop', { role: 'assistant', content: 'Existing tests passed.' });
+    },
+  })), /must produce an application diff/);
+  assert.equal(calls, 4);
+  assert.equal(existsSync(path.join(options.worktree, 'REVIEW.md')), false);
+  assert.match(readFileSync(path.join(options.worktree, 'RESULT.md'), 'utf8'), /Checks: FAIL[\s\S]*must produce an application diff/);
+});
+
 test('a NOTE.md write ends draft as a product write, never a tool_calls verdict', async (context) => {
   const options = fixture(context);
   const events = [];

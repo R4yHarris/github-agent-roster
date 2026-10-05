@@ -7,11 +7,19 @@ import { readTaskMetadata } from './estimate.mjs';
 import { applyReadmeStatus, hasRequiredReadmeStatus } from './readme-status.mjs';
 import { ContractsSubmoduleError, onlyMissingContractsScripts } from '../lib/contracts.mjs';
 import { UnsupportedFinishReasonError } from '../llm/finish-reason.mjs';
+import { ChatError } from '../llm/request.mjs';
 import { throwIfCancelled } from './cancel.mjs';
 import { SteeringInterrupt } from './steering.mjs';
 
 class MalformedCoderTools extends Error {}
 export const testRepairBudget = 4;
+const sentinelGuidance = 'For secret-leak or redaction tests, feed an obvious non-credential sentinel such as ' +
+  "'test-only-private-api-key' into the app code under test and assert it is absent from that code's output; " +
+  'never write sk-, ghp_, gho_, github_pat_ prefixed values or PEM private-key blocks.';
+
+function mentionsSecrets(task) {
+  return /\b(?:secrets?|credentials?|tokens?|api[ _-]?keys?|leaks?|leaking|redact\w*)\b/i.test(task);
+}
 
 function repairBudgetFor(task, bounded) {
   if (!bounded) return testRepairBudget;
@@ -79,6 +87,12 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     { role: 'user', content: 'Complete this task using only the offered tools. ' +
       (docsOnly ? 'This is a docs-only change. Do not run or edit tests. Check the written file. ' : '') +
       (!docsOnly && verification.run ? `Run and update only these tests: ${verification.update.join(', ')}. ` : '') +
+      (boundedTask && !docsOnly ? 'Read the allowed file and only direct imports needed to understand the APIs you will use; do not recursively trace transitive dependencies. ' +
+        'Batch independent reads in one response, preserve existing imports and unrelated assertions, and make the smallest targeted edit. ' +
+        'All tool paths are relative to the worktree root: an import like ../src/api.mjs from tests/test.mjs ' +
+        'must be read as src/api.mjs, never ../src/api.mjs. Preserve existing behavior and implement the requested outcome; ' +
+        'passing existing tests or rewriting identical content is not completion. ' : '') +
+      (mentionsSecrets(context.task) ? `${sentinelGuidance} ` : '') +
       'A failing test outside Allowed Files is pre-existing: report it and do not edit it. ' +
       'Finish with a concise summary of changes, test results, and blockers.' },
   ];
@@ -96,8 +110,10 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     !boundedTask || tool.function.name === 'run_test' || tool.function.name === 'web_search' || tool.function.name === 'web_fetch' ? tool : {
       ...tool, function: { ...tool.function, parameters: { ...tool.function.parameters,
         properties: { ...tool.function.parameters.properties,
-          path: { type: 'string', enum: tool.function.name === 'read_file'
-            ? ['TASK.md', singleAllowedFile] : [singleAllowedFile] },
+          path: tool.function.name === 'read_file' && !docsOnly
+            ? { type: 'string', description: 'Worktree-root-relative path: TASK.md, an allowed file, or its direct local imports. Never use absolute paths or .. components.' }
+            : { type: 'string', enum: tool.function.name === 'read_file'
+              ? ['TASK.md', singleAllowedFile] : [singleAllowedFile] },
         },
       } },
     });
@@ -166,6 +182,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       `Repair ${progress.testRepairs} of ${repairBudget}. Repair only TASK-allowed files` +
       (progress.repairFiles.length ? `: ${progress.repairFiles.join(', ')}` : '') +
       '. Do not edit a failing test outside Allowed Files. Report it as pre-existing. ' +
+      'Fix the exact reported root cause and ensure every identifier introduced by the change is defined in its scope. ' +
       'Rerun node --test, then provide a new summary. No change is verified yet.' });
     return true;
   };
@@ -239,7 +256,14 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         messages.push({ role: 'user', content: 'The response stopped at the completion cap. Continue with one complete tool call or a summary. Do not repeat completed edits.' });
         continue;
       }
+      if (error instanceof ChatError && !(error instanceof UnsupportedFinishReasonError) &&
+          finalSummaryOnly && checksPassedAfterWrite) {
+        acceptedLateLength = true;
+        usages.push(chat.lastUsage);
+        response = { finish_reason: 'stop', message: { role: 'assistant', content: '' }, usage: chat.lastUsage };
+      } else {
       throw error;
+      }
       }
     }
     if (!acceptedLateLength) {
@@ -475,11 +499,47 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       throw new TypeError('Coder excellence verifier returned an invalid report');
     }
     if (excellence.pass && (!tests || tests.exit_code === 0)) return result;
-    if (deterministic) throw new Error(`Deterministic fallback failed excellence: ${excellence.reasons[0]}`);
-
     const reasons = excellence.reasons.map((reason) => redactEvidence(reason, {
       env, apiKeyEnv: config.llm.api_key_env,
     }));
+    const noDiff = reasons.find((reason) => reason.includes('must produce an application diff'));
+    if (noDiff && reasons.length === 1 && !progress.noProgressRepairUsed) {
+      progress.noProgressRepairUsed = true;
+      attemptTurns = 0;
+      finalSummaryOnly = false;
+      checksPassedAfterWrite = false;
+      needsTools = false;
+      messages.push({ role: 'assistant', content: summary });
+      messages.push({ role: 'user', content: `${noDiff}\n` +
+        'One no-progress correction is allowed. Read the allowed file and its direct imports using root-relative paths. ' +
+        'Implement the missing Ask within Allowed Files, preserve existing behavior, rerun the required tests, and summarize. ' +
+        'Do not invent a fixture-only stand-in for the public behavior. If blocked, report the blocker rather than claim success.' });
+      continue;
+    }
+    const secretReasons = reasons.filter((reason) => reason.startsWith('Secret material detected'));
+    const substanceReasons = reasons.filter((reason) => reason.startsWith('Test substance:'));
+    const repairable = secretReasons.length + substanceReasons.length === reasons.length;
+    if (repairable && reasons.length && ((secretReasons.length && !progress.secretRepairUsed) ||
+        (substanceReasons.length && !progress.substanceRepairUsed))) {
+      if (secretReasons.length) progress.secretRepairUsed = true;
+      if (substanceReasons.length) progress.substanceRepairUsed = true;
+      attemptTurns = 0;
+      finalSummaryOnly = false;
+      checksPassedAfterWrite = false;
+      needsTools = false;
+      messages.push({ role: 'assistant', content: summary });
+      messages.push({ role: 'user', content: [
+        ...secretReasons, ...substanceReasons,
+        ...(secretReasons.length ? ['One secret-material correction is allowed. Credential-shaped literals are rejected even in test fixtures. ' +
+          `${sentinelGuidance} Replace every such literal in Allowed Files and keep the assertions.`] : []),
+        ...(substanceReasons.length ? ['One test-substance correction is allowed. Each new test must call the imported app function under test ' +
+          '(directly or via an existing helper) and assert on its output. Pass any seeded sentinel into that call ' +
+          '(argument, config object, or process.env) before asserting it is absent from the output; never build, strip, and inspect your own object.'] : []),
+        'Rerun the required tests, and summarize.',
+      ].join('\n') });
+      continue;
+    }
+    if (deterministic) throw new Error(`Deterministic fallback failed excellence: ${excellence.reasons[0]}`);
     const missingWrite = reasons.find((reason) => reason.includes('must write '));
     if (missingWrite && progress.testRepairs < repairBudget) {
       progress.testRepairs += 1;

@@ -53,7 +53,25 @@ server to an untrusted network.
 | `llm.model` | none | Model name; each chat request can override it |
 | `llm.api_key_optional` | `false` | Allow requests without a resolved key; set `true` for keyless local servers |
 | `llm.api_key_name` | `OPENAI_API_KEY` | Environment variable and vault entry name |
-| `llm.timeout_ms` | `30000` | Total HTTP deadline, including response parsing and any retry delay |
+| `llm.request_timeout_ms` | 20 minutes for loopback/private-IP hosts; 120 seconds otherwise | Total HTTP deadline, including response parsing and any HTTP retry delay; a fleet profile can override it for cold-inference gateways |
+| `llm.timeout_ms` | same host-based default | Low-level client compatibility alias; `request_timeout_ms` takes precedence |
+
+A streamed call to a remote (non-loopback, non-private-IP) host whose response
+body sends no bytes for 180 seconds after the headers arrive is abandoned and
+retried once with the same request. Waiting for headers is not watched, so a
+cold-inference gateway still gets its full `request_timeout_ms`.
+A second silent stream fails as an endpoint stall (`ROSTER_LLM_STALL`), which
+seats treat like a timeout rather than a bad TASK. This stops a stuck gateway
+from holding a seat until its own stream cutoff. Local hosts are not watched,
+because a cold model load can take minutes before the first byte. The
+low-level client accepts `stream_idle_timeout_ms` (`0` disables it).
+
+Requests omit `tools` when no tools are offered, because some gateways misroute
+an empty `tools` array. A streamed HTTP 200 response that carries a JSON
+`error` body, or no data frames at all, is reported as an endpoint error, not
+accepted as an empty completion. When the endpoint reports serving a model
+unrelated to the requested ID (a gateway alias), the seat prints one
+`served-model` warning, and the AI-Run records the served model.
 
 An absent, empty or whitespace-only `base_url` makes `createChat` return
 `null`, without accessing the vault or network. Keep the caller's existing
@@ -147,12 +165,23 @@ keys are optional. URL credentials, query strings, fragments and redirects
 are rejected to avoid accidental credential forwarding. A missing required
 key fails before any HTTP call.
 
-There is at most one retry, only for HTTP 429. `Retry-After` seconds or dates
+The low-level client retries at most once for HTTP 429. `Retry-After` seconds or dates
 are honored within the same deadline; missing or invalid headers use a
 one-second delay. Other HTTP errors, invalid responses, network errors and
 timeouts fail explicitly. Errors contain fixed descriptions or HTTP status
 numbers, never upstream bodies, URLs, keys or underlying error causes. The
 client does not log requests, responses or credentials.
+
+The slice planner additionally retries the same request once after a timeout
+when its configured deadline is shorter than the 20-minute cold-start allowance.
+The timed-out request is aborted before that retry; no partial tool calls execute.
+The human transcript and metadata logs explicitly report the retry. Cancellation,
+authentication failures, and network errors do not trigger this recovery. A second
+timeout, or a timeout after the full cold-start allowance, stops the run before
+coder, tests, reviewer, or publication. This is bounded recovery, not an
+automatic endpoint/model switch or an unlimited warmup loop. For a public gateway
+backed by cold local inference, set its fleet `request_timeout_ms: 1200000` rather
+than relying on the public-host default.
 
 ## Later hosted profile: same HTTP shape, vault key
 

@@ -34,6 +34,26 @@ values are redacted before a configured reviewer sends the task, result, and
 diff to the selected model. A malformed response or tool request produces
 `Verdict: fail` with the reason. No endpoint means a deterministic failing
 review, not a fabricated approval.
+For test tasks and changed test files, the reviewer is additionally instructed
+to verify that assertions fail when the requested behavior is absent, and to
+exercise the public operation when the Ask names one. Secret-leakage checks
+must feed an obvious non-credential sentinel such as `test-only-private-api-key`
+into the app code under test and assert that exact value is absent from its
+serialized output; a generic keyword scan, or a sentinel the test strips
+itself, is not sufficient. Tests that only inspect objects built inside the
+test are failed as tautological.
+
+Before review, the coder's excellence gate applies the same rule
+deterministically to added lines of changed test files, regardless of model.
+A new test block must call an imported app function, directly or through a
+file-local helper, whenever the file imports one; `child_process` spawns count
+as black-box CLI coverage. A seeded string literal that an assertion
+checks for absence must reach an app call as an argument, a config object
+derived from it, or `process.env`. Failures start with `Test substance:` and
+get one correction turn, shared with the secret-material correction; a second
+failure stops the run. The coder context also lists export signatures of the
+modules that allowed files import directly, under Public seams, so the
+coder does not spend turns probing for APIs.
 
 ## Publication gate
 
@@ -44,6 +64,12 @@ rechecks the coder's original worktree snapshot before staging task-allowed
 changes. A failed or changed report blocks publication without deleting
 the coder's work. A failed review also suppresses the run's printed
 publisher command.
+When the review gate is explicitly disabled or `--skip-review` is supplied,
+the printed command includes a warning that the failed review is being
+bypassed, not approved. The shell shows the review failure reason instead
+of its normal reviewed-publication hint. These settings never bypass
+operational excellence: a bounded code/test task that produces no application
+diff fails before reviewer inference and cannot be published as an implementation.
 `review.required: false` (legacy alias `reviewer.required`), explicitly saved through
 [onboarding](ONBOARDING.md) or private config, makes only that verdict
 optional. The reviewer still runs, and issue PR bodies disclose the

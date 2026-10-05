@@ -151,7 +151,7 @@ test('docs tools exclude list_dir and one write received during test returns to 
     fetchImpl: async (_url, request) => {
       calls += 1;
       const body = JSON.parse(request.body);
-      assert.ok(!body.tools.some(({ function: tool }) => tool.name === 'list_dir'));
+      assert.ok(!(body.tools ?? []).some(({ function: tool }) => tool.name === 'list_dir'));
       if (calls === 1) {
         return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
           role: 'assistant', tool_calls: [{ id: 'first-save', type: 'function', function: {
@@ -405,7 +405,7 @@ test('a sole README save skips node tests before refusing a later empty search',
           ],
         } }] });
       }
-      assert.deepEqual(body.tools, []);
+      assert.equal(body.tools, undefined);
       return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
         role: 'assistant', tool_calls: [{ id: 'empty-search', type: 'function', function: {
           name: 'search_text', arguments: JSON.stringify({ query: '', path: 'README.md' }),
@@ -712,6 +712,79 @@ test('minimum docs skips node tests but still rejects secrets in the actual edit
     },
     runTestCommand: () => assert.fail('Docs-only changes must not run node --test'),
   }), /Secret material/);
+});
+
+test('coder AI-Run records the served model and summed usage', async (t) => {
+  const options = fixture(t);
+  let calls = 0;
+  const result = await runCoder({
+    ...options,
+    fetchImpl: async () => {
+      calls += 1;
+      return Response.json({ model: 'served-model', usage: { prompt_tokens: 10 * calls, completion_tokens: calls },
+        choices: [calls === 1 ? { finish_reason: 'tool_calls', message: {
+          role: 'assistant', tool_calls: [{ id: 'edit', type: 'function', function: {
+            name: 'write_file', arguments: JSON.stringify({ path: 'README.md', content: '# Project\n\n## Status\nActive.\n' }),
+          } }],
+        } } : { finish_reason: 'stop', message: { role: 'assistant', content: 'Updated README.' } }] });
+    },
+    runTestCommand: () => assert.fail('Docs-only changes must not run node --test'),
+  });
+  assert.equal(result.run.metrics.model, 'served-model');
+  assert.equal(result.run.metrics.context_out, 2);
+});
+
+test('a failed final-summary turn after green checks keeps the run and omits empty tools', async (t) => {
+  const options = fixture(t);
+  let calls = 0;
+  const result = await runCoder({
+    ...options,
+    fetchImpl: async (_url, request) => {
+      calls += 1;
+      if (calls === 2) {
+        assert.equal(Object.hasOwn(JSON.parse(request.body), 'tools'), false);
+        return Response.json({ error: { message: 'all backends failed' } }, { status: 502 });
+      }
+      return Response.json({ model: 'served-model', usage: { prompt_tokens: 10, completion_tokens: 1 },
+        choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant', tool_calls: [{ id: 'edit', type: 'function', function: {
+            name: 'write_file', arguments: JSON.stringify({ path: 'README.md', content: '# Project\n\n## Status\nActive.\n' }),
+          } }],
+        } }] });
+    },
+    runTestCommand: () => assert.fail('Docs-only changes must not run node --test'),
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.excellence.pass, true);
+  assert.equal(result.run.metrics.model, 'served-model');
+});
+
+test('credential-shaped fixture gets one secret correction, then passes with a sentinel', async (t) => {
+  const options = fixture(t);
+  const credentialShaped = ['sk', 'abcdefghijklmnopqrstuvwxyz0123'].join('-');
+  let calls = 0;
+  const result = await runCoder({
+    ...options,
+    fetchImpl: async (_url, request) => {
+      calls += 1;
+      const last = JSON.parse(request.body).messages.at(-1).content;
+      if (calls === 3) {
+        assert.match(last, /One secret-material correction is allowed/);
+        assert.match(last, /test-only-private-api-key/);
+        assert.doesNotMatch(last, new RegExp(credentialShaped));
+      }
+      const content = calls === 1 ? `# Project\n${credentialShaped}\n` : '# Project\ntest-only-private-api-key\n';
+      return Response.json({ choices: [calls === 1 || calls === 3 ? { finish_reason: 'tool_calls', message: {
+        role: 'assistant', tool_calls: [{ id: `edit-${calls}`, type: 'function', function: {
+          name: 'write_file', arguments: JSON.stringify({ path: 'README.md', content }),
+        } }],
+      } } : { finish_reason: 'stop', message: { role: 'assistant', content: 'Updated README.' } }] });
+    },
+    runTestCommand: () => assert.fail('Docs-only changes must not run node --test'),
+  });
+  assert.equal(calls, 4);
+  assert.equal(result.excellence.pass, true);
+  assert.match(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /test-only-private-api-key/);
 });
 
 test('only difficulty4+ feat may load the normal research and implementation path', async (t) => {

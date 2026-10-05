@@ -14,6 +14,7 @@ profiles:
     provider: vllm
     context_max: 32768
     concurrency: 2
+    request_timeout_ms: 1200000
     hardware: fictional-gpu
     task_class: [feat, fix, docs, test]
     notes: "Describe measured limits in your private catalog."
@@ -30,7 +31,10 @@ HTTP(S) base URLs without credentials/query/fragment, positive safe-integer
 `/v1` is appended if missing. Full `/models` or `/chat/completions` request
 URLs are refused. `task_class` is optional and, when supplied, contains
 distinct `feat`, `fix`, `docs`, or `test` hints. Hardware and notes are
-single-line metadata, not benchmark evidence or permission grants.
+single-line metadata, not benchmark evidence or permission grants. Optional
+`request_timeout_ms` overrides the request deadline when that profile is
+routed, so gateways backed by cold local inference can use the documented
+20-minute cold-start allowance without changing every endpoint.
 
 The small YAML subset supports one root, two-space list items, four-space
 fields, double-quoted strings, decimal integers, and inline task-class lists.
