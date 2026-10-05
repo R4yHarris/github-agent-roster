@@ -7,7 +7,8 @@ import { ensureLocalPath } from '../lib/paths.mjs';
 import { redactEvidence } from '../lib/redaction.mjs';
 import { taskFilesAllowed } from '../planner/stub.mjs';
 import { splitTaskFrontmatter } from './skills.mjs';
-import { addedLinesByFile, analyzeTestSubstance, isTestFile } from './test-substance.mjs';
+import { addedLinesByFile, addsOnlyImports, addsTestEvidence, analyzeTestSubstance, isTestFile } from './test-substance.mjs';
+import { readTaskMetadata } from './estimate.mjs';
 import { isAllowedFile, isForbiddenRead, isForbiddenWrite, isManagedFile, isRunLog, isDebugLog, isShellHistory, isCheckpoint, isRepoMap, taskAndRepairFiles } from './tools.mjs';
 
 const execute = promisify(execFile);
@@ -85,6 +86,14 @@ function isVendorMetadata(file) {
   return normalized === 'vendor' || normalized.startsWith('vendor/') && normalized.split('/').includes('.git');
 }
 
+function taskClass(task) {
+  try {
+    return readTaskMetadata(task).task_class;
+  } catch {
+    return null;
+  }
+}
+
 export async function checkExcellence({
   worktree, task, result, baseline, verifiedSnapshot, memoryPath, env, apiKeyEnv,
 }) {
@@ -122,6 +131,8 @@ export async function checkExcellence({
     reasons.push(`Bounded task must produce an application diff in ${scoped[0]}; passing existing tests or rewriting identical content does not implement the Ask.`);
   }
   let added;
+  let testEvidence = false;
+  let testAdditions = '';
   for (const file of files) {
     if (isForbiddenWrite(file) || !isAllowedFile(file, allowed)) {
       reasons.push(`Diff path is protected or outside TASK.md allowed paths: ${file}`);
@@ -144,8 +155,17 @@ export async function checkExcellence({
     if (redactEvidence(text, options) !== text) reasons.push(`Secret material detected in changed file: ${file}`);
     if (result.mode === 'llm' && git.hasGit && isTestFile(file)) {
       added ??= addedLinesByFile(git.diff);
-      reasons.push(...analyzeTestSubstance({ file, text, added: added.get(file) ?? text }));
+      const fileAdded = added.get(file) ?? text;
+      testEvidence ||= addsTestEvidence(fileAdded);
+      testAdditions += `${fileAdded}\n`;
+      reasons.push(...analyzeTestSubstance({ file, text, added: fileAdded }));
     }
+  }
+  const nonTestChanged = files.some((file) => !isTestFile(file) && isAllowedFile(file, allowed) && !isForbiddenWrite(file));
+  if (result.mode === 'llm' && git.hasGit && !testEvidence && testAdditions.trim() && !nonTestChanged &&
+      (taskClass(task) === 'test' || addsOnlyImports(testAdditions))) {
+    reasons.push('Test substance: the diff changes only test files but adds no new test block or assertion; ' +
+      'imports, comments, or fixtures alone do not implement the Ask.');
   }
   if (redactEvidence(git.diff, options) !== git.diff) reasons.push('Secret material detected in the Git diff.');
   return { pass: reasons.length === 0, reasons, files, model: result.model, turns: result.turns,

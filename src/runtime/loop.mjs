@@ -571,9 +571,10 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         ...secretReasons, ...substanceReasons,
         ...(secretReasons.length ? ['One secret-material correction is allowed. Credential-shaped literals are rejected even in test fixtures. ' +
           `${sentinelGuidance} Replace every such literal in Allowed Files and keep the assertions.`] : []),
-        ...(substanceReasons.length ? ['One test-substance correction is allowed. Each new test must call the imported app function under test ' +
+        ...(substanceReasons.length ? ['One test-substance correction is allowed. Add at least one new test block. Each new test must call the imported app function under test ' +
           '(directly or via an existing helper) and assert on its output. Pass any seeded sentinel into that call ' +
-          '(argument, config object, or process.env) before asserting it is absent from the output; never build, strip, and inspect your own object.'] : []),
+          '(argument, config object, or process.env) before asserting it is absent from the output; never build, strip, and inspect your own object. ' +
+          'If a module you wanted is outside read scope, use exports the test file already imports or the listed public seams instead of stopping.'] : []),
         'Rerun the required tests, and summarize.',
       ].join('\n') });
       continue;

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { addedLinesByFile, analyzeTestSubstance, isTestFile } from '../src/runtime/test-substance.mjs';
+import { addedLinesByFile, addsOnlyImports, addsTestEvidence, analyzeTestSubstance, isTestFile } from '../src/runtime/test-substance.mjs';
 
 const header = `import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -95,4 +95,14 @@ test('added lines are grouped per file from a zero-context diff', () => {
   ].join('\n'));
   assert.equal(added.get('tests/a.test.mjs'), ';\none\ntwo\n;\nthree');
   assert.equal(added.get('src/x.mjs'), ';\nx');
+});
+
+test('test evidence needs a new test block or assertion, and import-only additions are flagged', () => {
+  assert.equal(addsTestEvidence("test('x', () => {});"), true);
+  assert.equal(addsTestEvidence("  assert.equal(run(), 1);"), true);
+  assert.equal(addsTestEvidence("import { run } from '../src/run.mjs';\n// assert.equal(run(), 1)"), false);
+  assert.equal(addsTestEvidence("const label = 'test(\"x\")';"), false);
+  assert.equal(addsOnlyImports("import { a,\n  b } from '../src/a.mjs';\nimport 'node:test';\n/* later */\n// todo"), true);
+  assert.equal(addsOnlyImports("import { a } from '../src/a.mjs';\nconst timeout = 50;"), false);
+  assert.equal(addsOnlyImports(''), false);
 });

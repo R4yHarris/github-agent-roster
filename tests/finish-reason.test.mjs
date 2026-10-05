@@ -126,6 +126,23 @@ test('deepseek thinking length retries at the same cap while preserving reasonin
   assert.equal(response.finish_reason, 'stop');
 });
 
+test('reasoning that spends the whole cap retries once at a doubled, bounded cap', async () => {
+  for (const [cap, retried] of [[4096, 8192], [30000, 32768], [40000, 40000]]) {
+    const requests = [];
+    const chat = createBuiltinChat({ ...config, llm: { ...config.llm, max_tokens: cap } }, { env: {},
+      fetchImpl: async (_url, request) => {
+        requests.push(JSON.parse(request.body));
+        return completion(requests.length === 1 ? 'length' : 'stop', requests.length === 1 ? '' : '{"verdict":"pass"}');
+      } });
+    const response = await chat({ messages: [{ role: 'user', content: 'Review the diff.' }] });
+    assert.deepEqual(requests.map(({ max_tokens }) => max_tokens), [cap, retried]);
+    assert.match(requests[1].messages.at(-1).content, /Reasoning used the whole completion cap/);
+    assert.equal(response.finish_reason, 'stop');
+    await chat({ messages: [{ role: 'user', content: 'Next.' }] });
+    assert.equal(requests[2].max_tokens, retried, 'Later requests keep the raised cap');
+  }
+});
+
 test('a second length response fails by name and cannot consume another retry', async () => {
   let calls = 0;
   const chat = createBuiltinChat(config, { env: {}, fetchImpl: async () => {

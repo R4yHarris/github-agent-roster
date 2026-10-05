@@ -251,6 +251,25 @@ function sentinelReached(added, maskedAdded, value, sinkNames) {
   return calls(maskedAdded, sinkNames).some(({ open, close }) => containsTaint(open, close));
 }
 
+// True when added test-file lines contain a new test/it block or an assertion.
+export function addsTestEvidence(added) {
+  if (typeof added !== 'string' || !added.trim()) return false;
+  const maskedAdded = maskCode(added);
+  return addedTestBlocks(added, maskedAdded).length > 0 ||
+    /(?<![\w$])(?:assert(?:\.[A-Za-z]+)?|expect|t\.assert\.[A-Za-z]+)\s*\(/.test(maskedAdded);
+}
+
+// True when added lines are only import statements, comments, hunk separators, or whitespace.
+export function addsOnlyImports(added) {
+  if (typeof added !== 'string' || !added.trim()) return false;
+  return !added
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '')
+    .replace(/\bimport\s+(?:[\w$*{}\s,]+?\s+from\s+)?(['"])[^'"\n]+\1\s*;?/g, '')
+    .replace(/^\s*;\s*$/gm, '')
+    .trim();
+}
+
 export function analyzeTestSubstance({ file, text, added }) {
   if (typeof added !== 'string' || !added.trim()) return [];
   const imports = parseImports(text);
