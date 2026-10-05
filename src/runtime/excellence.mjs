@@ -7,6 +7,7 @@ import { ensureLocalPath } from '../lib/paths.mjs';
 import { redactEvidence } from '../lib/redaction.mjs';
 import { taskFilesAllowed } from '../planner/stub.mjs';
 import { splitTaskFrontmatter } from './skills.mjs';
+import { addedLinesByFile, analyzeTestSubstance, isTestFile } from './test-substance.mjs';
 import { isAllowedFile, isForbiddenRead, isForbiddenWrite, isManagedFile, isRunLog, isDebugLog, isShellHistory, isCheckpoint, isRepoMap, taskAndRepairFiles } from './tools.mjs';
 
 const execute = promisify(execFile);
@@ -59,7 +60,7 @@ async function gitChanges(worktree, memoryPath) {
   try {
     await fs.lstat(path.join(worktree, '.git'));
   } catch (error) {
-    if (error.code === 'ENOENT') return { files: [], diff: '' };
+    if (error.code === 'ENOENT') return { files: [], diff: '', hasGit: false };
     throw error;
   }
   const git = async (args) => (await execute('git', args, {
@@ -76,7 +77,7 @@ async function gitChanges(worktree, memoryPath) {
     '--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '--no-renames',
     '--unified=0', 'HEAD', '--', ...readable,
   ]) : '';
-  return { files, diff };
+  return { files, diff, hasGit: true };
 }
 
 function isVendorMetadata(file) {
@@ -115,6 +116,12 @@ export async function checkExcellence({
     const normalized = file.replaceAll('\\', '/');
     return !isVendorMetadata(file) && normalized.split('/')[0].toLowerCase() !== 'vendor';
   }))].sort();
+  const scoped = taskFilesAllowed(task);
+  if (result.mode === 'llm' && scoped.length === 1 && !scoped[0].endsWith('.md') &&
+      !(git.hasGit ? git.files : files).some((file) => isAllowedFile(file, scoped))) {
+    reasons.push(`Bounded task must produce an application diff in ${scoped[0]}; passing existing tests or rewriting identical content does not implement the Ask.`);
+  }
+  let added;
   for (const file of files) {
     if (isForbiddenWrite(file) || !isAllowedFile(file, allowed)) {
       reasons.push(`Diff path is protected or outside TASK.md allowed paths: ${file}`);
@@ -135,6 +142,10 @@ export async function checkExcellence({
     }
     const text = await fs.readFile(target, 'utf8');
     if (redactEvidence(text, options) !== text) reasons.push(`Secret material detected in changed file: ${file}`);
+    if (result.mode === 'llm' && git.hasGit && isTestFile(file)) {
+      added ??= addedLinesByFile(git.diff);
+      reasons.push(...analyzeTestSubstance({ file, text, added: added.get(file) ?? text }));
+    }
   }
   if (redactEvidence(git.diff, options) !== git.diff) reasons.push('Secret material detected in the Git diff.');
   return { pass: reasons.length === 0, reasons, files, model: result.model, turns: result.turns,
@@ -162,8 +173,9 @@ export async function writeResult({ worktree, result, excellence, env, apiKeyEnv
       : excellence.reasons.map((reason, index) => `- ${index === 0 ? 'First failure: ' : ''}${reason}`).join('\n') + '\n') +
     `- ${tests}\n\n## Run\n\nModel: ${run?.metrics?.model ?? result.model}\nTool-loop turns: ${result.turns}\n` +
     `Research turns: ${result.research?.turns ?? 0}\n` +
-    (result.testRepairs === undefined ? '' : `Test repairs: ${result.testRepairs} of 4\n` +
+    (result.testRepairs === undefined ? '' : `Test repairs: ${result.testRepairs} of ${result.testRepairBudget ?? 4}\n` +
       `Additional failing-test scope: ${result.repairFiles?.join(', ') || '(none)'}\n`) +
+    (result.noProgressRepairUsed ? 'No-progress corrections: 1 of 1\n' : '') +
     (result.implementationPath ? `Implementation path: ${result.implementationPath}\n` : '') +
     (result.stages ? `Stages: ${result.stages.join(' -> ')} -> result\n` : '') +
     (run ? `AI-Run: ${run.line}\n` : result.mode === 'stub'

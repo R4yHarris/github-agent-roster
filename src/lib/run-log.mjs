@@ -83,6 +83,12 @@ export async function createRunLog({
     if (event.type === 'tool-refused') return 'Refused: outside the worktree.';
     if (event.type === 'test-repair') return `Tests failed. Repair ${event.attempt} of ${event.budget}.`;
     if (event.type === 'timeout') return 'The model did not answer in time. It may still be waking.';
+    if (event.type === 'timeout-retry') return 'Retrying the same planner request once after the endpoint timeout.';
+    if (event.type === 'stall') return event.retry
+      ? 'The model stream went silent. Retrying the same request once.'
+      : 'The model stream went silent again. This is an endpoint stall, not a bad TASK.';
+    if (event.type === 'served-model') return `Endpoint served ${event.served} for requested ${event.requested}; ` +
+      'the gateway may alias models. Metrics record the served model.';
     if (event.type === 'tool' && !tools.includes(event.name)) return `tool ${event.name ?? 'unknown'}`;
     return null;
   }
@@ -102,6 +108,21 @@ export async function createRunLog({
           (event.retry ? event.continued
             ? ' Response truncated. Continuing the same message.' : ' Response truncated. Retrying.' : '');
       case 'contracts-uninitialized': return 'contracts submodule uninitialized';
+      case 'timeout-retry':
+        if (event.attempt !== 1 || event.budget !== 1) throw new TypeError('Invalid live timeout retry event');
+        return 'timeout retry 1/1';
+      case 'stall':
+        if (typeof event.host !== 'string' || !/^[A-Za-z0-9.:[\]-]{1,255}$/.test(event.host) ||
+            !Number.isFinite(event.idleSeconds) || event.idleSeconds <= 0 || typeof event.retry !== 'boolean') {
+          throw new TypeError('Invalid live stall event');
+        }
+        return `stall host=${safe(event.host)} idle=${event.idleSeconds}s retry=${event.retry}`;
+      case 'served-model':
+        if (typeof event.host !== 'string' || !/^[A-Za-z0-9.:[\]-]{1,255}$/.test(event.host) ||
+            [event.requested, event.served].some((name) => typeof name !== 'string' || !/^[A-Za-z0-9._:/@+-]{1,128}$/.test(name))) {
+          throw new TypeError('Invalid live served-model event');
+        }
+        return `served-model host=${event.host} requested=${event.requested} served=${event.served}`;
       case 'tool-refused':
         if (!tools.includes(event.name)) throw new TypeError('Invalid live tool refusal event');
         return `tool refused ${event.name} outside-worktree`;
@@ -287,7 +308,9 @@ export async function readLastRunLog({
     if (!lastLine) return null;
     const parsed = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z (?:start seat|seat) (planner|coder|reviewer) (.+)$/.exec(lastLine);
     const metadata = /^(?:session=[A-Za-z0-9._[\]-]{1,128}|model="(?:[^"\\]|\\.)*" host="(?:[^"\\]|\\.)*"|mode (?:stub|llm)|waiting host=[A-Za-z0-9.:[\]-]{1,255} elapsed=\d+s(?: cold-start up to 15m)?|The LLM request timed out after \d+(?:\.\d+)?s at host=[A-Za-z0-9.:[\]-]{1,255}\. (?:Cold-start: the host may still be warming; Spark\/SGLang can take up to 15m\. )?This is an endpoint timeout, not a bad TASK\. (?:Retry: (?:roster run --issue [1-9]\d*(?: --auto-model)?|roster run --seat coder --runtime builtin|roster doctor --warm)|Retry the same request\.)|implementation (?:model|deterministic-readme)|http chat\.completions (?:start|ok status=2\d\d|error(?: status=[1-5]\d\d)? class=(?:authentication|network|timeout|http|response|abort))|tool (?:read_file|write_file|list_dir|run_test|search_text)(?: path="(?:[^"\\]|\\.)*")?|wrote (?:RECIPE\.yml|TASK\.md|PLAN\.md|ESTIMATE\.md|RESULT\.md|REVIEW\.md)|error class=(?:Error|TypeError|RangeError|AbortError|RunLogError)|elapsed_ms=\d+ mode=(?:stub|llm))$/;
-    const validMetadata = (value) => metadata.test(value) || value === 'steering coder' ||
+    const validMetadata = (value) => metadata.test(value) || value === 'steering coder' || value === 'timeout retry 1/1' ||
+      /^stall host=[A-Za-z0-9.:[\]-]{1,255} idle=\d+(?:\.\d+)?s retry=(?:true|false)$/.test(value) ||
+      /^served-model host=[A-Za-z0-9.:[\]-]{1,255} requested=[A-Za-z0-9._:/@+-]{1,128} served=[A-Za-z0-9._:/@+-]{1,128}$/.test(value) ||
       /^tool refused (?:read_file|write_file|list_dir|run_test|search_text) outside-worktree$/.test(value) ||
       /^completion finish_reason=(?:null|"stop"|"tool_calls")$/.test(value);
     if (!parsed || !validMetadata(parsed[2]) || /[\x00-\x1f\x7f]/.test(lastLine) ||

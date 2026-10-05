@@ -473,7 +473,8 @@ test('first exit 1 gets a repair turn and excellence waits for green tests', asy
             turns += 1;
             if (turns === 2) {
               assert.equal(verifies, 0);
-              assert.match(JSON.parse(request.body).messages.at(-1).content, /Repair 1 of 4[\s\S]*Rerun node --test/);
+              assert.match(JSON.parse(request.body).messages.at(-1).content,
+                /Repair 1 of 4[\s\S]*every identifier introduced[\s\S]*Rerun node --test/);
               return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
                 role: 'assistant', tool_calls: [{ id: 'repair', type: 'function', function: {
                   name: 'write_file', arguments: '{"path":"README.md","content":"fixed"}',

@@ -126,6 +126,58 @@ test('edits after final verification invalidate an earlier passing gate', async 
   assert.match(gate.reasons.join('\n'), /changed after final verification/);
 });
 
+test('a bounded regression task cannot pass on existing green tests without an actual Git diff', async (t) => {
+  const options = await fixture(t);
+  const task = planStub('Add a regression in tests/smoke.test.mjs.').task;
+  mkdirSync(path.join(options.worktree, 'tests'));
+  const file = path.join(options.worktree, 'tests', 'smoke.test.mjs');
+  const content = "import test from 'node:test';\ntest('existing', () => {});\n";
+  writeFileSync(file, content);
+  const git = (...args) => execFileSync('git', args, { cwd: options.worktree, stdio: 'pipe' });
+  git('init', '--quiet');
+  git('add', '--all');
+  git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--quiet', '-m', 'baseline');
+  const baseline = await snapshotWorktree(options.worktree);
+  writeFileSync(file, content);
+  const gate = await checkExcellence({ ...options, task, baseline });
+  assert.equal(gate.pass, false);
+  assert.deepEqual(gate.files, []);
+  assert.match(gate.reasons.join('\n'), /must produce an application diff[\s\S]*passing existing tests/);
+  writeFileSync(file, content + "test('regression', () => {});\n");
+  assert.equal((await checkExcellence({ ...options, task, baseline })).pass, true);
+  writeFileSync(file, content);
+  assert.equal((await checkExcellence({ ...options, task, baseline })).pass, false,
+    'Reverting a prior write must not retain implementation success');
+});
+
+test('test substance flags only added tests that cannot fail, never pre-existing ones', async (context) => {
+  const options = await fixture(context);
+  options.task = planStub('Add a regression test in tests/route.test.mjs.').task;
+  writeFileSync(path.join(options.worktree, 'TASK.md'), options.task);
+  mkdirSync(path.join(options.worktree, 'src'));
+  mkdirSync(path.join(options.worktree, 'tests'));
+  writeFileSync(path.join(options.worktree, 'src', 'route.mjs'), 'export const formatRoute = (env) => `route ${Object.keys(env).length}`;\n');
+  const file = path.join(options.worktree, 'tests', 'route.test.mjs');
+  const original = "import assert from 'node:assert/strict';\nimport test from 'node:test';\n" +
+    "import { formatRoute } from '../src/route.mjs';\n\ntest('legacy shape', () => {\n  assert.equal(1, 1);\n});\n";
+  writeFileSync(file, original);
+  const git = (...args) => execFileSync('git', args, { cwd: options.worktree, encoding: 'utf8', stdio: 'pipe' });
+  git('init', '--quiet');
+  git('add', '--all');
+  git('-c', 'user.name=Test Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet', '-m', 'Fixture');
+  options.baseline = await snapshotWorktree(options.worktree);
+  writeFileSync(file, `${original}\ntest('summary hides keys', () => {\n  const summary = { key: 'test-only-private-api-key' };\n` +
+    "  delete summary.key;\n  assert.ok(!JSON.stringify(summary).includes('test-only-private-api-key'));\n});\n");
+  const weak = await checkExcellence(options);
+  assert.equal(weak.pass, false);
+  assert.equal(weak.reasons.length, 2);
+  assert.match(weak.reasons[0], /^Test substance: new test "summary hides keys" in tests\/route\.test\.mjs never calls/);
+  assert.match(weak.reasons[1], /^Test substance: sentinel 'test-only-private-api-key' in tests\/route\.test\.mjs is asserted absent/);
+  writeFileSync(file, `${original}\ntest('summary hides keys', () => {\n  const secret = 'test-only-private-api-key';\n` +
+    '  assert.ok(!formatRoute({ ROSTER_API_KEY: secret }).includes(secret));\n});\n');
+  assert.deepEqual((await checkExcellence(options)).reasons, []);
+});
+
 test('Git diff checks include out-of-scope changes that already existed before the loop', async (context) => {
   const options = await fixture(context);
   const git = (...args) => execFileSync('git', args, { cwd: options.worktree, encoding: 'utf8', stdio: 'pipe' });

@@ -341,6 +341,7 @@ test('live HTTP events expose only model, host, phase, and status without reques
     { type: 'model', model: 'actual-model', host: 'localhost:8000' },
     { type: 'http', phase: 'ok', status: 200 },
     { type: 'usage', input: 4, output: 6 },
+    { type: 'served-model', host: 'localhost:8000', requested: 'local-test-model', served: 'actual-model' },
   ]);
   for (const sensitive of [secret, messages[0].content, completion.choices[0].message.content, '/private/v1']) {
     assert.ok(!JSON.stringify(events).includes(sensitive));

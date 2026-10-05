@@ -12,7 +12,7 @@ const seats = ['planner', 'coder', 'reviewer'];
 const tools = ['read_file', 'write_file', 'edit_file', 'glob_files', 'list_dir', 'run_test', 'run_command', 'search_text', 'web_search', 'web_fetch'];
 const pathClasses = ['root', 'outside', 'secret', 'git', 'policy', 'workflow', 'vendor', 'managed', 'tests', 'source', 'docs', 'other'];
 const phases = ['seat-start', 'seat-end', 'seat-error', 'model', 'http-start', 'http-ok', 'http-error',
-  'waiting', 'timeout', 'tool-start', 'tool-ok', 'tool-error', 'tool-denied', 'tool-refused', 'finish-reason',
+  'waiting', 'timeout', 'timeout-retry', 'stall', 'served-model', 'tool-start', 'tool-ok', 'tool-error', 'tool-denied', 'tool-refused', 'finish-reason',
   'finish-retry', 'completion', 'steering', 'test-repair', 'contracts-uninitialized', 'wrote', 'implementation',
   'usage'];
 const fields = ['time', 'issue', 'seat', 'phase', 'tool_name', 'path_class', 'finish_reason',

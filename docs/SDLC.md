@@ -93,10 +93,22 @@ without editing the tracked example or storing credentials.
   `192.168.*`, `10.*`, and `172.16-31.*`) use **20 minutes**; cloud/public
   hosts use **120 seconds**. This follows the selected endpoint, including
   fleet routing, not a profile name. See [cold starts](REPL.md#local-llm-cold-starts).
+  A fleet profile can override `request_timeout_ms` for a public cold-inference
+  gateway. The slice planner retries one shorter-deadline timeout, visibly,
+  without changing the model or replaying completed tools; a full 20-minute
+  timeout is terminal.
 - `planner.turn_budget` bounds planning chat responses to 1-64 (example: 2).
   The slice planner has only artifact-scoped `write_file` for root
   `RECIPE.yml`, `TASK.md`, and `ESTIMATE.md`; no app-code tools. The harness
   validates and finalizes those files. Tool replies and repairs consume turns.
+  Prefer one final JSON object with `title`, `acceptance_checks`, and
+  `files_allowed`; the harness can also normalize `task` as a title alias and
+  accept `steps`/`notes` hints without granting extra scope. A complete validated
+  JSON plan accompanying an incomplete artifact draft is finalized without an
+  extra model call. Invalid drafts return their validation error to the planner,
+  rather than a misleading successful write alone. Written tasks and JSON plans
+  must both keep the routed model. Failed planning stops the seat chain:
+  unverified stubs never start a coder, reviewer, tests, or publisher.
   Feature/initiative planning instead uses tool-free JSON and a PLAN-only
   harness writer, with at most one correction inside that budget.
   Private schema 1 configs predating the planner section use a one-turn planner.
