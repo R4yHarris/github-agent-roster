@@ -1709,7 +1709,7 @@ test('a merged PR still receives an issue comment when publisher local cleanup f
   assert.equal(commented, true);
 });
 
-test('default planner/coder run preserves the task handoff and reports denied out-of-scope writes', async (context) => {
+test('default planner/coder run stops after a denied managed-file write', async (context) => {
   const options = fixture(context);
   options.issue.title = 'Implement the app';
   options.issue.body = 'Add src/app.mjs.\n\n## Acceptance checks\n- node --test exits 0\n' +
@@ -1738,33 +1738,25 @@ test('default planner/coder run preserves the task handoff and reports denied ou
       return { ok: true, status: 200, json: async () => ({ choices: [{
         finish_reason: 'tool_calls',
         message: { role: 'assistant', tool_calls: [
-          write('code', 'src/app.mjs', 'export const ready = true;\n'),
           write('recipe', 'RECIPE.yml', 'tampered'),
+          write('code', 'src/app.mjs', 'export const ready = true;\n'),
           write('task', 'TASK.md', 'tampered'),
         ] },
       }] }) };
     }
-    assert.equal(completion, 3);
-    assert.match(JSON.stringify(body.messages.slice(1)), /src\/app\.mjs/);
-    assert.match(JSON.stringify(body.messages.slice(1)), /not allowed/);
-    return { ok: true, status: 200, json: async () => ({
-      choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Implemented the planned task.' } }],
-    }) };
+    assert.fail('A policy denial must stop before another model request');
   };
-  const result = await runBuiltinIssue(42, {
+  await assert.rejects(runBuiltinIssue(42, {
     ...options, config: llmConfig, fetchImpl, log: () => {},
     vault: { get: async () => undefined },
     runTestCommand: () => assert.fail('Denied writes must stop before tests'),
-  });
-  assert.equal(completion, 3);
-  assert.equal(result.result.excellence.pass, true);
+  }), /Writing RECIPE\.yml is not allowed by TASK\.md or worktree policy/);
+  assert.equal(completion, 2);
   assert.deepEqual(parseRecipe(readFileSync(path.join(worktreePath, 'RECIPE.yml'), 'utf8')).seats.map(({ id }) => id),
     ['planner', 'coder', 'reviewer']);
-  assert.equal(readFileSync(path.join(worktreePath, 'src', 'app.mjs'), 'utf8'),
-    'export const ready = true;\n');
   assert.deepEqual(['RECIPE.yml', 'TASK.md'].map((name) => readFileSync(path.join(worktreePath, name), 'utf8')), handoff);
-  assert.equal(existsSync(path.join(worktreePath, 'REVIEW.md')), true);
-  assert.equal(result.review.verdict, 'pass');
+  assert.equal(existsSync(path.join(worktreePath, 'src', 'app.mjs')), false);
+  assert.match(readFileSync(path.join(worktreePath, 'RESULT.md'), 'utf8'), /Checks: FAIL/);
   assert.equal(options.calls.filter(({ program, args }) =>
     program === 'git' && args[0] === 'worktree' && args[1] === 'add').length, 1);
 });
