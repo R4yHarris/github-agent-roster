@@ -132,10 +132,13 @@ only, never the run log or a trailer. Streamed text reaches the live transcript
 only; it is never written to the run log or the debug log.
 
 The shared builtin adapter accepts `stop` and `tool_calls` and grants one
-`length` retry per chat instance (the coder keeps one instance for its run).
+`length` retry per request, at most three per chat instance (the coder keeps
+one instance for its run).
 For a non-docs-slice run it logs `Response truncated. Retrying.`, discards the
-truncated completion without executing or replaying its tool calls, and asks
-for a concise complete response with half the previous completion cap.
+truncated completion without executing or replaying its tool calls, and retries
+at the same completion cap, asking the model to split large output into
+`edit_file` hunks or several smaller write/edit calls. Halving the cap cannot
+help because the overflowing content must still be emitted.
 A docs slice starts with reasoning disabled (`reasoning_effort: none`, and
 local DeepSeek `thinking: false`) before its first request and never sends a
 completion cap below 8192, including the continue turn.
@@ -143,9 +146,9 @@ On `length` it logs `Response truncated. Continuing the same message.`, keeps
 the partial assistant message, and sends exactly one *continue* turn at the
 same cap; a truncated tool call is still dropped rather than replayed, and the
 continue turn then asks for the complete call. This applies regardless of the
-docs filename, preserves completed writes, and has no second retry.
+docs filename, preserves completed writes, and has no second retry for that request.
 Builtin requests start at 4096 tokens unless the seat supplies a cap, such as
-the 8192 floor for docs slices. The retry cap and, for docs slices, disabled reasoning remain in effect for later
+the 8192 floor for docs slices. The cap and, for docs slices, disabled reasoning remain in effect for later
 requests; it is an output cap, not the model context capacity.
 The retry is an extra coder model turn, independent of failed-test repairs.
 A second `length` after a saved README-only Status edit is treated as a

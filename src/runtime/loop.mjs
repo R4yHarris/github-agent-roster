@@ -29,6 +29,12 @@ function repairBudgetFor(task, bounded) {
   return testRepairBudget;
 }
 
+// Failure identity without timings, so a changed failure signals repair progress.
+function failureFingerprint(output) {
+  return String(output).replace(/\(\d+(?:\.\d+)?m?s\)/g, '').replace(/duration_ms\s+\S+/g, '')
+    .replace(/\s+/g, ' ').trim();
+}
+
 function decodeCalls(message, offered, ids, turn) {
   if (message.tool_calls !== undefined && !Array.isArray(message.tool_calls)) {
     throw new MalformedCoderTools('LLM coder returned malformed tool calls');
@@ -76,7 +82,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   const singleAllowedFile = parsedTask.files_allowed.length === 1
     ? parsedTask.files_allowed[0] : null;
   const boundedTask = singleAllowedFile !== null;
-  const repairBudget = repairBudgetFor(context.task, boundedTask);
+  let repairBudget = repairBudgetFor(context.task, boundedTask);
   const explorationBudget = Math.min(config.seat.turn_budget,
     Math.max(4, parsedTask.files_allowed.length * 2));
 
@@ -134,6 +140,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   let steeringMessage;
   let webSearchDone = false;
   let webFetchDone = false;
+  const readCache = new Map();
   progress.testRepairs = 0;
   progress.testRepairBudget = repairBudget;
   progress.repairFiles = [];
@@ -169,6 +176,15 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         'Do not read or edit them. Continue only on the allowed files. ' +
         'A remediation agent is a separate session and starts only if the human asks.' });
       return true;
+    }
+    const fingerprint = failureFingerprint(output);
+    const progressed = progress.lastFailure !== undefined && progress.lastFailure !== fingerprint;
+    progress.lastFailure = fingerprint;
+    if (progress.testRepairs === repairBudget && progressed && !progress.progressRepairUsed &&
+        repairBudget < testRepairBudget) {
+      progress.progressRepairUsed = true;
+      repairBudget += 1;
+      progress.testRepairBudget = repairBudget;
     }
     if (progress.testRepairs === repairBudget) {
       progress.repairBudgetExhausted = true;
@@ -347,7 +363,18 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         const turnBudgetSpent = attemptTurns === config.seat.turn_budget + Number(repaired);
         const explorationSpent = attemptTurns >= explorationBudget;
         if (exploring && progress.writeForced) {
-          throw new Error('Coder continued exploring after the bounded exploration budget was spent');
+          if (progress.writeForcedAgain) {
+            throw new Error('Coder continued exploring after the bounded exploration budget was spent');
+          }
+          progress.writeForcedAgain = true;
+          for (const call of calls) {
+            messages.push({ role: 'tool', tool_call_id: call.id,
+              content: 'Denied: reads are closed. Use the content already in this conversation.' });
+            await onEvent?.({ type: 'tool-result', name: call.function.name, status: 'denied' });
+          }
+          messages.push({ role: 'user', content: 'Final notice: the next response must be write_file or edit_file on an allowed file. ' +
+            'Make the smallest complete change from what you already read; another read ends the run.' });
+          continue;
         }
         if (exploring && (turnBudgetSpent || explorationSpent)) {
           progress.writeForced = true;
@@ -419,12 +446,15 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
           await onEvent?.({ type: 'tool-result', name: call.function.name, status: 'denied' });
           continue;
         }
-        messages.push({
-          role: 'tool', tool_call_id: call.id,
-          content: redactEvidence(typeof result === 'string' ? result : JSON.stringify(result), {
-            env, apiKeyEnv: config.llm.api_key_env,
-          }),
+        const content = redactEvidence(typeof result === 'string' ? result : JSON.stringify(result), {
+          env, apiKeyEnv: config.llm.api_key_env,
         });
+        const readKey = call.function.name === 'read_file' ? String(call.args.path ?? '').replaceAll('\\', '/') : undefined;
+        const unchanged = readKey !== undefined && readCache.get(readKey) === content;
+        if (readKey !== undefined) readCache.set(readKey, content);
+        messages.push({ role: 'tool', tool_call_id: call.id, content: unchanged
+          ? `Unchanged since your earlier read_file of ${readKey} in this session; reuse that content instead of rereading.`
+          : content });
         if (call.function.name === 'web_search') webSearchDone = true;
         if (call.function.name === 'web_fetch') webFetchDone = true;
         if (['write_file', 'edit_file'].includes(call.function.name) &&

@@ -57,7 +57,7 @@ test('cloud docs slices disable reasoning from the first request while non-slice
     } });
     await chat({ messages: [{ role: 'user', content: 'Docs task.' }] });
     assert.equal(requests[0].max_tokens, kind === 'slice' ? 8192 : 4096);
-    assert.equal(requests[1].max_tokens, kind === 'slice' ? 8192 : 2048);
+    assert.equal(requests[1].max_tokens, kind === 'slice' ? 8192 : 4096);
     assert.equal(requests[0].reasoning_effort, kind === 'slice' ? 'none' : 'medium');
     assert.equal(requests[1].reasoning_effort, kind === 'slice' ? 'none' : requests[0].reasoning_effort);
   }
@@ -82,7 +82,7 @@ test('a docs slice never sends a completion cap below 8192 and sends the thinkin
   }
 });
 
-test('length gets exactly one retry with a smaller cap and no truncated body replay', async () => {
+test('length gets exactly one retry at the same cap and no truncated body replay', async () => {
   const requests = [];
   const events = [];
   const chat = createBuiltinChat({ ...config, llm: { ...config.llm, max_tokens: 2048 } }, {
@@ -95,7 +95,8 @@ test('length gets exactly one retry with a smaller cap and no truncated body rep
     },
   });
   const response = await chat({ messages: [{ role: 'user', content: 'Implement the task.' }] });
-  assert.deepEqual(requests.map(({ max_tokens }) => max_tokens), [2048, 1024]);
+  assert.deepEqual(requests.map(({ max_tokens }) => max_tokens), [2048, 2048]);
+  assert.match(requests[1].messages.at(-1).content, /Split large output: use edit_file/);
   assert.doesNotMatch(JSON.stringify(requests[1]), /PRIVATE_TRUNCATED_BODY/);
   assert.equal(response.finish_reason, 'stop');
   assert.equal(chat.lastAttempts, 2);
@@ -105,7 +106,7 @@ test('length gets exactly one retry with a smaller cap and no truncated body rep
     [{ type: 'finish-reason', reason: 'length', retry: true }]);
 });
 
-test('deepseek thinking length retries with a smaller cap while preserving reasoning', async () => {
+test('deepseek thinking length retries at the same cap while preserving reasoning', async () => {
   const deepseek = parseConfig(readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8')
     .replace('base_url: ""', 'base_url: http://127.0.0.1:8888/v1')
     .replace('model: ""', 'model: deepseek-v4.1-flash')
@@ -116,11 +117,11 @@ test('deepseek thinking length retries with a smaller cap while preserving reaso
     return completion(requests.length === 1 ? 'length' : 'stop', 'PRIVATE_TRUNCATED_BODY');
   } });
   const response = await chat({ messages: [{ role: 'user', content: 'Implement the task.' }] });
-  assert.deepEqual(requests.map(({ max_tokens }) => max_tokens), [4096, 2048]);
+  assert.deepEqual(requests.map(({ max_tokens }) => max_tokens), [4096, 4096]);
   assert.equal(requests[0].chat_template_kwargs.thinking, true);
   assert.equal(requests[1].chat_template_kwargs.thinking, true);
   assert.equal(requests[1].reasoning_effort, 'high');
-  assert.match(requests[1].messages.at(-1).content, /Retry concisely within the smaller completion cap/);
+  assert.match(requests[1].messages.at(-1).content, /Split large output/);
   assert.doesNotMatch(JSON.stringify(requests[1]), /PRIVATE_TRUNCATED_BODY/);
   assert.equal(response.finish_reason, 'stop');
 });
@@ -137,7 +138,7 @@ test('a second length response fails by name and cannot consume another retry', 
   assert.equal(calls, 2);
 });
 
-test('the length retry budget remains spent on later requests in the same coder chat', async () => {
+test('each request gets one length retry until the per-chat retry budget is spent', async () => {
   let calls = 0;
   const chat = createBuiltinChat(config, { env: {}, fetchImpl: async () => {
     calls += 1;
@@ -145,7 +146,11 @@ test('the length retry budget remains spent on later requests in the same coder 
   } });
   await chat({ messages: [{ role: 'user', content: 'Task' }] });
   await assert.rejects(chat({ messages: [{ role: 'user', content: 'Continue' }] }), /finish reason: length/);
-  assert.equal(calls, 3);
+  assert.equal(calls, 4);
+  await assert.rejects(chat({ messages: [{ role: 'user', content: 'Again' }] }), /finish reason: length/);
+  assert.equal(calls, 6);
+  await assert.rejects(chat({ messages: [{ role: 'user', content: 'Last' }] }), /finish reason: length/);
+  assert.equal(calls, 7);
 });
 
 test('unknown reasons are named in shell and run log without response bodies', async (t) => {

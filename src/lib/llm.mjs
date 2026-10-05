@@ -4,6 +4,8 @@ import { modelCapabilityPrior } from './capabilities.mjs';
 import { UnsupportedFinishReasonError } from '../llm/finish-reason.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
 
+const maxLengthRetries = 3;
+
 export function createBuiltinChat(config, {
   fetchImpl, env = process.env, vault, onEvent, retryCommand, clock, signal,
   retryLength = true, stream = false,
@@ -34,7 +36,7 @@ export function createBuiltinChat(config, {
   let completionCap = docsSlice
     ? docsCompletionCap(config.llm) : config.llm.max_tokens ?? 4096;
   let reasoningDisabled = docsSlice;
-  let lengthRetried = false;
+  let lengthRetries = 0;
   let lastAttempts = 0;
   let lastUsage = null;
   const chat = async (request, { signal: requestSignal = signal } = {}) => {
@@ -47,11 +49,12 @@ export function createBuiltinChat(config, {
       } : {}),
     };
     if (!Number.isSafeInteger(current.max_tokens) || current.max_tokens < 1 ||
-        current.max_tokens === 1 && !lengthRetried) {
+        current.max_tokens === 1 && lengthRetries === 0) {
       throw new TypeError('Initial builtin completion cap must be an integer of at least 2');
     }
     lastAttempts = 0;
     lastUsage = null;
+    let retriedThisRequest = false;
     const usages = [];
     for (;;) {
       lastAttempts += 1;
@@ -72,16 +75,19 @@ export function createBuiltinChat(config, {
         }
         usages.push(transport.lastResponse?.usage ?? null);
         lastUsage = mergeUsage(...usages);
-        const retry = retryLength && error.truncated && !lengthRetried && current.max_tokens > 1;
+        const retry = retryLength && error.truncated && !retriedThisRequest &&
+          lengthRetries < maxLengthRetries && current.max_tokens > 1;
         await onEvent?.({ type: 'finish-reason', reason: error.finishReason, retry,
           ...(retry && docsSlice ? { continued: true } : {}),
         });
         if (!retry) throw error;
-        lengthRetried = true;
+        retriedThisRequest = true;
+        lengthRetries += 1;
         const resumable = docsSlice && typeof error.partial?.content === 'string' &&
           error.partial.content.trim() && !error.partial.tool_calls?.length
           ? error.partial.content : null;
-        completionCap = docsSlice ? current.max_tokens : Math.floor(current.max_tokens / 2);
+        // Halving the cap cannot help: the content that overflowed still has to be emitted.
+        completionCap = current.max_tokens;
         current = { ...current, max_tokens: completionCap,
           ...(reasoningDisabled ? { reasoning_effort: 'none',
             ...(usesDeepseekReasoning(config.llm) ? { chat_template_kwargs: { thinking: false } } : {}),
@@ -93,7 +99,8 @@ export function createBuiltinChat(config, {
             (docsSlice ? resumable === null
               ? 'The response stopped at the completion cap. Continue the same answer from where it stopped. '
               : 'That message stopped at the completion cap. Continue it from where it stopped, without repeating it. '
-              : 'The response was truncated. Retry concisely within the smaller completion cap. ') +
+              : 'The response was truncated at the completion cap. Split large output: use edit_file for ' +
+                'targeted hunks or several smaller write/edit calls, and keep reasoning brief. ') +
             'Return complete tool calls or a complete summary; do not repeat previously executed edits.' },
         ] };
       }

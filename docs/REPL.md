@@ -256,8 +256,8 @@ gate and start checks, while a tool-call failure never opens review. The first
 `length` uses one extra model turn. A docs slice logs
 `Response truncated. Continuing the same message.`, keeps reasoning disabled
 and keeps the same completion cap of at least 8192. Other tasks retain
-`Response truncated. Retrying.` with half the cap. Repeated
-truncation or another unsupported reason fails review with that reason,
+`Response truncated. Retrying.` at the same cap and ask for split writes. A second
+truncation of the same request, or a fourth in one chat, or another unsupported reason fails review with that reason,
 preserving any completed README write. This does not consume a test repair.
 
 For any bounded one-file slice, draft offers only `read_file`, `write_file`,

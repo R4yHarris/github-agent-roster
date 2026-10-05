@@ -550,6 +550,42 @@ test('an optional test that exits 1 cannot be waived into a successful final sum
           assert.equal(verifies, 0);
 });
 
+test('an easy bounded repair earns one bonus only when the failure changes', async () => {
+  const task = planStub('Update `tests/smoke.test.mjs` with a regression test.',
+    { reference: 'issue:5', metadata: { task_class: 'test', difficulty: 2 } }).task;
+  const attempt = async (outputs) => {
+    let tests = 0;
+    let turns = 0;
+    const events = [];
+    const result = await runLoop({ config: llmConfig, context: { task, pack: task }, env: {},
+      onEvent: (event) => events.push(event),
+      tools: {
+        write_file: async () => ({ path: 'tests/smoke.test.mjs', bytes: 1 }),
+        run_test: async () => {
+          const stdout = outputs[Math.min(tests, outputs.length - 1)];
+          tests += 1;
+          return { exit_code: stdout === 'ok' ? 0 : 1, stdout, stderr: '' };
+        },
+      },
+      fetchImpl: async () => {
+        turns += 1;
+        return Response.json({ choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant',
+          tool_calls: [{ id: `w${turns}`, type: 'function', function: { name: 'write_file',
+            arguments: '{"path":"tests/smoke.test.mjs","content":"x"}' } }] } }] });
+      },
+      verify: () => ({ pass: true, reasons: [] }),
+    });
+    return { result, tests, repairs: events.filter(({ type }) => type === 'test-repair') };
+  };
+  const progressing = await attempt(['fail A (1.2ms)', 'fail B (3.4ms)', 'ok']);
+  assert.equal(progressing.result.error, undefined);
+  assert.equal(progressing.result.testRepairs, 2);
+  assert.deepEqual(progressing.repairs.map(({ budget }) => budget), [1, 2]);
+  const stuck = await attempt(['fail A (1.2ms)', 'fail A (9.9ms)']);
+  assert.match(stuck.result.error.message, /Test repair budget \(1\) exhausted/);
+  assert.equal(stuck.result.testRepairs, 1);
+});
+
 test('repair turns can reach their tool allowance without ending on the first failed check', async () => {
             let turns = 0;
             let tests = 0;
@@ -703,13 +739,14 @@ test('budget exhaustion and a failed final test stop without claiming success', 
 
 test('coder stops after ignoring the forced-write instruction', async () => {
   for (const [task, expectedReads, expectedTurns] of [
-    [planStub('Update README.md.').task, 3, 5],
+    [planStub('Update README.md.').task, 3, 6],
     [planStub('Update README.md.').task.replace('- `README.md`',
-      '- `src/runtime/loop.mjs`\n- `src/runtime/remediation.mjs`\n- `tests/remediation.test.mjs`\n- `tests/runtime.test.mjs`'), 7, 9],
+      '- `src/runtime/loop.mjs`\n- `src/runtime/remediation.mjs`\n- `tests/remediation.test.mjs`\n- `      tests/runtime.test.mjs`'), 7, 10],
   ]) {
     let reads = 0;
     let turns = 0;
     let forcedMessage;
+          let finalNotice;
     const result = await runLoop({
       config: { ...llmConfig, tools: { ...llmConfig.tools, internet: true },
         seat: { ...llmConfig.seat, turn_budget: 1000 } },
@@ -722,7 +759,8 @@ test('coder stops after ignoring the forced-write instruction', async () => {
         turns += 1;
         const body = JSON.parse(request.body);
         assert.doesNotMatch(body.tools.map(({ function: tool }) => tool.name).join(','), /web_search|web_fetch/);
-        if (turns === expectedTurns) forcedMessage = body.messages.at(-1).content;
+        if (turns === expectedTurns - 1) forcedMessage = body.messages.at(-1).content;
+        if (turns === expectedTurns) finalNotice = body.messages.at(-1).content;
         return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
           role: 'assistant', tool_calls: [{ id: `read-${turns}`, type: 'function', function: {
             name: 'read_file', arguments: JSON.stringify({
@@ -737,5 +775,41 @@ test('coder stops after ignoring the forced-write instruction', async () => {
     assert.equal(reads, expectedReads);
     assert.equal(turns, expectedTurns);
     assert.match(forcedMessage, /Stop reading and searching\. Write the allowed files now/);
+    assert.match(finalNotice, /Final notice: the next response must be write_file or edit_file/);
   }
+});
+
+test('rereading an unchanged file returns a short notice instead of the full content again', async () => {
+  const task = planStub('Update README.md and smoke.test.mjs.').task;
+  let turns = 0;
+  let disk = 'original body';
+  const seen = [];
+  const result = await runLoop({ config: { ...llmConfig, seat: { ...llmConfig.seat, turn_budget: 10 } },
+    context: { task, pack: task }, env: {},
+    tools: {
+      read_file: async () => disk,
+      write_file: async () => { disk = 'changed body'; return { path: 'README.md', bytes: 1 }; },
+      run_test: async () => ({ exit_code: 0, stdout: 'pass', stderr: '' }),
+    },
+    fetchImpl: async (_url, request) => {
+      turns += 1;
+      seen.splice(0, seen.length, ...JSON.parse(request.body).messages
+        .filter(({ role }) => role === 'tool').map(({ content }) => content));
+      const call = (name, args) => ({ choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant',
+        tool_calls: [{ id: `c${turns}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] } }] });
+      if (turns <= 2) return Response.json(call('read_file', { path: 'README.md' }));
+      if (turns === 3) {
+        const batch = call('write_file', { path: 'README.md', content: 'changed body' });
+        batch.choices[0].message.tool_calls.push({ id: 'c3-read', type: 'function',
+          function: { name: 'read_file', arguments: '{"path":"README.md"}' } });
+        return Response.json(batch);
+      }
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Done.' } }] });
+    },
+    verify: () => ({ pass: true, reasons: [] }),
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(seen[0], 'original body');
+  assert.match(seen[1], /^Unchanged since your earlier read_file of README\.md/);
+  assert.equal(seen.at(-1), 'changed body');
 });
