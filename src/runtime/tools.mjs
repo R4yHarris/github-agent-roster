@@ -16,6 +16,9 @@ const managedFiles = new Set(['assignment.md', 'task.md', 'recipe.yml', 'plan.md
 export class ToolAccessError extends Error {
   code = 'ROSTER_TOOL_DENIED';
 }
+// Recoverable scope or usage mistakes: the coder is told and may correct course.
+// Every other ToolAccessError is a security boundary and stops the run.
+export class ToolUsageError extends ToolAccessError {}
 export const outsideWorktreeMessage = 'Refused: outside the worktree.';
 export class OutsideWorktreeError extends ToolAccessError {
   constructor() { super(outsideWorktreeMessage); }
@@ -201,7 +204,7 @@ function argumentsFor(value, required, optional = []) {
 function validateSearchTextArguments(args) {
   argumentsFor(args, ['query'], ['path']);
   if (typeof args.query !== 'string' || !args.query.length || /[\r\n\0]/.test(args.query)) {
-    throw new ToolAccessError('search_text query must be nonempty, single-line literal text');
+    throw new ToolUsageError('search_text query must be nonempty, single-line literal text');
   }
 }
 
@@ -449,7 +452,7 @@ export async function createTools({
       throw new ToolAccessError('Plan exploration cannot read private .roster artifacts');
     }
     if (readmeOnlyDocs && !write && !['TASK.md', 'README.md'].includes(normalized) && !repairFiles.has(normalized)) {
-      throw new ToolAccessError('README-only docs task may read only TASK.md and README.md; other paths are denied');
+      throw new ToolUsageError('README-only docs task may read only TASK.md and README.md; other paths are denied');
     }
     const allowed = seat === 'planner' ? plannerArtifacts.includes(input) : isAllowedFile(normalized, scopedFiles());
     if (write && (!allowed ||
@@ -470,7 +473,7 @@ export async function createTools({
     });
     if (!write && !mapRead && (readmeOnlyDocs || sliceReadsOnly) && !readable(normalized, directory) &&
         !(directory && (normalized === '.' || normalized === '' || underAllowed))) {
-      throw new ToolAccessError(`Reading ${normalized} is not allowed by TASK.md slice scope`);
+      throw new ToolUsageError(`Reading ${normalized} is not allowed by TASK.md slice scope`);
     }
     return { file, relative, normalized };
   }
@@ -567,7 +570,7 @@ export async function createTools({
       if (seat === 'coder' && existing?.isFile()) {
         const previousText = await fs.readFile(file, 'utf8').catch(() => '');
         if (previousText.length > 2000 && content.length < previousText.length * 0.6) {
-          throw new ToolAccessError('Refusing to replace an existing file with a much shorter rewrite. Use edit_file with the exact old text.');
+          throw new ToolUsageError('Refusing to replace an existing file with a much shorter rewrite. Use edit_file with the exact old text.');
         }
         if (!content.endsWith('\n') && previousText.endsWith('\n')) content = `${content}\n`;
       }
@@ -616,7 +619,7 @@ export async function createTools({
       if (typeof args.old_string !== 'string' || typeof args.new_string !== 'string' || !args.old_string) {
         throw new TypeError('edit_file requires a nonempty old_string and a new_string');
       }
-      if (args.old_string === args.new_string) throw new ToolAccessError('edit_file old_string and new_string are identical');
+      if (args.old_string === args.new_string) throw new ToolUsageError('edit_file old_string and new_string are identical');
       const { file, relative, normalized } = locate(args.path, { write: true });
       await checkComponents(relative);
       await checkParent(file);
@@ -634,7 +637,7 @@ export async function createTools({
         if (count === 1) content = fileText.replace(needle, foldNewlines(args.new_string));
       }
       if (count !== 1) {
-        throw new ToolAccessError(count === 0
+        throw new ToolUsageError(count === 0
           ? 'edit_file old_string was not found. Read the file and copy the exact text.'
           : 'edit_file old_string matched more than once. Include more surrounding lines.');
       }
@@ -670,13 +673,13 @@ export async function createTools({
       argumentsFor(args, ['argv']);
       if (!Array.isArray(args.argv) || args.argv.length < 1 || args.argv.length > 8 ||
           args.argv.some((part) => typeof part !== 'string' || !part || /[\r\n\0;&|`$<>]/.test(part))) {
-        throw new ToolAccessError('run_command argv must be 1 to 8 plain strings with no shell syntax');
+        throw new ToolUsageError('run_command argv must be 1 to 8 plain strings with no shell syntax');
       }
       const [bin, ...rest] = args.argv;
       const gitOk = bin === 'git' && ['status', 'diff'].includes(rest[0]);
       const testOk = bin === 'node' && rest[0] === '--test';
       if (!gitOk && !testOk) {
-        throw new ToolAccessError('run_command allows only git status, git diff, and node --test');
+        throw new ToolUsageError('run_command allows only git status, git diff, and node --test');
       }
       try {
         const { stdout, stderr } = await execute(testOk ? process.execPath : 'git', rest, {
@@ -687,13 +690,13 @@ export async function createTools({
         if (typeof error.code === 'number') {
           return { exit_code: error.code, stdout: String(error.stdout ?? '').slice(0, 8000), stderr: String(error.stderr ?? '').slice(0, 2000) };
         }
-        throw new ToolAccessError(`run_command failed: ${error.message}`);
+        throw new ToolUsageError(`run_command failed: ${error.message}`);
       }
     },
 
     async list_dir(args = {}) {
       argumentsFor(args, [], ['path']);
-      if (readmeOnlyDocs) throw new ToolAccessError('README-only docs task does not allow directory listing');
+      if (readmeOnlyDocs) throw new ToolUsageError('README-only docs task does not allow directory listing');
       const { file, relative, normalized } = locate(args.path ?? '.', { directory: true });
       if (relative) await checkComponents(relative);
       const entry = await fs.lstat(file);
@@ -728,7 +731,7 @@ export async function createTools({
           throw new Error('README-only docs task must write README.md before running tests or other tools');
         }
       }
-      if (!allowRunTest) throw new ToolAccessError('run_test is disabled by tools.run_test');
+      if (!allowRunTest) throw new ToolUsageError('run_test is disabled by tools.run_test');
       const testEnv = { ...env, ROSTER_SEAT: 'coder' };
       for (const name of [apiKeyEnv, 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH',
         'GH_TOKEN', 'GITHUB_TOKEN', 'NODE_TEST_CONTEXT']) delete testEnv[name];
@@ -781,7 +784,7 @@ export async function createTools({
     async search_text(args) {
       validateSearchTextArguments(args);
       if (readmeOnlyDocs) {
-        throw new ToolAccessError('README-only docs task does not allow repository search; read README.md directly');
+        throw new ToolUsageError('README-only docs task does not allow repository search; read README.md directly');
       }
       const matches = [];
       async function visit(input) {
@@ -813,13 +816,13 @@ export async function createTools({
 
     async web_search(args) {
       argumentsFor(args, ['query']);
-      if (!allowInternet) throw new ToolAccessError('web_search is disabled until tools.internet is true');
+      if (!allowInternet) throw new ToolUsageError('web_search is disabled until tools.internet is true');
       if (typeof args.query !== 'string' || !args.query.trim() || args.query.length > 300) {
-        throw new ToolAccessError('web_search query must be 1-300 characters');
+        throw new ToolUsageError('web_search query must be 1-300 characters');
       }
       const endpoint = `https://api.duckduckgo.com/?q=${encodeURIComponent(args.query)}&format=json&no_html=1&skip_disambig=1`;
       const response = await fetchImpl(endpoint, { signal });
-      if (!response.ok) throw new ToolAccessError(`web_search failed with HTTP ${response.status}`);
+      if (!response.ok) throw new ToolUsageError(`web_search failed with HTTP ${response.status}`);
       const body = await response.json();
       const results = [];
       if (body.AbstractText && body.AbstractURL) {
@@ -856,10 +859,10 @@ export async function createTools({
 
     async web_fetch(args) {
       argumentsFor(args, ['url']);
-      if (!allowInternet) throw new ToolAccessError('web_fetch is disabled until tools.internet is true');
+      if (!allowInternet) throw new ToolUsageError('web_fetch is disabled until tools.internet is true');
       const original = publicHttpsUrl(args.url);
       if (!searchedUrls.has(original.href)) {
-        throw new ToolAccessError('web_fetch only accepts an https URL returned by web_search in this task');
+        throw new ToolUsageError('web_fetch only accepts an https URL returned by web_search in this task');
       }
       let target = original;
       let response;
@@ -872,10 +875,10 @@ export async function createTools({
         if (next.hostname !== original.hostname) throw new ToolAccessError('web_fetch refuses a redirect to another host');
         target = next;
       }
-      if (!response?.ok) throw new ToolAccessError(`web_fetch failed with HTTP ${response?.status ?? 0}`);
+      if (!response?.ok) throw new ToolUsageError(`web_fetch failed with HTTP ${response?.status ?? 0}`);
       const type = String(response.headers?.get?.('content-type') ?? '');
       if (!/^text\/(html|plain)\b|^application\/xhtml\+xml\b/i.test(type)) {
-        throw new ToolAccessError('web_fetch accepts only text/html or text/plain');
+        throw new ToolUsageError('web_fetch accepts only text/html or text/plain');
       }
       const raw = await response.text();
       const slice = raw.slice(0, 262144);

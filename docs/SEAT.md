@@ -103,7 +103,8 @@ The harness grants only regular failing test files identified in Node failure
 locations in addition to TASK scope; reviewer and publication use that same
 recorded scope. TASK.md itself remains unchanged. Only green tests can pass;
 budget exhaustion writes a failing review without reviewer inference.
-Timeouts and denied tool paths still stop with an unverified result.
+Timeouts, boundary denials, and a usage denial repeated a third time still stop
+with an unverified result; see [tool denials](TOOLS.md).
 Research usage joins coder usage; loop and research turns are separate.
 Configured runs expose the existing contracts AI-Run without inventing unknown
 counts. Private before/after snapshots are in-process evidence, not source
