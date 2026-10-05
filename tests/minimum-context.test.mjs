@@ -544,27 +544,21 @@ test('non-README slices send difficulty-based effort and deny fixture and harnes
     writeFileSync(join(options.worktree, 'TASK.md'),
       planStub('Fix src/widget.mjs.', { metadata: { task_class: 'fix', difficulty } }).task);
     let calls = 0;
-    const result = await runCoder({ ...options, askKind: 'slice', fetchImpl: async (_url, request) => {
+    await assert.rejects(runCoder({ ...options, askKind: 'slice', fetchImpl: async (_url, request) => {
       calls += 1;
       const body = JSON.parse(request.body);
       assert.equal(body.reasoning_effort, difficulty === 1 ? 'low' : 'high');
       assert.ok(!request.body.includes('PRIVATE_FIXTURE') && !request.body.includes('PRIVATE_HARNESS'));
-      if ([2, 3].includes(calls)) assert.match(body.messages.at(-1).content, /not allowed by TASK\.md slice scope/);
-      const call = calls === 1 ? { name: 'read_file', args: { path: 'tests/fixtures/planner.md' } }
-        : calls === 2 ? { name: 'read_file', args: { path: 'src/runtime/loop.mjs' } }
-          : calls === 3 ? { name: 'read_file', args: { path: 'src/widget.mjs' } }
-            : calls === 4 ? { name: 'edit_file', args: { path: 'src/widget.mjs',
-              old_string: 'false', new_string: 'true' } } : null;
-      return Response.json({ choices: [{ finish_reason: call ? 'tool_calls' : 'stop', message: call ? {
-        role: 'assistant', tool_calls: [{ id: `call-${calls}`, type: 'function', function: {
-          name: call.name, arguments: JSON.stringify(call.args),
+      return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+        role: 'assistant', tool_calls: [{ id: 'call-1', type: 'function', function: {
+          name: 'read_file', arguments: JSON.stringify({ path: 'tests/fixtures/planner.md' }),
         } }],
-      } : { role: 'assistant', content: 'Fixed the widget.' } }] });
-    }, runTestCommand: () => assert.fail('No relevant test file exists, so node --test must not run') });
-    assert.equal(calls, 5);
-    assert.equal(result.excellence.pass, true);
+      } }] });
+    }, runTestCommand: () => assert.fail('No relevant test file exists, so node --test must not run') }),
+      /not allowed by TASK\.md slice scope/);
+    assert.equal(calls, 1);
     assert.equal(readFileSync(join(options.worktree, 'src', 'widget.mjs'), 'utf8'),
-      'export const ready = true;\n');
+      'export const ready = false;\n');
   }
 });
 
@@ -573,36 +567,23 @@ test('configured docs slice denies planner fixtures, offers exact file tools, an
   mkdirSync(join(options.worktree, 'tests', 'fixtures'), { recursive: true });
   writeFileSync(join(options.worktree, 'tests', 'fixtures', 'planner-task-92.md'), 'PRIVATE_FIXTURE_92');
   let calls = 0;
-  let tests = 0;
-  const result = await runCoder({ ...options, fetchImpl: async (_url, request) => {
+  await assert.rejects(runCoder({ ...options, fetchImpl: async (_url, request) => {
     calls += 1;
     const body = JSON.parse(request.body);
-    assert.deepEqual(body.tools.map(({ function: tool }) => tool.name), calls === 4
-      ? [] : ['read_file', 'write_file', 'edit_file']);
-    if (calls < 4) {
-      assert.deepEqual(body.tools[0].function.parameters.properties.path.enum, ['TASK.md', 'README.md']);
-      assert.deepEqual(body.tools[1].function.parameters.properties.path.enum, ['README.md']);
-      assert.deepEqual(body.tools[2].function.parameters.properties.path.enum, ['README.md']);
-    }
+    assert.deepEqual(body.tools.map(({ function: tool }) => tool.name), ['read_file', 'write_file', 'edit_file']);
+    assert.deepEqual(body.tools[0].function.parameters.properties.path.enum, ['TASK.md', 'README.md']);
+    assert.deepEqual(body.tools[1].function.parameters.properties.path.enum, ['README.md']);
+    assert.deepEqual(body.tools[2].function.parameters.properties.path.enum, ['README.md']);
     assert.ok(!request.body.includes('PRIVATE_FIXTURE_92'));
-    if (calls === 2) assert.match(body.messages.at(-1).content, /may read only TASK\.md and README\.md/);
-    const call = calls === 1 ? { name: 'read_file', args: { path: 'tests/fixtures/planner-task-92.md' } }
-      : calls === 2 ? { name: 'read_file', args: { path: 'README.md' } }
-        : calls === 3 ? { name: 'write_file', args: { path: 'README.md', content: '# Project\n\n## Status\nActive.\n' } } : null;
-    return Response.json({ choices: [{ finish_reason: call ? 'tool_calls' : 'stop', message: call ? {
-      role: 'assistant', tool_calls: [{ id: `call-${calls}`, type: 'function', function: {
-        name: call.name, arguments: JSON.stringify(call.args),
+    return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+      role: 'assistant', tool_calls: [{ id: 'call-1', type: 'function', function: {
+        name: 'read_file', arguments: JSON.stringify({ path: 'tests/fixtures/planner-task-92.md' }),
       } }],
-    } : { role: 'assistant', content: 'Added a one-line Status.' } }] });
-  }, runTestCommand: async () => {
-    tests += 1;
-    throw new Error('Docs-only changes must not run node --test');
-  } });
-  assert.equal(tests, 0);
-  assert.equal(calls, 4);
-  assert.equal(result.excellence.pass, true);
-  assert.equal(result.testsSkipped, true);
-  assert.match(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /## Status/);
+    } }] });
+  }, runTestCommand: () => assert.fail('Docs-only changes must not run node --test') }),
+    /may read only TASK\.md and README\.md/);
+  assert.equal(calls, 1);
+  assert.equal(readFileSync(join(options.worktree, 'README.md'), 'utf8'), '# Project\n');
 });
 
 test('docs-only final completion cannot claim success without writing README, even if tests are waived', async (t) => {
@@ -656,23 +637,21 @@ test('coder HTTP timeout yields explicit unverified RESULT and failing incomplet
 test('minimum docs keeps path deny checks even when the model requests a protected write', async (t) => {
   const options = fixture(t);
   let calls = 0;
-  const result = await runCoder({
+  await assert.rejects(runCoder({
     ...options, fetchImpl: async (_url, request) => {
       calls += 1;
-      if (calls === 2) assert.match(JSON.parse(request.body).messages.at(-1).content, /not allowed/);
-      return Response.json({ choices: [calls < 3 ? { finish_reason: 'tool_calls', message: {
-        role: 'assistant', tool_calls: [{ id: `edit-${calls}`, type: 'function', function: {
-          name: 'write_file', arguments: JSON.stringify({ path: calls === 1 ? '.github/workflows/ci.yml' : 'README.md',
+      return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+        role: 'assistant', tool_calls: [{ id: 'edit-1', type: 'function', function: {
+          name: 'write_file', arguments: JSON.stringify({ path: '.github/workflows/ci.yml',
             content: '# Project\n\n## Status\nActive.\n' }),
         } }],
-      } } : { finish_reason: 'stop', message: { role: 'assistant', content: 'Updated only README.' } }] });
+      } }] });
     },
     runTestCommand: () => assert.fail('Docs-only changes must not run node --test'),
-  });
-  assert.equal(calls, 3);
+  }), /not allowed/);
+  assert.equal(calls, 1);
   assert.equal(existsSync(join(options.worktree, '.github')), false);
-  assert.equal(result.excellence.pass, true);
-  assert.match(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /## Status/);
+  assert.equal(readFileSync(join(options.worktree, 'README.md'), 'utf8'), '# Project\n');
 });
 
 test('minimum docs skips node tests but still rejects secrets in the actual edit', async (t) => {
