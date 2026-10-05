@@ -373,37 +373,32 @@ test('garbage coder arguments get one repair then the scoped README Status fallb
   assert.ok(events.some((event) => event.type === 'implementation' && event.path === 'deterministic-readme'));
 });
 
-test('model-requested path escape is denied before an allowed edit succeeds', async (context) => {
+test('model-requested path escape stops coding before any later model call or edit', async (context) => {
   const options = fixture(context, llmConfig);
   const outside = path.join(options.repoRoot, 'escape.md');
   let turns = 0;
-  const result = await runCoder({
+  await assert.rejects(runCoder({
     ...options, env: {},
     fetchImpl: async (_url, request) => {
       turns += 1;
-      if (turns < 3) {
-        if (turns === 2) assert.match(JSON.parse(request.body).messages.at(-1).content, /outside the worktree/);
-        return { status: 200, json: async () => ({
-          choices: [{ finish_reason: 'tool_calls', message: {
-            role: 'assistant', tool_calls: [{ id: `edit-${turns}`, type: 'function', function: {
-              name: 'write_file', arguments: JSON.stringify({
-                path: turns === 1 ? '../escape.md' : 'README.md',
-                content: '# Example\n\n## Status\nReady.\n',
-              }),
-            } }],
-          } }],
-        }) };
-      }
       return { status: 200, json: async () => ({
-        choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Updated README.' } }],
+        choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant', tool_calls: [{ id: 'edit-1', type: 'function', function: {
+            name: 'write_file', arguments: JSON.stringify({
+              path: '../escape.md',
+              content: '# Example\n\n## Status\nReady.\n',
+            }),
+          } }],
+        } }],
       }) };
     },
     runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
-  });
-  assert.equal(turns, 3);
+  }), /outside the worktree/);
+  assert.equal(turns, 1);
   assert.equal(existsSync(outside), false);
-  assert.match(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), /## Status\nReady/);
-  assert.equal(result.excellence.pass, true);
+  assert.equal(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), '# Example\n');
+  assert.match(readFileSync(path.join(options.worktree, 'RESULT.md'), 'utf8'), /Checks: FAIL/);
+  assert.match(readFileSync(path.join(options.worktree, 'RESULT.md'), 'utf8'), /outside the worktree/);
 });
 
 test('failed final tests receive another turn before acceptance while usage and errors stay truthful', async (context) => {

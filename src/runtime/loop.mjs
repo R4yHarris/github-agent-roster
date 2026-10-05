@@ -386,6 +386,10 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         try {
           result = await tools[call.function.name](call.args);
         } catch (error) {
+          if (error instanceof ToolAccessError) {
+            await onEvent?.({ type: 'tool-result', name: call.function.name, status: 'denied' });
+            throw error;
+          }
           messages.push({ role: 'tool', tool_call_id: call.id,
             content: `Denied: ${error instanceof Error ? error.message : 'tool failed'}. Continue with an allowed action or summarize the blocker.` });
           await onEvent?.({ type: 'tool-result', name: call.function.name, status: 'denied' });
