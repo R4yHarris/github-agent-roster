@@ -75,6 +75,22 @@ The result exposes `stages`, paths to the context/research/result artifacts,
 Configured runs also expose `testRepairs`, `repairFiles`, and (on exhaustion)
 `repairBudgetExhausted`. Failed tests are repaired up to four times after the
 initial run, with a fresh tool-turn budget per attempt and redacted diagnostics.
+Single-file tasks use one repair at difficulty 1-2, two at difficulty 3, and
+four at difficulty 4-5; RESULT.md reports the actual budget. A single-file
+code/test task must produce an application diff, not merely execute a write
+or pass existing tests. The harness grants one independent no-progress
+correction before stopping with an unverified result. An identical rewrite or
+a change reverted to baseline cannot reach reviewer inference or publication.
+Documentation-only already-satisfied behavior is unchanged.
+
+For bounded non-docs tasks, `read_file` can inspect the allowed file's direct
+local imports while write/edit scope remains unchanged. Reads use paths relative
+to the worktree root: `../src/api.mjs` imported from a test is read as
+`src/api.mjs`, not as a traversal path. The coder is instructed to read only
+imports needed for the APIs in use, batch independent reads, avoid recursively
+tracing transitive dependencies, and preserve unrelated imports and assertions.
+Existing secret, policy, workflow,
+vendor, symlink, and unrelated-file restrictions still apply.
 The harness grants only regular failing test files identified in Node failure
 locations in addition to TASK scope; reviewer and publication use that same
 recorded scope. TASK.md itself remains unchanged. Only green tests can pass;

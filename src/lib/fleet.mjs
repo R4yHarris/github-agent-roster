@@ -4,10 +4,11 @@ import { readConfigFile, validateBaseUrl } from './config.mjs';
 import { ensureLocalPath, resolveProjectRoot } from './paths.mjs';
 import { ensurePrivateFilesIgnored, writePrivateDocuments } from './private-files.mjs';
 import { resolvePublishModel } from '../metrics/run.mjs';
+import { validateRequestTimeout } from '../llm/request.mjs';
 
 const fields = ['id', 'base_url', 'model', 'provider', 'context_max', 'concurrency',
-  'hardware', 'task_class', 'notes', 'api_key_env'];
-const required = fields.filter((field) => !['task_class', 'api_key_env'].includes(field));
+  'hardware', 'task_class', 'notes', 'api_key_env', 'request_timeout_ms'];
+const required = fields.filter((field) => !['task_class', 'api_key_env', 'request_timeout_ms'].includes(field));
 const taskClasses = ['feat', 'fix', 'docs', 'test'];
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -62,12 +63,16 @@ export function validateFleetProfile(profile) {
   if (profile.api_key_env !== undefined && !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(profile.api_key_env)) {
     throw new TypeError('Fleet api_key_env must be a vault secret name');
   }
+  if (profile.request_timeout_ms !== undefined) {
+    validateRequestTimeout(profile.request_timeout_ms, 'fleet request_timeout_ms');
+  }
   return Object.freeze({
     id, base_url: normalizeFleetBaseUrl(profile.base_url), model, provider: profile.provider,
     context_max: profile.context_max, concurrency: profile.concurrency,
     hardware: text(profile.hardware, 'hardware', { maximum: 120 }),
     ...(profile.task_class ? { task_class: Object.freeze([...profile.task_class]) } : {}),
     ...(profile.api_key_env ? { api_key_env: profile.api_key_env } : {}),
+    ...(profile.request_timeout_ms === undefined ? {} : { request_timeout_ms: profile.request_timeout_ms }),
     notes: text(profile.notes, 'notes', { empty: true }),
   });
 }
@@ -106,6 +111,7 @@ export function withFleetProfile(config, profile) {
       provider: selected.provider, context_max: selected.context_max,
       api_key_env: selected.api_key_env ?? config.profiles['vllm-local'].api_key_env,
       api_key_optional: config.llm.api_key_optional ?? config.profiles['vllm-local'].api_key_optional,
+      ...(selected.request_timeout_ms === undefined ? {} : { request_timeout_ms: selected.request_timeout_ms }),
     },
   };
 }

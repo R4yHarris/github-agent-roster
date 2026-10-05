@@ -56,6 +56,36 @@ test('confirm pauses after the task summary and Enter continues the same prepare
   assert.equal(instance.state.display.state, 'passed');
 });
 
+test('failed planning is not displayed as a confirm pause and cannot continue on Enter', async () => {
+  let calls = 0;
+  const instance = shell({ runBuiltinIssue: async () => {
+    calls += 1;
+    return { issue: { number: 176 }, task: 'issue-176', askKind: 'slice',
+      planningOnly: true, failed: true, command: null };
+  } });
+  await instance.dispatch('/run 176');
+  assert.equal(instance.state.display.state, 'failed');
+  assert.equal(instance.state.pendingConfirm, null);
+  assert.match(instance.text, /Planning failed; stubs are unverified\. Coder, tests, reviewer, and publication did not run/);
+  assert.doesNotMatch(instance.text, /Paused by --confirm|Press Enter|Use \/publish/);
+  await instance.dispatch('');
+  assert.equal(calls, 1);
+});
+
+test('a failed review shows its reason and the configured bypass instead of offering approved publication', async () => {
+  const instance = shell({ runBuiltinIssue: async () => ({
+    issue: { number: 176 }, task: 'issue-176', askKind: 'slice',
+    review: { verdict: 'fail', reasons: ['Reviewer found no task diff to inspect'] },
+    command: 'publish command',
+  }) });
+  instance.state.config = { ...instance.state.config, review: { required: false }, reviewer: { required: false } };
+  await instance.dispatch('/run 176');
+  assert.equal(instance.state.display.state, 'failed');
+  assert.match(instance.text, /Review failed: Reviewer found no task diff/);
+  assert.match(instance.text, /configured review gate is disabled[\s\S]*not approve/);
+  assert.doesNotMatch(instance.text, /Use \/publish to publish reviewed changes|Planning failed/);
+});
+
 test('stop cancels a confirmed handoff and retry fails explicitly without a prepared worktree', async () => {
   const instance = shell({ runBuiltinIssue: async () => ({ issue: { number: 108 }, task: 'issue-108',
     confirmedPause: true, planningOnly: true, askKind: 'slice', worktreePath: 'issue-108' }) });

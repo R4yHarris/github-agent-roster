@@ -171,7 +171,7 @@ test('an explicitly empty recipe tool list denies even automatic write tools', a
   await assert.rejects(runCoder({ ...options, env: {},
     config: { ...config, seat: { ...config.seat, recipe_tools: [] } },
     fetchImpl: async (_url, request) => {
-      assert.deepEqual(JSON.parse(request.body).tools, []);
+      assert.equal(Object.hasOwn(JSON.parse(request.body), 'tools'), false);
       return response('tool_calls', { role: 'assistant', content: null, tool_calls: [writeCall()] });
     },
   }), /invalid or unavailable tool/);

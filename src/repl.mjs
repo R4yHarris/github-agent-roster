@@ -376,14 +376,21 @@ export function createDispatcher({
     notify();
     output.write(state.lastRun.askKind === 'clarify'
       ? `${state.lastRun.clarification}\n`
+      : state.lastRun.failed
+      ? 'Planning failed; stubs are unverified. Coder, tests, reviewer, and publication did not run. Check the planner diagnostic, then retry.\n'
       : state.lastRun.planMode
       ? 'Plan ready. Press Enter to accept and continue, or /stop to keep the plan without coding.\n'
       : state.lastRun.planPath
       ? 'PLAN ready; review the child drafts and run bounded slices. No coder ran.\n'
       : state.lastRun.planningOnly
       ? 'Paused by --confirm. Press Enter to continue, or /stop to cancel.\n'
-      : state.lastRun.failed
-      ? 'Planning failed; stubs are unverified and publication is disabled. Fix the endpoint output, then retry.\n'
+      : state.lastRun.review?.verdict === 'fail'
+      ? `Review failed: ${redactEvidence((state.lastRun.review.reasons ?? ['Inspect REVIEW.md.']).join('; '), {
+        env, apiKeyEnv: state.config.llm.api_key_env,
+      })}\n` +
+        (isReviewRequired(state.config)
+          ? 'Publication is blocked unless explicitly bypassed. Correct the evidence and retry.\n'
+          : 'WARNING: the configured review gate is disabled; publication would bypass this failed review, not approve it. Correct the evidence and retry.\n')
       : 'Use /publish to publish reviewed changes with --merge-when-green.\n');
     if (state.askQueue.length && !state.pendingConfirm && !state.lastRun.planMode && !state.lastRun.planningOnly && !state.lastRun.failed) {
       const next = state.askQueue.shift();

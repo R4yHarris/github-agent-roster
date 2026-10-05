@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { formatFleet, getFleetProfile, loadFleet, normalizeFleetBaseUrl,
-  parseFleet, validateFleet, validateFleetProfile } from '../src/lib/fleet.mjs';
+  parseFleet, validateFleet, validateFleetProfile, withFleetProfile } from '../src/lib/fleet.mjs';
 
 const example = readFileSync(new URL('../examples/fleet.yml', import.meta.url), 'utf8');
 const profile = {
@@ -57,6 +57,13 @@ test('unique IDs, real models, positive capacity, and optional task hints are va
   assert.throws(() => getFleetProfile({ profiles: [profile] }, 'missing'), /not found/);
   assert.equal(validateFleetProfile({ ...profile, id: 'default', context_max: 0 }).context_max, 0);
   assert.throws(() => validateFleetProfile({ ...profile, id: 'default', context_max: -1 }), /context_max/);
+  assert.equal(validateFleetProfile({ ...profile, request_timeout_ms: 1_200_000 }).request_timeout_ms, 1_200_000);
+  assert.throws(() => validateFleetProfile({ ...profile, request_timeout_ms: 0 }), /request_timeout_ms/);
+  const selected = withFleetProfile({
+    llm: { request_timeout_ms: 120_000 },
+    profiles: { 'vllm-local': { api_key_env: 'ROSTER_API_KEY', api_key_optional: true } },
+  }, { ...profile, request_timeout_ms: 1_200_000 });
+  assert.equal(selected.llm.request_timeout_ms, 1_200_000);
 });
 
 test('unsupported YAML and duplicate catalog keys fail instead of being silently ignored', () => {

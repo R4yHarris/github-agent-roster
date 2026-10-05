@@ -5,8 +5,8 @@ import { defaultRequestFetch } from './http.mjs';
 import { UnsupportedFinishReasonError } from './finish-reason.mjs';
 import { readChatStream } from './stream.mjs';
 import { isRunCancelled, throwIfCancelled } from '../runtime/cancel.mjs';
-import { ChatError, isLocalLlmHost, LlmTimeoutError, resolveRequestTimeout, validateRetryCommand,
-  withRequestTimeout } from './request.mjs';
+import { ChatError, isLocalLlmHost, LlmStallError, LlmTimeoutError, resolveRequestTimeout,
+  resolveStreamIdleTimeout, validateRetryCommand, withRequestTimeout } from './request.mjs';
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 function endpointFor(baseUrl) {
@@ -62,6 +62,16 @@ function parseCompletion(payload, requestedModel) {
   };
 }
 
+const safeModelName = /^[A-Za-z0-9._:/@+-]{1,128}$/;
+
+// Gateways may alias every requested ID to one backend; a path prefix or tag on the same name is not a mismatch.
+export function servedModelMismatch(requested, served) {
+  if (!safeModelName.test(requested ?? '') || !safeModelName.test(served ?? '')) return false;
+  const base = (name) => name.toLowerCase().split('/').at(-1);
+  const [want, got] = [base(requested), base(served)];
+  return !want.includes(got) && !got.includes(want);
+}
+
 function cachedTokens(usage) {
   const value = usage?.prompt_tokens_details?.cached_tokens;
   return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
@@ -93,6 +103,7 @@ export function createChat(config = {}, {
   const endpoint = endpointFor(llm.base_url);
   const optionalKey = llm.api_key_optional ?? false;
   const timeoutMs = resolveRequestTimeout(llm);
+  const streamIdleMs = resolveStreamIdleTimeout(llm);
   const fetchImpl = suppliedFetch === undefined ? defaultRequestFetch(timeoutMs) : suppliedFetch;
   if (typeof optionalKey !== 'boolean') throw new TypeError('llm.api_key_optional must be a boolean.');
   if (typeof fetchImpl !== 'function') throw new TypeError('A fetch implementation is required.');
@@ -103,6 +114,7 @@ export function createChat(config = {}, {
   const local = isLocalLlmHost(url.hostname);
 
   let lastResponse = null;
+  let servedMismatchReported = false;
   const chat = async function chat(request, { signal: requestSignal = signal } = {}) {
     throwIfCancelled(signal);
     throwIfCancelled(requestSignal);
@@ -116,13 +128,18 @@ export function createChat(config = {}, {
       throw new TypeError('A streaming chat request must set stream to a boolean.');
     }
     const streaming = request.stream === true;
+    // An empty tools array is non-standard; some gateways misroute it, so omit tool fields entirely.
+    const { tools: requestTools, tool_choice: toolChoice, ...rest } = request;
+    const toolFields = Array.isArray(requestTools) && requestTools.length === 0 ? {}
+      : { ...(requestTools === undefined ? {} : { tools: requestTools }),
+        ...(toolChoice === undefined ? {} : { tool_choice: toolChoice }) };
     let body;
     try {
       body = JSON.stringify({
         ...(llm.reasoning_effort === undefined ? {} : { reasoning_effort: llm.reasoning_effort }),
         ...(llm.max_tokens === undefined ? {} : { max_tokens: llm.max_tokens }),
         ...(llm.chat_template_kwargs === undefined ? {} : { chat_template_kwargs: llm.chat_template_kwargs }),
-        ...request, model, stream: streaming,
+        ...rest, ...toolFields, model, stream: streaming,
         // vLLM only reports prompt_tokens on a stream when the final chunk is requested.
         ...(streaming ? { stream_options: { include_usage: true } } : {}),
       });
@@ -148,7 +165,7 @@ export function createChat(config = {}, {
     const headers = { 'Content-Type': 'application/json' };
     if (key) headers.Authorization = `Bearer ${key}`;
     let status;
-    async function send(signal) {
+    async function sendOnce(signal, arm) {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         signal.throwIfAborted();
         await onEvent?.({ type: 'model', model: key ? model.split(key).join('[redacted]') : model, host });
@@ -181,9 +198,11 @@ export function createChat(config = {}, {
         let payload;
         const sseBody = typeof response.body?.getReader === 'function' &&
           !/application\/json/i.test(response.headers?.get?.('content-type') ?? '');
+        // Cold-start waits happen before headers; only a silent body after headers counts as a stall.
+        if (streaming && sseBody) arm();
         try {
           payload = streaming && sseBody
-            ? await readChatStream(response, model, { onDelta: onEvent && (async (text) => {
+            ? await readChatStream(response, model, { onBytes: arm, onDelta: onEvent && (async (text) => {
               const safe = redactSecrets(key ? text.split(key).join('[redacted]') : text,
                 { env, apiKeyEnv: llm.api_key_name ?? 'OPENAI_API_KEY' });
               if (safe) await onEvent({ type: 'delta', text: safe });
@@ -204,6 +223,33 @@ export function createChat(config = {}, {
       }
     }
 
+    async function send(signal) {
+      const idleMs = streaming ? streamIdleMs : 0;
+      for (let stallAttempt = 0; ; stallAttempt += 1) {
+        const attempt = new AbortController();
+        const relay = () => attempt.abort(signal.reason);
+        signal.addEventListener('abort', relay, { once: true });
+        let stalled = false;
+        let timer;
+        const arm = () => {
+          if (!idleMs) return;
+          clearTimeout(timer);
+          timer = setTimeout(() => { stalled = true; attempt.abort(); }, idleMs);
+        };
+        try {
+          return await sendOnce(attempt.signal, arm);
+        } catch (error) {
+          if (!stalled || signal.aborted) throw error;
+          const retry = stallAttempt === 0;
+          await onEvent?.({ type: 'stall', host, idleSeconds: idleMs / 1000, retry });
+          if (!retry) throw new LlmStallError({ host, idleMs });
+        } finally {
+          clearTimeout(timer);
+          signal.removeEventListener('abort', relay);
+        }
+      }
+    }
+
     try {
       const response = await withRequestTimeout(send, {
         host, local, timeoutMs, retryCommand, clock, signal: requestSignal,
@@ -214,6 +260,10 @@ export function createChat(config = {}, {
           .map((field) => [field, response.usage[field]]),
       ));
       lastResponse = Object.freeze({ model: response.model, usage });
+      if (!servedMismatchReported && servedModelMismatch(model, response.model)) {
+        servedMismatchReported = true;
+        await onEvent?.({ type: 'served-model', host, requested: model, served: response.model });
+      }
       if (response.finish_reason != null && !['stop', 'tool_calls'].includes(response.finish_reason)) {
         const rawReason = key ? response.finish_reason.split(key).join('[redacted]') : response.finish_reason;
         const reason = redactSecrets(rawReason, {

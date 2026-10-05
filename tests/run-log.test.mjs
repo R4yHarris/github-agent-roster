@@ -15,6 +15,47 @@ function fixture(t) {
 
 const config = { llm: { base_url: '', model: '' } };
 
+test('timeout retry is visible to the human and readable as safe log metadata', async (t) => {
+  const options = fixture(t);
+  const logger = await createRunLog(options);
+  await logger.seat('planner', 'roster-42-planner', config, async (onEvent) => {
+    await onEvent({ type: 'timeout-retry', attempt: 1, budget: 1, body: 'PRIVATE_PROMPT' });
+    const status = await readLastRunLog(options);
+    assert.match(status.lastLine, /seat planner timeout retry 1\/1$/);
+    await onEvent({ type: 'timeout-retry', attempt: 2, budget: 1 });
+  });
+  assert.equal(options.text, 'Retrying the same planner request once after the endpoint timeout.\n');
+  assert.doesNotMatch(readFileSync(logger.path, 'utf8'), /PRIVATE_PROMPT|timeout retry 2/);
+});
+
+test('stream stalls are logged with host, idle time, and retry without content', async (t) => {
+  const options = fixture(t);
+  const logger = await createRunLog(options);
+  await logger.seat('planner', 'roster-42-planner', config, async (onEvent) => {
+    await onEvent({ type: 'stall', host: 'aperture.example', idleSeconds: 180, retry: true, body: 'PRIVATE_PROMPT' });
+    const status = await readLastRunLog(options);
+    assert.match(status.lastLine, /seat planner stall host=aperture\.example idle=180s retry=true$/);
+    await onEvent({ type: 'stall', host: 'aperture.example', idleSeconds: 180, retry: false });
+  });
+  assert.equal(options.text, 'The model stream went silent. Retrying the same request once.\n' +
+    'The model stream went silent again. This is an endpoint stall, not a bad TASK.\n');
+  assert.doesNotMatch(readFileSync(logger.path, 'utf8'), /PRIVATE_PROMPT/);
+});
+
+test('a served-model alias is logged and explained without other event fields', async (t) => {
+  const options = fixture(t);
+  const logger = await createRunLog(options);
+  await logger.seat('planner', 'roster-42-planner', config, async (onEvent) => {
+    await onEvent({ type: 'served-model', host: 'aperture.example', requested: 'qwen3.8-27b',
+      served: 'glm-5.3-flash', body: 'PRIVATE_PROMPT' });
+    const status = await readLastRunLog(options);
+    assert.match(status.lastLine,
+      /seat planner served-model host=aperture\.example requested=qwen3\.8-27b served=glm-5\.3-flash$/);
+  });
+  assert.match(options.text, /^Endpoint served glm-5\.3-flash for requested qwen3\.8-27b;/);
+  assert.doesNotMatch(readFileSync(logger.path, 'utf8'), /PRIVATE_PROMPT/);
+});
+
 test('each valid test repair logs its exact attempt while an out-of-budget event is skipped', async (t) => {
   const options = fixture(t);
   const logger = await createRunLog(options);

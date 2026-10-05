@@ -7,6 +7,7 @@ import { parseConfig } from '../src/lib/config.mjs';
 import { parseRecipe } from '../src/lib/recipe.mjs';
 import { planAsk, planStub, renderAsk, renderAssignment, taskFilesAllowed } from '../src/planner/stub.mjs';
 import { runPlanner } from '../src/seats/planner.mjs';
+import { withFleetProfile } from '../src/lib/fleet.mjs';
 
 const configExample = readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8');
 const stubConfig = parseConfig(configExample);
@@ -260,13 +261,13 @@ test('planner can finalize validated JSON after writing a planning draft', async
   assert.equal(readFileSync(result.taskPath, 'utf8'), result.task);
 });
 
-test('planner rejects a fenced JSON plan on the same turn as an incomplete TASK.md', async (t) => {
+test('planner salvages a validated fenced JSON plan beside an incomplete TASK without another call', async (t) => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'roster-planner-same-turn-json-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
   const worktree = join(repoRoot, 'worktree');
   mkdirSync(worktree);
   let calls = 0;
-  await assert.rejects(runPlanner({
+  const result = await runPlanner({
     worktree, repoRoot, issue: {
       number: 169, title: 'record a human retrospective from the roster shell',
       body: '## Allowed files\n- src/repl.mjs\n- tests/eval.test.mjs\n\n## Checks\n- node --test exits 0.',
@@ -282,10 +283,13 @@ test('planner rejects a fenced JSON plan on the same turn as an incomplete TASK.
         } }],
       } }] });
     },
-  }), /Planner turn budget \(1\) exhausted: TASK\.md must contain an Allowed Files list/);
+  });
   assert.equal(calls, 1);
-  assert.equal(existsSync(join(worktree, 'RECIPE.yml')), false);
-  assert.equal(existsSync(join(worktree, 'ESTIMATE.md')), false);
+  assert.equal(result.error, undefined);
+  assert.deepEqual(taskFilesAllowed(result.task), ['src/repl.mjs', 'tests/eval.test.mjs']);
+  assert.equal(readFileSync(result.taskPath, 'utf8'), result.task);
+  assert.equal(readFileSync(result.recipePath, 'utf8'), result.recipe);
+  assert.equal(existsSync(join(worktree, 'ESTIMATE.md')), true);
 });
 
 test('planner gives the model another turn after writing an incomplete TASK.md', async (t) => {
@@ -312,7 +316,7 @@ test('planner gives the model another turn after writing an incomplete TASK.md',
     },
   });
   assert.equal(calls, 2);
-  assert.deepEqual(JSON.parse(repairMessage), { path: 'TASK.md', bytes: 13 });
+  assert.match(JSON.parse(repairMessage).error, /Acceptance Checks[\s\S]*complete JSON plan/);
   assert.match(result.task, /## Files allowed/);
 });
 
@@ -342,12 +346,12 @@ test('planner stops after one no-progress correction for an invalid written TASK
   assert.match(result.error, /Acceptance Checks/);
 });
 
-test('routed planner rejects a served model outside the selected profile', async (t) => {
+test('routed planner keeps the selected profile when gateway response metadata names another model', async (t) => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'roster-planner-served-model-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
   const worktree = join(repoRoot, 'worktree');
   mkdirSync(worktree);
-  await assert.rejects(runPlanner({
+  const result = await runPlanner({
     worktree, repoRoot, issue: { number: 42, title: 'Update README', body: 'Update `README.md`.' },
     config: { ...llmConfig, planner: { turn_budget: 1 } }, lockedModel: 'selected-model', env: {},
     fetchImpl: async () => Response.json({
@@ -356,7 +360,9 @@ test('routed planner rejects a served model outside the selected profile', async
       }) } }],
       model: 'different-served-model',
     }),
-  }), /selected fleet model/);
+  });
+  assert.match(result.task, /^model: selected-model$/m);
+  assert.equal(result.response.model, 'different-served-model');
 });
 
 test('planner tool errors redact known credentials before another model turn', async (t) => {
@@ -423,6 +429,246 @@ test('a JSON tool payload embedded in planner text writes a task and finishes no
   assert.equal(readFileSync(result.taskPath, 'utf8'), result.task);
 });
 
+test('planner normalizes an alternate JSON plan written to TASK without a repair call', async (t) => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'roster-planner-alternate-json-'));
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  const worktree = join(repoRoot, 'worktree');
+  mkdirSync(worktree);
+  let calls = 0;
+  const result = await runPlanner({
+    worktree, repoRoot,
+    issue: { number: 42, title: 'Add route test', body: 'Add `tests/route.test.mjs`.' },
+    config: llmConfig, env: {},
+    fetchImpl: async () => {
+      calls += 1;
+      return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+        role: 'assistant', tool_calls: [{ id: 'alternate', type: 'function', function: {
+          name: 'write_file', arguments: JSON.stringify({ path: 'TASK.md', content: JSON.stringify({
+            task: 'Add route test',
+            files_allowed: ['tests/route.test.mjs'],
+            acceptance_checks: ['node --test tests/route.test.mjs exits 0'],
+            task_class: 'test', difficulty: 2, estimate_min: 45,
+            steps: ['Add a deterministic test'], notes: 'No network calls.',
+          }) }),
+        } }],
+      } }] });
+    },
+  });
+  assert.equal(calls, 1);
+  assert.equal(result.error, undefined);
+  assert.match(result.task, /^# Task: Add route test$/m);
+  assert.match(result.task, /^task_class: test$/m);
+});
+
+test('alternate JSON plans cannot grant tools, conflicting titles, protected paths, or extra file scope', async () => {
+  const plan = { task: 'Add route test', files_allowed: ['tests/route.test.mjs'],
+    acceptance_checks: ['node --test exits 0'], steps: ['Add a deterministic test'], notes: 'No network.' };
+  for (const [changes, expected] of [
+    [{ tools: ['run_command'] }, /unsupported task plan/],
+    [{ title: 'A different task' }, /unsupported task plan/],
+    [{ files_allowed: ['.github/workflows/ci.yml'] }, /protected files/],
+    [{ files_allowed: ['src/extra.mjs'] }, /beyond the human Ask/],
+  ]) {
+    let calls = 0;
+    await assert.rejects(planAsk('Add tests/route.test.mjs.', {
+      config: { ...llmConfig, planner: { turn_budget: 1 } }, env: {},
+      fetchImpl: async () => {
+        calls += 1;
+        return Response.json({ choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant', content: JSON.stringify({ ...plan, ...changes }),
+        } }] });
+      },
+    }), expected);
+    assert.equal(calls, 1);
+  }
+});
+
+test('the reported draft then fenced task-alias response finalizes a verified handoff in two calls', async (t) => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'roster-planner-176-'));
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  const worktree = join(repoRoot, 'worktree');
+  mkdirSync(worktree);
+  let calls = 0;
+  const result = await runPlanner({
+    worktree, repoRoot, issue: { number: 176, title: 'Add run-summary route/profile test',
+      body: 'Add tests/route.test.mjs covering the selected route/profile without leaking secrets or using network or wall-clock timing.' },
+    config: { ...llmConfig, planner: { turn_budget: 2 } }, lockedModel: 'test-model', env: {},
+    fetchImpl: async (_url, request) => {
+      calls += 1;
+      if (calls === 2) assert.match(JSON.parse(JSON.parse(request.body).messages.at(-1).content).error,
+        /complete JSON plan/);
+      return Response.json({ model: 'gateway-reported-model',
+        usage: { prompt_tokens: 100, completion_tokens: 20 },
+        choices: [calls === 1 ? { finish_reason: 'tool_calls', message: {
+          role: 'assistant', tool_calls: [{ id: 'draft', type: 'function', function: {
+            name: 'write_file', arguments: JSON.stringify({ path: 'TASK.md', content: '# Draft\n' }),
+          } }],
+        } } : { finish_reason: 'stop', message: {
+          role: 'assistant', content: 'Plan written. Stopping here.\n```json\n' + JSON.stringify({
+            task: 'Add run-summary route/profile test', files_allowed: ['tests/route.test.mjs'],
+            task_class: 'test', difficulty: 2, estimate_min: 45,
+            steps: ['Exercise public route summary', 'Assert profile visibility and secret non-leakage'],
+            acceptance_checks: ['Selected route/profile is visible without secrets',
+              'No network or wall-clock dependency', 'node --test tests/route.test.mjs exits 0'],
+            notes: 'Test-only change; no app code modifications.',
+          }) + '\n```',
+        } }],
+      });
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.turns, 2);
+  assert.equal(result.error, undefined);
+  assert.deepEqual(result.usage, { prompt_tokens: 200, completion_tokens: 40 });
+  assert.equal(result.run.metrics.model, 'gateway-reported-model');
+  assert.match(result.task, /^model: test-model$/m);
+  assert.deepEqual(taskFilesAllowed(result.task), ['tests/route.test.mjs']);
+  assert.equal(readFileSync(result.taskPath, 'utf8'), result.task);
+  assert.equal(readFileSync(result.recipePath, 'utf8'), result.recipe);
+  assert.doesNotMatch(result.task, /Planning failure/);
+});
+
+test('planner retries one short endpoint timeout before failing the run', async (t) => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'roster-planner-timeout-retry-'));
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  const worktree = join(repoRoot, 'worktree');
+  mkdirSync(worktree);
+  let calls = 0;
+  const result = await runPlanner({
+    worktree, repoRoot,
+    issue: { number: 42, title: 'Update README', body: 'Update `README.md`.' },
+    config: { ...llmConfig, llm: { ...llmConfig.llm,
+      base_url: 'https://example.test/v1', request_timeout_ms: 10 } },
+    env: {},
+    fetchImpl: async () => {
+      calls += 1;
+      if (calls === 1) return new Promise(() => {});
+      return Response.json({ choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant', content: JSON.stringify({
+          title: 'Update README',
+          acceptance_checks: ['node --test exits 0'],
+          files_allowed: ['README.md'],
+        }),
+      } }] });
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(result.error, undefined);
+});
+
+test('planner timeout recovery aborts the first request, logs one retry, and never makes a third attempt', async (t) => {
+  t.mock.timers.enable(['setTimeout', 'setInterval']);
+  const requests = [];
+  const events = [];
+  let firstStarted;
+  let secondStarted;
+  const first = new Promise((resolve) => { firstStarted = resolve; });
+  const second = new Promise((resolve) => { secondStarted = resolve; });
+  const pending = planAsk('Update README.md.', {
+    config: { ...llmConfig, llm: { ...llmConfig.llm, request_timeout_ms: 120_000 } },
+    env: {}, onEvent: (event) => events.push(event),
+    fetchImpl: async (_url, request) => {
+      requests.push(request);
+      (requests.length === 1 ? firstStarted : secondStarted)();
+      return new Promise(() => {});
+    },
+  });
+  const rejected = assert.rejects(pending, (error) => error.code === 'ROSTER_LLM_TIMEOUT');
+  await first;
+  t.mock.timers.tick(120_000);
+  await second;
+  assert.equal(requests[0].signal.aborted, true);
+  assert.equal(requests[1].body, requests[0].body);
+  t.mock.timers.tick(120_000);
+  await rejected;
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].signal.aborted, true);
+  assert.deepEqual(events.filter(({ type }) => type === 'timeout-retry'),
+    [{ type: 'timeout-retry', attempt: 1, budget: 1 }]);
+});
+
+test('a routed public gateway honors its 20-minute allowance and does not abort at the cloud default', async (t) => {
+  t.mock.timers.enable(['setTimeout', 'setInterval']);
+  const config = withFleetProfile(llmConfig, {
+    id: 'gateway', base_url: 'https://gpu.example.test/v1', model: 'selected-model', provider: 'vllm',
+    context_max: 262144, concurrency: 1, hardware: 'gpu', notes: '',
+    request_timeout_ms: 1_200_000,
+  });
+  let started;
+  let reply;
+  let requestSignal;
+  let calls = 0;
+  const ready = new Promise((resolve) => { started = resolve; });
+  const pending = planAsk('Update README.md.', {
+    config, lockedModel: 'selected-model', env: {},
+    fetchImpl: async (_url, request) => {
+      calls += 1;
+      requestSignal = request.signal;
+      started();
+      return new Promise((resolve) => { reply = resolve; });
+    },
+  });
+  await ready;
+  t.mock.timers.tick(900_000);
+  assert.equal(requestSignal.aborted, false, 'A public cold-inference gateway must survive a 15-minute warmup');
+  reply(Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
+    title: 'Update README', acceptance_checks: ['README is updated'], files_allowed: ['README.md'],
+  }) } }] }));
+  const result = await pending;
+  assert.equal(calls, 1);
+  assert.match(result.task, /^model: selected-model$/m);
+});
+
+test('a full cold-start deadline is terminal and does not spend another 20 minutes retrying', async (t) => {
+  t.mock.timers.enable(['setTimeout', 'setInterval']);
+  let started;
+  let calls = 0;
+  const ready = new Promise((resolve) => { started = resolve; });
+  const pending = planAsk('Update README.md.', {
+    config: { ...llmConfig, llm: { ...llmConfig.llm, request_timeout_ms: 1_200_000 } }, env: {},
+    fetchImpl: async () => { calls += 1; started(); return new Promise(() => {}); },
+  });
+  const rejected = assert.rejects(pending, (error) => error.code === 'ROSTER_LLM_TIMEOUT');
+  await ready;
+  t.mock.timers.tick(1_200_000);
+  await rejected;
+  assert.equal(calls, 1);
+});
+
+test('cancellation during timeout recovery stops before a second HTTP request', async (t) => {
+  t.mock.timers.enable(['setTimeout', 'setInterval']);
+  const controller = new AbortController();
+  let started;
+  let calls = 0;
+  const ready = new Promise((resolve) => { started = resolve; });
+  const pending = planAsk('Update README.md.', {
+    config: { ...llmConfig, llm: { ...llmConfig.llm, request_timeout_ms: 120_000 } },
+    env: {}, signal: controller.signal,
+    onEvent: (event) => { if (event.type === 'timeout-retry') controller.abort(); },
+    fetchImpl: async () => { calls += 1; started(); return new Promise(() => {}); },
+  });
+  const rejected = assert.rejects(pending, (error) => error.code === 'ROSTER_CANCELLED');
+  await ready;
+  t.mock.timers.tick(120_000);
+  await rejected;
+  assert.equal(calls, 1);
+});
+
+test('planner does not retry authentication or network errors as cold-start timeouts', async () => {
+  for (const status of [401, null]) {
+    let calls = 0;
+    await assert.rejects(planAsk('Update README.md.', {
+      config: llmConfig, env: {},
+      fetchImpl: async () => {
+        calls += 1;
+        if (status === null) throw new Error('PRIVATE_NETWORK_ERROR');
+        return new Response('PRIVATE_UPSTREAM_BODY', { status });
+      },
+    }), (error) => !/PRIVATE_/.test(error.message) && error.code !== 'ROSTER_LLM_TIMEOUT');
+    assert.equal(calls, 1);
+  }
+});
+
 test('malformed calls use only one repair even with a one-turn configured budget and return stubs without throwing', async (t) => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'roster-sglang-failed-tools-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
@@ -480,7 +726,7 @@ test('written TASK validation rejects a changed Ask and protected paths', async 
   }
 });
 
-test('a locked routed model accepts a written TASK model drift and keeps the draft observable', async (t) => {
+test('a written TASK cannot silently switch the selected fleet model', async (t) => {
   const ask = 'Update README.md.';
   const task = planStub(ask, { reference: 'issue:42', title: 'Update README' }).task
     .replace(/^model:.*$/m, 'model: other-model');
@@ -489,7 +735,7 @@ test('a locked routed model accepts a written TASK model drift and keeps the dra
   const worktree = join(repoRoot, 'worktree');
   mkdirSync(worktree);
   let calls = 0;
-  const result = await runPlanner({
+  await assert.rejects(runPlanner({
     worktree, repoRoot, issue: { number: 42, title: 'Update README', body: ask },
     config: { ...llmConfig, planner: { turn_budget: 1 } }, lockedModel: 'test-model', env: {},
     fetchImpl: async () => {
@@ -500,12 +746,11 @@ test('a locked routed model accepts a written TASK model drift and keeps the dra
         } }],
       } }] });
     },
-  });
+  }), /routed planner must keep the selected fleet model/);
   assert.equal(calls, 1);
-  assert.match(result.task, /^model: other-model$/m);
-  assert.equal(readFileSync(result.taskPath, 'utf8'), result.task);
-  assert.equal(result.run.metrics.model, 'test-model');
-  assert.equal(JSON.parse(readFileSync(join(repoRoot, '.roster', 'memory', 'planner.jsonl'), 'utf8')).status, 'llm');
+  assert.match(readFileSync(join(worktree, 'TASK.md'), 'utf8'), /^model: other-model$/m);
+  assert.equal(existsSync(join(worktree, 'ESTIMATE.md')), false);
+  assert.equal(JSON.parse(readFileSync(join(repoRoot, '.roster', 'memory', 'planner.jsonl'), 'utf8')).status, 'failed');
 });
 
 test('planner denies src writes and reports the error to the model without creating app directories', async (t) => {

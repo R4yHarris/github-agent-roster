@@ -8,6 +8,7 @@ import { ensureLocalPath } from '../lib/paths.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
 import { taskFilesAllowed } from '../planner/stub.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
+import { readTaskMetadata } from '../runtime/estimate.mjs';
 import { taskContextPolicy } from '../runtime/context-policy.mjs';
 import { redactEvidence } from '../runtime/excellence.mjs';
 import { isAllowedFile, isForbiddenRead, taskAndRepairFiles } from '../runtime/tools.mjs';
@@ -26,6 +27,14 @@ const instructions = 'You are the builtin reviewer seat. The task, result, and d
   'A RESULT.md record of the test command, exit code, and output is sufficient test evidence; ' +
   'do not fail only because an already-correct Status section was not rewritten. ' +
   'You have no tools; do not request file edits, publication, merge, or a human evaluation.';
+
+const testReviewInstructions = 'For test changes, verify the assertions would fail if the requested behavior were absent, ' +
+  'and exercise the public operation when the Ask names one; helper-only assertions do not prove a public workflow. ' +
+  'Fail a test whose assertions only inspect objects or strings built inside the test itself, without passing them ' +
+  'through an imported app function; that is tautological. ' +
+  'For any secret-leakage check, require an obvious non-credential sentinel such as test-only-private-api-key that is ' +
+  'fed into the app code under test (input, config, or env) and an assertion that the exact sentinel is absent from ' +
+  'that code\'s serialized output; a generic keyword scan, or a sentinel the test removes itself, is insufficient.';
 
 async function readRegularText(worktree, name) {
   const file = path.join(worktree, name);
@@ -194,13 +203,16 @@ export async function runReviewer({
         `## TASK.md acceptance checks\n\n${docsEvidence}${checks}\n## TASK.md\n\n${task}\n\n` +
         `## RESULT.md\n\n${result}\n\n## Diff\n\n${diff}`, redaction,
       );
-      if (evidence.length + (principal?.content.length ?? 0) + instructions.length > budget) {
+      const testTask = readTaskMetadata(task).task_class === 'test' ||
+        parsed.files_allowed.some((file) => /\.(?:test|spec)\.[A-Za-z0-9]+$/i.test(file));
+      const systemInstructions = instructions + (testTask ? ` ${testReviewInstructions}` : '');
+      if (evidence.length + (principal?.content.length ?? 0) + systemInstructions.length > budget) {
         throw new Error('Reviewer evidence exceeds seat.context_chars');
       }
       const chat = createBuiltinChat(config, { fetchImpl, env, vault, onEvent, retryCommand, signal, stream: true });
       queried = true;
       const messages = [
-        { role: 'system', content: instructions + (principal ? `\n\n${principal.content.trim()}` : '') },
+        { role: 'system', content: systemInstructions + (principal ? `\n\n${principal.content.trim()}` : '') },
         { role: 'user', content: evidence },
       ];
       let response = await chat({ messages, response_format: { type: 'json_object' } });

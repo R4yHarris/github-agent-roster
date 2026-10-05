@@ -53,9 +53,12 @@ export function createCompletionAssembler(requestedModel) {
   };
 }
 
-export async function readChatStream(response, requestedModel, { onDelta } = {}) {
+export async function readChatStream(response, requestedModel, { onDelta, onBytes } = {}) {
   if (onDelta !== undefined && typeof onDelta !== 'function') {
     throw new TypeError('A stream delta observer must be a function.');
+  }
+  if (onBytes !== undefined && typeof onBytes !== 'function') {
+    throw new TypeError('A stream byte observer must be a function.');
   }
   const body = response.body;
   if (!body || typeof body.getReader !== 'function') {
@@ -67,11 +70,14 @@ export async function readChatStream(response, requestedModel, { onDelta } = {})
   let buffer = '';
   let bytes = 0;
   let done = false;
+  let frames = 0;
+  let head = '';
 
   const consume = async (block) => {
     for (const line of block.split('\n')) {
       const field = line.startsWith('data:') ? line.slice(5).trim() : '';
       if (!field) continue;
+      frames += 1;
       if (field === '[DONE]') {
         done = true;
         continue;
@@ -100,9 +106,12 @@ export async function readChatStream(response, requestedModel, { onDelta } = {})
         throw new ChatError('The LLM stream ended before the response was complete.', 'response');
       }
       if (finished) break;
+      if (value?.byteLength) onBytes?.();
       bytes += value?.byteLength ?? 0;
       if (bytes > maxStreamBytes) throw new ChatError('The LLM stream exceeded the supported size.');
-      buffer += decoder.decode(value, { stream: true });
+      const text = decoder.decode(value, { stream: true });
+      buffer += text;
+      if (head.length < 4096) head += text.slice(0, 4096 - head.length);
       let separator = buffer.search(/\r?\n\r?\n/);
       while (separator !== -1) {
         await consume(buffer.slice(0, separator).replace(/\r/g, ''));
@@ -116,5 +125,16 @@ export async function readChatStream(response, requestedModel, { onDelta } = {})
   }
   buffer += decoder.decode();
   if (buffer.trim()) await consume(buffer.replace(/\r/g, ''));
+  if (frames === 0) {
+    let errorBody = false;
+    try {
+      const parsed = JSON.parse(head.trim());
+      errorBody = isObject(parsed) && parsed.error !== undefined;
+    } catch {}
+    // Some gateways answer HTTP 200 with a JSON error instead of SSE; never treat that as an empty completion.
+    throw errorBody
+      ? new ChatError('The LLM endpoint returned an error body instead of a stream; a gateway backend may be down.', 'http')
+      : new ChatError('The LLM stream contained no completion data.', 'response');
+  }
   return assembler.payload();
 }
