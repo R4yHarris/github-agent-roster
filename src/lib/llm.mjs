@@ -5,6 +5,7 @@ import { UnsupportedFinishReasonError } from '../llm/finish-reason.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
 
 const maxLengthRetries = 3;
+const maxReasoningCap = 32_768;
 
 export function createBuiltinChat(config, {
   fetchImpl, env = process.env, vault, onEvent, retryCommand, clock, signal,
@@ -86,8 +87,13 @@ export function createBuiltinChat(config, {
         const resumable = docsSlice && typeof error.partial?.content === 'string' &&
           error.partial.content.trim() && !error.partial.tool_calls?.length
           ? error.partial.content : null;
+        // Empty visible output means reasoning spent the cap; only a larger cap can help then.
+        const reasoningSpent = !(typeof error.partial?.content === 'string' && error.partial.content.trim()) &&
+          !error.partial?.tool_calls?.length;
         // Halving the cap cannot help: the content that overflowed still has to be emitted.
-        completionCap = current.max_tokens;
+        completionCap = reasoningSpent
+          ? Math.max(current.max_tokens, Math.min(current.max_tokens * 2, maxReasoningCap))
+          : current.max_tokens;
         current = { ...current, max_tokens: completionCap,
           ...(reasoningDisabled ? { reasoning_effort: 'none',
             ...(usesDeepseekReasoning(config.llm) ? { chat_template_kwargs: { thinking: false } } : {}),
@@ -99,8 +105,10 @@ export function createBuiltinChat(config, {
             (docsSlice ? resumable === null
               ? 'The response stopped at the completion cap. Continue the same answer from where it stopped. '
               : 'That message stopped at the completion cap. Continue it from where it stopped, without repeating it. '
-              : 'The response was truncated at the completion cap. Split large output: use edit_file for ' +
-                'targeted hunks or several smaller write/edit calls, and keep reasoning brief. ') +
+              : reasoningSpent
+                ? 'Reasoning used the whole completion cap before any answer. Think briefly, then answer directly. '
+                : 'The response was truncated at the completion cap. Split large output: use edit_file for ' +
+                  'targeted hunks or several smaller write/edit calls, and keep reasoning brief. ') +
             'Return complete tool calls or a complete summary; do not repeat previously executed edits.' },
         ] };
       }

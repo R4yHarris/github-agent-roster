@@ -49,7 +49,10 @@ A new test block must call an imported app function, directly or through a
 file-local helper, whenever the file imports one; `child_process` spawns count
 as black-box CLI coverage. A seeded string literal that an assertion
 checks for absence must reach an app call as an argument, a config object
-derived from it, or `process.env`. Failures start with `Test substance:` and
+derived from it, or `process.env`. A diff that changes only test files must
+add a test block or assertion when TASK class is `test` or the additions are
+only imports and comments; otherwise it is not test work. Failures start with
+`Test substance:` and
 get one correction turn, shared with the secret-material correction; a second
 failure stops the run. The coder context also lists export signatures of the
 modules that allowed files import directly, under Public seams, so the

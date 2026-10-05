@@ -138,7 +138,10 @@ For a non-docs-slice run it logs `Response truncated. Retrying.`, discards the
 truncated completion without executing or replaying its tool calls, and retries
 at the same completion cap, asking the model to split large output into
 `edit_file` hunks or several smaller write/edit calls. Halving the cap cannot
-help because the overflowing content must still be emitted.
+help because the overflowing content must still be emitted. If the truncated
+response has no visible content and no tool call, reasoning spent the whole
+cap: the retry doubles the cap, up to 32768 (a larger configured cap is kept),
+and asks the model to think briefly and answer directly.
 A docs slice starts with reasoning disabled (`reasoning_effort: none`, and
 local DeepSeek `thinking: false`) before its first request and never sends a
 completion cap below 8192, including the continue turn.

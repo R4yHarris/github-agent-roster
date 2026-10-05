@@ -176,6 +176,12 @@ test('test substance flags only added tests that cannot fail, never pre-existing
   writeFileSync(file, `${original}\ntest('summary hides keys', () => {\n  const secret = 'test-only-private-api-key';\n` +
     '  assert.ok(!formatRoute({ ROSTER_API_KEY: secret }).includes(secret));\n});\n');
   assert.deepEqual((await checkExcellence(options)).reasons, []);
+  writeFileSync(file, original.replace("import { formatRoute } from '../src/route.mjs';",
+    "import { formatRoute } from '../src/route.mjs';\nimport { strict } from 'node:assert';\n// planned regression test"));
+  assert.deepEqual((await checkExcellence(options)).reasons, ['Test substance: the diff changes only test files but adds no new test block or assertion; ' +
+    'imports, comments, or fixtures alone do not implement the Ask.']);
+  writeFileSync(file, original.replace("assert.equal(1, 1);", "assert.equal(formatRoute({}), 'route 0');"));
+  assert.deepEqual((await checkExcellence(options)).reasons, [], 'Strengthening an existing assertion is real test work');
 });
 
 test('Git diff checks include out-of-scope changes that already existed before the loop', async (context) => {
