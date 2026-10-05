@@ -10,6 +10,7 @@ import { appendMemory, readMemory, seatMemoryPath } from '../src/runtime/memory.
 import { loadSkills } from '../src/runtime/skills.mjs';
 import { runCoder as runCoderSeat } from '../src/seats/coder.mjs';
 import { runLoop } from '../src/runtime/loop.mjs';
+import { ToolUsageError } from '../src/runtime/tools.mjs';
 import { withResearchSummary } from './helpers/research.mjs';
 
 function runCoder(options) {
@@ -399,6 +400,43 @@ test('model-requested path escape stops coding before any later model call or ed
   assert.equal(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), '# Example\n');
   assert.match(readFileSync(path.join(options.worktree, 'RESULT.md'), 'utf8'), /Checks: FAIL/);
   assert.match(readFileSync(path.join(options.worktree, 'RESULT.md'), 'utf8'), /outside the worktree/);
+});
+
+test('a recoverable scope denial steers the coder, but the same denial repeated stops it', async () => {
+  const task = planStub('Update README.md and smoke.test.mjs.').task;
+  const attempt = async (denials) => {
+    let turns = 0;
+    let reads = 0;
+    const result = await runLoop({ config: { ...llmConfig, seat: { ...llmConfig.seat, turn_budget: 10 } },
+      context: { task, pack: task }, env: {},
+      tools: {
+        read_file: async () => {
+          reads += 1;
+          if (reads <= denials) throw new ToolUsageError('Reading src/other.mjs is not allowed by TASK.md slice scope');
+          return 'body';
+        },
+        write_file: async () => ({ path: 'README.md', bytes: 1 }),
+        run_test: async () => ({ exit_code: 0, stdout: 'pass', stderr: '' }),
+      },
+      fetchImpl: async (_url, request) => {
+        turns += 1;
+        const last = JSON.parse(request.body).messages.at(-1);
+        if (turns > 1 && turns <= denials + 1) assert.match(last.content, /^Denied: Reading src\/other\.mjs/);
+        const call = (name, args) => ({ choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant',
+          tool_calls: [{ id: `c${turns}`, type: 'function', function: { name, arguments: JSON.stringify(args) } }] } }] });
+        if (turns <= denials) return Response.json(call('read_file', { path: 'src/other.mjs' }));
+        if (turns === denials + 1) return Response.json(call('write_file', { path: 'README.md', content: 'x' }));
+        return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Done.' } }] });
+      },
+      verify: () => ({ pass: true, reasons: [] }),
+    });
+    return { result, turns };
+  };
+  const recovered = await attempt(2);
+  assert.equal(recovered.result.error, undefined);
+  const stuck = await attempt(3);
+  assert.match(stuck.result.error?.message ?? '', /slice scope \(repeated after 2 denials\)/);
+  assert.equal(stuck.turns, 3);
 });
 
 test('failed final tests receive another turn before acceptance while usage and errors stay truthful', async (context) => {

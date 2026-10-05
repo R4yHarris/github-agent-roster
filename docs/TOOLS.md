@@ -31,6 +31,14 @@ Secrets, Git metadata, human-owned policy/workflows, and contracts
 remain protected even with broad TASK scope. Test execution remains a separate
 permission; read scope does not waive the acceptance checks.
 
+Denials come in two classes. Security-boundary denials stop the coder at once:
+path escapes, writes outside TASK scope or to managed files, secrets, Git
+metadata, policy, workflows, contracts, symlinks, and unsafe web targets. Scope
+and usage mistakes (reads outside the slice, unmatched edits, disabled tools,
+disallowed commands) return `Denied: ... Continue` so the model can correct
+course without seeing the denied content. The same usage denial a third time
+stops the run with `(repeated after 2 denials)`.
+
 ## Planner artifact writer
 
 A configured slice planner in an issue worktree receives only `write_file`.

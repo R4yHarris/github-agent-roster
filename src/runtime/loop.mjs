@@ -1,6 +1,6 @@
 import { createBuiltinChat } from '../lib/llm.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
-import { taskAndRepairFiles, toolDefinitions, ToolAccessError, verificationDecision, isDocsOnlyScope } from './tools.mjs';
+import { taskAndRepairFiles, toolDefinitions, ToolAccessError, ToolUsageError, verificationDecision, isDocsOnlyScope } from './tools.mjs';
 import { redactEvidence, taskSkipsTests } from './excellence.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
 import { readTaskMetadata } from './estimate.mjs';
@@ -13,6 +13,7 @@ import { SteeringInterrupt } from './steering.mjs';
 
 class MalformedCoderTools extends Error {}
 export const testRepairBudget = 4;
+const maxRepeatedDenials = 2;
 const sentinelGuidance = 'For secret-leak or redaction tests, feed an obvious non-credential sentinel such as ' +
   "'test-only-private-api-key' into the app code under test and assert it is absent from that code's output; " +
   'never write sk-, ghp_, gho_, github_pat_ prefixed values or PEM private-key blocks.';
@@ -141,6 +142,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   let webSearchDone = false;
   let webFetchDone = false;
   const readCache = new Map();
+  const usageDenials = new Map();
   progress.testRepairs = 0;
   progress.testRepairBudget = repairBudget;
   progress.repairFiles = [];
@@ -437,9 +439,11 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         try {
           result = await tools[call.function.name](call.args);
         } catch (error) {
-          if (error instanceof ToolAccessError) {
+          const repeated = error instanceof ToolUsageError &&
+            (usageDenials.set(error.message, (usageDenials.get(error.message) ?? 0) + 1).get(error.message) > maxRepeatedDenials);
+          if (error instanceof ToolAccessError && (!(error instanceof ToolUsageError) || repeated)) {
             await onEvent?.({ type: 'tool-result', name: call.function.name, status: 'denied' });
-            throw error;
+            throw repeated ? new ToolAccessError(`${error.message} (repeated after ${maxRepeatedDenials} denials)`) : error;
           }
           messages.push({ role: 'tool', tool_call_id: call.id,
             content: `Denied: ${error instanceof Error ? error.message : 'tool failed'}. Continue with an allowed action or summarize the blocker.` });

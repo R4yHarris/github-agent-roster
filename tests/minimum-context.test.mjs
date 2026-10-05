@@ -533,7 +533,7 @@ test('docs1 scope is exact; other task classes/difficulties/file sets keep their
     /scope limited to README\.md/);
 });
 
-test('non-README slices send difficulty-based effort and deny fixture and harness reads through coder tools', async (t) => {
+test('non-README slices send difficulty-based effort and keep denying fixture and harness reads until repeats stop the coder', async (t) => {
   for (const difficulty of [1, 5]) {
     const options = fixture(t, { task_class: 'fix', difficulty });
     mkdirSync(join(options.worktree, 'src', 'runtime'), { recursive: true });
@@ -550,19 +550,19 @@ test('non-README slices send difficulty-based effort and deny fixture and harnes
       assert.equal(body.reasoning_effort, difficulty === 1 ? 'low' : 'high');
       assert.ok(!request.body.includes('PRIVATE_FIXTURE') && !request.body.includes('PRIVATE_HARNESS'));
       return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
-        role: 'assistant', tool_calls: [{ id: 'call-1', type: 'function', function: {
+        role: 'assistant', tool_calls: [{ id: `call-${calls}`, type: 'function', function: {
           name: 'read_file', arguments: JSON.stringify({ path: 'tests/fixtures/planner.md' }),
         } }],
       } }] });
     }, runTestCommand: () => assert.fail('No relevant test file exists, so node --test must not run') }),
-      /not allowed by TASK\.md slice scope/);
-    assert.equal(calls, 1);
+      /not allowed by TASK\.md slice scope \(repeated after 2 denials\)/);
+    assert.equal(calls, 3);
     assert.equal(readFileSync(join(options.worktree, 'src', 'widget.mjs'), 'utf8'),
       'export const ready = false;\n');
   }
 });
 
-test('configured docs slice denies planner fixtures, offers exact file tools, and skips tests', async (t) => {
+test('configured docs slice keeps denying planner fixtures, offers exact file tools, and skips tests', async (t) => {
   const options = fixture(t);
   mkdirSync(join(options.worktree, 'tests', 'fixtures'), { recursive: true });
   writeFileSync(join(options.worktree, 'tests', 'fixtures', 'planner-task-92.md'), 'PRIVATE_FIXTURE_92');
@@ -576,13 +576,13 @@ test('configured docs slice denies planner fixtures, offers exact file tools, an
     assert.deepEqual(body.tools[2].function.parameters.properties.path.enum, ['README.md']);
     assert.ok(!request.body.includes('PRIVATE_FIXTURE_92'));
     return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
-      role: 'assistant', tool_calls: [{ id: 'call-1', type: 'function', function: {
+      role: 'assistant', tool_calls: [{ id: `call-${calls}`, type: 'function', function: {
         name: 'read_file', arguments: JSON.stringify({ path: 'tests/fixtures/planner-task-92.md' }),
       } }],
     } }] });
   }, runTestCommand: () => assert.fail('Docs-only changes must not run node --test') }),
-    /may read only TASK\.md and README\.md/);
-  assert.equal(calls, 1);
+    /may read only TASK\.md and README\.md.*\(repeated after 2 denials\)/);
+  assert.equal(calls, 3);
   assert.equal(readFileSync(join(options.worktree, 'README.md'), 'utf8'), '# Project\n');
 });
 
