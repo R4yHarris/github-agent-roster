@@ -7,6 +7,8 @@ import { resolveContractsPath, resolveProjectRoot } from './paths.mjs';
 import {
   resolveMachineRoot, resolveRepositoryState, StateRootError,
 } from './paths.mjs';
+import { configStatePath } from './config.mjs';
+import { configCheckName } from './repo-state.mjs';
 import { resolveSecret } from './secrets.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
 import { ChatError, isLocalLlmHost, resolveRequestTimeout, withRequestTimeout } from '../llm/request.mjs';
@@ -242,7 +244,7 @@ export function checkDoctor({
     }
   }
   let modelReady = false;
-  if (!configReason && regularFile(join(projectRoot, '.roster', 'config.yml'), inspect)) {
+  if (!configReason && regularFile(join(configStatePath(projectRoot).legacyRoot, 'config.yml'), inspect)) {
     try {
       resolvePublishModel({ config, env: {} });
       modelReady = true;
@@ -263,7 +265,7 @@ export function checkDoctor({
       publishExpected && regularFile(join(projectRoot, 'agent-policy.yml'), inspect)),
     publishingCheck('.github/workflows/check-agent-trailers.yml',
       publishExpected && regularFile(join(projectRoot, '.github', 'workflows', 'check-agent-trailers.yml'), inspect)),
-    { name: '.roster/config.yml model', ok: !modelExpected || modelReady,
+    { name: configCheckName(), ok: !modelExpected || modelReady,
       ...(!modelExpected ? { skipped: true } : {}),
       ...(modelExpected && !modelReady ? {
         reason: configReason ?? 'private config with a real model is required; run roster onboard',

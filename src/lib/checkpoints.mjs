@@ -5,6 +5,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { githubRepository } from './issue.mjs';
 import { ensureLocalPath } from './paths.mjs';
+import { STATE_SCOPES, statePaths, managedIgnorePrefixes, checkpointIgnorePattern, LEGACY_STATE_DIRNAME } from './repo-state.mjs';
 import { isAllowedFile, isForbiddenRead, isManagedFile } from '../runtime/tools.mjs';
 import { redactEvidence } from '../runtime/excellence.mjs';
 import { throwIfCancelled } from '../runtime/cancel.mjs';
@@ -32,10 +33,12 @@ async function git(worktree, args, env = process.env, options = {}) {
 
 async function productFiles(worktree, allowedFiles) {
   const files = [];
+  const managedPrefixes = managedIgnorePrefixes(worktree);
   async function visit(directory = '') {
     for (const entry of await fs.readdir(path.join(worktree, directory), { withFileTypes: true })) {
       const file = path.posix.join(directory, entry.name);
-      if (isForbiddenRead(file) || isManagedFile(file) || file.startsWith('.roster/') ||
+      if (isForbiddenRead(file) || isManagedFile(file) ||
+          managedPrefixes.some((prefix) => file.startsWith(prefix)) ||
           ['node_modules', '.worktrees'].includes(file.split('/')[0])) continue;
       if (entry.isSymbolicLink()) {
         if (isAllowedFile(file, allowedFiles)) throw new Error('Checkpoint product paths may not be symlinks');
@@ -50,8 +53,24 @@ async function productFiles(worktree, allowedFiles) {
   return files.sort();
 }
 
+// Checkpoints are PER_WORKTREE state: each linked worktree owns its own
+// checkpoint tree, resolved through the repo-state API off worktree identity.
+// The legacy pre-split layout stays the on-disk truth for per-worktree state;
+// the repo-state API owns the path construction, scoping, and legacy-layout
+// detection so no consumer spells the private directory name itself.
+async function checkpointDir(worktree, task) {
+  const resolved = await statePaths({
+    scope: STATE_SCOPES.PER_WORKTREE,
+    repoRoot: worktree,
+    worktreeRoot: worktree,
+    layoutDirName: LEGACY_STATE_DIRNAME,
+    segments: ['checkpoints', identity(task)],
+  });
+  return resolved.path;
+}
+
 export async function listCheckpoints({ worktree, task }) {
-  const directory = path.join(worktree, '.roster', 'checkpoints', identity(task));
+  const directory = await checkpointDir(worktree, task);
   await ensureLocalPath(directory, worktree);
   const entries = await fs.readdir(directory).catch((error) => {
     if (error.code === 'ENOENT') return [];
@@ -89,10 +108,10 @@ export async function captureCheckpoint({ worktree, task, allowedFiles, env = pr
   }
   const records = await listCheckpoints({ worktree, task });
   const number = (records.at(-1)?.number ?? 0) + 1;
-  const directory = path.join(worktree, '.roster', 'checkpoints', identity(task));
+  const directory = await checkpointDir(worktree, task);
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   await ensureLocalPath(directory, worktree);
-  await ensureManagedIgnored(worktree, '.roster/checkpoints/', env);
+  await ensureManagedIgnored(worktree, checkpointIgnorePattern(), env);
   const index = path.join(directory, `index-${randomBytes(8).toString('hex')}`);
   const indexEnv = { ...env, GIT_INDEX_FILE: index };
   const ref = `refs/roster/checkpoints/${task}/${number}`;

@@ -2,6 +2,7 @@ import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { ensureLocalPath } from './paths.mjs';
+import { STATE_SCOPES, statePaths, LEGACY_STATE_DIRNAME } from './repo-state.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
 import { timeoutHint, validateRequestTimeout, validateRetryCommand } from '../llm/request.mjs';
 import { createDebugLog } from './debug-log.mjs';
@@ -17,11 +18,26 @@ export class RunLogError extends Error {
   code = 'ROSTER_RUN_LOG';
 }
 
-function logPath(repoRoot, session) {
+// Run logs are PER_WORKTREE state: each worktree owns its seat transcripts,
+// resolved through the repo-state API. The legacy pre-split layout stays the
+// on-disk truth; the repo-state API owns path construction, scoping, and
+// legacy-layout detection so no consumer spells the private directory itself.
+async function runsDir(repoRoot) {
+  const resolved = await statePaths({
+    scope: STATE_SCOPES.PER_WORKTREE,
+    repoRoot,
+    worktreeRoot: repoRoot,
+    layoutDirName: LEGACY_STATE_DIRNAME,
+    segments: ['runs'],
+  });
+  return resolved.path;
+}
+
+async function logPath(repoRoot, session) {
   if (typeof session !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(session)) {
     throw new TypeError('Run log session must be an opaque identifier of at most 64 characters');
   }
-  return path.resolve(repoRoot, '.roster', 'runs', `${session}.log`);
+  return path.join(await runsDir(repoRoot), `${session}.log`);
 }
 
 function errorClass(error) {
@@ -45,7 +61,7 @@ export async function createRunLog({
   if (observe !== undefined && typeof observe !== 'function') throw new TypeError('Seat observer must be a function');
   const safe = (value) => redactSecrets(value, { env, apiKeyEnv }).replace(/[\x00-\x1f\x7f]/g, '?');
   if (safe(session) !== session) throw new TypeError('Run log session must not contain credentials');
-  const file = logPath(repoRoot, session);
+  const file = await logPath(repoRoot, session);
   await ensureLocalPath(file, repoRoot);
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   await ensureLocalPath(file, repoRoot);
@@ -199,7 +215,7 @@ export async function createRunLog({
 
   async function seat(name, seatSession, config, operation) {
     if (!seats.includes(name) || typeof operation !== 'function') throw new TypeError('Invalid logged seat');
-    logPath(repoRoot, seatSession);
+    await logPath(repoRoot, seatSession);
     let mode = config.llm.base_url ? 'llm' : 'stub';
     let modelEvent;
     let effort;
@@ -286,7 +302,7 @@ export async function readLastRunLog({
   repoRoot, session, env = process.env, apiKeyEnv = 'ROSTER_API_KEY', limit = 1,
 }) {
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new TypeError('Run log tail limit must be 1-200');
-  const file = logPath(repoRoot, session);
+  const file = await logPath(repoRoot, session);
   await ensureLocalPath(file, repoRoot);
   let handle;
   try {
@@ -332,7 +348,7 @@ export async function readLastRunLog({
 export async function readIssueLogs({ repoRoot, issue, env = process.env, apiKeyEnv = 'ROSTER_API_KEY', limit = 50 }) {
   if (!Number.isSafeInteger(Number(issue)) || Number(issue) < 1) throw new TypeError('Issue log requires a positive issue number');
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new TypeError('Run log tail limit must be 1-200');
-  const directory = path.join(repoRoot, '.roster', 'runs');
+  const directory = await runsDir(repoRoot);
   await ensureLocalPath(directory, repoRoot);
   const entries = await fs.readdir(directory, { withFileTypes: true }).catch((error) => {
     if (error.code === 'ENOENT') return [];
