@@ -20,6 +20,14 @@ function outline(count = 2) {
   })) };
 }
 
+test('a feature-titled ask with an explicit allow-list, one outcome, and acceptance checks is a slice', () => {
+  const body = '## Outcome\nResolve the state root.\n\n## Acceptance criteria\n- node --test exits 0\n\n' +
+    '## Allowed files\n- `src/lib/paths.mjs`\n- `tests/paths.test.mjs`';
+  assert.equal(classifyAsk(body, { title: 'feature: Implement a state-root resolver' }).kind, 'slice');
+  assert.equal(classifyAsk('Implement a profile feature.\n\n## Allowed files\n- `README.md`',
+    { title: 'Implement a profile feature' }).kind, 'feature');
+});
+
 test('README one-liners classify slice independently of task class, case and templates', () => {
   for (const ask of ['README one-liner', 'Add a one-line Status to README.md.',
     'feat: Add one-line Status to `README.md`.',

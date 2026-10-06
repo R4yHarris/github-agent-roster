@@ -167,11 +167,23 @@ export function isRepairTestFile(file) {
     !isForbiddenWrite(file);
 }
 
-export function taskAndRepairFiles(allowedFiles, repairFiles = []) {
+// Planned scope steers the coder; a capped, recorded expansion is reviewed instead of killing the run.
+export function isScopeExpansionFile(file) {
+  if (typeof file !== 'string' || !file || file.includes('\\') || path.isAbsolute(file) || path.win32.isAbsolute(file) ||
+      file.split('/').some((part) => !part || part === '.' || part === '..')) return false;
+  const parts = partsOf(file);
+  return !isForbiddenWrite(file) && !isManagedFile(file) && parts[0] !== '.roster' && parts[0] !== '.github' &&
+    !(parts.length === 1 && [...plannerArtifactFiles, ...planArtifactFiles].map((name) => name.toLowerCase()).includes(parts[0]));
+}
+
+export function taskAndRepairFiles(allowedFiles, repairFiles = [], scopeFiles = []) {
   if (!Array.isArray(repairFiles) || repairFiles.some((file) => !isRepairTestFile(file))) {
     throw new TypeError('Repair scope must contain only worktree-relative, unprotected test files');
   }
-  return [...new Set([...allowedFiles, ...repairFiles])];
+  if (!Array.isArray(scopeFiles) || scopeFiles.some((file) => !isScopeExpansionFile(file))) {
+    throw new TypeError('Scope expansion must contain only worktree-relative, unprotected product files');
+  }
+  return [...new Set([...allowedFiles, ...repairFiles, ...scopeFiles])];
 }
 
 function failingTestPaths(output, root) {
@@ -365,8 +377,14 @@ export async function createTools({
   allowRepoMap = false,
   allowInternet = false,
   fetchImpl = globalThis.fetch,
+  scopeExpansion = 0,
+  initialScopeFiles = [],
 } = {}) {
   if (!['planner', 'coder'].includes(seat)) throw new TypeError('Only planner and coder seats have file tools');
+  if (!Number.isSafeInteger(scopeExpansion) || scopeExpansion < 0 || scopeExpansion > 16 ||
+      scopeExpansion && seat !== 'coder') {
+    throw new TypeError('Scope expansion requires a coder seat and a 0-16 file limit');
+  }
   if (seat === 'planner' && (!Array.isArray(plannerArtifacts) || !plannerArtifacts.length ||
       plannerArtifacts.some((name) => ![...plannerArtifactFiles, ...planArtifactFiles].includes(name)))) {
     throw new TypeError('Planner scope must contain only known root planning artifacts');
@@ -403,7 +421,8 @@ export async function createTools({
   }
   let readmeWritten = false;
   const repairFiles = new Set();
-  const scopedFiles = () => taskAndRepairFiles(allowedFiles, [...repairFiles]);
+  const scopeFiles = new Set(scopeExpansion ? taskAndRepairFiles([], [], initialScopeFiles).slice(0, scopeExpansion) : []);
+  const scopedFiles = () => taskAndRepairFiles(allowedFiles, [...repairFiles], [...scopeFiles]);
   if (seat === 'coder' && (!Array.isArray(allowedFiles) || !allowedFiles.length)) {
     throw new TypeError('TASK.md must list files allowed for writing');
   }
@@ -454,7 +473,17 @@ export async function createTools({
     if (readmeOnlyDocs && !write && !['TASK.md', 'README.md'].includes(normalized) && !repairFiles.has(normalized)) {
       throw new ToolUsageError('README-only docs task may read only TASK.md and README.md; other paths are denied');
     }
-    const allowed = seat === 'planner' ? plannerArtifacts.includes(input) : isAllowedFile(normalized, scopedFiles());
+    let allowed = seat === 'planner' ? plannerArtifacts.includes(input) : isAllowedFile(normalized, scopedFiles());
+    let expanded = false;
+    if (write && !allowed && seat === 'coder' && scopeExpansion > 0 && !readmeOnlyDocs &&
+        isScopeExpansionFile(normalized) && !(memoryPath && path.relative(file, path.resolve(memoryPath)) === '')) {
+      if (scopeFiles.size >= scopeExpansion) {
+        throw new ToolUsageError(`Scope expansion limit (${scopeExpansion} files outside TASK.md) reached; ` +
+          `cannot also write ${normalized}. Finish within the planned and expanded files, or summarize why the plan needs a re-plan.`);
+      }
+      allowed = true;
+      expanded = true;
+    }
     if (write && (!allowed ||
         (memoryPath && path.relative(file, path.resolve(memoryPath)) === ''))) {
       throw new ToolAccessError(seat === 'planner'
@@ -475,7 +504,26 @@ export async function createTools({
         !(directory && (normalized === '.' || normalized === '' || underAllowed))) {
       throw new ToolUsageError(`Reading ${normalized} is not allowed by TASK.md slice scope`);
     }
-    return { file, relative, normalized };
+    return { file, relative, normalized, expanded };
+  }
+
+  const scopeKey = (file) => process.platform === 'win32' ? file.toLowerCase() : file;
+  const scopeEntry = (file) => [...scopeFiles].find((entry) => scopeKey(entry) === scopeKey(file));
+  const hasScopeFile = (file) => scopeEntry(file) !== undefined;
+
+  async function recordExpansion(normalized) {
+    if (hasScopeFile(normalized)) return;
+    scopeFiles.add(normalized);
+    await onEvent?.({ type: 'scope-expansion', path: normalized, count: scopeFiles.size, limit: scopeExpansion });
+  }
+
+  function expansionNote(normalized) {
+    return hasScopeFile(normalized) ? {
+      scope_expanded: true,
+      scope_path: scopeEntry(normalized),
+      note: `${normalized} is outside planned TASK.md scope (${scopeFiles.size} of ${scopeExpansion} expansions). ` +
+        'Justify it in your summary; the reviewer judges it and publication lists it.',
+    } : {};
   }
 
   async function checkComponents(relative) {
@@ -554,7 +602,7 @@ export async function createTools({
       if (seat === 'planner' && redactSecrets(args.content, { env, apiKeyEnv }) !== args.content) {
         throw new Error('Planner artifacts must not contain credentials or private keys');
       }
-      const { file, relative, normalized } = locate(args.path, { write: true });
+      const { file, relative, normalized, expanded } = locate(args.path, { write: true });
       await checkComponents(relative);
       await checkComponents(relative);
       await fs.mkdir(path.dirname(file), { recursive: true });
@@ -565,6 +613,7 @@ export async function createTools({
         throw error;
       });
       if (existing && !existing.isFile()) throw new Error('write_file requires a regular file');
+      if (expanded) await recordExpansion(normalized);
       if (seat === 'coder') await beforeWrite?.({ path: normalized, allowedFiles: scopedFiles() });
       let content = args.content;
       if (seat === 'coder' && existing?.isFile()) {
@@ -611,7 +660,7 @@ export async function createTools({
         await handle.close();
       }
       if (readmeOnlyDocs && normalized === 'README.md') readmeWritten = true;
-      return { path: normalized, bytes: Buffer.byteLength(content, 'utf8') };
+      return { path: normalized, bytes: Buffer.byteLength(content, 'utf8'), ...expansionNote(normalized) };
     },
 
     async edit_file(args) {
@@ -620,12 +669,11 @@ export async function createTools({
         throw new TypeError('edit_file requires a nonempty old_string and a new_string');
       }
       if (args.old_string === args.new_string) throw new ToolUsageError('edit_file old_string and new_string are identical');
-      const { file, relative, normalized } = locate(args.path, { write: true });
+      const { file, relative, normalized, expanded } = locate(args.path, { write: true });
       await checkComponents(relative);
       await checkParent(file);
       const entry = await fs.lstat(file);
       if (!entry.isFile()) throw new Error('edit_file requires an existing regular file');
-      if (seat === 'coder') await beforeWrite?.({ path: normalized, allowedFiles: scopedFiles() });
       const text = await fs.readFile(file, 'utf8');
       const foldNewlines = (value) => value.replace(/\r\n/g, '\n');
       let count = text.split(args.old_string).length - 1;
@@ -641,8 +689,11 @@ export async function createTools({
           ? 'edit_file old_string was not found. Read the file and copy the exact text.'
           : 'edit_file old_string matched more than once. Include more surrounding lines.');
       }
+      if (expanded) await recordExpansion(normalized);
+      if (seat === 'coder') await beforeWrite?.({ path: normalized, allowedFiles: scopedFiles() });
+      if (await fs.readFile(file, 'utf8') !== text) throw new Error('edit_file target changed during the edit');
       await fs.writeFile(file, content, 'utf8');
-      return { path: normalized, replacements: 1 };
+      return { path: normalized, replacements: 1, ...expansionNote(normalized) };
     },
 
     async glob_files(args) {
@@ -735,7 +786,7 @@ export async function createTools({
       const testEnv = { ...env, ROSTER_SEAT: 'coder' };
       for (const name of [apiKeyEnv, 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH',
         'GH_TOKEN', 'GITHUB_TOKEN', 'NODE_TEST_CONTEXT']) delete testEnv[name];
-      const command = testCommandFor(seat === 'coder' ? allowedFiles : []);
+      const command = testCommandFor(seat === 'coder' ? [...allowedFiles, ...scopeFiles] : []);
       if (command.skip) return { exit_code: 0, skipped: true, stdout: command.label, stderr: '' };
       const present = [];
       for (const file of command.args.slice(3)) {

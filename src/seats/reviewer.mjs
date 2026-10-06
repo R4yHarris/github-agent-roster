@@ -87,10 +87,10 @@ function parseResponse(content) {
   return report;
 }
 
-async function readDiff(worktree, task, files, budget, repairFiles) {
+async function readDiff(worktree, task, files, budget, repairFiles, scopeFiles) {
   if (!Array.isArray(files) || !files.length || files.length > 32 ||
       files.some((file) => typeof file !== 'string' || isForbiddenRead(file) ||
-        !isAllowedFile(file, taskAndRepairFiles(taskFilesAllowed(task), repairFiles)))) {
+        !isAllowedFile(file, taskAndRepairFiles(taskFilesAllowed(task), repairFiles, scopeFiles)))) {
     throw new Error('Reviewer requires 1-32 task-allowed changed files');
   }
   const git = async (args) => (await execute('git', args, {
@@ -199,9 +199,14 @@ export async function runReviewer({
       if (!Number.isSafeInteger(budget) || budget < 1) {
         throw new TypeError('Reviewer requires a positive seat.context_chars budget');
       }
-      const diff = await readDiff(worktree, task, coderResult.excellence.files, budget, coderResult.repairFiles);
+      const diff = await readDiff(worktree, task, coderResult.excellence.files, budget, coderResult.repairFiles,
+        coderResult.scopeFiles ?? []);
+      const scopeNote = coderResult.scopeFiles?.length
+        ? `## Files outside planned scope\n\nThe coder wrote these files beyond TASK.md Allowed Files: ${coderResult.scopeFiles.join(', ')}. ` +
+          'Fail the review unless each is necessary for the named outcome and its change is minimal and safe.\n\n'
+        : '';
       const evidence = redactEvidence(
-        `## TASK.md acceptance checks\n\n${docsEvidence}${checks}\n## TASK.md\n\n${task}\n\n` +
+        `## TASK.md acceptance checks\n\n${docsEvidence}${checks}\n${scopeNote}## TASK.md\n\n${task}\n\n` +
         `## RESULT.md\n\n${result}\n\n## Diff\n\n${diff}`, redaction,
       );
       const testTask = readTaskMetadata(task).task_class === 'test' ||

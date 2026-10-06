@@ -592,7 +592,7 @@ export function createDispatcher({
         if (task === null) throw new Error('Rewind requires the current TASK.md product scope.');
         const checkpoint = await api.rewindCheckpoint({ worktree: run.worktreePath, task: run.task,
           number: latest ? undefined : Number(args), published: state.published, env,
-          allowedFiles: taskAndRepairFiles(taskFilesAllowed(task), run.result?.repairFiles) });
+          allowedFiles: taskAndRepairFiles(taskFilesAllowed(task), run.result?.repairFiles, run.result?.scopeFiles) });
         state.lastRun = { ...run, review: null, ...(run.result ? { result: { ...run.result,
           excellence: { ...run.result.excellence, pass: false, reasons: ['Product files were rewound; rerun verification.'] } } } : {}) };
         state.display.state = 'idle';
@@ -878,6 +878,7 @@ export function createDispatcher({
               env, apiKeyEnv: state.config.llm.api_key_env,
             }),
             testsSkipped: state.lastRun?.result?.testsSkipped,
+            scopeFiles: state.lastRun?.result?.scopeFiles ?? [],
             issueNumber: state.lastRun?.issue?.number,
             seats: state.lastRun
               ? `planner, coder, reviewer (${reviewLabel})`
@@ -915,6 +916,7 @@ export function createDispatcher({
             env, apiKeyEnv: state.config.llm.api_key_env,
           }),
           testsSkipped: state.lastRun?.result?.testsSkipped,
+          scopeFiles: state.lastRun?.result?.scopeFiles ?? [],
           seats: state.lastRun
             ? `planner, coder, reviewer (${reviewLabel})`
             : undefined,

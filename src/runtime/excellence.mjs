@@ -97,7 +97,7 @@ function taskClass(task) {
 export async function checkExcellence({
   worktree, task, result, baseline, verifiedSnapshot, memoryPath, env, apiKeyEnv,
 }) {
-  const allowed = taskAndRepairFiles(taskFilesAllowed(task), result.repairFiles);
+  const allowed = taskAndRepairFiles(taskFilesAllowed(task), result.repairFiles, result.scopeFiles);
   const reasons = [];
   const options = { env, apiKeyEnv };
   if (result.error) reasons.push(redactEvidence(result.error.message, options));
@@ -195,6 +195,7 @@ export async function writeResult({ worktree, result, excellence, env, apiKeyEnv
     `Research turns: ${result.research?.turns ?? 0}\n` +
     (result.testRepairs === undefined ? '' : `Test repairs: ${result.testRepairs} of ${result.testRepairBudget ?? 4}\n` +
       `Additional failing-test scope: ${result.repairFiles?.join(', ') || '(none)'}\n`) +
+    (result.scopeFiles?.length ? `Files outside planned scope: ${result.scopeFiles.join(', ')}\n` : '') +
     (result.noProgressRepairUsed ? 'No-progress corrections: 1 of 1\n' : '') +
     (result.implementationPath ? `Implementation path: ${result.implementationPath}\n` : '') +
     (result.stages ? `Stages: ${result.stages.join(' -> ')} -> result\n` : '') +

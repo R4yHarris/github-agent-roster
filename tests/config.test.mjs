@@ -36,7 +36,7 @@ test('loads the tracked example when private config is absent', (context) => {
     },
     planner: { turn_budget: 32 },
     seat: {
-      id: 'coder', principal: 'coder', turn_budget: 1000, context_chars: 200000,
+      id: 'coder', principal: 'coder', turn_budget: 1000, context_chars: 200000, scope_expansion: 3,
       tools: ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text'],
     },
     paths: {
@@ -282,6 +282,13 @@ test('older configs retain the default context budget and can explicitly set it'
   assert.equal(parseConfig(example.replace(/  context_chars:[^\r\n]*\r?\n/, '')).seat.context_chars, 200000);
   assert.equal(parseConfig(example.replace('context_chars: 200000', 'context_chars: 16000'))
     .seat.context_chars, 16000);
+});
+
+test('seat.scope_expansion defaults to three files, accepts 0 for strict scope, and is bounded', () => {
+  assert.equal(parseConfig(example).seat.scope_expansion, 3);
+  const withScope = (value) => example.replace(/(  context_chars: 200000)/, `$1\n  scope_expansion: ${value}`);
+  assert.equal(parseConfig(withScope(0)).seat.scope_expansion, 0);
+  assert.throws(() => parseConfig(withScope(17)), /scope_expansion/);
 });
 
 test('only a missing private config triggers the example fallback', (context) => {

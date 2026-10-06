@@ -24,6 +24,7 @@ export async function runCoder({
   signal,
   steeringControl,
   initialBaseline,
+  initialScopeFiles = [],
   continuation = null,
 }) {
   const stages = [];
@@ -31,6 +32,7 @@ export async function runCoder({
     repoRoot, memoryPath: config.paths.memory, seat: 'coder',
   });
   const changedFiles = new Set();
+  const scopeFiles = new Set(initialScopeFiles ?? []);
   let context;
   let research;
   let baseline;
@@ -68,6 +70,8 @@ export async function runCoder({
       readmeOnlyDocs: context.contextPolicy.readmeOnlyDocs,
       sliceReadsOnly: context.contextPolicy.sliceReadsOnly,
       allowRepoMap: context.contextPolicy.repoMap,
+      scopeExpansion: config.seat.scope_expansion ?? 3,
+      initialScopeFiles: [...scopeFiles],
       beforeWrite: lstatSync(path.join(worktree, '.git'), { throwIfNoEntry: false })
         ? async ({ allowedFiles }) => {
           try {
@@ -116,11 +120,13 @@ export async function runCoder({
       async write_file(args) {
         const written = await tools.write_file(args);
         changedFiles.add(written.path);
+        if (written.scope_expanded) scopeFiles.add(written.scope_path);
         return written;
       },
       async edit_file(args) {
         const written = await tools.edit_file(args);
         changedFiles.add(written.path);
+        if (written.scope_expanded) scopeFiles.add(written.scope_path);
         return written;
       },
       async run_test(args) {
@@ -133,7 +139,7 @@ export async function runCoder({
       config, context, tools: trackedTools, fetchImpl, env, vault, onEvent, retryCommand, signal, steeringControl,
       verify: async (candidate) => {
         const evidence = await checkExcellence({
-          worktree, task: context.task, result: candidate, baseline, memoryPath,
+          worktree, task: context.task, result: { ...candidate, scopeFiles: [...scopeFiles].sort() }, baseline, memoryPath,
           env, apiKeyEnv: config.llm.api_key_env,
         });
         if (context.contextPolicy.readmeOnlyDocs && !changedFiles.has('README.md')) {
@@ -159,7 +165,7 @@ export async function runCoder({
     result = { ...result, error };
   }
   const timedOut = isLlmTimeout(result.error);
-  result = { ...result, research, stages, ...(timedOut ? {
+  result = { ...result, research, stages, scopeFiles: [...scopeFiles].sort(), ...(timedOut ? {
     timedOut: true,
     summary: 'Coder HTTP request timed out. No change was verified; this run did not complete.',
   } : {}) };

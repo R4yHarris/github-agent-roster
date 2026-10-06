@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { resolvePublishModel, RUN_ENV_NAMES } from '../metrics/run.mjs';
 import { issueMergeMessage } from './issue-reference.mjs';
+import { isScopeExpansionFile } from '../runtime/tools.mjs';
 
 export function parsePublishArgs(args) {
   if (typeof args !== 'string') throw new TypeError('Publish arguments must be text');
@@ -55,12 +56,15 @@ export function formatPublishEnvironment(env) {
   return RUN_ENV_NAMES.map((name) => `${name}=${env[name] ?? ''}\n`).join('');
 }
 
-export function buildPublishMessage({ subject, model, summary, testsSkipped = false, issueNumber, seats, ghcp = false }) {
+export function buildPublishMessage({ subject, model, summary, testsSkipped = false, issueNumber, seats, ghcp = false, scopeFiles = [] }) {
   if (typeof subject !== 'string' || !subject.trim() || /[\r\n\0]/.test(subject)) {
     throw new TypeError('Publish subject must be nonempty single-line text');
   }
   if (typeof summary !== 'string' || !summary.trim() || summary.includes('\0')) {
     throw new TypeError('Publish summary must describe the reviewed changes');
+  }
+  if (!Array.isArray(scopeFiles) || scopeFiles.some((file) => !isScopeExpansionFile(file))) {
+    throw new TypeError('Publish scope expansion must list worktree-relative unprotected files');
   }
   if (seats !== undefined && (typeof seats !== 'string' || !seats.trim() ||
       /[\r\n\0]/.test(seats) || seats.length > 200)) {
@@ -72,6 +76,8 @@ export function buildPublishMessage({ subject, model, summary, testsSkipped = fa
     : 'Run `node --test` from the feature worktree root and review the task acceptance checks.';
   const message = `${subject.trim()}\n\n## Model\n\n${actualModel}\n\n## Summary\n\n${summary.trim()}` +
     (seats ? `\n\n## Seats\n\n${seats}` : '') +
+    (scopeFiles.length ? `\n\n## Files outside planned scope\n\n${scopeFiles.map((file) => `- \`${file}\``).join('\n')}\n\n` +
+      'The coder expanded beyond TASK.md Allowed Files; the reviewer judged these changes.' : '') +
     (ghcp ? '\n\n## Metrics\n\nGHCP used/out are `-` (unknown); declared context capacity is not token usage.' : '') +
     `\n\n### How to test\n\n${testing}`;
   return issueNumber === undefined ? message : issueMergeMessage(message, issueNumber);

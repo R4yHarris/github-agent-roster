@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createTools, isAllowedFile, isForbiddenRead, isForbiddenWrite, toolDefinitions } from '../src/runtime/tools.mjs';
+import { createTools, isAllowedFile, isForbiddenRead, isForbiddenWrite, taskAndRepairFiles, toolDefinitions } from '../src/runtime/tools.mjs';
 
 function fixture(context) {
   const worktree = mkdtempSync(path.join(tmpdir(), 'roster-tools-'));
@@ -78,6 +78,52 @@ test('a killed test process with numeric exit 1 is a terminal timeout, not a rep
       code: 1, killed: true, stdout: 'not ok', stderr: '',
     }); } });
   await assert.rejects(tools.run_test(), /timed out after 60 seconds/);
+});
+
+test('tiered scope records capped coder expansion while hard-deny surfaces stay fatal', async (context) => {
+  const worktree = fixture(context);
+  writeFileSync(path.join(worktree, 'src', 'cli.mjs'), 'export const cli = 1;\n');
+  const events = [];
+  const tools = await createTools({ worktree, allowedFiles: ['README.md'], scopeExpansion: 2,
+    onEvent: (event) => events.push(event) });
+  const written = await tools.write_file({ path: 'src/state.mjs', content: 'export const state = 1;\n' });
+  assert.equal(written.scope_expanded, true);
+  assert.match(written.note, /outside planned TASK\.md scope \(1 of 2/);
+  await assert.rejects(tools.edit_file({ path: 'src/cli.mjs', old_string: 'missing', new_string: 'x' }), /not found/);
+  const edited = await tools.edit_file({ path: 'src/cli.mjs', old_string: 'cli = 1', new_string: 'cli = 2' });
+  assert.equal(edited.scope_expanded, true);
+  assert.equal((await tools.write_file({ path: 'src/state.mjs', content: 'export const state = 2;\n' })).scope_expanded, true);
+  await assert.rejects(tools.write_file({ path: 'src/third.mjs', content: '' }), /Scope expansion limit \(2 files/);
+  assert.equal(existsSync(path.join(worktree, 'src', 'third.mjs')), false);
+  for (const file of ['.env', 'key.pem', '.github/workflows/build.yml', '.git/config', 'agent-policy.yml',
+    'TASK.md', 'RESULT.md', '.roster/memory/coder.jsonl', 'vendor/x.mjs', '../outside.mjs']) {
+    await assert.rejects(tools.write_file({ path: file, content: 'bad' }), /relative|outside|secret|not allowed|refused/i, file);
+  }
+  assert.deepEqual(events.filter(({ type }) => type === 'scope-expansion').map(({ path: file }) => file),
+    ['src/state.mjs', 'src/cli.mjs']);
+  const strict = await createTools({ worktree, allowedFiles: ['README.md'] });
+  await assert.rejects(strict.write_file({ path: 'src/other.mjs', content: '' }), /not allowed by TASK\.md/);
+  const resumed = await createTools({ worktree, allowedFiles: ['README.md'], scopeExpansion: 2,
+    initialScopeFiles: ['src/state.mjs', 'src/cli.mjs'] });
+  assert.equal((await resumed.write_file({ path: 'src/state.mjs', content: '' })).scope_expanded, true);
+  await assert.rejects(resumed.write_file({ path: 'src/fourth.mjs', content: '' }), /Scope expansion limit/);
+  await assert.rejects(createTools({ worktree, seat: 'planner', scopeExpansion: 1 }), /coder seat/);
+  if (process.platform === 'win32') {
+    const variant = await resumed.write_file({ path: 'SRC/STATE.MJS', content: '' });
+    assert.equal(variant.scope_path, 'src/state.mjs');
+  }
+  mkdirSync(path.join(worktree, 'tests'), { recursive: true });
+  writeFileSync(path.join(worktree, 'tests', 'state.test.mjs'), '');
+  let testArgs;
+  const testing = await createTools({ worktree, allowedFiles: ['README.md'], scopeExpansion: 1,
+    initialScopeFiles: ['src/state.mjs'], runCommand: async (_program, args) => {
+      testArgs = args;
+      return { stdout: 'ok', stderr: '' };
+    } });
+  await testing.run_test({});
+  assert.ok(testArgs.includes('tests/state.test.mjs'), 'expanded source files run their related tests');
+  assert.throws(() => taskAndRepairFiles(['README.md'], [], ['.env']), /Scope expansion/);
+  assert.deepEqual(taskAndRepairFiles(['README.md'], [], ['src/a.mjs']), ['README.md', 'src/a.mjs']);
 });
 
 test('limits reading, writing, and listing to worktree files allowed by TASK.md', async (context) => {
