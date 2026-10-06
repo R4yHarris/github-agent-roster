@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -68,6 +69,35 @@ test('a real failed node test grants only its regular failing-test file for repa
     content: "import test from 'node:test';\ntest('broken', () => {});\n" });
   await assert.rejects(tools.write_file({ path: 'tests/unrelated.test.mjs', content: '' }), /not allowed/);
   assert.equal((await tools.run_test()).exit_code, 0);
+});
+
+test('final full-suite verification separates regressions this change caused from failures already at base', async (context) => {
+  const worktree = fixture(context);
+  const git = (...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args],
+    { cwd: worktree, encoding: 'utf8', stdio: 'pipe' });
+  mkdirSync(path.join(worktree, 'tests'));
+  const write = (file, text) => writeFileSync(path.join(worktree, ...file.split('/')), text);
+  const check = (expression) => "import test from 'node:test';\nimport assert from 'node:assert/strict';\n" +
+    `import { value } from '../src/app.mjs';\ntest('check', () => assert.ok(${expression}));\n`;
+  write('src/app.mjs', 'export const value = 1;\n');
+  write('tests/app.test.mjs', check('value === 1'));
+  write('tests/consumer.test.mjs', check('value === 1'));
+  write('tests/broken.test.mjs', check('value === 99'));
+  git('init', '-q');
+  git('add', 'src', 'tests');
+  git('commit', '-q', '-m', 'base');
+  write('src/app.mjs', 'export const value = 2;\n');
+  write('tests/app.test.mjs', check('value === 2'));
+  const tools = await createTools({ worktree, allowedFiles: ['src/app.mjs', 'tests/app.test.mjs'] });
+  assert.equal((await tools.run_test()).exit_code, 0, 'the targeted slice test alone passes');
+  const full = await tools.run_test({}, { full: true });
+  assert.notEqual(full.exit_code, 0);
+  assert.deepEqual(full.regression_files, ['tests/consumer.test.mjs']);
+  assert.deepEqual(full.preexisting_files, ['tests/broken.test.mjs']);
+  assert.equal(git('worktree', 'list').trim().split('\n').length, 1, 'the base worktree is removed');
+  const targeted = await tools.run_test();
+  assert.notEqual(targeted.exit_code, 0, 'later targeted runs include the regressed test');
+  await tools.write_file({ path: 'tests/consumer.test.mjs', content: check('value === 2') });
 });
 
 test('a killed test process with numeric exit 1 is a terminal timeout, not a repairable check', async (context) => {

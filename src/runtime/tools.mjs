@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
-import { promises as fs, readFileSync } from 'node:fs';
+import { existsSync, promises as fs, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -25,7 +25,8 @@ export class OutsideWorktreeError extends ToolAccessError {
 }
 export const docsTestFiles = Object.freeze(['tests/cli.test.mjs']);
 export const docsTestTimeoutMs = 60_000;
-export const fullTestTimeoutMs = 300_000;
+export const fullTestTimeoutMs = 900_000;
+export const fullTestPerTestTimeoutMs = 120_000;
 
 export function isOutsideWorktreePath(input) {
   if (typeof input !== 'string') return false;
@@ -625,6 +626,48 @@ export async function createTools({
     }
   }
 
+  // Splits full-suite failures outside the planned files into regressions this change caused (they pass
+  // at the base commit) and failures it did not cause (flaky when rerun alone, or failing at base too).
+  async function classifyOutsideFailures(files, testEnv) {
+    const fileArgs = (file) => ['--test', `--test-timeout=${fullTestPerTestTimeoutMs}`, file];
+    const passes = (cwd, file, env) => runCommand(process.execPath, fileArgs(file), {
+      cwd, timeout: fullTestPerTestTimeoutMs * 2, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024, env, signal,
+    }).then(() => true, () => { throwIfCancelled(signal); return false; });
+    const checked = files.slice(0, 8);
+    const preexisting = files.slice(8);
+    const persistent = [];
+    for (const file of checked) {
+      if (await passes(root, file, testEnv)) preexisting.push(file);
+      else persistent.push(file);
+    }
+    if (!persistent.length) return { regression_files: [], preexisting_files: preexisting };
+    const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'roster-base-'));
+    const base = path.join(temp, 'base');
+    const regressions = [];
+    try {
+      await runCommand('git', ['worktree', 'add', '--detach', base, 'HEAD'], {
+        cwd: root, timeout: 120_000, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024, signal,
+      });
+      const vendor = path.join(root, 'vendor', 'github-agent-contracts');
+      const baseEnv = { ...testEnv, ...(existsSync(path.join(vendor, 'scripts', 'agent-pr.mjs'))
+        ? { GITHUB_AGENT_CONTRACTS: vendor } : {}) };
+      for (const file of persistent) {
+        if (await passes(base, file, baseEnv)) regressions.push(file);
+        else preexisting.push(file);
+      }
+    } catch (error) {
+      throwIfCancelled(signal);
+      await onEvent?.({ type: 'baseline-unavailable', reason: String(error.message ?? error).slice(0, 200) });
+      return { regression_files: [], preexisting_files: files };
+    } finally {
+      await runCommand('git', ['worktree', 'remove', '--force', base], {
+        cwd: root, timeout: 120_000, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
+      }).catch(() => {});
+      await fs.rm(temp, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
+    }
+    return { regression_files: regressions, preexisting_files: preexisting };
+  }
+
   const plannerWrites = new Map();
   const searchedUrls = new Set();
   function publicHttpsUrl(value) {
@@ -896,7 +939,8 @@ export async function createTools({
         })).sort((left, right) => left.name.localeCompare(right.name));
     },
 
-    async run_test(args = {}) {
+    // `full` is a harness-only option: the model calls tools with one argument, so only final verification reaches it.
+    async run_test(args = {}, { full = false } = {}) {
       throwIfCancelled(signal);
       argumentsFor(args, []);
       if (readmeOnlyDocs && !readmeWritten) {
@@ -915,17 +959,27 @@ export async function createTools({
       const testEnv = { ...env, ROSTER_SEAT: 'coder' };
       for (const name of [apiKeyEnv, 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH',
         'GH_TOKEN', 'GITHUB_TOKEN', 'NODE_TEST_CONTEXT']) delete testEnv[name];
-      const command = testCommandFor(seat === 'coder' ? [...allowedFiles, ...scopeFiles] : []);
-      if (command.skip) return { exit_code: 0, skipped: true, stdout: command.label, stderr: '' };
-      const present = [];
-      for (const file of command.args.slice(3)) {
-        const entry = await fs.lstat(path.join(root, ...file.split('/'))).catch(() => null);
-        if (entry?.isFile()) present.push(file);
+      const planned = seat === 'coder' ? [...allowedFiles, ...scopeFiles] : [];
+      const command = testCommandFor(planned.length && !isDocsOnlyScope(allowedFiles) ? [...planned, ...repairFiles] : planned);
+      if (command.skip && !(full && seat === 'coder' && !isDocsOnlyScope(allowedFiles))) {
+        return { exit_code: 0, skipped: true, stdout: command.label, stderr: '' };
       }
-      if (!present.length) return { exit_code: 0, skipped: true, stdout: 'no relevant tests exist for the changed files', stderr: '' };
-      // A per-test timeout turns a hanging test into a located, repairable failure before the outer kill.
-      command.args = ['--test', '--test-concurrency', command.args[2],
-        `--test-timeout=${Math.floor(command.timeoutMs / 3)}`, ...present];
+      const jobs = String(testConcurrency());
+      if (full && seat === 'coder') {
+        // Final verification runs the whole suite: a slice can break tests in files it never planned to touch.
+        command.args = ['--test', '--test-concurrency', jobs, `--test-timeout=${fullTestPerTestTimeoutMs}`];
+        command.timeoutMs = fullTestTimeoutMs;
+      } else {
+        const present = [];
+        for (const file of command.args.slice(3)) {
+          const entry = await fs.lstat(path.join(root, ...file.split('/'))).catch(() => null);
+          if (entry?.isFile()) present.push(file);
+        }
+        if (!present.length) return { exit_code: 0, skipped: true, stdout: 'no relevant tests exist for the changed files', stderr: '' };
+        // A per-test timeout turns a hanging test into a located, repairable failure before the outer kill.
+        command.args = ['--test', '--test-concurrency', command.args[2],
+          `--test-timeout=${Math.floor(command.timeoutMs / 3)}`, ...present];
+      }
       command.label = `node ${command.args.join(' ')}`;
       try {
         await assertContractsInitialized(root);
@@ -949,6 +1003,7 @@ export async function createTools({
             await onEvent?.({ type: 'contracts-uninitialized' });
             throw new ContractsSubmoduleError({ cause: error, tests: { exit_code: result.exit_code } });
           }
+          const failing = [];
           for (const file of failingTestPaths(`${result.stdout}\n${result.stderr}`, root)) {
             const target = path.join(root, file);
             await checkComponents(file.split('/').join(path.sep));
@@ -956,8 +1011,12 @@ export async function createTools({
             const entry = await fs.lstat(target);
             if (!entry.isFile() || entry.nlink !== 1) throw new Error('Failing test repair requires a regular single-link file');
             repairFiles.add(file);
+            failing.push(file);
           }
-          return { ...result, ...(repairFiles.size ? { repair_files: [...repairFiles] } : {}) };
+          const outside = full && seat === 'coder'
+            ? failing.filter((file) => !isAllowedFile(file, [...allowedFiles, ...scopeFiles])) : [];
+          const classified = outside.length ? await classifyOutsideFailures(outside, testEnv) : {};
+          return { ...result, ...(repairFiles.size ? { repair_files: [...repairFiles] } : {}), ...classified };
         }
         throw new Error(`node --test could not run: ${error.message}`, { cause: error });
       }
@@ -1074,15 +1133,15 @@ export async function createTools({
       };
     },
   };
-  const guarded = Object.fromEntries(Object.entries(tools).map(([name, execute]) => [name, async (args) => {
+  const guarded = Object.fromEntries(Object.entries(tools).map(([name, execute]) => [name, async (args, options) => {
     if (isOutsideWorktreePath(args?.path)) throw new OutsideWorktreeError();
-    return execute(args);
+    return execute(args, options);
   }]));
   const selected = seat === 'planner' ? plannerReads
     ? { read_file: guarded.read_file, list_dir: guarded.list_dir, search_text: guarded.search_text, write_file: guarded.write_file }
     : { write_file: guarded.write_file } : guarded;
   if (!onEvent) return selected;
-  return Object.fromEntries(Object.entries(selected).map(([name, execute]) => [name, async (args) => {
+  return Object.fromEntries(Object.entries(selected).map(([name, execute]) => [name, async (args, options) => {
     const location = args?.path ?? (['list_dir', 'search_text'].includes(name) ? '.' : undefined);
     if (isOutsideWorktreePath(location)) {
       await onEvent({ type: 'tool-refused', name });
@@ -1100,7 +1159,7 @@ export async function createTools({
     await onEvent({ type: 'tool', name, ...(location === undefined ? {} : { path: location }) });
     let result;
     try {
-      result = await execute(args);
+      result = await execute(args, options);
     } catch (error) {
       if (error?.code === 'ROSTER_RUN_LOG') throw error;
       await onEvent({ type: 'tool-result', name, ...(location === undefined ? {} : { path: location }),

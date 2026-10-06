@@ -218,8 +218,18 @@ environment, marks the child as `ROSTER_SEAT=coder` to preserve the human-only
 evaluation boundary, and captures test output. A docs slice whose only allowed
 file is `README.md` runs `node --test tests/repl.test.mjs` with a 60-second
 cap and never spawns the full suite; a repository without that file falls back
-to the full suite. Every other (code) slice runs the full `node --test` suite
-with a 5-minute cap.
+to the full suite. A code slice's own `run_test` calls run the tests that cover
+its files plus any failing tests already surfaced for repair, with a 60-second
+cap. Final verification, which only the harness can request, runs the full
+`node --test` suite with a 15-minute cap and a 2-minute per-test timeout,
+because a slice can break tests in files it never planned to touch.
+Full-suite failures outside Allowed Files are rerun alone (a pass marks a
+flake), then once at the base commit in a temporary detached worktree. A test
+that passes at base is a regression this change caused: it becomes a repair
+file the coder must fix, by updating the test to the intended new behavior or
+by fixing the implementation. Only failures that also fail at base, or flakes,
+are reported as pre-existing and left alone. If the base check cannot run, all
+outside failures are treated as pre-existing, as before.
 A nonzero Node exit is a failed tool result rather than completion,
 so the coder receives its summary and a fresh repair attempt. Each test also
 gets `--test-timeout` of one third of the cap, so a hanging test (for example
