@@ -226,7 +226,9 @@ update any shard (see [testing](TESTING.md)). Final verification, which only the
 `node --test` suite with a 15-minute cap and a 2-minute per-test timeout,
 because a slice can break tests in files it never planned to touch.
 Full-suite failures outside Allowed Files are rerun alone (a pass marks a
-flake), then once at the base commit in a temporary detached worktree. A test
+flake), then once at the base commit in a temporary detached worktree. Initialized
+submodule content is copied into that worktree, so missing dependencies cannot make a
+regression look pre-existing. A test
 that passes at base is a regression this change caused: it becomes a repair
 file the coder must fix, by updating the test to the intended new behavior or
 by fixing the implementation. Only failures that also fail at base, or flakes,

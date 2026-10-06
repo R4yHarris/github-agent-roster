@@ -71,6 +71,33 @@ test('a real failed node test grants only its regular failing-test file for repa
   assert.equal((await tools.run_test()).exit_code, 0);
 });
 
+test('regression classification mirrors initialized submodules into the base worktree', async (context) => {
+  const worktree = fixture(context);
+  const git = (...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args],
+    { cwd: worktree, encoding: 'utf8', stdio: 'pipe' });
+  const write = (file, text) => {
+    mkdirSync(path.dirname(path.join(worktree, ...file.split('/'))), { recursive: true });
+    writeFileSync(path.join(worktree, ...file.split('/')), text);
+  };
+  const check = (expression) => "import test from 'node:test';\nimport assert from 'node:assert/strict';\n" +
+    "import { value } from '../src/app.mjs';\nimport { ready } from '../deps/lib/index.mjs';\n" +
+    `test('check', () => assert.ok(ready && ${expression}));\n`;
+  write('.gitmodules', '[submodule "lib"]\n\tpath = deps/lib\n\turl = https://example.invalid/lib.git\n');
+  write('src/app.mjs', 'export const value = 1;\n');
+  write('tests/consumer.test.mjs', check('value === 1'));
+  git('init', '-q');
+  git('add', '.gitmodules', 'src', 'tests');
+  git('commit', '-q', '-m', 'base');
+  // Initialized submodule content exists only in this checkout, as with a fresh worktree's empty submodule.
+  write('deps/lib/index.mjs', 'export const ready = true;\n');
+  write('src/app.mjs', 'export const value = 2;\n');
+  const tools = await createTools({ worktree, allowedFiles: ['src/app.mjs'] });
+  const full = await tools.run_test({}, { full: true });
+  assert.deepEqual(full.regression_files, ['tests/consumer.test.mjs']);
+  assert.deepEqual(full.preexisting_files, []);
+  assert.equal(readFileSync(path.join(worktree, 'deps', 'lib', 'index.mjs'), 'utf8'), 'export const ready = true;\n');
+});
+
 test('final full-suite verification separates regressions this change caused from failures already at base', async (context) => {
   const worktree = fixture(context);
   const git = (...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args],
