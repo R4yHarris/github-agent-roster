@@ -38,6 +38,7 @@ import { createDebugLog } from './debug-log.mjs';
 import { throwIfCancelled } from '../runtime/cancel.mjs';
 import { issueWave, requireEarlierWavesClosed } from './waves.mjs';
 import { githubRepository } from './issue.mjs';
+import { routeFailure } from '../llm/openai.mjs';
 
 const execFileAsync = promisify(execFile);
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -455,23 +456,58 @@ async function runBuiltinAssignment(issueNumber, {
   let activeConfig = config;
   let autoRecommendation = null;
   let route = null;
-  if (autoModel) {
-    const taskClass = prepared.metadata?.task_class ?? inferTaskClass(prepared.issue.title) ?? 'feat';
-    if (taskClass) {
-      route = await routeTask({
-        cwd: prepared.repoRoot, installationRoot: repoRoot, fleet,
-        taskClass, difficulty: prepared.metadata?.difficulty ?? 2,
-        records: metricsLoader({ contractsPath, cwd: prepared.repoRoot }),
-      });
+  const routeAttempts = [];
+  const routingTaskClass = prepared.metadata?.task_class ?? inferTaskClass(prepared.issue.title) ?? 'feat';
+  const selectAutoRoute = async (excludedProfileIds = []) => {
+    const selectedRoute = await routeTask({
+      cwd: prepared.repoRoot, installationRoot: repoRoot, fleet,
+      taskClass: routingTaskClass, difficulty: prepared.metadata?.difficulty ?? 2,
+      records: metricsLoader({ contractsPath, cwd: prepared.repoRoot }),
+      excludedProfileIds,
+    });
+    if (!selectedRoute) return null;
+    const selected = withFleetProfile(config, selectedRoute.profile);
+    activeConfig = { ...selected, llm: Object.freeze({
+      ...selected.llm, effort: selectedRoute.recommendation?.effort ?? config.llm.effort,
+      locked_model: selectedRoute.profile.model,
+    }) };
+    autoRecommendation = selectedRoute.recommendation;
+    route = selectedRoute;
+    return selectedRoute;
+  };
+  // A route failure (substituted model, timeout, stall) is evidence about the endpoint, not the task:
+  // quarantine that profile for this run and continue the same seat on a different eligible profile.
+  const recoverRoute = async (seat, error) => {
+    const failure = autoModel && route ? routeFailure(error) : null;
+    if (!failure) return false;
+    const failedProfile = route.profile.id;
+    routeAttempts.push({ seat, profile: failedProfile, ...failure });
+    const detail = failure.reason === 'locked-model-mismatch'
+      ? `served ${failure.served} instead of ${failure.requested}` : 'endpoint timed out or stalled';
+    const retryEffort = activeConfig.llm.review_retry_effort;
+    const alternate = await selectAutoRoute([...new Set(routeAttempts.map((attempt) => attempt.profile))]);
+    if (!alternate) {
+      log(`Route recovery exhausted: seat=${seat} profile=${failedProfile} ${detail}; ` +
+        'no other eligible fleet profile remains for this run.');
+      return false;
     }
+    activeConfig = selectReasoning({ ...activeConfig, llm: { ...activeConfig.llm,
+      ...(retryEffort ? { review_retry_effort: retryEffort } : {}),
+    } }, { kind: classification.kind, taskClass: prepared.metadata?.task_class,
+      difficulty: prepared.metadata?.difficulty });
+    log(`Route recovery: seat=${seat} profile=${failedProfile} ${detail}; ` +
+      `continuing with profile=${alternate.profile.id} model=${alternate.profile.model}.`);
+    onRunEvent?.({ type: 'route-recovery', seat, failedProfile, ...failure,
+      profile: alternate.profile.id, model: alternate.profile.model });
+    onRunEvent?.({ type: 'route', model: alternate.profile.model,
+      host: new URL(alternate.profile.base_url).host, contextMax: alternate.profile.context_max,
+      hardware: alternate.profile.hardware });
+    return true;
+  };
+  if (autoModel) {
+    route = await selectAutoRoute();
     if (route) {
-      autoRecommendation = route.recommendation;
-      const selected = withFleetProfile(config, route.profile);
-      activeConfig = { ...selected, llm: Object.freeze({
-        ...selected.llm, effort: autoRecommendation?.effort ?? config.llm.effort,
-        locked_model: route.profile.model,
-      }) };
-      log(`Route: ${formatRoute(route, taskClass).trimEnd()}`);
+      log(`Route: ${formatRoute(route, routingTaskClass).trimEnd()}`);
       onRunEvent?.({ type: 'route', model: route.profile.model,
         host: new URL(route.profile.base_url).host, contextMax: route.profile.context_max,
         hardware: route.profile.hardware });
@@ -513,10 +549,11 @@ async function runBuiltinAssignment(issueNumber, {
       planningOnly: true, failed: false };
   }
   if (existing.reason) log(existing.reason);
+  const plannerPreserve = acceptPlan ? ['PLAN.md'] : existing.plan
+    ? existing.plan.normalizedRecipe ? ['TASK.md'] : ['RECIPE.yml', 'TASK.md'] : [];
   const archivePath = prepared.reused ? await archiveRunArtifacts(worktreePath, {
     task: prepared.task, git: (args) => git(worktreePath, args, commandEnv),
-    preserve: acceptPlan ? ['PLAN.md'] : existing.plan
-      ? existing.plan.normalizedRecipe ? ['TASK.md'] : ['RECIPE.yml', 'TASK.md'] : [],
+    preserve: plannerPreserve,
   }) : null;
   if (archivePath) log(`Previous generated run artifacts preserved: ${archivePath}`);
   const liveLog = await createRunLog({
@@ -529,27 +566,34 @@ async function runBuiltinAssignment(issueNumber, {
   for (const name of [...RUN_ENV_NAMES, 'GITHUB_APP_ID', 'GITHUB_APP_PRIVATE_KEY_PATH',
     'GH_TOKEN', 'GITHUB_TOKEN']) delete metricEnv[name];
   let planner;
-  try {
-    planner = acceptPlan ? await acceptPlannerPlan({ worktree: worktreePath, ask: prepared.ask,
-      title: prepared.issue.title, reference, learningRoot: prepared.repoRoot, config: activeConfig, env, signal,
-      lockedModel: route?.profile.model })
-      : existing.plan ? await preparePlannerHandoff(existing.plan, {
-      worktree: worktreePath, learningRoot: prepared.repoRoot, config: activeConfig, env,
-    }) : await liveLog.seat('planner', sessions.planner, activeConfig, (onEvent) => runPlanner({
-      worktree: worktreePath, repoRoot, issue: prepared.issue, config: activeConfig,
-      ask: prepared.ask, reference, metadata: prepared.metadata ?? undefined, task: prepared.task,
-      session: sessions.planner, fetchImpl, env, vault, learningRoot: prepared.repoRoot,
-      lockedModel: route?.profile.model, onEvent, askKind, retryCommand, signal, planMode,
-    }));
-    if (planner.reused) log('planner skipped artifacts valid; starting coder.');
-  } catch (error) {
-    if (error instanceof Error && error.run) {
-      await recordRun({ session: sessions.planner, task: prepared.task,
-        task_class: prepared.metadata?.task_class ?? inferTaskClass(prepared.issue.title) }, {
-        cwd: prepared.repoRoot, env: { ...metricEnv, ...error.run.env }, createDirectory: true, run: error.run,
+  for (;;) {
+    try {
+      planner = acceptPlan ? await acceptPlannerPlan({ worktree: worktreePath, ask: prepared.ask,
+        title: prepared.issue.title, reference, learningRoot: prepared.repoRoot, config: activeConfig, env, signal,
+        lockedModel: route?.profile.model })
+        : existing.plan ? await preparePlannerHandoff(existing.plan, {
+        worktree: worktreePath, learningRoot: prepared.repoRoot, config: activeConfig, env,
+      }) : await liveLog.seat('planner', sessions.planner, activeConfig, (onEvent) => runPlanner({
+        worktree: worktreePath, repoRoot, issue: prepared.issue, config: activeConfig,
+        ask: prepared.ask, reference, metadata: prepared.metadata ?? undefined, task: prepared.task,
+        session: sessions.planner, fetchImpl, env, vault, learningRoot: prepared.repoRoot,
+        lockedModel: route?.profile.model, onEvent, askKind, retryCommand, signal, planMode,
+      }));
+      if (planner.reused) log('planner skipped artifacts valid; starting coder.');
+      break;
+    } catch (error) {
+      if (error instanceof Error && error.run) {
+        await recordRun({ session: sessions.planner, task: prepared.task,
+          task_class: prepared.metadata?.task_class ?? inferTaskClass(prepared.issue.title) }, {
+          cwd: prepared.repoRoot, env: { ...metricEnv, ...error.run.env }, createDirectory: true, run: error.run,
+        });
+      }
+      if (!await recoverRoute('planner', error)) throw error;
+      // A partial handoff from the failed route must not block the alternate planner's exclusive writes.
+      await archiveRunArtifacts(worktreePath, {
+        task: prepared.task, git: (args) => git(worktreePath, args, commandEnv), preserve: plannerPreserve,
       });
     }
-    throw error;
   }
   const taskClass = askKind === 'slice' && !planMode ? planner.metadata.task_class
     : prepared.metadata?.task_class ?? inferTaskClass(prepared.issue.title) ?? 'feat';
@@ -582,12 +626,13 @@ async function runBuiltinAssignment(issueNumber, {
       planningOnly: true, failed: false, archivePath, logPath: liveLog.path, logSession: liveLog.session };
   }
   const recipeCoder = parseRecipe(planner.recipe).seats.find(({ id }) => id === 'coder');
-  const coderConfig = selectReasoning({ ...activeConfig,
+  const buildCoderConfig = (model) => selectReasoning({ ...activeConfig,
     seat: { ...activeConfig.seat, ...(recipeCoder.tools === undefined ? {} : { recipe_tools: recipeCoder.tools }) },
     llm: {
-    ...activeConfig.llm, model: planner.metadata.model || activeConfig.llm.model,
+    ...activeConfig.llm, model,
     effort: planner.feedback?.effort ?? activeConfig.llm.effort,
   } }, { kind: askKind, taskClass: planner.metadata.task_class, difficulty: planner.metadata.difficulty });
+  let coderConfig = buildCoderConfig(planner.metadata.model || activeConfig.llm.model);
   if (!planner.error) {
     log(taskSummary(planner, coderConfig.llm.effort));
     if (confirm) {
@@ -599,21 +644,32 @@ async function runBuiltinAssignment(issueNumber, {
     }
   }
   const reviewSeat = async (coderResult) => {
-    const reviewConfig = { ...coderConfig, llm: {
-      ...coderConfig.llm, model: coderResult.mode === 'llm' ? coderResult.model : coderConfig.llm.model,
-    } };
-    const review = await liveLog.seat('reviewer', sessions.reviewer, reviewConfig, (onEvent) => runReviewer({
-      worktree: worktreePath, repoRoot, config: reviewConfig,
-      coderResult, fetchImpl, env, vault, onEvent, askKind, retryCommand, signal,
-    }));
-    const reviewerRun = review.queried ? buildRun({
-      config: reviewConfig, response: review.response, session: sessions.reviewer,
-      task: prepared.task, env,
-    }) : null;
-    await recordSeat(sessions.reviewer, reviewerRun);
-    return { review, reviewerRun };
+    let reviewerRoute = null;
+    for (;;) {
+      const reviewConfig = reviewerRoute ? { ...coderConfig, llm: { ...coderConfig.llm, ...activeConfig.llm } }
+        : { ...coderConfig, llm: {
+          ...coderConfig.llm, model: coderResult.mode === 'llm' ? coderResult.model : coderConfig.llm.model,
+        } };
+      let review;
+      try {
+        review = await liveLog.seat('reviewer', sessions.reviewer, reviewConfig, (onEvent) => runReviewer({
+          worktree: worktreePath, repoRoot, config: reviewConfig,
+          coderResult, fetchImpl, env, vault, onEvent, askKind, retryCommand, signal,
+        }));
+      } catch (error) {
+        if (!await recoverRoute('reviewer', error)) throw error;
+        reviewerRoute = route;
+        continue;
+      }
+      const reviewerRun = review.queried ? buildRun({
+        config: reviewConfig, response: review.response, session: sessions.reviewer,
+        task: prepared.task, env,
+      }) : null;
+      await recordSeat(sessions.reviewer, reviewerRun);
+      return { review, reviewerRun };
+    }
   };
-  const coderSeat = (priorFeedback = planner.feedback?.context) => {
+  const coderSeat = (priorFeedback = planner.feedback?.context, { initialBaseline, continuation } = {}) => {
     assertSeatCovers(recipeCoder, {
       ...(recipeCoder.max_difficulty === undefined ? {} : { difficulty: readTaskMetadata(planner.task).difficulty }),
       ...(recipeCoder.skills === undefined ? {} : { skills: taskSkillNames(planner.task) }),
@@ -621,16 +677,33 @@ async function runBuiltinAssignment(issueNumber, {
     return liveLog.seat('coder', sessions.coder, coderConfig, (onEvent) => runCoder({
       worktree: worktreePath, repoRoot, config: coderConfig, task: prepared.task, session: sessions.coder,
       fetchImpl, env, vault, runTestCommand, priorFeedback, onEvent, askKind, retryCommand, signal, steeringControl,
+      initialBaseline, continuation,
     }));
   };
   let result;
-  try {
-    result = await coderSeat();
-  } catch (error) {
-    if (error instanceof Error && error.result) {
-      await recordSeat(sessions.coder, error.result.run, error.result.excellence);
+  let coderBaseline;
+  let continuation;
+  for (;;) {
+    try {
+      result = await coderSeat(undefined, { initialBaseline: coderBaseline, continuation });
+      break;
+    } catch (error) {
+      if (error instanceof Error && error.result) {
+        await recordSeat(sessions.coder, error.result.run, error.result.excellence);
+      }
+      const failedProfile = route?.profile.id;
+      if (!await recoverRoute('coder', error)) throw error;
+      coderBaseline ??= error.result?.baseline;
+      coderConfig = buildCoderConfig(activeConfig.llm.model);
+      await archiveRunArtifacts(worktreePath, {
+        task: prepared.task, git: (args) => git(worktreePath, args, commandEnv),
+        preserve: ['RECIPE.yml', 'TASK.md', 'ESTIMATE.md'],
+      });
+      continuation =
+        `The previous coder attempt on fleet profile ${failedProfile} stopped because of an endpoint route failure, ` +
+        'not a task failure. Its edits remain in the worktree: inspect them, keep what is correct, and continue ' +
+        'to a verified result with a different approach rather than repeating the same steps.';
     }
-    throw error;
   }
   let coderRun = result.run;
   await recordSeat(sessions.coder, coderRun, result.excellence);
@@ -689,7 +762,7 @@ async function runBuiltinAssignment(issueNumber, {
 
   const completed = {
     ...prepared, askKind, classification, recipePath: planner.recipePath, taskPath: planner.taskPath,
-    planner, result, review, sessions, runs, run: coderRun, command, autoRecommendation, route, archivePath,
+    planner, result, review, sessions, runs, run: coderRun, command, autoRecommendation, route, routeAttempts, archivePath,
     failed: false,
     logPath: liveLog.path, logSession: liveLog.session,
   };

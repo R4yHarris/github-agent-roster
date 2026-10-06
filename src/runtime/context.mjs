@@ -93,8 +93,10 @@ function boundedPack(sections, budget, minimum = false) {
   return { pack: render(bodies), truncated };
 }
 
-export async function loadContext({ worktree, memoryPath, repoRoot, config, principal, env, priorFeedback = null, askKind }) {
+export async function loadContext({ worktree, memoryPath, repoRoot, config, principal, env, priorFeedback = null, askKind,
+  continuation = null }) {
   if (priorFeedback !== null && typeof priorFeedback !== 'string') throw new TypeError('Prior feedback must be text');
+  if (continuation !== null && typeof continuation !== 'string') throw new TypeError('Continuation must be text');
   const budget = config?.seat?.context_chars ?? 8000;
   if (!Number.isSafeInteger(budget) || budget < 1) {
     throw new TypeError('seat.context_chars must be a positive safe integer');
@@ -138,6 +140,9 @@ export async function loadContext({ worktree, memoryPath, repoRoot, config, prin
     { heading: 'Relevant file list from TASK.md',
       body: files.map((file) => `- \`${file}\``).join('\n'), required: true },
   ];
+  // A harness continuation (for example after a route recovery) is required in every pack mode.
+  if (continuation) sections.splice(1, 0, { heading: 'Continuation',
+    body: redactSecrets(continuation, { env, apiKeyEnv: config?.llm?.api_key_env }), required: true });
   const repoMap = policy.repoMap ? await readRepoMap(worktree, { env, apiKeyEnv: config?.llm?.api_key_env }) : null;
   if (repoMap) sections.push({ heading: 'Repo map (filenames only)', body: repoMap.trim(), required: false });
   const seams = await readPublicSeams(worktree, files);

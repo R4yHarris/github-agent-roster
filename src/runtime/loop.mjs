@@ -92,6 +92,9 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   const messages = [
     { role: 'system', content: context.pack },
     { role: 'user', content: 'Complete this task using only the offered tools. ' +
+      'Work to completion within the task boundary. When an attempt fails, use the new evidence to change strategy; ' +
+      'do not repeat the same action against the same unchanged state. Consider a different implementation perspective ' +
+      'before concluding that the bounded task cannot be completed. ' +
       (docsOnly ? 'This is a docs-only change. Do not run or edit tests. Check the written file. ' : '') +
       (!docsOnly && verification.run ? `Run and update only these tests: ${verification.update.join(', ')}. ` : '') +
       (boundedTask && !docsOnly ? 'Read the allowed file and only direct imports needed to understand the APIs you will use; do not recursively trace transitive dependencies. ' +

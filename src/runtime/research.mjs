@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createBuiltinChat } from '../lib/llm.mjs';
+import { routeFailure } from '../llm/openai.mjs';
 import { isRunCancelled, throwIfCancelled } from './cancel.mjs';
 import { ensureLocalPath } from '../lib/paths.mjs';
 import { taskFilesAllowed } from '../planner/stub.mjs';
@@ -124,6 +125,8 @@ export async function runResearch({ worktree, tools, expectedTask, config, fetch
         if (isRunCancelled(error)) throw error;
         throwIfCancelled(signal);
         if (error.code === 'ROSTER_RUN_LOG') throw error;
+        // An endpoint route failure on a locked fleet model is not an optional-summary failure: the seat must reroute.
+        if (config.llm.locked_model && routeFailure(error)) throw error;
         summaryStatus = 'failed';
         warning = 'Optional LLM research summary failed; the read-only inventory was retained.';
       }

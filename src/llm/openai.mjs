@@ -5,7 +5,7 @@ import { defaultRequestFetch } from './http.mjs';
 import { UnsupportedFinishReasonError } from './finish-reason.mjs';
 import { readChatStream } from './stream.mjs';
 import { isRunCancelled, throwIfCancelled } from '../runtime/cancel.mjs';
-import { ChatError, isLocalLlmHost, LlmStallError, LlmTimeoutError, resolveRequestTimeout,
+import { ChatError, isLlmTimeout, isLocalLlmHost, LlmStallError, LlmTimeoutError, resolveRequestTimeout,
   resolveStreamIdleTimeout, validateRetryCommand, withRequestTimeout } from './request.mjs';
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
@@ -63,6 +63,28 @@ function parseCompletion(payload, requestedModel) {
 }
 
 const safeModelName = /^[A-Za-z0-9._:/@+-]{1,128}$/;
+
+export class LockedModelMismatchError extends ChatError {
+  constructor(requested, served) {
+    super(`Locked fleet model mismatch: requested ${requested}, served ${served}.`, 'response');
+    this.name = 'LockedModelMismatchError';
+    this.code = 'ROSTER_LOCKED_MODEL_MISMATCH';
+    this.requested = requested;
+    this.served = served;
+  }
+}
+
+// Failures of the endpoint route itself, not of the task: another fleet profile may succeed.
+export function routeFailure(error) {
+  const seen = new Set();
+  for (let current = error; current instanceof Error && !seen.has(current); current = current.cause) {
+    seen.add(current);
+    if (current instanceof LockedModelMismatchError) {
+      return { reason: 'locked-model-mismatch', requested: current.requested, served: current.served };
+    }
+  }
+  return isLlmTimeout(error) ? { reason: 'endpoint-timeout' } : null;
+}
 
 // Gateways may alias every requested ID to one backend; a path prefix or tag on the same name is not a mismatch.
 export function servedModelMismatch(requested, served) {
@@ -268,10 +290,7 @@ export function createChat(config = {}, {
         await onEvent?.({ type: 'served-model', host, requested: model, served: response.model });
       }
       if (expectedModel !== undefined && servedModelMismatch(expectedModel, response.model)) {
-        throw new ChatError(
-          `Locked fleet model mismatch: requested ${expectedModel}, served ${response.model}.`,
-          'response',
-        );
+        throw new LockedModelMismatchError(expectedModel, response.model);
       }
       if (response.finish_reason != null && !['stop', 'tool_calls'].includes(response.finish_reason)) {
         const rawReason = key ? response.finish_reason.split(key).join('[redacted]') : response.finish_reason;
