@@ -23,7 +23,7 @@ import { IDENTIFIER, inferTaskClass, loadLearning, recordRun } from './learn.mjs
 import { loadMetrics } from './metrics.mjs';
 import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
 import { buildPublishMessage, formatPublishCommand, formatPublishEnvironment } from './publication.mjs';
-import { archiveRunArtifacts } from './run-artifacts.mjs';
+import { archiveRunArtifacts, latestArchivedReview } from './run-artifacts.mjs';
 import { createRunLog } from './run-log.mjs';
 import { humanEvalHint, recordedCoderRun } from './seat-publication.mjs';
 import { formatRoute, routeTask } from './route.mjs';
@@ -784,7 +784,9 @@ async function runBuiltinAssignment(issueNumber, {
   let result;
   let coderBaseline;
   let coderScopeFiles = [];
-  let continuation = planner.reused ? previousReviewContinuation(previousReview) : undefined;
+  let continuation = planner.reused ? previousReviewContinuation(previousReview ??
+    await latestArchivedReview(worktreePath, { task: prepared.task, git: (args) => git(worktreePath, args, commandEnv) })
+      .catch(() => null)) : undefined;
   if (continuation) log('Carrying the previous failed review findings into the coder context.');
   const perspectiveAttempts = [];
   const rescopes = [];
