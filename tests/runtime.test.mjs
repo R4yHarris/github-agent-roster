@@ -789,7 +789,7 @@ test('a nonzero run_test returns captured output for the coder to fix in the nex
   assert.equal(testRuns, 2);
   assert.match(repairMessages.at(-1).content, /Repair 1 of 4/);
   assert.deepEqual(JSON.parse(repairMessages.at(-2).content), {
-    exit_code: 1, stdout: 'not ok', stderr: 'assertion failed',
+    exit_code: 1, stdout: 'not ok', stderr: 'assertion failed', failing_files: [],
   });
   assert.equal(result.tests.exit_code, 0);
   assert.match(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), /## Status\nReady/);

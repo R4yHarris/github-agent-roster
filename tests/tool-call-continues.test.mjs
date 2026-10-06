@@ -269,3 +269,46 @@ test('a full-suite regression outside Allowed Files is repaired, not excused as 
   assert.ok(runs.some((run) => run.startsWith('node base --test') && run.endsWith('tests/consumer.test.mjs')), runs.join('\n'));
   assert.ok(!seen.some((text) => text.includes('are outside Allowed Files and are pre-existing')));
 });
+
+test('a repaired own test no longer blocks steering when only a pre-existing outside test still fails', async (context) => {
+  const options = fixture(context, planStub('Update `README.md`, `src/app.mjs` and `tests/app.test.mjs` with a Status section and export.',
+    { reference: 'issue:5', metadata: { task_class: 'feat', difficulty: 4 } }).task);
+  mkdirSync(path.join(options.worktree, 'tests'));
+  const own = path.join(options.worktree, 'tests', 'app.test.mjs');
+  writeFileSync(own, "import test from 'node:test';\ntest('broken', () => { throw new Error('x'); });\n");
+  writeFileSync(path.join(options.worktree, 'tests', 'outside.test.mjs'), "import test from 'node:test';\ntest('o', () => {});\n");
+  const ownFixed = () => readFileSync(own, 'utf8').includes('fixed');
+  const passing = Array.from({ length: 400 }, (_, index) => `✔ passing test number ${index} (1.2ms)`).join('\n');
+  const fail = (files) => Object.assign(new Error('tests failed'), { code: 1,
+    stdout: `${passing}\n✖ failing tests:\n\n${files.map((file) => `test at ${file}:1:1\n✖ ${file} broke (2ms)\n  AssertionError: ${file} marker`).join('\n')}\n`,
+    stderr: '' });
+  let calls = 0;
+  const seen = [];
+  const result = await runCoder({
+    ...options, env: {},
+    runTestCommand: async (program, args) => {
+      if (program === 'git' || args.length !== 4) return { stdout: '', stderr: '' };
+      throw fail(ownFixed() ? ['tests/outside.test.mjs'] : ['tests/app.test.mjs', 'tests/outside.test.mjs']);
+    },
+    fetchImpl: withResearch(async (_url, request) => {
+      calls += 1;
+      const body = JSON.parse(request.body);
+      seen.push(body.messages.at(-1).content ?? '');
+      if (calls === 1) return response('tool_calls', { role: 'assistant', content: null, tool_calls: [writeCall()] });
+      if (seen.at(-1).includes('Repair 1 of') && !ownFixed()) {
+        return response('tool_calls', { role: 'assistant', content: null, tool_calls: [{
+          id: `repair-${calls}`, type: 'function', function: { name: 'write_file', arguments: JSON.stringify({
+            path: 'tests/app.test.mjs', content: "import test from 'node:test';\ntest('fixed', () => {});\n" }) },
+        }] });
+      }
+      return response('stop', { role: 'assistant', content: 'Added the Status section; own tests pass.' });
+    }),
+  });
+  const repair = seen.find((text) => text.includes('Repair 1 of'));
+  assert.ok(repair?.includes('AssertionError: tests/app.test.mjs marker'), 'repair evidence shows the failure, not passing lines');
+  assert.ok(!repair.includes('passing test number 0 '), 'repair evidence skips the passing head');
+  assert.ok(seen.some((text) => text.includes('are outside Allowed Files and are pre-existing: tests/outside.test.mjs')),
+    seen.join('\n---\n'));
+  assert.ok(!seen.some((text) => text.includes('Repair 2 of')), 'the cumulative repair grant is not mistaken for a current failure');
+  assert.equal(result.progress?.testRepairs ?? 1, 1);
+});
