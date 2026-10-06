@@ -25,7 +25,9 @@ reviews the repaired result again. If a repair leaves the same checks unmet,
 the next round is told to change strategy and, when auto-routing, moves to the
 next eligible fleet profile. A reviewer that could not complete (invalid JSON
 or endpoint failure), a non-LLM coder, and explicit `--skip-review` do not
-trigger repair. After two repairs the last REVIEW.md stands.
+trigger repair. After two repairs the last REVIEW.md stands. A later rerun
+that reuses the same TASK starts its coder from that failed REVIEW.md's
+findings rather than repeating the same attempt.
 
 A coder HTTP timeout is explicitly incomplete work, not a finished stub
 review. RESULT.md records `Outcome: timed out (unverified)`, failing checks

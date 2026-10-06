@@ -49,8 +49,9 @@ export const maxReviewRepairs = 2;
 const maxScopeExpansion = 16;
 
 // A semantic reviewer fail is actionable feedback, not a terminal verdict: hand the findings back to the coder.
-export function reviewRepairContinuation({ round, reasons, unmetChecks = [], stalled = false, changedFiles = [] }) {
-  return `Review repair ${round}: the reviewer failed the previous result` +
+export function reviewRepairContinuation({ round, reasons, unmetChecks = [], stalled = false, changedFiles = [],
+  heading = `Review repair ${round}: the reviewer failed the previous result` }) {
+  return heading +
     (unmetChecks.length ? ` (unmet acceptance checks: ${unmetChecks.join(', ')})` : '') + '. Its edits remain in the ' +
     'worktree' + (changedFiles.length ? ` (${changedFiles.join(', ')})` : '') + '. ' +
     (stalled ? 'The same checks stayed unmet after the last repair, so do not repeat that approach: re-derive the ' +
@@ -60,6 +61,17 @@ export function reviewRepairContinuation({ round, reasons, unmetChecks = [], sta
     'node --test until it exits 0. In your summary, map each acceptance check to the evidence that now meets it.' +
     '\n\nReviewer findings (redacted, truncated):\n' +
     reasons.map((reason) => `- ${reason}`).join('\n').slice(0, 3000);
+}
+
+// A rerun of the same TASK starts from the last failed review's findings instead of repeating the same attempt.
+export function previousReviewContinuation(review) {
+  if (typeof review !== 'string' || !review.startsWith('# Review\n\nVerdict: fail\n')) return undefined;
+  const section = (name) => (review.split(`\n## ${name}\n`)[1] ?? '').split('\n## ')[0];
+  const reasons = section('Reasons').split('\n').filter((line) => line.startsWith('- ')).map((line) => line.slice(2));
+  if (!reasons.length) return undefined;
+  const unmetChecks = [...section('Acceptance checks').matchAll(/^- \[ \] (\d+)\. /gm)].map(([, id]) => Number(id));
+  return reviewRepairContinuation({ reasons, unmetChecks,
+    heading: 'Previous run: the reviewer failed the last result for this same TASK' });
 }
 
 // Returns the raised expansion budget when the coder was blocked only by the scope limit, else null.
@@ -771,7 +783,8 @@ async function runBuiltinAssignment(issueNumber, {
   let result;
   let coderBaseline;
   let coderScopeFiles = [];
-  let continuation;
+  let continuation = planner.reused ? previousReviewContinuation(previousReview) : undefined;
+  if (continuation) log('Carrying the previous failed review findings into the coder context.');
   const perspectiveAttempts = [];
   const rescopes = [];
   const reviewRepairs = [];
