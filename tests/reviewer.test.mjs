@@ -89,6 +89,29 @@ test('reviewer reads the diff, RESULT, and acceptance checks without receiving a
     /RESULT\.md changed after review/);
 });
 
+test('a diff larger than 64 KiB but within seat.context_chars is reviewed, not a buffer failure', async (context) => {
+  const options = fixture(context);
+  const big = Array.from({ length: 3000 }, (_, index) => `export const value${index} = ${index}; // padding line`).join('\n');
+  writeFileSync(options.source, `export const ready = true;\n${big}\n`);
+  let seen = 0;
+  const review = await runReviewer({ ...options, config, env: {},
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      seen = body.messages[1].content.length;
+      return { status: 200, json: async () => ({ choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant', content: passingReview(body) } }] }) };
+    },
+  });
+  assert.ok(seen > 65_536);
+  assert.equal(review.verdict, 'pass', review.content);
+  rmSync(review.reviewPath);
+  const tight = { ...config, seat: { ...config.seat, context_chars: 20_000 } };
+  const refused = await runReviewer({ ...options, config: tight, env: {},
+    fetchImpl: async () => assert.fail('An oversized diff must not reach the model') });
+  assert.match(refused.content, /exceeds seat\.context_chars/);
+  assert.doesNotMatch(refused.content, /maxBuffer/);
+});
+
 test('reviewer requires substantive public-path and seeded-secret evidence for test tasks', async (context) => {
   const options = fixture(context);
   writeFileSync(path.join(options.worktree, 'TASK.md'),
