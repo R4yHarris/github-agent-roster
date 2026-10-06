@@ -273,3 +273,53 @@ test('a test subprocess scope violation writes a failed result and cannot reach 
     runs: { coder: { env: {} } }, result: failure.result,
   }, { config, env: {} }), /passing excellence gate/);
 });
+
+test('a regression repair from an earlier coder attempt stays in scope for the next perspective', async (context) => {
+  const setup = async () => {
+    const options = await fixture(context);
+    cpSync(new URL('../principals/', import.meta.url), path.join(options.repoRoot, 'principals'), { recursive: true });
+    cpSync(new URL('../skills/', import.meta.url), path.join(options.repoRoot, 'skills'), { recursive: true });
+    writeFileSync(path.join(options.worktree, 'AGENTS.md'), '# Instructions\nStay scoped.\n');
+    const task = planStub('Update src/runtime/excellence.mjs.').task;
+    mkdirSync(path.join(options.worktree, 'src', 'runtime'), { recursive: true });
+    mkdirSync(path.join(options.worktree, 'tests'), { recursive: true });
+    writeFileSync(path.join(options.worktree, 'src', 'runtime', 'excellence.mjs'), 'export const value = 1;\n');
+    const other = path.join(options.worktree, 'tests', 'other.test.mjs');
+    const original = "import assert from 'node:assert/strict';\nimport test from 'node:test';\n" +
+      "import { value } from '../src/runtime/excellence.mjs';\n\ntest('value', () => {\n  assert.equal(value, 1);\n});\n";
+    writeFileSync(other, original);
+    writeFileSync(path.join(options.worktree, 'TASK.md'), task);
+    const git = (...args) => execFileSync('git', args, { cwd: options.worktree, encoding: 'utf8', stdio: 'pipe' });
+    git('init', '--quiet');
+    git('add', '--all');
+    git('-c', 'user.name=Test Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet', '-m', 'Fixture');
+    // The earlier attempt repaired a test outside Allowed Files that its change broke.
+    writeFileSync(other, original.replace('assert.equal(value, 1)', 'assert.equal(value, 2)'));
+    return options;
+  };
+  const run = (options, initialRepairFiles) => {
+    let turns = 0;
+    return runCoder({
+      ...options, config, task: 'issue-4', session: 'coder-4', vault: { get: async () => undefined },
+      initialRepairFiles,
+      fetchImpl: withResearchSummary(async () => {
+        turns += 1;
+        return Response.json({ choices: [turns === 1 ? {
+          finish_reason: 'tool_calls',
+          message: { role: 'assistant', tool_calls: [{ id: 'write', type: 'function', function: {
+            name: 'write_file', arguments: JSON.stringify({
+              path: 'src/runtime/excellence.mjs', content: 'export const value = 2;\n',
+            }),
+          } }] },
+        } : {
+          finish_reason: 'stop', message: { role: 'assistant', content: 'Updated value; kept the earlier test repair.' },
+        }] });
+      }),
+      runTestCommand: async () => ({ exit_code: 0, stdout: 'tests pass', stderr: '' }),
+    });
+  };
+  await assert.rejects(run(await setup(), []), /outside TASK\.md allowed paths: tests\/other\.test\.mjs/);
+  const result = await run(await setup(), ['tests/other.test.mjs']);
+  assert.equal(result.excellence.pass, true);
+  assert.deepEqual(result.repairFiles, ['tests/other.test.mjs']);
+});

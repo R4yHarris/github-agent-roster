@@ -11,7 +11,9 @@ import { taskSkillNames } from '../runtime/skills.mjs';
 import { runCoder } from '../seats/coder.mjs';
 import { acceptPlannerPlan, preparePlannerHandoff, readPlannerHandoff, readPlannerTask, readPreviousReview, runPlanner } from '../seats/planner.mjs';
 import { requirePassingReview, runReviewer } from '../seats/reviewer.mjs';
-import { isAllowedFile, isForbiddenWrite, isManagedFile, taskAndRepairFiles, ToolAccessError } from '../runtime/tools.mjs';
+import {
+  isAllowedFile, isForbiddenWrite, isManagedFile, isRepairTestFile, isScopeExpansionFile, taskAndRepairFiles, ToolAccessError,
+} from '../runtime/tools.mjs';
 import { checkExcellence, redactEvidence } from '../runtime/excellence.mjs';
 import { isReviewRequired, loadConfig, requirePublicationEnabled, withoutLlmKeys } from './config.mjs';
 import { loadFleet, withFleetProfile } from './fleet.mjs';
@@ -23,7 +25,7 @@ import { IDENTIFIER, inferTaskClass, loadLearning, recordRun } from './learn.mjs
 import { loadMetrics } from './metrics.mjs';
 import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
 import { buildPublishMessage, formatPublishCommand, formatPublishEnvironment } from './publication.mjs';
-import { archiveRunArtifacts, latestArchivedReview } from './run-artifacts.mjs';
+import { archivedRunScope, archiveRunArtifacts, latestArchivedReview } from './run-artifacts.mjs';
 import { createRunLog } from './run-log.mjs';
 import { humanEvalHint, recordedCoderRun } from './seat-publication.mjs';
 import { formatRoute, routeTask } from './route.mjs';
@@ -118,6 +120,20 @@ export function perspectiveContinuation({ attempt, reason, evidence, changedFile
     'and its implementation to chase the same assertion. Keep correct work, prefer the simplest behavior that ' +
     'satisfies TASK.md, and rerun node --test until it exits 0.\n\nLast failure evidence (redacted, truncated):\n' +
     String(evidence ?? '').slice(0, 2000);
+}
+
+// A resumed run keeps only harness-recorded scope whose files are still changed in the worktree.
+export async function restoreRunScope(worktree, task, runGit, allowedFiles = []) {
+  const recorded = await archivedRunScope(worktree, { task, git: runGit });
+  const changed = new Set([
+    ...(await runGit(['diff', '--name-only', '-z', 'HEAD'])).split('\0'),
+    ...(await runGit(['ls-files', '--others', '--exclude-standard', '-z'])).split('\0'),
+  ].filter(Boolean).map((file) => file.replaceAll('\\', '/')));
+  const keep = (file, valid) => changed.has(file) && valid(file) && !isAllowedFile(file, allowedFiles);
+  return {
+    repairFiles: recorded.repairFiles.filter((file) => keep(file, isRepairTestFile)),
+    scopeFiles: recorded.scopeFiles.filter((file) => keep(file, isScopeExpansionFile)),
+  };
 }
 
 async function git(worktree, args, env = process.env) {
@@ -771,7 +787,7 @@ async function runBuiltinAssignment(issueNumber, {
       return { review, reviewerRun };
     }
   };
-  const coderSeat = (priorFeedback = planner.feedback?.context, { initialBaseline, initialScopeFiles, continuation } = {}) => {
+  const coderSeat = (priorFeedback = planner.feedback?.context, { initialBaseline, initialScopeFiles, initialRepairFiles, continuation } = {}) => {
     assertSeatCovers(recipeCoder, {
       ...(recipeCoder.max_difficulty === undefined ? {} : { difficulty: readTaskMetadata(planner.task).difficulty }),
       ...(recipeCoder.skills === undefined ? {} : { skills: taskSkillNames(planner.task) }),
@@ -779,12 +795,21 @@ async function runBuiltinAssignment(issueNumber, {
     return liveLog.seat('coder', sessions.coder, coderConfig, (onEvent) => runCoder({
       worktree: worktreePath, repoRoot, config: coderConfig, task: prepared.task, session: sessions.coder,
       fetchImpl, env, vault, runTestCommand, priorFeedback, onEvent, askKind, retryCommand, signal, steeringControl,
-      initialBaseline, initialScopeFiles, continuation,
+      initialBaseline, initialScopeFiles, initialRepairFiles, continuation,
     }));
   };
   let result;
   let coderBaseline;
   let coderScopeFiles = [];
+  let coderRepairFiles = [];
+  if (planner.reused) {
+    const restored = await restoreRunScope(worktreePath, prepared.task, (args) => git(worktreePath, args, commandEnv),
+      taskFilesAllowed(planner.task)).catch(() => null);
+    if (restored && restored.repairFiles.length + restored.scopeFiles.length) {
+      ({ repairFiles: coderRepairFiles, scopeFiles: coderScopeFiles } = restored);
+      log(`Restored recorded scope from earlier runs: ${[...restored.repairFiles, ...restored.scopeFiles].join(', ')}.`);
+    }
+  }
   let continuation = planner.reused ? previousReviewContinuation(previousReview) ??
     previousReviewContinuation(await latestArchivedReview(worktreePath, { task: prepared.task,
       git: (args) => git(worktreePath, args, commandEnv),
@@ -799,7 +824,8 @@ async function runBuiltinAssignment(issueNumber, {
   for (;;) {
   for (;;) {
     try {
-      result = await coderSeat(undefined, { initialBaseline: coderBaseline, initialScopeFiles: coderScopeFiles, continuation });
+      result = await coderSeat(undefined, { initialBaseline: coderBaseline, initialScopeFiles: coderScopeFiles,
+        initialRepairFiles: coderRepairFiles, continuation });
       break;
     } catch (error) {
       if (error instanceof Error && error.result) {
@@ -848,6 +874,7 @@ async function runBuiltinAssignment(issueNumber, {
       }
       coderBaseline ??= error.result?.baseline;
       coderScopeFiles = [...new Set([...coderScopeFiles, ...(error.result?.scopeFiles ?? [])])];
+      coderRepairFiles = [...new Set([...coderRepairFiles, ...(error.result?.repairFiles ?? [])])];
       await archiveRunArtifacts(worktreePath, {
         task: prepared.task, git: (args) => git(worktreePath, args, commandEnv),
         preserve: ['RECIPE.yml', 'TASK.md', 'ESTIMATE.md'],
@@ -880,6 +907,7 @@ async function runBuiltinAssignment(issueNumber, {
     reasons: review.reasons, unmetChecks, stalled, changedFiles: result.excellence?.files ?? [] });
   coderBaseline ??= result.baseline;
   coderScopeFiles = [...new Set([...coderScopeFiles, ...(result.scopeFiles ?? [])])];
+  coderRepairFiles = [...new Set([...coderRepairFiles, ...(result.repairFiles ?? [])])];
   await archiveRunArtifacts(worktreePath, {
     task: prepared.task, git: (args) => git(worktreePath, args, commandEnv),
     preserve: ['RECIPE.yml', 'TASK.md', 'ESTIMATE.md'],
