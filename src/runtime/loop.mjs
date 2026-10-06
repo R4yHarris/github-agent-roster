@@ -154,6 +154,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   progress.testRepairs = 0;
   progress.testRepairBudget = repairBudget;
   progress.repairFiles = [];
+  progress.regressionFiles = [];
   const repairTests = async (tests) => {
     if (!Number.isSafeInteger(tests?.exit_code) || tests.exit_code < 0) {
       throw new TypeError('run_test must return a nonnegative integer exit_code');
@@ -164,8 +165,15 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       await onEvent?.({ type: 'contracts-uninitialized' });
       throw new ContractsSubmoduleError({ tests: { exit_code: tests.exit_code } });
     }
-    progress.repairFiles = (tests.repair_files ?? []).filter((file) => parsedTask.files_allowed.includes(file));
-    const outside = (tests.repair_files ?? []).filter((file) => !parsedTask.files_allowed.includes(file));
+    const failingFiles = tests.repair_files ?? [];
+    for (const file of tests.regression_files ?? []) {
+      if (!progress.regressionFiles.includes(file)) progress.regressionFiles.push(file);
+    }
+    // Regressions this change caused outside Allowed Files are repairable; only proven non-regressions are excused.
+    const excused = (file) => !parsedTask.files_allowed.includes(file) && !progress.regressionFiles.includes(file);
+    progress.repairFiles = failingFiles.filter((file) => !excused(file));
+    const outside = failingFiles.filter(excused);
+    const regressions = progress.repairFiles.filter((file) => progress.regressionFiles.includes(file));
     const output = redactEvidence([tests.stdout, tests.stderr].filter(Boolean).join('\n'), {
       env, apiKeyEnv: config.llm.api_key_env,
     }).slice(0, 4096);
@@ -208,7 +216,10 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     messages.push({ role: 'user', content: `${failure}\n` +
       `Repair ${progress.testRepairs} of ${repairBudget}. Repair only TASK-allowed files` +
       (progress.repairFiles.length ? `: ${progress.repairFiles.join(', ')}` : '') +
-      '. Do not edit a failing test outside Allowed Files. Report it as pre-existing. ' +
+      '. ' + (regressions.length ? `These tests pass at the base commit, so this change broke them: ${regressions.join(', ')}. ` +
+        'Decide from TASK.md whether the new behavior is intended (update the test to it) or the implementation ' +
+        'regressed (fix the implementation). ' : '') +
+      'Do not edit any other failing test outside Allowed Files. Report it as pre-existing. ' +
       'Fix the exact reported root cause and ensure every identifier introduced by the change is defined in its scope. ' +
       (progress.testRepairs > 1 ? 'Earlier repairs did not make the suite pass, so change strategy: decide from TASK.md ' +
         'whether the failing assertion or the implementation is wrong and change only that side; do not alternate ' +
@@ -428,7 +439,8 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         }
         if ((call.function.name === 'edit_file' || call.function.name === 'write_file') &&
             /(?:^|\/)(?:test(?:[._-][^/]+)?|[^/]+[._-]test)\.[cm]?js$/.test(String(call.args.path ?? '')) &&
-            !verification.update.includes(String(call.args.path).replaceAll('\\', '/'))) {
+            !verification.update.includes(String(call.args.path).replaceAll('\\', '/')) &&
+            !progress.repairFiles.includes(String(call.args.path).replaceAll('\\', '/'))) {
           messages.push({ role: 'tool', tool_call_id: call.id,
             content: 'Denied. Update only a test that covers a file changed in this session.' });
           await onEvent?.({ type: 'tool-result', name: call.function.name, status: 'denied' });
@@ -496,7 +508,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       if (failedTests) await repairTests(failedTests);
       if (wroteSingleAllowedFile) {
         const testsSkipped = !verification.run || taskSkipsTests(context.task);
-        const tests = testsSkipped ? undefined : await tools.run_test({});
+        const tests = testsSkipped ? undefined : await tools.run_test({}, { full: true });
         progress.tests = tests;
         if (tests && tests.exit_code !== 0) {
           await repairTests(tests);
@@ -535,7 +547,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     }
     const testsSkipped = !verification.run || taskSkipsTests(context.task);
     const tests = checksPassedAfterWrite ? progress.tests
-      : testsSkipped && progress.testRepairs === 0 ? undefined : await tools.run_test({});
+      : testsSkipped && progress.testRepairs === 0 ? undefined : await tools.run_test({}, { full: true });
     progress.tests = tests;
     const result = {
       mode: 'llm', model: config.llm.model, summary, usage, turns: progress.turns, tests, testsSkipped,

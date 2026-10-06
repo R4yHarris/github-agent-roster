@@ -222,3 +222,50 @@ test('an out-of-scope scratch file in the diff gets an in-loop correction and de
   assert.equal(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), '# Example\n\n## Status\nReady.\n');
   assert.throws(() => readFileSync(path.join(options.worktree, 'probe.mjs')), /ENOENT/);
 });
+
+test('a full-suite regression outside Allowed Files is repaired, not excused as pre-existing', async (context) => {
+  const options = fixture(context, planStub('Update `README.md` and `src/app.mjs` with a Status section and export.',
+    { reference: 'issue:4', metadata: { task_class: 'feat', difficulty: 4 } }).task);
+  mkdirSync(path.join(options.worktree, 'tests'));
+  const consumer = path.join(options.worktree, 'tests', 'consumer.test.mjs');
+  writeFileSync(consumer, "import test from 'node:test';\ntest('old status', () => {});\n");
+  const git = (...args) => execFileSync('git', args, { cwd: options.worktree, stdio: 'pipe' });
+  git('init', '-q');
+  git('add', '-A');
+  git('-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-qm', 'init');
+  const fixed = () => readFileSync(consumer, 'utf8').includes('new status');
+  const failure = Object.assign(new Error('tests failed'), { code: 1,
+    stdout: 'not ok 1 - old status\n', stderr: 'test at tests/consumer.test.mjs:2:1\n' });
+  const runs = [];
+  let calls = 0;
+  const seen = [];
+  const result = await runCoder({
+    ...options, env: {},
+    runTestCommand: async (program, args, { cwd }) => {
+      runs.push([program === 'git' ? 'git' : 'node', path.resolve(cwd) === path.resolve(options.worktree) ? 'work' : 'base',
+        ...args].join(' '));
+      if (program === 'git' || path.resolve(cwd) !== path.resolve(options.worktree)) return { stdout: '', stderr: '' };
+      if (args.includes('--test-timeout=120000') && !fixed()) throw failure;
+      return { stdout: 'all tests pass', stderr: '' };
+    },
+    fetchImpl: withResearch(async (_url, request) => {
+      calls += 1;
+      const body = JSON.parse(request.body);
+      seen.push(body.messages.at(-1).content ?? '');
+      if (calls === 1) return response('tool_calls', { role: 'assistant', content: null, tool_calls: [writeCall()] });
+      if (seen.at(-1).includes('so this change broke them: tests/consumer.test.mjs') && !fixed()) {
+        return response('tool_calls', { role: 'assistant', content: null, tool_calls: [{
+          id: `repair-${calls}`, type: 'function', function: { name: 'write_file', arguments: JSON.stringify({
+            path: 'tests/consumer.test.mjs', content: "import test from 'node:test';\ntest('new status', () => {});\n" }) },
+        }] });
+      }
+      return response('stop', { role: 'assistant', content: 'Added the Status section; tests pass.' });
+    }),
+  });
+  assert.equal(result.error, undefined, result.error?.message);
+  assert.equal(result.excellence.pass, true, result.excellence.reasons.join('; '));
+  assert.ok(fixed(), 'the coder repaired the regressed consumer test');
+  assert.ok(runs.some((run) => run.startsWith('git work worktree add --detach')), runs.join('\n'));
+  assert.ok(runs.some((run) => run.startsWith('node base --test') && run.endsWith('tests/consumer.test.mjs')), runs.join('\n'));
+  assert.ok(!seen.some((text) => text.includes('are outside Allowed Files and are pre-existing')));
+});

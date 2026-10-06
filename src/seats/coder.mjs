@@ -90,11 +90,11 @@ export async function runCoder({
       },
     });
     const tools = config.seat.recipe_tools === undefined ? availableTools : Object.fromEntries(
-      Object.entries(availableTools).map(([name, execute]) => [name, async (args) => {
+      Object.entries(availableTools).map(([name, execute]) => [name, async (args, options) => {
         if (!recipeAllowsTool(config.seat.recipe_tools, name)) {
           throw new ToolAccessError(`Seat coder tools allow-list denies ${name}`);
         }
-        return execute(args);
+        return execute(args, options);
       }]),
     );
     if (!context.minimalDocs) {
@@ -138,9 +138,9 @@ export async function runCoder({
         changedFiles.add(deleted.path);
         return deleted;
       },
-      async run_test(args) {
+      async run_test(args, options) {
         tests = undefined;
-        tests = await tools.run_test(args);
+        tests = await tools.run_test(args, options);
         return tests;
       },
     };

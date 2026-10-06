@@ -776,7 +776,8 @@ test('a nonzero run_test returns captured output for the coder to fix in the nex
     ...options, env: { ROSTER_API_KEY: 'test-only-key' }, fetchImpl,
     runTestCommand: async (_program, _args, { timeout }) => {
       testRuns += 1;
-      assert.equal(timeout, 60_000);
+      // The coder's own run is targeted; final verification runs the full suite with its longer cap.
+      assert.equal(timeout, testRuns === 1 ? 60_000 : 900_000);
       if (testRuns === 1) throw Object.assign(new Error('tests failed'), {
         code: 1, stdout: 'not ok', stderr: 'assertion failed',
       });
