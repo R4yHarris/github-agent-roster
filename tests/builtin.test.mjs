@@ -4,11 +4,12 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { passingReview } from './helpers/review.mjs';
+import { passingReview, reviewedChecks } from './helpers/review.mjs';
 import { parseConfig } from '../src/lib/config.mjs';
 import { writeAsk } from '../src/lib/ask.mjs';
 import {
   coderStuckReason, maxPerspectiveEscalations, perspectiveContinuation, maxRescopes, rescopeBudget, rescopeContinuation,
+  maxReviewRepairs, reviewRepairContinuation,
   prepareBuiltinPublication, runBuiltinAsk, runBuiltinIssue as runIssueWithSeats, stageReviewedFiles,
 } from '../src/lib/builtin.mjs';
 import { ToolAccessError } from '../src/runtime/tools.mjs';
@@ -602,6 +603,86 @@ test('a coder blocked only by the scope expansion limit is re-scoped instead of 
   assert.deepEqual(events.filter(({ type }) => type === 'rescope').map(({ from, to }) => [from, to]), [[1, 3]]);
 });
 
+test('a semantic review failure loops back to the coder, flags a stalled repair, and stops at its bound', async (context) => {
+  const options = multiFileFixture(context);
+  const logs = [];
+  const events = [];
+  const repairs = [];
+  let reviews = 0;
+  const result = await runIssueWithSeats(42, { ...options, config: llmConfig, log: (text) => logs.push(text),
+    onRunEvent: (event) => events.push(event),
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      const system = body.messages[0].content;
+      if (system.startsWith('You are the builtin planner seat.')) {
+        return Response.json({ choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant', content: JSON.stringify({ title: 'Add Status',
+            acceptance_checks: ['node --test exits 0', 'src/a.mjs exports ready'], files_allowed: multiFileScope }),
+        } }] });
+      }
+      if (system.startsWith('You are the builtin reviewer seat.')) {
+        reviews += 1;
+        return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
+          verdict: 'fail', reasons: ['The ready export is missing.'], security_notes: [],
+          checks: reviewedChecks(body).map((id) => ({ id, met: id !== 2,
+            evidence: id === 2 ? 'src/a.mjs has no ready export.' : 'Tests exit 0.' })),
+        }) } }] });
+      }
+      const text = JSON.stringify(body.messages);
+      const repair = text.match(/Review repair (\d)/)?.[1];
+      if (repair && !repairs.some(([round]) => round === repair)) {
+        repairs.push([repair, /do not repeat that approach/.test(text), /Check 2 unmet: src\/a\.mjs has no ready export/.test(text)]);
+      }
+      return Response.json({ choices: [body.tools?.length && !text.includes('"role":"tool"') ? {
+        finish_reason: 'tool_calls', message: { role: 'assistant', tool_calls: [{ id: `w-${reviews}`, type: 'function',
+          function: { name: 'write_file', arguments: JSON.stringify({ path: 'README.md', content: `# Example\n\n## Status\n${reviews}.\n` }) } }] },
+      } : { finish_reason: 'stop', message: { role: 'assistant', content: 'Updated src/a.mjs.' } }] });
+    },
+    runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+  });
+  assert.equal(result.review.verdict, 'fail');
+  assert.equal(reviews, 1 + maxReviewRepairs);
+  assert.deepEqual(repairs, [['1', false, true], ['2', true, true]]);
+  assert.deepEqual(result.reviewRepairs.map(({ unmetChecks }) => unmetChecks), [[2], [2]]);
+  assert.match(logs.join('\n'), /Review repair 1 of 2: reviewer failed checks 2; continuing with model=\S+ in a fresh coder context/);
+  assert.deepEqual(events.filter(({ type }) => type === 'review-repair').map(({ attempt }) => attempt), [1, 2]);
+  assert.match(reviewRepairContinuation({ round: 1, reasons: ['Check 1 unmet: x'], unmetChecks: [1] }),
+    /^Review repair 1: .*unmet acceptance checks: 1[\s\S]*- Check 1 unmet: x$/);
+});
+
+test('an incomplete reviewer gives no findings, so it does not restart the coder', async (context) => {
+  const options = multiFileFixture(context);
+  let reviews = 0;
+  let coderTurns = 0;
+  const result = await runIssueWithSeats(42, { ...options, config: llmConfig, log: () => {},
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      const system = body.messages[0].content;
+      if (system.startsWith('You are the builtin planner seat.')) {
+        return Response.json({ choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant', content: JSON.stringify({ title: 'Add Status',
+            acceptance_checks: ['node --test exits 0'], files_allowed: multiFileScope }),
+        } }] });
+      }
+      if (system.startsWith('You are the builtin reviewer seat.')) {
+        reviews += 1;
+        return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'not json' } }] });
+      }
+      coderTurns += 1;
+      return Response.json({ choices: [coderTurns === 1 ? {
+        finish_reason: 'tool_calls', message: { role: 'assistant', tool_calls: [{ id: 'w', type: 'function',
+          function: { name: 'write_file', arguments: JSON.stringify({ path: 'README.md', content: '# Example\n\n## Status\nReady.\n' }) } }] },
+      } : { finish_reason: 'stop', message: { role: 'assistant', content: 'Done.' } }] });
+    },
+    runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+  });
+  assert.equal(result.review.verdict, 'fail');
+  assert.match(result.review.reasons[0], /^Reviewer could not complete/);
+  assert.equal(reviews, 2);
+  assert.equal(coderTurns, 2);
+  assert.deepEqual(result.reviewRepairs, []);
+});
+
 test('re-scoping respects strict scope, the 16-file ceiling, and its attempt limit', () => {
   const blocked = { result: { scopeBlocked: ['src/x.mjs'] } };
   assert.equal(rescopeBudget(blocked, 3, 0), 6);
@@ -635,7 +716,7 @@ test('coder stuck detection escalates budget exhaustion but never security denia
   assert.ok(text.length < 3000);
 });
 
-test('a bounded docs review failure does not start a second coder', async (context) => {
+test('a bounded docs review failure returns its findings to the coder, which repairs the result', async (context) => {
   const options = fixture(context);
   options.issue.body = renderIssueBody(options.issue.body, {
     task_class: 'docs', difficulty: 1, estimate_min: 10,
@@ -668,6 +749,7 @@ test('a bounded docs review failure does not start a second coder', async (conte
         } }] });
       }
       coderCalls += 1;
+      if (reviews === 1) assert.match(JSON.stringify(body.messages), /Review repair 1[\s\S]*Status must say Active/);
       const draft = coderCalls <= 2 ? 'Draft.' : 'Active.';
       const tools = body.tools ?? [];
       return Response.json({ choices: [tools.length ? { finish_reason: 'tool_calls', message: {
@@ -685,10 +767,11 @@ test('a bounded docs review failure does not start a second coder', async (conte
       return { stdout: 'pass', stderr: '' };
     },
   });
-  assert.equal(result.review.verdict, 'fail');
-  assert.equal(reviews, 1);
-  assert.equal(coderCalls, 2);
-  assert.match(readFileSync(path.join(result.worktreePath, 'README.md'), 'utf8'), /## Status\nDraft\./);
+  assert.equal(result.review.verdict, 'pass');
+  assert.equal(reviews, 2);
+  assert.equal(coderCalls, 4);
+  assert.deepEqual(result.reviewRepairs.map(({ unmetChecks }) => unmetChecks), [[]]);
+  assert.match(readFileSync(path.join(result.worktreePath, 'README.md'), 'utf8'), /## Status\nActive\./);
 });
 
 test('a repaired failing test passes excellence, read-only review, and declared-scope publication staging', async (context) => {
@@ -851,7 +934,7 @@ test('a configured direct ask implements and reviews the slice after its streame
   assert.match(logs.join('\n'), /Human AI-Eval|human AI-Eval/);
 });
 
-test('docs slice does not start a second coder after a failed review', async (context) => {
+test('docs slice review repair is bounded when every review fails', async (context) => {
   const options = fixture(context);
   options.issue.body = renderIssueBody(options.issue.body, { task_class: 'docs', difficulty: 1 });
   const config = { ...llmConfig, llm: { ...llmConfig.llm, model: 'deepseek-v4.1-flash',
@@ -890,7 +973,8 @@ test('docs slice does not start a second coder after a failed review', async (co
       }, runTestCommand: () => assert.fail('Docs-only changes do not run node --test'),
     });
     assert.equal(result.review.verdict, 'fail');
-    assert.equal(coderTurns, 2);
+    assert.equal(coderTurns, 2 * (1 + maxReviewRepairs));
+    assert.equal(result.reviewRepairs.length, maxReviewRepairs);
     assert.equal(result.runs.coder.metrics.effort, { low: 'l', high: 'h', max: 'x', none: '-' }[effort]);
     assert.equal(recordedCoderRun({ repoRoot: options.target, run: result.runs.coder }).line, result.runs.coder.line);
     assert.doesNotMatch(options.stderr, new RegExp(`Drafting at ${effort} effort`));

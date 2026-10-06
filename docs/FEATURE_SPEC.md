@@ -145,6 +145,8 @@ Taken from Claude Code, OpenHands, and Aider.
 Taken from GitHub rulesets and missing in crew chat.
 
 - Reviewer seat reads the diff and the acceptance checks. It does not push.
+- A failed review returns per-check findings to a fresh coder context, at most twice, switching perspective when
+  the same checks stay unmet; it never weakens a check.
 - Required CI from the base revision's trusted checker, not PR-controlled code.
 - Human review for policy, workflows, and release.
 - Merger role may merge only when the check is green and the verdict is pass.
