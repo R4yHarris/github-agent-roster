@@ -101,6 +101,8 @@ test('tiered scope records capped coder expansion while hard-deny surfaces stay 
   }
   assert.deepEqual(events.filter(({ type }) => type === 'scope-expansion').map(({ path: file }) => file),
     ['src/state.mjs', 'src/cli.mjs']);
+  assert.deepEqual(events.filter(({ type }) => type === 'scope-limit').map(({ path: file, limit }) => [file, limit]),
+    [['src/third.mjs', 2]]);
   const strict = await createTools({ worktree, allowedFiles: ['README.md'] });
   await assert.rejects(strict.write_file({ path: 'src/other.mjs', content: '' }), /not allowed by TASK\.md/);
   const resumed = await createTools({ worktree, allowedFiles: ['README.md'], scopeExpansion: 2,

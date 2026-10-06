@@ -119,7 +119,7 @@ Taken from MetaGPT's company SOP and agile practice, without the role-play.
 
 - Ask kinds: question, slice, story, epic, incident.
 - A slice has one named outcome, an allow-list, and acceptance checks. A human ask with all three is a slice whatever its title says.
-- The allow-list is planned scope, not a tripwire. A coder may expand into a few unprotected files (`seat.scope_expansion`, default 3, `0` = strict); each expansion is recorded, reviewed, and listed in the PR. Hitting the cap means re-plan.
+- The allow-list is planned scope, not a tripwire. A coder may expand into a few unprotected files (`seat.scope_expansion`, default 3, `0` = strict); each expansion is recorded, reviewed, and listed in the PR. Hitting the cap re-scopes from that evidence: Roster raises the budget (up to 16, at most twice) and continues; it never fails the run for scope alone.
 - An epic must split before any coder starts. The planner does not implement.
 - Dependencies are issue links, not a second kanban database.
 - Estimates are first-class: difficulty 1–5, minutes, confidence.

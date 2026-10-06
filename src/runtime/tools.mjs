@@ -478,8 +478,12 @@ export async function createTools({
     if (write && !allowed && seat === 'coder' && scopeExpansion > 0 && !readmeOnlyDocs &&
         isScopeExpansionFile(normalized) && !(memoryPath && path.relative(file, path.resolve(memoryPath)) === '')) {
       if (scopeFiles.size >= scopeExpansion) {
+        try {
+          onEvent?.({ type: 'scope-limit', path: normalized, count: scopeFiles.size, limit: scopeExpansion })?.catch?.(() => {});
+        } catch {}
         throw new ToolUsageError(`Scope expansion limit (${scopeExpansion} files outside TASK.md) reached; ` +
-          `cannot also write ${normalized}. Finish within the planned and expanded files, or summarize why the plan needs a re-plan.`);
+          `cannot also write ${normalized}. Finish within the planned and expanded files if that fully satisfies TASK.md; ` +
+          'otherwise finish with a summary naming the files the change still needs, and Roster re-scopes from that evidence.');
       }
       allowed = true;
       expanded = true;

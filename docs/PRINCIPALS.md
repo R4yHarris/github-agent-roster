@@ -51,8 +51,9 @@ These apply to every seat and to the harness that sequences them
   `seat.scope_expansion` files (default 3; `0` restores strict scope). Each
   expansion is logged, listed in RESULT.md and in the PR body under "Files
   outside planned scope", and judged by the reviewer, who fails it unless it is
-  necessary and minimal. Hitting the cap is a re-plan signal (§5.3), not
-  silent acceptance.
+  necessary and minimal. Hitting the cap re-scopes rather than fails: the
+  blocked files are evidence, so the orchestrator raises the budget (at most
+  twice, never above 16) and continues the coder in a fresh context (§5.3).
 
 ## Builtin coder conduct
 

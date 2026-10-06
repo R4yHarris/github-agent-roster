@@ -48,6 +48,13 @@ recovery. It is accepted by the excellence gate, sent to the reviewer under
 "Files outside planned scope", staged for publication, and listed in the PR
 body. README-only and single-file bounded tasks stay strict.
 
+At the cap, the denied path emits a `scope-limit` event and the coder result
+lists it in `scopeBlocked`. If that coder attempt fails, the orchestrator
+re-scopes instead of stopping. It raises the budget to
+`max(2 × budget, budget + blocked + 1)`, capped at 16, at most twice, logs
+`Re-scope N of 2`, and resumes in a fresh context with the same model and the
+worktree edits. Strict scope (`0`) and hard-deny paths never re-scope.
+
 ## Planner artifact writer
 
 A configured slice planner in an issue worktree receives only `write_file`.
