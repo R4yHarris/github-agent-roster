@@ -8,7 +8,7 @@ import { runLoop } from '../runtime/loop.mjs';
 import { appendMemory, coderMemoryRecord, seatMemoryPath } from '../runtime/memory.mjs';
 import { runResearch } from '../runtime/research.mjs';
 import { loadSkills, previewSkills } from '../runtime/skills.mjs';
-import { createTools, isManagedFile, ToolAccessError } from '../runtime/tools.mjs';
+import { createTools, isManagedFile, recipeAllowsTool, ToolAccessError } from '../runtime/tools.mjs';
 import { statusSectionPresent } from '../runtime/readme-status.mjs';
 import { isLlmTimeout, retryCommandForTask } from '../llm/request.mjs';
 import { selectReasoning } from '../llm/reasoning.mjs';
@@ -91,7 +91,7 @@ export async function runCoder({
     });
     const tools = config.seat.recipe_tools === undefined ? availableTools : Object.fromEntries(
       Object.entries(availableTools).map(([name, execute]) => [name, async (args) => {
-        if (!config.seat.recipe_tools.includes(name)) {
+        if (!recipeAllowsTool(config.seat.recipe_tools, name)) {
           throw new ToolAccessError(`Seat coder tools allow-list denies ${name}`);
         }
         return execute(args);
@@ -132,6 +132,11 @@ export async function runCoder({
         changedFiles.add(written.path);
         if (written.scope_expanded) scopeFiles.add(written.scope_path);
         return written;
+      },
+      async delete_file(args) {
+        const deleted = await tools.delete_file(args);
+        changedFiles.add(deleted.path);
+        return deleted;
       },
       async run_test(args) {
         tests = undefined;

@@ -120,12 +120,18 @@ async function readDiff(worktree, task, files, budget, repairFiles, scopeFiles) 
   // The diff is bounded by the reviewer's context budget (UTF-8 can take up to 4 bytes per character), not 64 KiB.
   const diffBytes = Math.max(maxFileBytes, budget * 4 + 1);
   const git = async (args) => {
+    const pending = execute('git', args, {
+      cwd: worktree, encoding: 'utf8', timeout: 60_000, maxBuffer: diffBytes,
+    });
     try {
-      return (await execute('git', args, {
-        cwd: worktree, encoding: 'utf8', timeout: 60_000, maxBuffer: diffBytes,
-      })).stdout;
+      return (await pending).stdout;
     } catch (error) {
       if (error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+        // Node rejects before the killed git exits; wait so no git process outlives the review.
+        const { child } = pending;
+        if (child && child.exitCode === null && child.signalCode === null) {
+          await new Promise((resolve) => child.once('close', resolve));
+        }
         throw new Error('Reviewer diff exceeds seat.context_chars', { cause: error });
       }
       throw error;
@@ -135,11 +141,15 @@ async function readDiff(worktree, task, files, budget, repairFiles, scopeFiles) 
   if (path.resolve(root) !== path.resolve(worktree)) {
     throw new Error('Reviewer requires the task worktree repository root');
   }
-  const [tracked, untracked] = await Promise.all([
+  // Settle both git calls before failing so no git process outlives the review.
+  const settled = await Promise.allSettled([
     git(['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv',
       '--no-renames', '--unified=3', 'HEAD', '--', ...files]),
     git(['--literal-pathspecs', 'ls-files', '--others', '--exclude-standard', '-z', '--', ...files]),
   ]);
+  const failed = settled.find(({ status }) => status === 'rejected');
+  if (failed) throw failed.reason;
+  const [tracked, untracked] = settled.map(({ value }) => value);
   if (tracked.includes('Binary files ') || tracked.includes('Binary file ')) {
     throw new Error('Reviewer cannot inspect a binary diff');
   }

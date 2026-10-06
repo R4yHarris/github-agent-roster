@@ -347,7 +347,7 @@ test('run_test actually executes Node tests from the worktree', async (context) 
 test('coder tools deny protected reads and Windows alias or stream paths', async (context) => {
   const worktree = fixture(context);
   const tools = await createTools({ worktree, allowedFiles: ['**/*'] });
-  const names = ['read_file', 'write_file', 'edit_file', 'glob_files', 'run_command', 'list_dir', 'run_test', 'search_text', 'web_search', 'web_fetch'];
+  const names = ['read_file', 'write_file', 'edit_file', 'delete_file', 'glob_files', 'run_command', 'list_dir', 'run_test', 'search_text', 'web_search', 'web_fetch'];
   assert.deepEqual(Object.keys(tools), names);
   assert.deepEqual(toolDefinitions.map(({ function: tool }) => tool.name), names);
   for (const file of ['.env', 'nested/.env.local', 'production.env', 'key.pem',
@@ -406,4 +406,28 @@ test('read_file limits research excerpts without changing ordinary reads', async
   for (const max_lines of [0, -1, 1.5, '2', null]) {
     await assert.rejects(tools.read_file({ path: 'README.md', max_lines }), /positive safe integer/);
   }
+});
+
+test('delete_file removes scope and untracked scratch files but refuses tracked out-of-scope and protected paths', async (context) => {
+  const worktree = fixture(context);
+  const { execFileSync } = await import('node:child_process');
+  const git = (...args) => execFileSync('git', args, { cwd: worktree, stdio: 'pipe' });
+  git('init', '-q');
+  writeFileSync(path.join(worktree, 'src', 'app.mjs'), 'export const a = 1;\n');
+  writeFileSync(path.join(worktree, 'src', 'other.mjs'), 'export const b = 2;\n');
+  git('add', 'README.md', 'src/app.mjs', 'src/other.mjs');
+  writeFileSync(path.join(worktree, 'probe.mjs'), 'console.log(1);\n');
+  writeFileSync(path.join(worktree, 'TASK.md'), 'Task\n');
+  const tools = await createTools({ worktree, allowedFiles: ['src/app.mjs'] });
+  assert.deepEqual(await tools.delete_file({ path: 'probe.mjs' }), { path: 'probe.mjs', deleted: true });
+  assert.equal(existsSync(path.join(worktree, 'probe.mjs')), false);
+  assert.deepEqual(await tools.delete_file({ path: 'src/app.mjs' }), { path: 'src/app.mjs', deleted: true });
+  await assert.rejects(tools.delete_file({ path: 'src/other.mjs' }), /Git tracks it and it is outside TASK\.md scope/);
+  assert.equal(existsSync(path.join(worktree, 'src', 'other.mjs')), true);
+  for (const file of ['.env', 'TASK.md', '.roster/runs/x.log', 'vendor/x.mjs']) {
+    await assert.rejects(tools.delete_file({ path: file }), /protected, harness, and private paths|outside the worktree/, file);
+  }
+  await assert.rejects(tools.delete_file({ path: '../outside.mjs' }), /outside the worktree/);
+  await assert.rejects(tools.delete_file({ path: 'missing.mjs' }), /does not exist/);
+  assert.equal(existsSync(path.join(worktree, '.env')), true);
 });
