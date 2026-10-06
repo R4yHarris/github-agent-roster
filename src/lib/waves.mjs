@@ -38,7 +38,7 @@ export async function requireEarlierWavesClosed({ issue, repository, cwd, runCom
   }
 }
 
-async function planSource(worktree) {
+export async function readWavePlan(worktree) {
   const file = path.join(worktree, 'PLAN.md');
   await ensureLocalPath(file, worktree);
   const entry = await fs.lstat(file);
@@ -68,7 +68,7 @@ export async function waveBoard({
   runCommand = (program, args, root) => run(program, args, root, env),
 }) {
   if (open && env.ROSTER_SEAT) throw new Error('Opening wave drafts requires an explicit human command, not an agent seat.');
-  const { source, key, plan } = await planSource(worktree);
+  const { source, key, plan } = await readWavePlan(worktree);
   if (redactEvidence(source, { env, apiKeyEnv }) !== source) throw new Error('Wave plans must not contain secret material');
   const repository = githubRepository((await runCommand('git', ['remote', 'get-url', 'origin'], cwd)).trim());
   const existing = await linkedIssues(repository, key, runCommand, cwd);
@@ -90,10 +90,12 @@ export async function waveBoard({
     }
     for (const [index, draft] of plan.issues.entries()) {
       if (matched.has(index + 1)) continue;
-      const ask = `${draft.title}\n\n${draft.outcome}\n\n## Acceptance checks\n` +
-        draft.acceptance_checks.map((check) => `- ${check}`).join('\n') +
-        (draft.files_allowed.length ? '\n\n## Files allowed\n' + draft.files_allowed.map((file) => `- \`${file}\``).join('\n') : '') +
-        `\n\n<!-- Roster-Plan: ${key} -->\n<!-- Roster-Wave: ${draft.wave} -->\n<!-- Roster-Draft: ${index + 1} -->`;
+      const parent = /^issue:[1-9]\d*$/.test(plan.reference) ? `\n\nParent: #${plan.reference.slice('issue:'.length)}` : '';
+      // Markers precede the headed lists: a trailing line would be parsed as part of Files allowed.
+      const ask = `${draft.title}\n\n${draft.outcome}${parent}\n\n` +
+        `<!-- Roster-Plan: ${key} -->\n<!-- Roster-Wave: ${draft.wave} -->\n<!-- Roster-Draft: ${index + 1} -->\n\n` +
+        '## Acceptance checks\n' + draft.acceptance_checks.map((check) => `- ${check}`).join('\n') +
+        (draft.files_allowed.length ? '\n\n## Files allowed\n' + draft.files_allowed.map((file) => `- \`${file}\``).join('\n') : '');
       const url = (await runCommand('gh', ['issue', 'create', '--repo', repository, '--title', draft.title,
         '--body', renderIssueBody(ask), '--label', `wave:${draft.wave}`], cwd)).trim();
       const prefix = `https://github.com/${repository}/issues/`;

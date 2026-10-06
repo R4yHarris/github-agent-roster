@@ -6,7 +6,8 @@ import test from 'node:test';
 import { renderPlan, validatePlan } from '../src/planner/plan.mjs';
 import { parsePlanDocument } from '../src/planner/plan-document.mjs';
 import { requireEarlierWavesClosed, waveBoard } from '../src/lib/waves.mjs';
-import { renderAssignment } from '../src/planner/stub.mjs';
+import { askRequirements, cleanAskText, renderAssignment } from '../src/planner/stub.mjs';
+import { classifyAsk } from '../src/planner/classify.mjs';
 import { formatHelp } from '../src/shell/commands.mjs';
 
 function fixture(t) {
@@ -64,6 +65,19 @@ test('explicit open creates only existing drafts, is idempotent and derives stat
   assert.equal((await waveBoard(options))[1].state, 'review');
   assert.equal((await waveBoard({ ...options, activeIssue: options.issues[1].number, activeState: 'drafting' }))[1].state, 'running');
   await assert.rejects(waveBoard({ ...options, open: true, env: { ROSTER_SEAT: 'coder' } }), /explicit human command/);
+});
+
+test('opened child issues are runnable slices linked to their parent issue', async (t) => {
+  const options = fixture(t);
+  writeFileSync(path.join(options.worktree, 'PLAN.md'), options.source.replace('local:wave-plan', 'issue:196'));
+  await waveBoard({ ...options, open: true });
+  assert.equal(options.issues.length, 2);
+  for (const issue of options.issues) {
+    const ask = cleanAskText(issue.body);
+    assert.match(ask, /^Parent: #196$/m);
+    assert.equal(classifyAsk(ask, { title: `feature: ${issue.title}` }).kind, 'slice');
+    assert.deepEqual(askRequirements(ask).files, ['README.md']);
+  }
 });
 
 test('a later wave refuses startup while an earlier label issue is open and fails closed on lookup errors', async () => {

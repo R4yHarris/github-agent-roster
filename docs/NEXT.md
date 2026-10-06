@@ -39,7 +39,8 @@ selection above remains available outside that explicit routing path.
 
 If a matching evaluation exists, the second task's generated `CONTEXT.md`
 may contain `## Prior feedback` on the unclassified complex feat>=4 context path. Classified
-slices always use the minimum pack, and feature/initiative runs stop at PLAN.md.
+slices always use the minimum pack, and feature/initiative planner runs end at PLAN.md
+(a feature issue run then continues into its first child slice).
 Ordinary
 minimum packs omit this model input while retaining factual memory/evaluation
 records in the harness. When supplied, it summarizes the latest human verdict

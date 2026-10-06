@@ -171,7 +171,7 @@ test('an initiative cannot consume even a valid cached TASK and prior PLAN is ar
   assert.doesNotMatch(readFileSync(again.logPath, 'utf8'), /start seat coder|start seat reviewer/);
 });
 
-test('feature planner writes five child issue drafts with wave labels and --publish cannot start coder', async (context) => {
+test('feature planner writes five child issue drafts with wave labels and --confirm stops before opening or coding', async (context) => {
   const options = fixture(context);
   options.issue.title = 'Implement a profile feature';
   options.issue.body = 'Implement a profile feature.\n\n## Allowed files\n- `README.md`';
@@ -179,8 +179,7 @@ test('feature planner writes five child issue drafts with wave labels and --publ
   git(options.target, 'worktree', 'add', '-b', 'issue-42', worktree);
   const before = readFileSync(path.join(worktree, 'README.md'));
   let calls = 0;
-  const result = await runBuiltinIssue(42, { ...options, config: llmConfig, publish: true, log: () => {},
-    env: { ...options.env, GITHUB_APP_ID: 'test-app', GITHUB_APP_PRIVATE_KEY_PATH: 'test-only.pem' },
+  const result = await runBuiltinIssue(42, { ...options, config: llmConfig, confirm: true, log: () => {},
     fetchImpl: async (_url, request) => {
       calls += 1;
       const body = JSON.parse(request.body);
@@ -196,12 +195,13 @@ test('feature planner writes five child issue drafts with wave labels and --publ
         }) } }] });
     },
     runTestCommand: () => assert.fail('Feature cannot call coder tests'),
-    publisher: () => assert.fail('Feature cannot publish even with --publish'),
+    publisher: () => assert.fail('Feature cannot publish'),
     issueCommenter: () => assert.fail('Feature children remain drafts'),
   });
   assert.equal(calls, 1);
   assert.equal(result.askKind, 'feature');
   assert.equal(result.planningOnly, true);
+  assert.equal(result.continueWith, undefined);
   assert.equal(result.runs.planner.metrics.model, 'served-planner');
   assert.equal(result.runs.coder, null);
   const plan = readFileSync(result.planPath, 'utf8');
@@ -211,6 +211,87 @@ test('feature planner writes five child issue drafts with wave labels and --publ
   assert.doesNotMatch(options.stderr, /Drafting the change|Checking the diff|Profile outcome/);
   assert.doesNotMatch(readFileSync(result.logPath, 'utf8'), /start seat coder|start seat reviewer/);
   assert.equal(options.calls.filter(({ program }) => program === 'gh').length, 1);
+});
+
+test('an issue feature opens linked wave children, continues into the first slice, and reuses its PLAN on rerun', async (context) => {
+  const options = fixture(context);
+  const parent = { ...options.issue, title: 'Implement a profile feature',
+    body: 'Implement a profile feature across the README and smoke test.' };
+  const children = [];
+  const labels = [];
+  options.runCommand = async (program, args, workingDirectory) => {
+    options.calls.push({ program, args, workingDirectory });
+    if (program !== 'gh') return git(workingDirectory, ...args);
+    if (args[0] === 'issue' && args[1] === 'view') {
+      const number = Number(args[2]);
+      return JSON.stringify(number === 42 ? parent : children.find((issue) => issue.number === number));
+    }
+    if (args[0] === 'issue' && args[1] === 'list') return JSON.stringify(children);
+    if (args[0] === 'label' && args[1] === 'list') return JSON.stringify(labels.map((name) => ({ name })));
+    if (args[0] === 'label' && args[1] === 'create') { labels.push(args[2]); return ''; }
+    if (args[0] === 'issue' && args[1] === 'create') {
+      const issue = { number: 100 + children.length, title: args[args.indexOf('--title') + 1], state: 'OPEN',
+        body: args[args.indexOf('--body') + 1], labels: [{ name: args[args.indexOf('--label') + 1] }],
+        url: `https://github.com/example/project/issues/${100 + children.length}` };
+      children.push(issue);
+      return `${issue.url}\n`;
+    }
+    if (args[0] === 'pr' && args[1] === 'list') return '[]';
+    throw new Error(`Unexpected gh ${args.join(' ')}`);
+  };
+  let planners = 0;
+  const fetchImpl = async (_url, request) => {
+    const body = JSON.parse(request.body);
+    const system = body.messages[0].content;
+    if (/feature planner seat/.test(system)) {
+      planners += 1;
+      assert.ok(JSON.parse(body.messages[1].content).repository_files.includes('README.md'));
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
+        outcomes: ['A profile feature works'], issues: [
+          { title: 'Document the profile', outcome: 'README documents the profile', wave: 1,
+            acceptance_checks: ['README has a Profile section'], files_allowed: ['README.md'] },
+          { title: 'Test the profile', outcome: 'Smoke test covers the profile', wave: 2,
+            acceptance_checks: ['node --test exits 0'], files_allowed: ['smoke.test.mjs'] },
+        ] }) } }] });
+    }
+    if (system.startsWith('You are the builtin reviewer seat.')) {
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: passingReview(body) } }] });
+    }
+    if (system.startsWith('You are the builtin planner seat.')) {
+      const draft = planStub(children[0].body, { reference: 'issue:100', title: children[0].title });
+      return body.messages.at(-1).role === 'tool'
+        ? Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Task ready.' } }] })
+        : Response.json({ choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', tool_calls: [{
+          id: 'task', type: 'function', function: { name: 'write_file',
+            arguments: JSON.stringify({ path: 'TASK.md', content: draft.task }) } }] } }] });
+    }
+    return body.messages.some((message) => message.role === 'tool')
+      ? Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Documented the profile.' } }] })
+      : Response.json({ choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', tool_calls: [{
+        id: 'profile', type: 'function', function: { name: 'write_file',
+          arguments: JSON.stringify({ path: 'README.md', content: '# Example\n\n## Profile\n\nProfiles work.\n' }) },
+      }] } }] });
+  };
+  const logs = [];
+  const result = await runBuiltinIssue(42, { ...options, config: llmConfig, log: (text) => logs.push(text), fetchImpl,
+    runTestCommand: () => assert.fail('Documentation-only child does not run node --test') });
+  assert.equal(planners, 1);
+  assert.deepEqual(children.map(({ number, title }) => [number, title]), [[100, 'Document the profile'], [101, 'Test the profile']]);
+  assert.match(children[0].body, /^Parent: #42$/m);
+  assert.equal(result.parent.issue, 42);
+  assert.deepEqual(result.parent.waves.map(({ issue, state }) => [issue, state]), [[100, 'todo'], [101, 'blocked']]);
+  assert.equal(result.issue.number, 100);
+  assert.equal(result.askKind, 'slice');
+  assert.equal(result.failed, false);
+  assert.equal(result.review.verdict, 'pass');
+  assert.match(readFileSync(path.join(result.worktreePath, 'README.md'), 'utf8'), /## Profile/);
+  assert.match(logs.join('\n'), /Continuing feature #42 with wave 1 child #100: Document the profile/);
+
+  const again = await runBuiltinIssue(42, { ...options, config: llmConfig, confirm: true, log: (text) => logs.push(text),
+    fetchImpl: () => assert.fail('An executable PLAN is reused, not re-planned') });
+  assert.equal(again.planner.reused, true);
+  assert.equal(children.length, 2);
+  assert.match(logs.join('\n'), /Reusing executable feature PLAN/);
 });
 
 test('an Ask without scope or planning intent stops for clarify before any seat', async (context) => {

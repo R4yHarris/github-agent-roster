@@ -24,5 +24,6 @@ export function parsePlanDocument(source) {
   const ask = children[2].trim();
   return { kind, reference, ask, ...validatePlan({ outcomes: list(outcomes), issues }, {
     kind, filesAllowed: askRequirements(ask, { allowMissing: true }).files,
+    proposedScope: /^Scope: planner-proposed$/m.test(text.split('\n## Outcomes\n')[0]),
   }) };
 }
