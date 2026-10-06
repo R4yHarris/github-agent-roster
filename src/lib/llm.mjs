@@ -6,6 +6,16 @@ import { mergeUsage } from '../metrics/run.mjs';
 
 const maxLengthRetries = 3;
 const maxReasoningCap = 32_768;
+const reasoningCaps = { low: 8192, medium: 16_384, high: 16_384, xhigh: 32_768, max: 32_768 };
+
+// Thinking shares the completion cap with the answer; a fixed 4096 truncates every reasoning turn that writes code.
+export function defaultCompletionCap(llm) {
+  const effort = mappedEffort(llm);
+  const cap = reasoningCaps[effort] ?? 4096;
+  const contextBound = Number.isSafeInteger(llm.context_max) && llm.context_max > 0
+    ? Math.floor(llm.context_max / 4) : cap;
+  return Math.max(4096, Math.min(cap, contextBound));
+}
 
 export function createBuiltinChat(config, {
   fetchImpl, env = process.env, vault, onEvent, retryCommand, clock, signal,
@@ -36,7 +46,7 @@ export function createBuiltinChat(config, {
   })), retryCommand, clock, signal });
   if (transport === null) return null;
   let completionCap = docsSlice
-    ? docsCompletionCap(config.llm) : config.llm.max_tokens ?? 4096;
+    ? docsCompletionCap(config.llm) : config.llm.max_tokens ?? defaultCompletionCap(config.llm);
   let reasoningDisabled = docsSlice;
   let lengthRetries = 0;
   let lastAttempts = 0;

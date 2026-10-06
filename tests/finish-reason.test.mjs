@@ -117,7 +117,7 @@ test('deepseek thinking length retries at the same cap while preserving reasonin
     return completion(requests.length === 1 ? 'length' : 'stop', 'PRIVATE_TRUNCATED_BODY');
   } });
   const response = await chat({ messages: [{ role: 'user', content: 'Implement the task.' }] });
-  assert.deepEqual(requests.map(({ max_tokens }) => max_tokens), [4096, 4096]);
+  assert.deepEqual(requests.map(({ max_tokens }) => max_tokens), [16_384, 16_384]);
   assert.equal(requests[0].chat_template_kwargs.thinking, true);
   assert.equal(requests[1].chat_template_kwargs.thinking, true);
   assert.equal(requests[1].reasoning_effort, 'high');
