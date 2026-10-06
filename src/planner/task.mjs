@@ -18,7 +18,8 @@ export function allowedFile(value) {
 
 export function checkedList(items, label, check, limit = 8) {
   if (!Array.isArray(items) || items.length < 1 || items.length > limit) {
-    throw new TypeError(`${label} must contain 1-${limit} entries`);
+    throw new TypeError(`${label} must contain 1-${limit} entries` +
+      (Array.isArray(items) && items.length > limit ? ` (got ${items.length}; merge related entries)` : ''));
   }
   return items.map(check);
 }

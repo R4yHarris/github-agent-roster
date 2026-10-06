@@ -304,22 +304,31 @@ export async function planAsk(ask, {
             continue;
           }
           if (['TASK.md', 'RECIPE.yml', 'ESTIMATE.md'].includes(args.path) && writtenArtifacts.has(args.path)) {
+            let draftError = null;
             if (taskDraft !== undefined) {
-              const complete = planFromTask(taskDraft, cleanAsk, { issueTitle: fixedTitle });
-              if (lockedModel && complete.model && complete.model !== lockedModel) {
-                throw new TypeError('The routed planner must keep the selected fleet model');
+              try {
+                const complete = planFromTask(taskDraft, cleanAsk, { issueTitle: fixedTitle });
+                if (lockedModel && complete.model && complete.model !== lockedModel) {
+                  throw new TypeError('The routed planner must keep the selected fleet model');
+                }
+                const validated = buildPlan(cleanAsk, {
+                  reference, title: fixedTitle ?? complete.title,
+                  acceptanceChecks: complete.acceptance_checks, filesAllowed: complete.files_allowed,
+                  metadata: { ...metadata, ...complete, ...(lockedModel ? { model: lockedModel } : {}) },
+                  scope: requirements,
+                });
+                return finish({ ...validated, task: taskDraft, usage: mergeUsage(...usages), turns: turn, response: lastResponse });
+              } catch (error) {
+                // An invalid draft must stay rewritable; refusing the rewrite would re-report the same error forever.
+                if (!(error instanceof Error) || args.path !== 'TASK.md') throw error;
+                draftError = error;
               }
-              const validated = buildPlan(cleanAsk, {
-                reference, title: fixedTitle ?? complete.title,
-                acceptanceChecks: complete.acceptance_checks, filesAllowed: complete.files_allowed,
-                metadata: { ...metadata, ...complete, ...(lockedModel ? { model: lockedModel } : {}) },
-                scope: requirements,
-              });
-              return finish({ ...validated, task: taskDraft, usage: mergeUsage(...usages), turns: turn, response: lastResponse });
             }
-            result = { error: `${args.path} is already written. Stop.` };
-            messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
-            continue;
+            if (!draftError) {
+              result = { error: `${args.path} is already written. Stop.` };
+              messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify(result) });
+              continue;
+            }
           }
           result = await tools.write_file(args);
           writtenArtifacts.add(args.path);
