@@ -44,6 +44,24 @@ import { routeFailure } from '../llm/openai.mjs';
 const execFileAsync = promisify(execFile);
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
 export const maxPerspectiveEscalations = 2;
+export const maxRescopes = 2;
+const maxScopeExpansion = 16;
+
+// Returns the raised expansion budget when the coder was blocked only by the scope limit, else null.
+export function rescopeBudget(error, current, attempts) {
+  const blocked = error?.result?.scopeBlocked;
+  if (!Array.isArray(blocked) || !blocked.length || attempts >= maxRescopes) return null;
+  if (!Number.isSafeInteger(current) || current <= 0 || current >= maxScopeExpansion) return null;
+  return Math.min(maxScopeExpansion, Math.max(current * 2, current + blocked.length + 1));
+}
+
+export function rescopeContinuation({ previous, budget, files, changedFiles = [] }) {
+  return `Re-scoped: the previous coder context reached its ${previous}-file expansion budget and needed ` +
+    `${files.join(', ')}. The budget is now ${budget} files outside TASK.md Allowed Files. Its edits remain in the ` +
+    'worktree' + (changedFiles.length ? ` (${changedFiles.join(', ')})` : '') + '. Re-read TASK.md and the current ' +
+    'diff, write the files the change genuinely needs, justify each file outside the plan in your summary (the reviewer ' +
+    'judges it), and rerun node --test until it exits 0.';
+}
 
 // Budget exhaustion means the coder's context is stuck; hard denials, cancellation, and setup errors are not.
 export function coderStuckReason(error) {
@@ -679,8 +697,10 @@ async function runBuiltinAssignment(issueNumber, {
       planningOnly: true, failed: false, archivePath, logPath: liveLog.path, logSession: liveLog.session };
   }
   const recipeCoder = parseRecipe(planner.recipe).seats.find(({ id }) => id === 'coder');
+  let scopeBudget;
   const buildCoderConfig = (model) => selectReasoning({ ...activeConfig,
-    seat: { ...activeConfig.seat, ...(recipeCoder.tools === undefined ? {} : { recipe_tools: recipeCoder.tools }) },
+    seat: { ...activeConfig.seat, ...(recipeCoder.tools === undefined ? {} : { recipe_tools: recipeCoder.tools }),
+      ...(scopeBudget === undefined ? {} : { scope_expansion: scopeBudget }) },
     llm: {
     ...activeConfig.llm, model,
     effort: planner.feedback?.effort ?? activeConfig.llm.effort,
@@ -738,6 +758,7 @@ async function runBuiltinAssignment(issueNumber, {
   let coderScopeFiles = [];
   let continuation;
   const perspectiveAttempts = [];
+  const rescopes = [];
   for (;;) {
     try {
       result = await coderSeat(undefined, { initialBaseline: coderBaseline, initialScopeFiles: coderScopeFiles, continuation });
@@ -753,6 +774,19 @@ async function runBuiltinAssignment(issueNumber, {
           `The previous coder attempt on fleet profile ${failedProfile} stopped because of an endpoint route failure, ` +
           'not a task failure. Its edits remain in the worktree: inspect them, keep what is correct, and continue ' +
           'to a verified result with a different approach rather than repeating the same steps.';
+      } else if (rescopeBudget(error, coderConfig.seat.scope_expansion ?? 3, rescopes.length)) {
+        // The plan is a pre-read estimate: a coder blocked only by the expansion limit gets a larger budget,
+        // not a failed run. Protected paths stay denied and the reviewer still judges every expanded file.
+        const previous = coderConfig.seat.scope_expansion ?? 3;
+        scopeBudget = rescopeBudget(error, previous, rescopes.length);
+        coderConfig = buildCoderConfig(coderConfig.llm.model);
+        const needed = error.result.scopeBlocked;
+        rescopes.push({ from: previous, to: scopeBudget, files: needed });
+        log(`Re-scope ${rescopes.length} of ${maxRescopes}: coder needed ${needed.join(', ')} beyond its ` +
+          `${previous}-file expansion budget; continuing with ${scopeBudget} files in a fresh context.`);
+        onRunEvent?.({ type: 'rescope', attempt: rescopes.length, from: previous, to: scopeBudget, files: needed });
+        continuation = rescopeContinuation({ previous, budget: scopeBudget, files: needed,
+          changedFiles: error.result?.excellence?.files ?? [] });
       } else {
         // An exhausted repair or turn budget is evidence that this context is stuck, not that the task is
         // impossible: retry once or twice with a fresh context (and a different profile when one is eligible).
@@ -841,7 +875,7 @@ async function runBuiltinAssignment(issueNumber, {
   const completed = {
     ...prepared, askKind, classification, recipePath: planner.recipePath, taskPath: planner.taskPath,
     planner, result, review, sessions, runs, run: coderRun, command, autoRecommendation, route, routeAttempts,
-    perspectiveAttempts, archivePath,
+    perspectiveAttempts, rescopes, archivePath,
     failed: false,
     logPath: liveLog.path, logSession: liveLog.session,
   };

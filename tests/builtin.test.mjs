@@ -7,7 +7,7 @@ import test from 'node:test';
 import { parseConfig } from '../src/lib/config.mjs';
 import { writeAsk } from '../src/lib/ask.mjs';
 import {
-  coderStuckReason, maxPerspectiveEscalations, perspectiveContinuation,
+  coderStuckReason, maxPerspectiveEscalations, perspectiveContinuation, maxRescopes, rescopeBudget, rescopeContinuation,
   prepareBuiltinPublication, runBuiltinAsk, runBuiltinIssue as runIssueWithSeats, stageReviewedFiles,
 } from '../src/lib/builtin.mjs';
 import { ToolAccessError } from '../src/runtime/tools.mjs';
@@ -544,6 +544,75 @@ test('test budget exhaustion escalates to fresh coder perspectives, then stops b
     assert.match(logs.join('\n'), new RegExp(`Perspective escalation ${attempt} of ${maxPerspectiveEscalations}: ` +
       'coder exhausted its test repair budget; continuing with model=\\S+ in a fresh context\\.'));
   }
+});
+
+test('a coder blocked only by the scope expansion limit is re-scoped instead of failing the run', async (context) => {
+  const options = multiFileFixture(context);
+  const config = { ...llmConfig, seat: { ...llmConfig.seat, scope_expansion: 1 } };
+  const worktree = path.join(options.target, '.worktrees', 'issue-42');
+  const logs = [];
+  const events = [];
+  let attempt = 0;
+  let step = 0;
+  const result = await runBuiltinIssue(42, { ...options, config, log: (text) => logs.push(text),
+    onRunEvent: (event) => events.push(event),
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      const system = body.messages[0].content;
+      if (system.startsWith('You are the builtin planner seat.')) {
+        return Response.json({ choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant', content: JSON.stringify({ title: 'Add Status',
+            acceptance_checks: ['node --test exits 0'], files_allowed: multiFileScope }),
+        } }] });
+      }
+      if (system.startsWith('You are the builtin reviewer seat.')) {
+        return Response.json({ choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant', content: JSON.stringify({ verdict: 'pass',
+            reasons: ['Expanded files are justified.'], security_notes: ['No protected paths changed.'] }),
+        } }] });
+      }
+      const rescoped = body.messages.some(({ content }) => /Re-scoped: .*1-file expansion budget/s.test(content ?? ''));
+      if (rescoped && attempt === 0) { attempt = 1; step = 0; }
+      step += 1;
+      const writes = attempt === 0
+        ? [['README.md', '# Example\n\n## Status\nReady.\n'], ['src/a.mjs', 'export const a = 1;\n'],
+          ['src/b.mjs', 'export const b = 1;\n']]
+        : [['src/b.mjs', 'export const b = 1;\n']];
+      const write = writes[step - 1];
+      return Response.json({ choices: [{ finish_reason: write ? 'tool_calls' : 'stop', message: write ? {
+        role: 'assistant', tool_calls: [{ id: `code-${attempt}-${step}`, type: 'function', function: {
+          name: 'write_file', arguments: JSON.stringify({ path: write[0], content: write[1] }),
+        } }],
+      } : { role: 'assistant', content: 'Added Status and its helpers.' } }] });
+    },
+    runTestCommand: async () => {
+      if (!existsSync(path.join(worktree, 'src', 'b.mjs'))) {
+        throw Object.assign(new Error('tests failed'), { code: 1, stdout: 'not ok', stderr: 'src/b.mjs missing' });
+      }
+      return { stdout: 'pass', stderr: '' };
+    },
+  });
+  assert.equal(attempt, 1);
+  assert.equal(result.review.verdict, 'pass');
+  assert.deepEqual(result.rescopes, [{ from: 1, to: 3, files: ['src/b.mjs'] }]);
+  assert.deepEqual(result.perspectiveAttempts, []);
+  assert.deepEqual(result.result.scopeFiles, ['src/a.mjs', 'src/b.mjs']);
+  assert.match(logs.join('\n'), /Re-scope 1 of 2: coder needed src\/b\.mjs beyond its 1-file expansion budget; continuing with 3 files/);
+  assert.deepEqual(events.filter(({ type }) => type === 'rescope').map(({ from, to }) => [from, to]), [[1, 3]]);
+});
+
+test('re-scoping respects strict scope, the 16-file ceiling, and its attempt limit', () => {
+  const blocked = { result: { scopeBlocked: ['src/x.mjs'] } };
+  assert.equal(rescopeBudget(blocked, 3, 0), 6);
+  assert.equal(rescopeBudget({ result: { scopeBlocked: ['a', 'b', 'c', 'd', 'e', 'f'] } }, 3, 0), 10);
+  assert.equal(rescopeBudget(blocked, 12, 1), 16);
+  assert.equal(rescopeBudget(blocked, 16, 0), null);
+  assert.equal(rescopeBudget(blocked, 0, 0), null);
+  assert.equal(rescopeBudget(blocked, 3, maxRescopes), null);
+  assert.equal(rescopeBudget({ result: { scopeBlocked: [] } }, 3, 0), null);
+  assert.equal(rescopeBudget(new Error('x'), 3, 0), null);
+  assert.match(rescopeContinuation({ previous: 3, budget: 6, files: ['src/x.mjs'], changedFiles: ['README.md'] }),
+    /^Re-scoped: .*3-file expansion budget and needed src\/x\.mjs\. The budget is now 6 files.*\(README\.md\)/s);
 });
 
 test('coder stuck detection escalates budget exhaustion but never security denials', () => {

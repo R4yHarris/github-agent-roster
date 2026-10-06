@@ -33,6 +33,7 @@ export async function runCoder({
   });
   const changedFiles = new Set();
   const scopeFiles = new Set(initialScopeFiles ?? []);
+  const scopeBlocked = new Set();
   let context;
   let research;
   let baseline;
@@ -83,7 +84,10 @@ export async function runCoder({
           }
         } : undefined,
       signal,
-      onEvent,
+      onEvent: async (event) => {
+        if (event?.type === 'scope-limit') scopeBlocked.add(event.path);
+        await onEvent?.(event);
+      },
     });
     const tools = config.seat.recipe_tools === undefined ? availableTools : Object.fromEntries(
       Object.entries(availableTools).map(([name, execute]) => [name, async (args) => {
@@ -165,7 +169,8 @@ export async function runCoder({
     result = { ...result, error };
   }
   const timedOut = isLlmTimeout(result.error);
-  result = { ...result, research, stages, scopeFiles: [...scopeFiles].sort(), ...(timedOut ? {
+  result = { ...result, research, stages, scopeFiles: [...scopeFiles].sort(),
+    scopeBlocked: [...scopeBlocked].sort(), ...(timedOut ? {
     timedOut: true,
     summary: 'Coder HTTP request timed out. No change was verified; this run did not complete.',
   } : {}) };
