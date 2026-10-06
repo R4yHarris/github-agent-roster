@@ -33,7 +33,7 @@ import {
   runBuiltinIssue, example, stubConfig, llmConfig, vllmConfig, multiFileScope, git, fixture, multiFileFixture,
 } from './helpers/builtin.mjs';
 
-test('test budget exhaustion escalates to fresh coder perspectives, then stops before review', async (context) => {
+test('a repeated test failure escalates to fresh coder perspectives, then stops before review', async (context) => {
   const options = multiFileFixture(context);
   let tests = 0;
   let coderTurns = 0;
@@ -49,7 +49,7 @@ test('test budget exhaustion escalates to fresh coder perspectives, then stops b
             acceptance_checks: ['node --test exits 0'], files_allowed: multiFileScope }),
         } }] });
       }
-      assert.ok(!system.startsWith('You are the builtin reviewer seat.'), 'Exhausted tests cannot request reviewer inference');
+      assert.ok(!system.startsWith('You are the builtin reviewer seat.'), 'Stalled tests cannot request reviewer inference');
       coderTurns += 1;
       const fresh = system.match(/Fresh perspective (\d)/);
       if (fresh && !continuations.includes(fresh[1])) continuations.push(fresh[1]);
@@ -64,22 +64,56 @@ test('test budget exhaustion escalates to fresh coder perspectives, then stops b
     },
   }), (error) => {
     failed = error.result;
-    return /Test repair budget \(4\) exhausted/.test(error.message);
+    return /Test repair stalled: an earlier failure repeated after 2 repairs/.test(error.message);
   });
   const attempts = 1 + maxPerspectiveEscalations;
-  assert.equal(tests, 5 * attempts);
-  assert.equal(coderTurns, 5 * attempts);
+  assert.equal(tests, 3 * attempts);
+  assert.equal(coderTurns, 3 * attempts);
   assert.deepEqual(continuations, ['1', '2']);
-  assert.equal(failed.repairBudgetExhausted, true);
+  assert.equal(failed.repairRepeated, true);
   assert.equal(failed.review, undefined);
   assert.equal(existsSync(path.join(failed.resultPath, '..', 'REVIEW.md')), false);
-  for (let attempt = 1; attempt <= 4; attempt += 1) {
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
     assert.match(options.stderr, new RegExp(`Tests failed\\. Repair ${attempt} of 4\\.`));
   }
   for (let attempt = 1; attempt <= maxPerspectiveEscalations; attempt += 1) {
     assert.match(logs.join('\n'), new RegExp(`Perspective escalation ${attempt} of ${maxPerspectiveEscalations}: ` +
-      'coder exhausted its test repair budget; continuing with model=\\S+ in a fresh context\\.'));
+      'coder repeated an earlier test failure; continuing with model=\\S+ in a fresh context\\.'));
   }
+});
+
+test('fresh perspectives carry earlier contexts and their failure counts, within the two-escalation cap', async (context) => {
+  const options = multiFileFixture(context);
+  let tests = 0;
+  const logs = [];
+  const systems = [];
+  await assert.rejects(runBuiltinIssue(42, { ...options, config: llmConfig, log: (text) => logs.push(text),
+    fetchImpl: async (_url, request) => {
+      const system = JSON.parse(request.body).messages[0].content;
+      if (system.startsWith('You are the builtin planner seat.')) {
+        return Response.json({ choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant', content: JSON.stringify({ title: 'Add Status',
+            acceptance_checks: ['node --test exits 0'], files_allowed: multiFileScope }),
+        } }] });
+      }
+      systems.push(system);
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Done.' } }] });
+    },
+    runTestCommand: async () => {
+      tests += 1;
+      // Each context repeats its own failure three times; every fresh context has one fewer failing test.
+      const failing = 10 - Math.floor((tests - 1) / 3);
+      throw Object.assign(new Error('tests failed'), { code: 1, stdout: `not ok\nℹ fail ${failing}`, stderr: '' });
+    },
+  }), /Test repair stalled/);
+  assert.equal(tests, 3 * (1 + maxPerspectiveEscalations));
+  const text = logs.join('\n');
+  assert.match(text, /Perspective escalation 1 of 2: coder repeated an earlier test failure with 10 failing test\(s\)/);
+  assert.match(text, /Perspective escalation 2 of 2: coder repeated an earlier test failure with 9 failing test\(s\)/);
+  assert.doesNotMatch(text, /Perspective escalation 3/);
+  const last = systems.at(-1);
+  assert.match(last, /Fresh perspective 2: .*Earlier contexts on this TASK: 1\) \S+ repeated an earlier test failure with 10 failing test\(s\); 2\) \S+ repeated an earlier test failure with 9 failing test\(s\)\. Do not retry their approaches/s);
+  assert.match(last, /same model as the stopped context/);
 });
 
 test('a coder blocked only by the scope expansion limit is re-scoped instead of failing the run', async (context) => {
@@ -257,6 +291,12 @@ test('coder stuck detection escalates budget exhaustion but never security denia
     cause: new ToolAccessError('Write denied: .github/workflows/ci.yml') }))), null);
   assert.equal(coderStuckReason(new Error('Test repair budget (4) exhausted')), null);
   assert.equal(coderStuckReason(withResult(new Error('Cancelled'))), null);
+  assert.equal(coderStuckReason(Object.assign(new Error('x'), { result: { repairRepeated: true } })),
+    'repeated an earlier test failure');
+  assert.equal(coderStuckReason(withResult(new Error('Test repair stalled: an earlier failure repeated after 2 repairs'))),
+    'repeated an earlier test failure');
+  assert.equal(coderStuckReason(Object.assign(new Error('x'), { result: { contextHandoff: true } })),
+    'filled half its context while repairs were still progressing');
   const text = perspectiveContinuation({ attempt: 1, reason: 'exhausted its test repair budget',
     evidence: 'x'.repeat(5000), changedFiles: ['src/a.mjs'] });
   assert.match(text, /^Fresh perspective 1: .*\(src\/a\.mjs\).*never alternate between editing a test/s);

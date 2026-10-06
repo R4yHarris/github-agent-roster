@@ -102,6 +102,12 @@ export function coderStuckReason(error) {
     return null;
   }
   const text = chain.map((entry) => entry.message).join('\n');
+  if (error.result.contextHandoff === true || /Test repair handoff: context \d+ of \d+ tokens/.test(text)) {
+    return 'filled half its context while repairs were still progressing';
+  }
+  if (error.result.repairRepeated === true || /Test repair stalled: an earlier failure repeated/.test(text)) {
+    return 'repeated an earlier test failure';
+  }
   if (error.result.repairBudgetExhausted === true || /Test repair budget \(\d+\) exhausted/.test(text)) {
     return 'exhausted its test repair budget';
   }
@@ -111,10 +117,18 @@ export function coderStuckReason(error) {
   return null;
 }
 
-export function perspectiveContinuation({ attempt, reason, evidence, changedFiles = [] }) {
+export function perspectiveContinuation({ attempt, reason, evidence, changedFiles = [], history = [],
+  sameModel = false }) {
   return `Fresh perspective ${attempt}: the previous coder context ${reason} and was stopped so it would not keep ` +
     'repeating the same moves. Its edits remain in the worktree' +
-    (changedFiles.length ? ` (${changedFiles.join(', ')})` : '') + '. Before editing, read the TASK checks, the ' +
+    (changedFiles.length ? ` (${changedFiles.join(', ')})` : '') + '. ' +
+    (history.length > 1 ? 'Earlier contexts on this TASK: ' + history.map((entry, index) =>
+      `${index + 1}) ${entry.model ?? 'unknown model'} ${entry.reason}` +
+      (Number.isSafeInteger(entry.failCount) ? ` with ${entry.failCount} failing test(s)` : '')).join('; ') +
+      '. Do not retry their approaches. ' : '') +
+    (sameModel ? 'You run on the same model as the stopped context, so only a different approach can change the ' +
+      'outcome. ' : '') +
+    'Before editing, read the TASK checks, the ' +
     'current implementation, and the current tests. For each remaining failure, decide from TASK.md which side is ' +
     'wrong (the assertion or the implementation) and change only that side; never alternate between editing a test ' +
     'and its implementation to chase the same assertion. Keep correct work, prefer the simplest behavior that ' +
@@ -901,6 +915,7 @@ async function runBuiltinAssignment(issueNumber, {
         // An exhausted repair or turn budget is evidence that this context is stuck, not that the task is
         // impossible: retry once or twice with a fresh context (and a different profile when one is eligible).
         const stuck = coderStuckReason(error);
+        const failCount = error.result?.failCount;
         if (!stuck || perspectiveAttempts.length >= maxPerspectiveEscalations) throw error;
         const previousModel = coderConfig.llm.model;
         const alternate = autoModel && route ? await selectAutoRoute([...new Set([...quarantinedProfiles,
@@ -908,15 +923,17 @@ async function runBuiltinAssignment(issueNumber, {
           failedProfile,
         ])]) : null;
         if (alternate) coderConfig = buildCoderConfig(activeConfig.llm.model);
-        perspectiveAttempts.push({ profile: failedProfile ?? null, model: previousModel, reason: stuck });
-        log(`Perspective escalation ${perspectiveAttempts.length} of ${maxPerspectiveEscalations}: coder ${stuck}; ` +
+        perspectiveAttempts.push({ profile: failedProfile ?? null, model: previousModel, reason: stuck, failCount });
+        log(`Perspective escalation ${perspectiveAttempts.length} of ${maxPerspectiveEscalations}: coder ${stuck}` +
+          (Number.isSafeInteger(failCount) ? ` with ${failCount} failing test(s)` : '') + '; ' +
           (alternate ? `continuing with profile=${alternate.profile.id} model=${alternate.profile.model} in a fresh context.`
             : `continuing with model=${coderConfig.llm.model} in a fresh context.`));
         onRunEvent?.({ type: 'perspective-escalation', attempt: perspectiveAttempts.length, reason: stuck,
           model: coderConfig.llm.model });
         continuation = perspectiveContinuation({ attempt: perspectiveAttempts.length, reason: stuck,
           evidence: redactEvidence(error.message, { env, apiKeyEnv: config.llm.api_key_env }),
-          changedFiles: error.result?.excellence?.files ?? [] });
+          changedFiles: error.result?.excellence?.files ?? [], history: perspectiveAttempts,
+          sameModel: coderConfig.llm.model === previousModel });
       }
       coderBaseline ??= error.result?.baseline;
       coderScopeFiles = [...new Set([...coderScopeFiles, ...(error.result?.scopeFiles ?? [])])];

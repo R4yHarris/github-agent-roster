@@ -9,7 +9,7 @@ import { loadContext } from '../src/runtime/context.mjs';
 import { appendMemory, readMemory, seatMemoryPath } from '../src/runtime/memory.mjs';
 import { loadSkills } from '../src/runtime/skills.mjs';
 import { runCoder as runCoderSeat } from '../src/seats/coder.mjs';
-import { runLoop } from '../src/runtime/loop.mjs';
+import { failingTestCount, runLoop } from '../src/runtime/loop.mjs';
 import { ToolUsageError } from '../src/runtime/tools.mjs';
 import { withResearchSummary } from './helpers/research.mjs';
 
@@ -646,20 +646,21 @@ test('an optional test that exits 1 cannot be waived into a successful final sum
             },
             verify: () => { verifies += 1; return { pass: true, reasons: [] }; },
           });
-          assert.match(result.error.message, /Test repair budget \(4\) exhausted/);
-          assert.equal(result.testRepairs, 4);
-          assert.equal(tests, 5);
+          assert.match(result.error.message, /Test repair budget \(12\) exhausted/);
+          assert.equal(result.testRepairs, 12);
+          assert.equal(tests, 13);
           assert.equal(verifies, 0);
 });
 
-test('an easy bounded repair earns one bonus only when the failure changes', async () => {
+test('a bounded repair keeps earning repairs while the failure changes, and not once it repeats', async () => {
   const task = planStub('Update `tests/smoke.test.mjs` with a regression test.',
     { reference: 'issue:5', metadata: { task_class: 'test', difficulty: 2 } }).task;
-  const attempt = async (outputs) => {
+  const attempt = async (outputs, llm = llmConfig.llm, usage = undefined) => {
     let tests = 0;
     let turns = 0;
     const events = [];
-    const result = await runLoop({ config: llmConfig, context: { task, pack: task }, env: {},
+    const messages = [];
+    const result = await runLoop({ config: { ...llmConfig, llm }, context: { task, pack: task }, env: {},
       onEvent: (event) => events.push(event),
       tools: {
         write_file: async () => ({ path: 'tests/smoke.test.mjs', bytes: 1 }),
@@ -669,23 +670,64 @@ test('an easy bounded repair earns one bonus only when the failure changes', asy
           return { exit_code: stdout === 'ok' ? 0 : 1, stdout, stderr: '' };
         },
       },
-      fetchImpl: async () => {
+      fetchImpl: async (_url, request) => {
         turns += 1;
-        return Response.json({ choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant',
-          tool_calls: [{ id: `w${turns}`, type: 'function', function: { name: 'write_file',
-            arguments: '{"path":"tests/smoke.test.mjs","content":"x"}' } }] } }] });
+        messages.push(JSON.parse(request.body).messages.at(-1).content);
+        return Response.json({ ...(usage ? { usage } : {}), choices: [{ finish_reason: 'tool_calls',
+          message: { role: 'assistant', tool_calls: [{ id: `w${turns}`, type: 'function', function: {
+            name: 'write_file', arguments: '{"path":"tests/smoke.test.mjs","content":"x"}' } }] } }] });
       },
       verify: () => ({ pass: true, reasons: [] }),
     });
-    return { result, tests, repairs: events.filter(({ type }) => type === 'test-repair') };
+    return { result, tests, messages, repairs: events.filter(({ type }) => type === 'test-repair') };
   };
-  const progressing = await attempt(['fail A (1.2ms)', 'fail B (3.4ms)', 'ok']);
+  const progressing = await attempt(['fail A (1.2ms)', 'fail B (3.4ms)', 'fail C', 'fail D', 'ok']);
   assert.equal(progressing.result.error, undefined);
-  assert.equal(progressing.result.testRepairs, 2);
-  assert.deepEqual(progressing.repairs.map(({ budget }) => budget), [1, 2]);
+  assert.equal(progressing.result.testRepairs, 4);
+  assert.deepEqual(progressing.repairs.map(({ budget }) => budget), [1, 2, 3, 4]);
   const stuck = await attempt(['fail A (1.2ms)', 'fail A (9.9ms)']);
   assert.match(stuck.result.error.message, /Test repair budget \(1\) exhausted/);
   assert.equal(stuck.result.testRepairs, 1);
+  const worse = await attempt(['x\nℹ fail 1', 'y\nℹ fail 3']);
+  assert.match(worse.result.error.message, /Test repair budget \(1\) exhausted/);
+  assert.equal(worse.result.failCount, 3);
+  const crowded = await attempt(['fail A', 'fail B'], { ...llmConfig.llm, context_max: 1000 },
+    { prompt_tokens: 600, completion_tokens: 1, total_tokens: 601 });
+  assert.match(crowded.result.error.message, /Test repair handoff: context 600 of 1000 tokens after 1 progressing repairs/);
+  assert.equal(crowded.result.contextHandoff, true);
+  assert.equal(crowded.result.repairBudgetExhausted, undefined);
+});
+
+test('a repair that returns to an earlier failure is steered once, then stops as stalled', async () => {
+  const task = planStub('Update README.md and smoke.test.mjs.').task;
+  const outputs = ['fail A', 'fail B', 'fail A', 'fail B'];
+  let tests = 0;
+  let turns = 0;
+  const messages = [];
+  const result = await runLoop({ config: llmConfig, context: { task, pack: task }, env: {},
+    tools: { run_test: async () => ({ exit_code: 1, stdout: outputs[Math.min(tests++, 3)], stderr: '' }) },
+    fetchImpl: async (_url, request) => {
+      turns += 1;
+      messages.push(JSON.parse(request.body).messages.at(-1).content);
+      return Response.json({ choices: [{ finish_reason: turns === 1 ? 'tool_calls' : 'stop', message: turns === 1
+        ? { role: 'assistant', tool_calls: [{ id: 'test', type: 'function',
+          function: { name: 'run_test', arguments: '{}' } }] }
+        : { role: 'assistant', content: 'Done.' } }] });
+    },
+    verify: () => ({ pass: true, reasons: [] }),
+  });
+  assert.match(result.error.message, /Test repair stalled: an earlier failure repeated after 3 repairs/);
+  assert.equal(result.repairRepeated, true);
+  assert.equal(result.testRepairs, 3);
+  assert.equal(tests, 4);
+  assert.match(messages.at(-1), /already occurred after an earlier repair[\s\S]*materially different approach/);
+  assert.doesNotMatch(messages[1], /already occurred/);
+});
+
+test('failingTestCount reads the spec and TAP summaries', () => {
+  assert.equal(failingTestCount('ℹ tests 9\nℹ pass 7\nℹ fail 2\n'), 2);
+  assert.equal(failingTestCount('# tests 3\n# fail 0\n'), 0);
+  assert.equal(failingTestCount('not ok 1 - x'), undefined);
 });
 
 test('repair turns can reach their tool allowance without ending on the first failed check', async () => {
@@ -833,11 +875,11 @@ test('budget exhaustion and a failed final test stop without claiming success', 
       });
     },
   }), /Final node --test failed [\s\S]*one test failed/);
-  assert.equal(finalTurns, 5);
-  assert.equal(finalTests, 5);
+  assert.equal(finalTurns, 3);
+  assert.equal(finalTests, 3);
   assert.equal(JSON.parse(readFileSync(failing.memoryPath, 'utf8')).status, 'failed');
   assert.match(readFileSync(path.join(failing.worktree, 'RESULT.md'), 'utf8'),
-    /Checks: FAIL[\s\S]*one test failed[\s\S]*Test repair budget \(4\) exhausted/);
+    /Checks: FAIL[\s\S]*one test failed[\s\S]*Test repair stalled: an earlier failure repeated after 2 repairs/);
 });
 
 test('coder stops after ignoring the forced-write instruction', async () => {

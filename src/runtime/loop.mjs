@@ -13,6 +13,10 @@ import { SteeringInterrupt } from './steering.mjs';
 
 class MalformedCoderTools extends Error {}
 export const testRepairBudget = 4;
+// Progress extends the repair budget one repair at a time, never past this cap.
+export const testRepairCap = 12;
+// A context this full is handed to a fresh coder instead of being extended further.
+export const repairContextShare = 0.5;
 const maxRepeatedDenials = 2;
 const sentinelGuidance = 'For secret-leak or redaction tests, feed an obvious non-credential sentinel such as ' +
   "'test-only-private-api-key' into the app code under test and assert it is absent from that code's output; " +
@@ -34,6 +38,12 @@ function repairBudgetFor(task, bounded) {
 function failureFingerprint(output) {
   return String(output).replace(/\(\d+(?:\.\d+)?m?s\)/g, '').replace(/duration_ms\s+\S+/g, '')
     .replace(/\s+/g, ' ').trim();
+}
+
+// The failing-test count from the node --test spec or TAP summary, when present.
+export function failingTestCount(stdout) {
+  const matches = [...String(stdout ?? '').matchAll(/^\s*(?:ℹ|#)\s*fail\s+(\d+)\s*$/gm)];
+  return matches.length ? Number(matches.at(-1)[1]) : undefined;
 }
 
 function decodeCalls(message, offered, ids, turn) {
@@ -198,11 +208,30 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       return true;
     }
     const fingerprint = failureFingerprint(output);
-    const progressed = progress.lastFailure !== undefined && progress.lastFailure !== fingerprint;
-    progress.lastFailure = fingerprint;
-    if (progress.testRepairs === repairBudget && progressed && !progress.progressRepairUsed &&
-        repairBudget < testRepairBudget) {
-      progress.progressRepairUsed = true;
+    const failCount = failingTestCount(tests.stdout);
+    progress.seenFailures ??= [];
+    // Any earlier failure counts, so oscillating between two failures is a repeat, not progress.
+    const repeated = progress.seenFailures.includes(fingerprint);
+    const worse = failCount !== undefined && progress.failCount !== undefined && failCount > progress.failCount;
+    const progressed = progress.testRepairs > 0 && !repeated && !worse;
+    if (!repeated) progress.seenFailures.push(fingerprint);
+    if (failCount !== undefined) progress.failCount = failCount;
+    if (repeated) {
+      progress.repeatedFailures = (progress.repeatedFailures ?? 0) + 1;
+      if (progress.repeatedFailures >= 2) {
+        progress.repairRepeated = true;
+        throw new Error(`${failure}\nTest repair stalled: an earlier failure repeated after ${progress.testRepairs} repairs`);
+      }
+    }
+    if (progress.testRepairs === repairBudget && progressed && repairBudget < testRepairCap) {
+      const contextUsed = usages.at(-1)?.prompt_tokens;
+      const contextMax = config.llm.context_max;
+      if (contextMax > 0 && contextUsed >= contextMax * repairContextShare) {
+        // Progressing but crowded: a fresh context with the edits kept is cheaper than resending this history.
+        progress.contextHandoff = true;
+        throw new Error(`${failure}\nTest repair handoff: context ${contextUsed} of ${contextMax} tokens after ` +
+          `${progress.testRepairs} progressing repairs`);
+      }
       repairBudget += 1;
       progress.testRepairBudget = repairBudget;
     }
@@ -216,9 +245,13 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     checksPassedAfterWrite = false;
     await onEvent?.({ type: 'test-repair', attempt: progress.testRepairs, budget: repairBudget });
     messages.push({ role: 'user', content: `${failure}\n` +
-      `Repair ${progress.testRepairs} of ${repairBudget}. Repair only TASK-allowed files` +
+      `Repair ${progress.testRepairs} of ${repairBudget}` +
+      (repairBudget < testRepairCap ? ' (each repair that changes the failure without adding failing tests earns another)' : '') +
+      '. Repair only TASK-allowed files' +
       (progress.repairFiles.length ? `: ${progress.repairFiles.join(', ')}` : '') +
-      '. ' + (regressions.length ? `These tests pass at the base commit, so this change broke them: ${regressions.join(', ')}. ` +
+      '. ' + (repeated ? 'This failure already occurred after an earlier repair, so that approach did not work. ' +
+        'Take a materially different approach; one more repeat stops this context. ' : '') +
+      (regressions.length ? `These tests pass at the base commit, so this change broke them: ${regressions.join(', ')}. ` +
         'Decide from TASK.md whether the new behavior is intended (update the test to it) or the implementation ' +
         'regressed (fix the implementation). ' : '') +
       'Do not edit any other failing test outside Allowed Files. Report it as pre-existing. ' +
