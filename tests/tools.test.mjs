@@ -521,3 +521,19 @@ test('a targeted run includes every shard of a split module test', async (contex
   await tools.run_test();
   assert.deepEqual(received.slice(4), ['tests/builtin.models.test.mjs', 'tests/builtin.resume.test.mjs']);
 });
+
+test('a coder write to a harness report is a recoverable usage denial; handoff tampering stays a hard stop', async (t) => {
+  const worktree = mkdtempSync(path.join(tmpdir(), 'roster-report-write-'));
+  t.after(() => rmSync(worktree, { recursive: true, force: true }));
+  const tools = await createTools({ worktree, allowedFiles: ['src/app.mjs'] });
+  for (const file of ['RESULT.md', 'REVIEW.md']) {
+    await assert.rejects(tools.write_file({ path: file, content: 'forged' }), (error) => {
+      assert.equal(error.constructor.name, 'ToolUsageError');
+      assert.match(error.message, new RegExp(`Writing ${file.replace('.', '\\.')} is not allowed: the harness writes it`));
+      return true;
+    });
+    assert.equal(existsSync(path.join(worktree, file)), false);
+  }
+  await assert.rejects(tools.write_file({ path: 'TASK.md', content: 'forged' }), (error) =>
+    error.constructor.name === 'ToolAccessError' && /Writing TASK\.md is not allowed/.test(error.message));
+});

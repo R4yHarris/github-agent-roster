@@ -608,6 +608,12 @@ export async function createTools({
     }
     if (write && (!allowed ||
         (memoryPath && path.relative(file, path.resolve(memoryPath)) === ''))) {
+      // A harness report is a misdirected write, not tampering with the handoff: refuse it with guidance and continue.
+      if (seat !== 'planner' && ['result.md', 'review.md'].includes(normalized.toLowerCase())) {
+        throw new ToolUsageError(`Writing ${normalized} is not allowed: the harness writes it, not the coder; it records the verified ` +
+          'diff and the final node --test output after the loop. Change code or tests instead; RESULT.md evidence ' +
+          'is regenerated from the next verified run');
+      }
       throw new ToolAccessError(seat === 'planner'
         ? `Planner write_file allows only root ${plannerArtifacts.join(', ').replace(/, ([^,]+)$/, ', and $1')}`
         : `Writing ${normalized} is not allowed by TASK.md or worktree policy`);

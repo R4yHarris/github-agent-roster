@@ -7,7 +7,7 @@ import test from 'node:test';
 import { parseConfig } from '../src/lib/config.mjs';
 import { prepareBuiltinPublication } from '../src/lib/builtin.mjs';
 import { planStub } from '../src/planner/stub.mjs';
-import { checkExcellence, snapshotWorktree, taskSkipsTests, writeResult } from '../src/runtime/excellence.mjs';
+import { checkExcellence, declaredTestNames, snapshotWorktree, taskSkipsTests, testEvidence, writeResult } from '../src/runtime/excellence.mjs';
 import { runCoder } from '../src/seats/coder.mjs';
 import { withResearchSummary } from './helpers/research.mjs';
 
@@ -322,4 +322,19 @@ test('a regression repair from an earlier coder attempt stays in scope for the n
   const result = await run(await setup(), ['tests/other.test.mjs']);
   assert.equal(result.excellence.pass, true);
   assert.deepEqual(result.repairFiles, ['tests/other.test.mjs']);
+});
+
+test('test evidence quotes suite totals and every result from changed test files, not just the output head', () => {
+  const names = declaredTestNames("test('dry-run touches nothing', () => {});\ntest(\"it\\'s idempotent\", () => {});\n" +
+    'for (const x of [1]) test(`loop ${x}`, () => {});\n');
+  assert.deepEqual(names, ['dry-run touches nothing', "it's idempotent"]);
+  const head = Array.from({ length: 200 }, (_, index) => `✔ unrelated test ${index} (1.0ms)`).join('\n');
+  const stdout = `${head}\n✔ dry-run touches nothing (3.1ms)\n✔ it's idempotent (2.0ms)\n` +
+    'ℹ tests 202\nℹ suites 0\nℹ pass 202\nℹ fail 0\nℹ skipped 0\n';
+  const evidence = testEvidence({ exit_code: 0, stdout, stderr: '' },
+    [{ file: 'tests/repo-migrate.test.mjs', names }]);
+  assert.match(evidence, /Totals:\n  ℹ tests 202\n  ℹ suites 0\n  ℹ pass 202\n  ℹ fail 0/);
+  assert.match(evidence, /tests\/repo-migrate\.test\.mjs: 2 of 2 declared tests reported\n  ✔ dry-run touches nothing \(3\.1ms\)\n  ✔ it's idempotent/);
+  assert.match(evidence, /Output:\n✔ unrelated test 0/);
+  assert.doesNotMatch(testEvidence({ exit_code: 0, stdout: 'ok', stderr: '' }), /Changed test files|Totals/);
 });

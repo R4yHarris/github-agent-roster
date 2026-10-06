@@ -59,7 +59,9 @@ export function reviewRepairContinuation({ round, reasons, unmetChecks = [], sta
       'required behavior from TASK.md and change strategy. ' : '') +
     'Address every finding below with the smallest correct change, write any missing required file in several ' +
     'smaller write/edit calls rather than one huge call, keep work that already meets its check, and rerun ' +
-    'node --test until it exits 0. In your summary, map each acceptance check to the evidence that now meets it.' +
+    'node --test until it exits 0. RESULT.md and REVIEW.md are harness-written and read-only to you; findings about ' +
+    'missing test evidence are met by tests that pass, which the regenerated RESULT.md then shows. ' +
+    'In your summary, map each acceptance check to the evidence that now meets it.' +
     '\n\nReviewer findings (redacted, truncated):\n' +
     reasons.map((reason) => `- ${reason}`).join('\n').slice(0, 3000);
 }

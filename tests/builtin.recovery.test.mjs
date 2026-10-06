@@ -215,6 +215,8 @@ test('a semantic review failure loops back to the coder, flags a stalled repair,
   assert.deepEqual(events.filter(({ type }) => type === 'review-repair').map(({ attempt }) => attempt), [1, 2]);
   assert.match(reviewRepairContinuation({ round: 1, reasons: ['Check 1 unmet: x'], unmetChecks: [1] }),
     /^Review repair 1: .*unmet acceptance checks: 1[\s\S]*- Check 1 unmet: x$/);
+  assert.match(reviewRepairContinuation({ round: 1, reasons: ['x'] }),
+    /RESULT\.md and REVIEW\.md are harness-written and read-only to you/);
 });
 
 test('a rerun of the same TASK carries the previous failed review findings, not a passing one', () => {
