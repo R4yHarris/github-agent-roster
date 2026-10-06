@@ -94,6 +94,18 @@ test('task-class hints precede declared concurrency as a weak deterministic tie-
     capabilities: rows }).profile.id, 'fast');
 });
 
+test('current-run exclusions force routing to a different eligible profile', () => {
+  const other = { ...fast, id: 'wider', model: 'owner/wider', concurrency: 8 };
+  const rows = { capabilities: [...capabilities.capabilities,
+    { ...capabilities.capabilities[0], profile_id: 'wider' }] };
+  assert.equal(select({ fleet: { profiles: [fast, other] }, capabilities: rows }).profile.id, 'wider');
+  assert.equal(select({ fleet: { profiles: [fast, other] }, capabilities: rows,
+    excludedProfileIds: ['wider'] }).profile.id, 'fast');
+  assert.equal(select({ fleet: { profiles: [fast, other] }, capabilities: rows,
+    excludedProfileIds: ['wider', 'fast'] }), null);
+  assert.throws(() => select({ excludedProfileIds: ['fast', 'fast'] }), /distinct opaque identifiers/);
+});
+
 test('automatic excellence passes are not human evals, and recorded defects remain rejects', () => {
   const automated = Array.from({ length: 3 }, (_, index) => ({
     model: 'owner/steady', task_class: 'fix', session: `auto-${index}`, excellence: 'pass',

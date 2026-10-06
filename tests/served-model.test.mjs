@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createChat, servedModelMismatch } from '../src/llm/openai.mjs';
+import { createChat, LockedModelMismatchError, servedModelMismatch } from '../src/llm/openai.mjs';
 
 function client(served, events) {
   return createChat({ llm: { base_url: 'http://127.0.0.1:8000/v1', model: 'qwen3.8-27b', api_key_optional: true } }, {
@@ -34,7 +34,13 @@ test('a locked fleet model fails closed when the gateway serves an unrelated mod
     env: {}, vault: { get: async () => undefined }, expectedModel: 'qwen3.8-27b',
     onEvent: (event) => { events.push(event); },
   });
-  await assert.rejects(chat(request), /Locked fleet model mismatch: requested qwen3\.8-27b, served glm-5\.3-flash/);
+  await assert.rejects(chat(request), (error) => {
+    assert.ok(error instanceof LockedModelMismatchError);
+    assert.equal(error.code, 'ROSTER_LOCKED_MODEL_MISMATCH');
+    assert.equal(error.requested, 'qwen3.8-27b');
+    assert.equal(error.served, 'glm-5.3-flash');
+    return true;
+  });
   assert.equal(chat.lastResponse.model, 'glm-5.3-flash');
   assert.equal(events.filter(({ type }) => type === 'served-model').length, 1);
 });

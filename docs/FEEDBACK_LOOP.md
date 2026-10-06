@@ -32,6 +32,14 @@ The coder receives a bounded context pack and task-selected skills, performs
 the [research step](RESEARCH.md), and edits only through its configured,
 [worktree-scoped tools](TOOLS.md). Tests run after the last edit unless the
 task explicitly declares no tests.
+Within those boundaries, failed attempts are evidence: the seat changes
+strategy instead of repeating an unchanged action. For automatic fleet
+routing, a route failure in any seat (locked-model substitution, timeout, or
+stall) quarantines that profile for the current run and continues the same
+seat on the next eligible profile, keeping prior worktree progress. The harness
+never accepts the substituted response under the original model identity; if
+no honest alternate exists, it fails explicitly. See
+[harness operating principles](PRINCIPALS.md#harness-operating-principles).
 
 The [excellence gate](EXCELLENCE.md) checks test evidence, changed-file scope,
 detected secrets, and truthful model/turn reporting before `RESULT.md`.

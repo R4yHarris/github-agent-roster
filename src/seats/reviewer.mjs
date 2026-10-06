@@ -14,6 +14,7 @@ import { redactEvidence } from '../runtime/excellence.mjs';
 import { isAllowedFile, isForbiddenRead, taskAndRepairFiles } from '../runtime/tools.mjs';
 import { loadPrincipal } from './principal.mjs';
 import { isLlmTimeout } from '../llm/request.mjs';
+import { routeFailure } from '../llm/openai.mjs';
 import { isRunCancelled, throwIfCancelled } from '../runtime/cancel.mjs';
 
 const execute = promisify(execFile);
@@ -248,6 +249,7 @@ export async function runReviewer({
     if (!(error instanceof Error)) throw error;
     if (isRunCancelled(error)) throw error;
     if (error.code === 'ROSTER_RUN_LOG') throw error;
+    if (config.llm.locked_model && routeFailure(error)) throw error;
     report = {
       verdict: 'fail',
       reasons: [`Reviewer could not complete: ${redactEvidence(error.message, redaction)

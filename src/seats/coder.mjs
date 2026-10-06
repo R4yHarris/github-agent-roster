@@ -8,7 +8,7 @@ import { runLoop } from '../runtime/loop.mjs';
 import { appendMemory, coderMemoryRecord, seatMemoryPath } from '../runtime/memory.mjs';
 import { runResearch } from '../runtime/research.mjs';
 import { loadSkills, previewSkills } from '../runtime/skills.mjs';
-import { createTools, ToolAccessError } from '../runtime/tools.mjs';
+import { createTools, isManagedFile, ToolAccessError } from '../runtime/tools.mjs';
 import { statusSectionPresent } from '../runtime/readme-status.mjs';
 import { isLlmTimeout, retryCommandForTask } from '../llm/request.mjs';
 import { selectReasoning } from '../llm/reasoning.mjs';
@@ -23,6 +23,8 @@ export async function runCoder({
   retryCommand = retryCommandForTask(task),
   signal,
   steeringControl,
+  initialBaseline,
+  continuation = null,
 }) {
   const stages = [];
   const memoryPath = seatMemoryPath({
@@ -42,7 +44,7 @@ export async function runCoder({
   };
   try {
     throwIfCancelled(signal);
-    context = await loadContext({ worktree, memoryPath, repoRoot, config, env, priorFeedback, askKind });
+    context = await loadContext({ worktree, memoryPath, repoRoot, config, env, priorFeedback, askKind, continuation });
     if (!context.minimalDocs) stages.push('principal');
     stages.push('context');
     const skipsTests = taskSkipsTests(context.task);
@@ -51,6 +53,8 @@ export async function runCoder({
     }
     const allowedFiles = taskFilesAllowed(context.task);
     metadata = estimateTask(readTaskMetadata(context.task), [], config.llm.model || env?.ROSTER_MODEL || '');
+    // A harness reroute locks a new fleet model; TASK.md still names the planner's original route.
+    if (config.llm.locked_model) metadata = { ...metadata, model: config.llm.locked_model };
     if (config.llm.base_url && !metadata.model) throw new Error('Set config.llm.model or TASK.md model for the coder seat');
     config = selectReasoning({ ...config, llm: { ...config.llm, model: metadata.model } },
       { kind: askKind ?? 'slice', taskClass: metadata.task_class, difficulty: metadata.difficulty });
@@ -99,6 +103,14 @@ export async function runCoder({
     }
     stages.push('skills');
     baseline = await snapshotWorktree(worktree, { memoryPath });
+    // A rerouted attempt keeps the first attempt's edits, so its diff is measured from the pre-coder state.
+    if (initialBaseline) {
+      for (const file of new Set([...initialBaseline.keys(), ...baseline.keys()])) {
+        if (isManagedFile(file)) continue;
+        if (initialBaseline.has(file)) baseline.set(file, initialBaseline.get(file));
+        else baseline.delete(file);
+      }
+    }
     const trackedTools = {
       ...tools,
       async write_file(args) {

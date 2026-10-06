@@ -4,6 +4,35 @@ The **GitHub App is the principal, not the LLM**. GitHub authenticates the App
 through its installation token. The contracts policy constrains operations;
 worker names, model choices, and `AI_*` run metadata do not grant authority.
 
+## Harness operating principles
+
+These apply to every seat and to the harness that sequences them
+([feature spec](FEATURE_SPEC.md) §3, §5.2, §5.4, §5.6).
+
+- **Work to completion.** A run exists to deliver the Ask through plan, code,
+  verification, and review, not to stop at the first obstacle. Recoverable
+  failures are steered toward a result; only unrecoverable ones end the run.
+- **Do not repeat the same thing and expect a different result.** A failed
+  attempt is evidence. Retrying the same action against the same unchanged
+  state, model, or endpoint is not progress; change the approach first.
+- **Get a different perspective.** When an auto-routed fleet profile fails as a
+  route (it serves a substituted model, times out, or stalls), the harness
+  quarantines that profile for the run and continues the *same seat* on the
+  next eligible profile. The planner, coder, and reviewer each recover this
+  way. A coder retry keeps the previous attempt's worktree edits and diff
+  baseline and is told to continue from them with a different approach.
+- **Preserve progress.** Recovery keeps RECIPE.yml, TASK.md, ESTIMATE.md, and
+  worktree edits; it archives only the per-attempt CONTEXT.md and RESULT.md.
+- **Never switch models silently.** Every reroute is logged
+  (`Route recovery: seat=… profile=…`), recorded in `routeAttempts`, and
+  measured under the model that actually answered. A substituted response is
+  never accepted under the locked model's identity.
+- **Fail honestly when no alternative remains.** If no eligible profile is
+  left, the run stops with the original error and `Route recovery exhausted`.
+  Task failures such as a check failing twice (§5.4) still stop for a human;
+  rerouting is for endpoint failures, not for weakening checks. Saved,
+  non-routed models are never rerouted.
+
 ## Builtin coder conduct
 
 A seat is a bounded principal, not a chat or the human GitHub user. Its

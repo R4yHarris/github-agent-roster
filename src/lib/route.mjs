@@ -16,6 +16,7 @@ function contextFit(profile) {
 
 export function chooseRoute({
   fleet, capabilities, records = [], taskClass, difficulty = 2, contextRequired = 0, profileId, seat = 'coder',
+  excludedProfileIds = [],
 }) {
   if (!TASK_CLASSES.includes(taskClass)) throw new TypeError('Routing task class must be feat, fix, docs, or test');
   if (!Number.isInteger(difficulty) || difficulty < 1 || difficulty > 5) {
@@ -32,11 +33,18 @@ export function chooseRoute({
   if (typeof seat !== 'string' || !IDENTIFIER.test(seat)) {
     throw new TypeError('Routing seat must be an opaque 1-64 character identifier');
   }
+  if (!Array.isArray(excludedProfileIds) ||
+      excludedProfileIds.some((id) => typeof id !== 'string' || !IDENTIFIER.test(id)) ||
+      new Set(excludedProfileIds).size !== excludedProfileIds.length) {
+    throw new TypeError('Excluded fleet profiles must be distinct opaque identifiers');
+  }
+  const excluded = new Set(excludedProfileIds);
   const ceilings = new Map(deriveDifficultyCeilings(records).filter((entry) => entry.seat === seat)
     .map((entry) => [entry.model, entry.ceiling]));
   const catalog = validateFleet(fleet);
   const priors = validateCapabilities(capabilities).capabilities;
   const profiles = (profileId === undefined ? catalog.profiles : [getFleetProfile(catalog, profileId)])
+    .filter((profile) => !excluded.has(profile.id))
     .filter((profile) => !ceilings.has(profile.model) || ceilings.get(profile.model) >= difficulty);
   const human = records.filter((record) => record.evaluation != null &&
     learningSeat(record) === seat);

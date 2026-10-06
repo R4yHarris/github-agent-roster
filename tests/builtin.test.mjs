@@ -17,6 +17,7 @@ import { parseRecipe } from '../src/lib/recipe.mjs';
 import { planStub } from '../src/planner/stub.mjs';
 import { renderIssueBody } from '../src/lib/issue.mjs';
 import { formatFleet } from '../src/lib/fleet.mjs';
+import { LlmTimeoutError } from '../src/llm/request.mjs';
 import { packAgentRun } from '../vendor/github-agent-contracts/scripts/parse-agent-run.mjs';
 import { withResearchSummary } from './helpers/research.mjs';
 import { recordedCoderRun } from '../src/lib/seat-publication.mjs';
@@ -1516,6 +1517,196 @@ test('auto-model fails closed when a gateway serves a model outside the locked f
       choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: '{}' } }],
     }),
   }), /Locked fleet model mismatch: requested routed-model, served substituted-model/);
+});
+
+test('auto-model excludes a dishonest profile and retries the planner with an eligible alternate', async (context) => {
+  const options = multiFileFixture(context);
+  options.issue.title = 'feat: Add status';
+  mkdirSync(path.join(options.target, '.roster'));
+  writeFileSync(path.join(options.target, '.roster', 'fleet.yml'), formatFleet({ profiles: [
+    {
+      id: 'first', base_url: 'https://first.example.invalid/v1', model: 'first-model',
+      provider: 'vllm', context_max: 32768, concurrency: 8,
+      hardware: 'test-gpu', task_class: ['feat'], notes: '',
+    },
+    {
+      id: 'alternate', base_url: 'https://alternate.example.invalid/v1', model: 'alternate-model',
+      provider: 'vllm', context_max: 65536, concurrency: 1,
+      hardware: 'test-gpu', task_class: ['feat'], notes: '',
+    },
+  ] }));
+  const requests = [];
+  const logs = [];
+  const result = await runBuiltinIssue(42, {
+    ...options, config: llmConfig, autoModel: true, metricsLoader: () => [],
+    env: { ...options.env, ROSTER_API_KEY: 'test-only-key' },
+    log: (line) => logs.push(line),
+    fetchImpl: async (url, request) => {
+      const body = JSON.parse(request.body);
+      requests.push({ url: String(url), model: body.model });
+      if (requests.length === 1) return Response.json({
+        model: 'substituted-model',
+        choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: '{}' } }],
+      });
+      if (requests.length === 2) return Response.json({
+        model: 'alternate-model',
+        choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
+          title: 'Add status', acceptance_checks: ['node --test exits 0'], files_allowed: multiFileScope,
+        }) } }],
+      });
+      if (requests.length === 3) return Response.json({
+        model: 'alternate-model',
+        choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant', tool_calls: [{ id: 'edit', type: 'function', function: {
+            name: 'write_file', arguments: JSON.stringify({
+              path: 'README.md', content: '# Example\n\n## Status\nReady.\n',
+            }),
+          } }],
+        } }],
+      });
+      return Response.json({
+        model: 'alternate-model',
+        choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+          content: requests.length === 4 ? 'Added status; tests pass.' : 'PASS' } }],
+      });
+    },
+    runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+  });
+  assert.deepEqual(requests.slice(0, 2), [
+    { url: 'https://first.example.invalid/v1/chat/completions', model: 'first-model' },
+    { url: 'https://alternate.example.invalid/v1/chat/completions', model: 'alternate-model' },
+  ]);
+  assert.deepEqual(result.routeAttempts, [
+    { seat: 'planner', profile: 'first', reason: 'locked-model-mismatch',
+      requested: 'first-model', served: 'substituted-model' },
+  ]);
+  assert.equal(result.route.profile.id, 'alternate');
+  assert.equal(result.runs.planner.env.AI_MODEL, 'alternate-model');
+  assert.equal(result.runs.coder.env.AI_MODEL, 'alternate-model');
+  assert.ok(logs.some((line) => /Route recovery: seat=planner profile=first served substituted-model.*profile=alternate/.test(line)));
+});
+
+const twoProfileFleet = (target) => {
+  mkdirSync(path.join(target, '.roster'));
+  writeFileSync(path.join(target, '.roster', 'fleet.yml'), formatFleet({ profiles: [
+    {
+      id: 'first', base_url: 'https://first.example.invalid/v1', model: 'first-model',
+      provider: 'vllm', context_max: 32768, concurrency: 8,
+      hardware: 'test-gpu', task_class: ['feat'], notes: '',
+    },
+    {
+      id: 'alternate', base_url: 'https://alternate.example.invalid/v1', model: 'alternate-model',
+      provider: 'vllm', context_max: 65536, concurrency: 1,
+      hardware: 'test-gpu', task_class: ['feat'], notes: '',
+    },
+  ] }));
+};
+const planReply = (model) => Response.json({ model, choices: [{ finish_reason: 'stop', message: {
+  role: 'assistant', content: JSON.stringify({
+    title: 'Add status', acceptance_checks: ['node --test exits 0'], files_allowed: multiFileScope,
+  }) } }] });
+const editReply = (model) => Response.json({ model, choices: [{ finish_reason: 'tool_calls', message: {
+  role: 'assistant', tool_calls: [{ id: 'edit', type: 'function', function: {
+    name: 'write_file', arguments: JSON.stringify({ path: 'README.md', content: '# Example\n\n## Status\nReady.\n' }),
+  } }] } }] });
+const textReply = (model, content) => Response.json({ model,
+  choices: [{ finish_reason: 'stop', message: { role: 'assistant', content } }] });
+
+for (const failure of ['substitution', 'timeout']) {
+  test(`auto-model continues the coder seat on an alternate profile after a route ${failure}`, async (context) => {
+    const options = multiFileFixture(context);
+    options.issue.title = 'feat: Add status';
+    twoProfileFleet(options.target);
+    const requests = [];
+    const logs = [];
+    const result = await runBuiltinIssue(42, {
+      ...options, config: llmConfig, autoModel: true, metricsLoader: () => [],
+      env: { ...options.env, ROSTER_API_KEY: 'test-only-key' },
+      log: (line) => logs.push(line),
+      fetchImpl: async (url, request) => {
+        const body = JSON.parse(request.body);
+        requests.push({ url: String(url), model: body.model, prompt: JSON.stringify(body.messages) });
+        if (requests.length === 1) return planReply('first-model');
+        if (requests.length === 2) {
+          if (failure === 'timeout') throw new LlmTimeoutError({ host: 'first.example.invalid', timeoutMs: 1000, local: false });
+          return editReply('substituted-model');
+        }
+        if (requests.length === 3) return editReply('alternate-model');
+        return textReply('alternate-model', requests.length === 4 ? 'Added status; tests pass.' : 'PASS');
+      },
+      runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+    });
+    assert.equal(requests[1].model, 'first-model');
+    assert.equal(requests[2].url, 'https://alternate.example.invalid/v1/chat/completions');
+    assert.equal(requests[2].model, 'alternate-model');
+    assert.match(requests[2].prompt, /previous coder attempt on fleet profile first stopped because of an endpoint route failure/);
+    assert.equal(result.routeAttempts.length, 1);
+    assert.equal(result.routeAttempts[0].seat, 'coder');
+    assert.equal(result.routeAttempts[0].profile, 'first');
+    assert.equal(result.routeAttempts[0].reason, failure === 'timeout' ? 'endpoint-timeout' : 'locked-model-mismatch');
+    assert.equal(result.runs.planner.env.AI_MODEL, 'first-model');
+    assert.equal(result.runs.coder.env.AI_MODEL, 'alternate-model');
+    assert.equal(result.runs.reviewer.env.AI_MODEL, 'alternate-model');
+    assert.ok(result.result.excellence.pass);
+    assert.ok(logs.some((line) => /Route recovery: seat=coder profile=first .*profile=alternate model=alternate-model/.test(line)));
+  });
+}
+
+test('auto-model continues the reviewer seat on an alternate profile instead of failing the review', async (context) => {
+  const options = multiFileFixture(context);
+  options.issue.title = 'feat: Add status';
+  twoProfileFleet(options.target);
+  const requests = [];
+  const reviews = [];
+  const passReview = JSON.stringify({ verdict: 'pass', reasons: [], security_notes: [] });
+  const seatFetch = withResearchSummary(async (url, request) => {
+    requests.push({ url: String(url), model: JSON.parse(request.body).model });
+    if (requests.length === 1) return planReply('first-model');
+    if (requests.length === 2) return editReply('first-model');
+    return textReply('first-model', 'Added status; tests pass.');
+  });
+  const result = await runIssueWithSeats(42, {
+    ...options, config: llmConfig, autoModel: true, metricsLoader: () => [],
+    env: { ...options.env, ROSTER_API_KEY: 'test-only-key' },
+    log: () => {},
+    fetchImpl: async (url, request) => {
+      const body = JSON.parse(request.body);
+      if (!body.messages[0].content.startsWith('You are the builtin reviewer seat.')) return seatFetch(url, request);
+      reviews.push({ url: String(url), model: body.model });
+      return textReply(reviews.length === 1 ? 'substituted-model' : 'alternate-model', passReview);
+    },
+    runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+  });
+  assert.deepEqual(reviews, [
+    { url: 'https://first.example.invalid/v1/chat/completions', model: 'first-model' },
+    { url: 'https://alternate.example.invalid/v1/chat/completions', model: 'alternate-model' },
+  ]);
+  assert.deepEqual(result.routeAttempts.map(({ seat, profile }) => ({ seat, profile })),
+    [{ seat: 'reviewer', profile: 'first' }]);
+  assert.equal(result.runs.coder.env.AI_MODEL, 'first-model');
+  assert.equal(result.runs.reviewer.env.AI_MODEL, 'alternate-model');
+  assert.equal(result.review.verdict, 'pass');
+});
+
+test('auto-model coder fails explicitly when no alternate fleet profile remains', async (context) => {
+  const options = multiFileFixture(context);
+  options.issue.title = 'feat: Add status';
+  mkdirSync(path.join(options.target, '.roster'));
+  writeFileSync(path.join(options.target, '.roster', 'fleet.yml'), formatFleet({ profiles: [{
+    id: 'burst', base_url: 'https://burst.example.invalid/v1', model: 'routed-model',
+    provider: 'vllm', context_max: 32768, concurrency: 1,
+    hardware: 'test-gpu', task_class: ['feat'], notes: '',
+  }] }));
+  const logs = [];
+  let requests = 0;
+  await assert.rejects(runBuiltinIssue(42, {
+    ...options, config: llmConfig, autoModel: true, metricsLoader: () => [],
+    env: { ...options.env, ROSTER_API_KEY: 'test-only-key' },
+    log: (line) => logs.push(line),
+    fetchImpl: async () => (++requests === 1 ? planReply('routed-model') : editReply('substituted-model')),
+    runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+  }), /Locked fleet model mismatch: requested routed-model, served substituted-model/);
+  assert.ok(logs.some((line) => /Route recovery exhausted: seat=coder profile=burst/.test(line)));
 });
 
 test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the SDK only with --publish', async (context) => {

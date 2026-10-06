@@ -99,6 +99,18 @@ test('an optional failed or tool-requesting model summary leaves the inventory i
   }
 });
 
+test('a locked fleet model substitution in research is a route failure, not an optional summary failure', async (context) => {
+  const options = await fixture(context, 'src/new.mjs');
+  const substituted = async () => Response.json({ model: 'substituted-model', choices: [{
+    finish_reason: 'stop', message: { role: 'assistant', content: 'Inventory reviewed.' } }] });
+  const locked = { ...config, llm: { ...config.llm, locked_model: 'local-model' } };
+  await assert.rejects(runResearch({ ...options, config: locked, fetchImpl: substituted }),
+    (error) => error.code === 'ROSTER_LOCKED_MODEL_MISMATCH');
+  rmSync(path.join(options.worktree, 'RESEARCH.md'));
+  const result = await runResearch({ ...options, config, fetchImpl: substituted });
+  assert.equal(result.summaryStatus, 'complete');
+});
+
 test('coder research precedes writes and its usage is included in coder accounting', async (context) => {
   const options = await fixture(context, 'README.md');
   cpSync(new URL('../principals/', import.meta.url), path.join(options.repoRoot, 'principals'), { recursive: true });
