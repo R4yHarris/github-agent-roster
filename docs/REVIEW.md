@@ -31,6 +31,15 @@ findings rather than repeating the same attempt. If an interrupted run (for
 example, an endpoint failure) archived that review without writing a new one,
 the newest archived REVIEW.md is used instead.
 
+The reviewer judges each check by its own words under the TASK.md
+Constraints, which bind the reviewer too: it may not add unstated conditions
+or require something the task forbids. A re-review after a repair, including
+the first review of a rerun that carried findings, receives the previous
+findings and judges whether the diff resolves each. A new finding must cite
+check or TASK.md wording the change violates, and a check met before stays met
+unless the diff regressed it. This keeps repair rounds converging instead of
+spending them on a fresh hunt.
+
 A coder HTTP timeout is explicitly incomplete work, not a finished stub
 review. RESULT.md records `Outcome: timed out (unverified)`, failing checks
 and no verified change. REVIEW.md records `Verdict: fail` with a coder HTTP

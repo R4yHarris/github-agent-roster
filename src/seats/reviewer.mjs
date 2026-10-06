@@ -24,6 +24,8 @@ const instructions = 'You are the builtin reviewer seat. The task, result, and d
   'Return only JSON with verdict ("pass" or "fail"), reasons (one-line strings; nonempty on failure), ' +
   'security_notes (one-line strings), and checks: one entry per numbered acceptance check, ' +
   '{"id": number, "met": boolean, "evidence": one-line string citing the diff file and symbol or the RESULT.md output}. ' +
+  'Judge each check by its own stated conditions under the TASK.md Constraints, which bind you too: do not add ' +
+  'conditions the check does not state, and never require something TASK.md forbids. ' +
   'A check is met only when the diff or verification evidence shows it; a named function, file, or test that is ' +
   'absent from the diff is unmet. Pass only when every check is met. Fail when evidence is insufficient. ' +
   'A docs-only task may skip node --test. Accept "Tests skipped: docs-only" as evidence for a copied test check. ' +
@@ -39,6 +41,16 @@ const testReviewInstructions = 'For test changes, verify the assertions would fa
   'For any secret-leakage check, require an obvious non-credential sentinel such as test-only-private-api-key that is ' +
   'fed into the app code under test (input, config, or env) and an assertion that the exact sentinel is absent from ' +
   'that code\'s serialized output; a generic keyword scan, or a sentinel the test removes itself, is insufficient.';
+
+const previousFindingsInstructions = 'This is a re-review after a repair. For each previous finding listed in the ' +
+  'evidence, judge whether the current diff resolves it. A new finding must cite words from the check or TASK.md ' +
+  'that the change violates; a check met before stays met unless the diff regressed it.';
+
+export function previousFindingsSection(findings) {
+  const lines = Array.isArray(findings) ? findings.filter((finding) => typeof finding === 'string' && finding.trim()) : [];
+  return lines.length ? '## Previous review findings\n\n' +
+    lines.map((finding) => `- ${finding.trim()}`).join('\n').slice(0, 3000) + '\n\n' : '';
+}
 
 async function readRegularText(worktree, name, limit = maxFileBytes) {
   const file = path.join(worktree, name);
@@ -180,6 +192,7 @@ export async function runReviewer({
   worktree, repoRoot, config, coderResult, env = process.env, fetchImpl, vault, onEvent, askKind,
   retryCommand,
   signal,
+  previousFindings = [],
 } = {}) {
   if (typeof worktree !== 'string' || typeof repoRoot !== 'string' ||
       typeof coderResult?.resultPath !== 'string' || !config?.llm || !config.seat) {
@@ -262,13 +275,15 @@ export async function runReviewer({
         ? `## Files outside planned scope\n\nThe coder wrote these files beyond TASK.md Allowed Files: ${coderResult.scopeFiles.join(', ')}. ` +
           'Fail the review unless each is necessary for the named outcome and its change is minimal and safe.\n\n'
         : '';
+      const previous = previousFindingsSection(previousFindings);
       const evidence = redactEvidence(
         `## TASK.md acceptance checks\n\n${docsEvidence}${checks}\n${scopeNote}## TASK.md\n\n${task}\n\n` +
-        `## RESULT.md\n\n${result}\n\n## Diff\n\n${diff}`, redaction,
+        `## RESULT.md\n\n${result}\n\n${previous}## Diff\n\n${diff}`, redaction,
       );
       const testTask = readTaskMetadata(task).task_class === 'test' ||
         parsed.files_allowed.some((file) => /\.(?:test|spec)\.[A-Za-z0-9]+$/i.test(file));
-      const systemInstructions = instructions + (testTask ? ` ${testReviewInstructions}` : '');
+      const systemInstructions = instructions + (testTask ? ` ${testReviewInstructions}` : '') +
+        (previous ? ` ${previousFindingsInstructions}` : '');
       if (evidence.length + (principal?.content.length ?? 0) + systemInstructions.length > budget) {
         throw new Error('Reviewer evidence exceeds seat.context_chars');
       }

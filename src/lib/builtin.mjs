@@ -67,14 +67,19 @@ export function reviewRepairContinuation({ round, reasons, unmetChecks = [], sta
 }
 
 // A rerun of the same TASK starts from the last failed review's findings instead of repeating the same attempt.
-export function previousReviewContinuation(review) {
+export function previousReviewFindings(review) {
   if (typeof review !== 'string' || !review.startsWith('# Review\n\nVerdict: fail\n')) return undefined;
   const section = (name) => (review.split(`\n## ${name}\n`)[1] ?? '').split('\n## ')[0];
   const reasons = section('Reasons').split('\n').filter((line) => line.startsWith('- ')).map((line) => line.slice(2));
   // A reviewer that could not complete gave no findings; an older complete review is better evidence.
   if (!reasons.length || reasons.every((reason) => reason.startsWith('Reviewer could not complete'))) return undefined;
   const unmetChecks = [...section('Acceptance checks').matchAll(/^- \[ \] (\d+)\. /gm)].map(([, id]) => Number(id));
-  return reviewRepairContinuation({ reasons, unmetChecks,
+  return { reasons, unmetChecks };
+}
+
+export function previousReviewContinuation(review) {
+  const findings = previousReviewFindings(review);
+  return findings && reviewRepairContinuation({ ...findings,
     heading: 'Previous run: the reviewer failed the last result for this same TASK' });
 }
 
@@ -802,7 +807,7 @@ async function runBuiltinAssignment(issueNumber, {
         logPath: liveLog.path, logSession: liveLog.session };
     }
   }
-  const reviewSeat = async (coderResult) => {
+  const reviewSeat = async (coderResult, previousFindings = []) => {
     let reviewerRoute = null;
     for (;;) {
       const reviewConfig = reviewerRoute ? { ...coderConfig, llm: { ...coderConfig.llm, ...activeConfig.llm } }
@@ -813,7 +818,7 @@ async function runBuiltinAssignment(issueNumber, {
       try {
         review = await liveLog.seat('reviewer', sessions.reviewer, reviewConfig, (onEvent) => runReviewer({
           worktree: worktreePath, repoRoot, config: reviewConfig,
-          coderResult, fetchImpl, env, vault, onEvent, askKind, retryCommand, signal,
+          coderResult, fetchImpl, env, vault, onEvent, askKind, retryCommand, signal, previousFindings,
         }));
       } catch (error) {
         if (!await recoverRoute('reviewer', error)) throw error;
@@ -851,10 +856,19 @@ async function runBuiltinAssignment(issueNumber, {
       log(`Restored recorded scope from earlier runs: ${[...restored.repairFiles, ...restored.scopeFiles].join(', ')}.`);
     }
   }
-  let continuation = planner.reused ? previousReviewContinuation(previousReview) ??
-    previousReviewContinuation(await latestArchivedReview(worktreePath, { task: prepared.task,
-      git: (args) => git(worktreePath, args, commandEnv),
-      accept: (text) => previousReviewContinuation(text) !== undefined }).catch(() => null)) : undefined;
+  let continuation;
+  let reviewFindings = [];
+  if (planner.reused) {
+    const carried = previousReviewFindings(previousReview) ??
+      previousReviewFindings(await latestArchivedReview(worktreePath, { task: prepared.task,
+        git: (args) => git(worktreePath, args, commandEnv),
+        accept: (text) => previousReviewFindings(text) !== undefined }).catch(() => null));
+    if (carried) {
+      continuation = reviewRepairContinuation({ ...carried,
+        heading: 'Previous run: the reviewer failed the last result for this same TASK' });
+      reviewFindings = carried.reasons;
+    }
+  }
   if (continuation) log('Carrying the previous failed review findings into the coder context.');
   const perspectiveAttempts = [];
   const rescopes = [];
@@ -927,7 +941,7 @@ async function runBuiltinAssignment(issueNumber, {
   }
   coderRun = result.run;
   await recordSeat(sessions.coder, coderRun, result.excellence);
-  ({ review, reviewerRun } = await reviewSeat(result));
+  ({ review, reviewerRun } = await reviewSeat(result, reviewFindings));
   if (review.verdict !== 'fail' || !review.completed || skipReview || result.mode !== 'llm' ||
       reviewRepairs.length >= maxReviewRepairs) break;
   const unmetChecks = review.unmetChecks ?? [];
@@ -949,6 +963,7 @@ async function runBuiltinAssignment(issueNumber, {
   onRunEvent?.({ type: 'review-repair', attempt: reviewRepairs.length, unmetChecks, model: coderConfig.llm.model });
   continuation = reviewRepairContinuation({ round: reviewRepairs.length,
     reasons: review.reasons, unmetChecks, stalled, changedFiles: result.excellence?.files ?? [] });
+  reviewFindings = review.reasons ?? [];
   coderBaseline ??= result.baseline;
   coderScopeFiles = [...new Set([...coderScopeFiles, ...(result.scopeFiles ?? [])])];
   coderRepairFiles = [...new Set([...coderRepairFiles, ...(result.repairFiles ?? [])])];

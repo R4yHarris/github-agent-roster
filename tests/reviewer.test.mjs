@@ -90,6 +90,28 @@ test('reviewer reads the diff, RESULT, and acceptance checks without receiving a
     /RESULT\.md changed after review/);
 });
 
+test('a re-review judges the previous findings and is bound by TASK.md constraints', async (context) => {
+  const options = fixture(context);
+  const seen = [];
+  const reviewer = (previousFindings) => runReviewer({ ...options, config, env: {}, previousFindings,
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      seen.push(body.messages);
+      return { status: 200, json: async () => ({ choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant', content: passingReview(body) } }] }) };
+    } });
+  assert.equal((await reviewer()).verdict, 'pass');
+  assert.match(seen[0][0].content, /TASK\.md Constraints, which bind you too/);
+  assert.match(seen[0][0].content, /never require something TASK\.md forbids/);
+  assert.doesNotMatch(seen[0][0].content, /re-review/);
+  assert.doesNotMatch(seen[0][1].content, /Previous review findings/);
+  rmSync(path.join(options.worktree, 'REVIEW.md'));
+  assert.equal((await reviewer(['Check 2 unmet: ready is not exported', ' '])).verdict, 'pass');
+  assert.match(seen[1][0].content, /re-review after a repair[\s\S]*cite words from the check or TASK\.md/);
+  assert.match(seen[1][1].content,
+    /## RESULT\.md[\s\S]*## Previous review findings\n\n- Check 2 unmet: ready is not exported\n\n## Diff/);
+});
+
 test('a diff larger than 64 KiB but within seat.context_chars is reviewed, not a buffer failure', async (context) => {
   const options = fixture(context);
   const big = Array.from({ length: 3000 }, (_, index) => `export const value${index} = ${index}; // padding line`).join('\n');
