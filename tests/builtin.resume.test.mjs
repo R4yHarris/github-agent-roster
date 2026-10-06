@@ -14,7 +14,6 @@ import {
   prepareBuiltinPublication, runBuiltinAsk, runBuiltinIssue as runIssueWithSeats, stageReviewedFiles,
 } from '../src/lib/builtin.mjs';
 import { ToolAccessError } from '../src/runtime/tools.mjs';
-import { loadRouteQuarantine, recordRouteQuarantine, routeQuarantineTtlMs } from '../src/lib/route-quarantine.mjs';
 import { loadLearning } from '../src/lib/learn.mjs';
 import { readStatus, formatStatus } from '../src/lib/status.mjs';
 import { resolveContractsPath } from '../src/lib/paths.mjs';

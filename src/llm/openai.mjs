@@ -66,24 +66,12 @@ function parseCompletion(payload, requestedModel) {
 
 const safeModelName = /^[A-Za-z0-9._:/@+-]{1,128}$/;
 
-export class LockedModelMismatchError extends ChatError {
-  constructor(requested, served) {
-    super(`Locked fleet model mismatch: requested ${requested}, served ${served}.`, 'response');
-    this.name = 'LockedModelMismatchError';
-    this.code = 'ROSTER_LOCKED_MODEL_MISMATCH';
-    this.requested = requested;
-    this.served = served;
-  }
-}
-
 // Failures of the endpoint route itself, not of the task: another fleet profile may succeed.
+// A response's model label is not a route failure: gateways stamp labels unreliably.
 export function routeFailure(error) {
   const seen = new Set();
   for (let current = error; current instanceof Error && !seen.has(current); current = current.cause) {
     seen.add(current);
-    if (current instanceof LockedModelMismatchError) {
-      return { reason: 'locked-model-mismatch', requested: current.requested, served: current.served };
-    }
     if (current instanceof ChatError && current.transient) return { reason: 'endpoint-error' };
   }
   return isLlmTimeout(error) ? { reason: 'endpoint-timeout' } : null;
@@ -115,7 +103,7 @@ export function reportedUsage(usage) {
 
 export function createChat(config = {}, {
   fetch: suppliedFetch, env = process.env, vault, onEvent, retryCommand, clock,
-  signal, expectedModel,
+  signal,
 } = {}) {
   if (!isObject(config) || (config.llm !== undefined && !isObject(config.llm))) {
     throw new TypeError('LLM configuration must be an object with an optional llm object.');
@@ -133,9 +121,6 @@ export function createChat(config = {}, {
   if (typeof optionalKey !== 'boolean') throw new TypeError('llm.api_key_optional must be a boolean.');
   if (typeof fetchImpl !== 'function') throw new TypeError('A fetch implementation is required.');
   if (onEvent !== undefined && typeof onEvent !== 'function') throw new TypeError('Live chat observer must be a function.');
-  if (expectedModel !== undefined && (typeof expectedModel !== 'string' || !safeModelName.test(expectedModel))) {
-    throw new TypeError('Expected model must be a supported served model ID.');
-  }
   if (llm.served_model_label !== undefined && !['trust', 'ignore'].includes(llm.served_model_label)) {
     throw new TypeError('llm.served_model_label must be trust or ignore.');
   }
@@ -311,9 +296,6 @@ export function createChat(config = {}, {
       if (!servedMismatchReported && servedModelMismatch(model, response.model)) {
         servedMismatchReported = true;
         await onEvent?.({ type: 'served-model', host, requested: model, served: response.model });
-      }
-      if (expectedModel !== undefined && servedModelMismatch(expectedModel, response.model)) {
-        throw new LockedModelMismatchError(expectedModel, response.model);
       }
       if (response.finish_reason != null && !['stop', 'tool_calls'].includes(response.finish_reason)) {
         const rawReason = key ? response.finish_reason.split(key).join('[redacted]') : response.finish_reason;

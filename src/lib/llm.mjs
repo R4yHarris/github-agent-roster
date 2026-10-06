@@ -32,13 +32,14 @@ export function createBuiltinChat(config, {
     api_key_optional: config.llm.api_key_optional ?? true,
     request_timeout_ms: config.llm.request_timeout_ms,
     stream_idle_timeout_ms: config.llm.stream_idle_timeout_ms,
-    served_model_label: config.llm.served_model_label,
+    // A fleet route measures the profile the router chose; a gateway's response label cannot override it.
+    served_model_label: config.llm.locked_model ? 'ignore' : config.llm.served_model_label,
     reasoning_effort: docsSlice ? 'none' : mappedEffort(config.llm),
     max_tokens: config.llm.max_tokens,
     ...(usesDeepseekReasoning(config.llm) ? {
       chat_template_kwargs: { thinking: !docsSlice && config.llm.effort !== 'none' },
     } : {}),
-  } }, { fetch: fetchImpl, env, vault, expectedModel: config.llm.locked_model,
+  } }, { fetch: fetchImpl, env, vault,
     onEvent: onEvent && ((event) => onEvent({
     ...event, ...(event.type === 'http' ? {
       modelPrior: config.llm.model_prior ?? modelCapabilityPrior(config.llm.model).strength,

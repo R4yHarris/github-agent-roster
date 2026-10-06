@@ -3,6 +3,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writ
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { LlmTimeoutError, isLlmTimeout } from '../src/llm/request.mjs';
 import { parseConfig } from '../src/lib/config.mjs';
 import { planStub, taskFilesAllowed } from '../src/planner/stub.mjs';
 import { runResearch } from '../src/runtime/research.mjs';
@@ -99,15 +100,15 @@ test('an optional failed or tool-requesting model summary leaves the inventory i
   }
 });
 
-test('a locked fleet model substitution in research is a route failure, not an optional summary failure', async (context) => {
+test('on a locked fleet route, research rethrows a route failure but accepts a mismatched model label', async (context) => {
   const options = await fixture(context, 'src/new.mjs');
+  const locked = { ...config, llm: { ...config.llm, locked_model: 'local-model' } };
+  const timedOut = async () => { throw new LlmTimeoutError({ host: '127.0.0.1:8000', timeoutMs: 1000, local: true }); };
+  await assert.rejects(runResearch({ ...options, config: locked, fetchImpl: timedOut }), (error) => isLlmTimeout(error));
+  rmSync(path.join(options.worktree, 'RESEARCH.md'), { force: true });
   const substituted = async () => Response.json({ model: 'substituted-model', choices: [{
     finish_reason: 'stop', message: { role: 'assistant', content: 'Inventory reviewed.' } }] });
-  const locked = { ...config, llm: { ...config.llm, locked_model: 'local-model' } };
-  await assert.rejects(runResearch({ ...options, config: locked, fetchImpl: substituted }),
-    (error) => error.code === 'ROSTER_LOCKED_MODEL_MISMATCH');
-  rmSync(path.join(options.worktree, 'RESEARCH.md'));
-  const result = await runResearch({ ...options, config, fetchImpl: substituted });
+  const result = await runResearch({ ...options, config: locked, fetchImpl: substituted });
   assert.equal(result.summaryStatus, 'complete');
 });
 
