@@ -229,6 +229,14 @@ export async function runReviewer({
         reasons: ['Contracts submodule was not initialized; verification is infrastructure-blocked, not a slice test failure.'],
         security_notes: ['No passing verification or completed review is available.'],
       };
+    } else if (coderResult.repairRepeated === true || coderResult.contextHandoff === true) {
+      report = {
+        verdict: 'fail',
+        reasons: [coderResult.repairRepeated === true
+          ? `Coder test repair stalled after ${coderResult.testRepairs ?? 0} repairs: an earlier failure repeated; tests did not pass.`
+          : `Coder context filled while test repairs were progressing after ${coderResult.testRepairs ?? 0} repairs; tests did not pass.`],
+        security_notes: ['No passing implementation or completed review is available.'],
+      };
     } else if (coderResult.repairBudgetExhausted === true) {
       const budget = coderResult.testRepairBudget ?? 4;
       report = {

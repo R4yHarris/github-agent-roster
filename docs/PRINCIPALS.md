@@ -37,12 +37,19 @@ These apply to every seat and to the harness that sequences them
   left, the run stops with the original error and `Route recovery exhausted`.
   Saved, non-routed models are never rerouted.
 - **Work to completion; escalate perspective, not effort on the same context.**
-  When a coder context exhausts its repair or turn budget, or repeats a denied
-  action, that context is stuck, but the task is not proven impossible. The
+  Test repairs are driven by progress, not a fixed count: each repair that
+  produces a new failure without more failing tests earns another (up to 12).
+  Returning to any earlier failure is the same thing expecting a different
+  result: it is steered once, then stops the context. A context that is still
+  progressing but past half its window hands off rather than growing further.
+  When a coder context exhausts its repair or turn budget, stalls, hands off,
+  or repeats a denied action, that context is stuck, but the task is not proven
+  impossible. The
   harness starts a fresh coder context (`Perspective escalation N of 2`). It uses
   the next eligible fleet profile when auto-routing, and the same model
-  otherwise. Worktree edits are kept, and the context gets the last failure
-  plus an instruction to decide which side (test or implementation) is wrong
+  otherwise (and says so, so only a different approach can help). Worktree
+  edits are kept, and the context gets the last failure, each earlier context's
+  model, reason, and failing-test count, plus an instruction to decide which side (test or implementation) is wrong
   and stop alternating between them. Escalation never weakens checks and
   never applies to security denials. After two escalations, the run stops for
   a human (§5.4).

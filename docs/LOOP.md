@@ -10,10 +10,16 @@ A seat ends on the first of these. None of them are a model sentence.
 - `baseline`: an in-scope check passed and every remaining failure is outside Allowed Files.
 - `docs-checked`: the only allowed file is documentation and the required note is present.
 - `repeat`: the same tool name, arguments, and target hash occurred twice.
-- `budget`: turn, token, or repair budget is exhausted. In a builtin run, an exhausted turn or repair budget (or
+- `budget`: turn, token, or repair budget is exhausted. A test repair budget starts from task difficulty (1, 2,
+  or 4); each repair whose failure is new and whose failing-test count did not rise earns one more, up to 12.
+  A failure that matches any earlier one (including oscillation) is steered once toward a different approach and
+  stops the context on its second repeat (`Test repair stalled`). A progressing context past half its declared
+  `context_max` is handed to a fresh context instead of being extended (`Test repair handoff`). In a builtin run,
+  an exhausted turn or repair budget, a stalled or handed-off repair (or
   a repeated denied action) ends this coder context only: the harness starts up to two fresh coder contexts
   (`Perspective escalation N of 2`), on a different eligible fleet profile when one exists. Worktree edits are kept,
-  and the last failure is passed in as evidence. Recorded scope expansions and regression-repaired tests outside
+  and the last failure is passed in as evidence, with each earlier context's model, stop reason, and failing-test
+  count so the next one does not retry them. Recorded scope expansions and regression-repaired tests outside
   Allowed Files stay in scope for the next context, so its gate does not reject an earlier context's legitimate
   repair. A resumed run restores the same recorded scope from archived results for files still changed in the
   worktree. A hard security denial is never escalated.
