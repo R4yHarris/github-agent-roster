@@ -184,7 +184,7 @@ test('redactRoot tilde-abbreviates private display paths', () => {
   assert.equal(redactRoot(join(home, 'roster'), { home }), `~${joiner}roster`);
   assert.equal(redactRoot('/var/tmp/state', { home: '/Users/me' }), 'var…state');
   assert.equal(redactRoot('C:\\Users\\me\\AppData\\Local\\roster\\state', { home: 'C:\\Users\\me' }),
-    `~${joiner}…${joiner}state`);
+      '~\\…\\state');
   assert.equal(redactRoot('relative'), 'relative');
   assert.equal(redactRoot(''), '<unknown>');
 });
