@@ -64,7 +64,7 @@ export async function archiveRunArtifacts(worktree, { task, git, preserve = [] }
 }
 
 // The newest archived REVIEW.md lets a rerun after an interrupted run still start from the last review findings.
-export async function latestArchivedReview(worktree, { task, git }) {
+export async function latestArchivedReview(worktree, { task, git, accept = () => true }) {
   if (typeof task !== 'string' || !/^(?:issue-[1-9]\d*|local-[a-f0-9]{16})$/.test(task)) return null;
   const common = path.resolve(worktree, (await git(['rev-parse', '--git-common-dir'])).trim());
   const root = path.join(common, 'roster-artifacts', task);
@@ -73,7 +73,8 @@ export async function latestArchivedReview(worktree, { task, git }) {
     const file = path.join(root, name, 'REVIEW.md');
     const stat = await fs.lstat(file).catch(() => null);
     if (!stat?.isFile() || stat.isSymbolicLink() || stat.size > 64 * 1024) continue;
-    return fs.readFile(file, 'utf8');
+    const text = await fs.readFile(file, 'utf8');
+    if (accept(text)) return text;
   }
   return null;
 }
