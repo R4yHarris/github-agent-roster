@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { parseConfig, setConfigValue } from '../src/lib/config.mjs';
-import { createBuiltinChat } from '../src/lib/llm.mjs';
+import { createBuiltinChat, defaultCompletionCap } from '../src/lib/llm.mjs';
 import { mappedEffort, nextEffort, selectReasoning } from '../src/llm/reasoning.mjs';
 import { planOutline } from '../src/planner/plan.mjs';
 import { createRunLog } from '../src/lib/run-log.mjs';
@@ -37,6 +37,17 @@ test('difficulty versus model prior selects effort for every task class and ask 
   assert.equal(unknown.llm.effort, 'm');
   assert.equal(unknown.llm.model_prior, 'unknown');
   assert.throws(() => selectReasoning(config, { difficulty: 6 }), /difficulty/);
+});
+
+test('the default completion cap scales with reasoning effort and stays within a quarter of context', () => {
+  const local = { ...config.llm };
+  assert.equal(local.context_max, 0);
+  assert.equal(defaultCompletionCap({ ...local, effort: 'none' }), 4096);
+  assert.equal(defaultCompletionCap({ ...local, effort: 'l' }), 8192);
+  assert.equal(defaultCompletionCap({ ...local, effort: 'h' }), 16_384);
+  assert.equal(defaultCompletionCap({ ...local, effort: 'x' }), 32_768);
+  assert.equal(defaultCompletionCap({ ...local, effort: 'x', context_max: 64_500 }), 16_125);
+  assert.equal(defaultCompletionCap({ ...local, effort: 'x', context_max: 8192 }), 4096);
 });
 
 test('SGLang DeepSeek4.1 maps medium to high and caps at max; cloud retains four effort tiers', () => {

@@ -152,7 +152,11 @@ the partial assistant message, and sends exactly one *continue* turn at the
 same cap; a truncated tool call is still dropped rather than replayed, and the
 continue turn then asks for the complete call. This applies regardless of the
 docs filename, preserves completed writes, and has no second retry for that request.
-Builtin requests start at 4096 tokens unless the seat supplies a cap, such as
+Builtin requests without an explicit `max_tokens` start at a cap scaled to the
+reasoning effort, because thinking shares the completion cap with the answer:
+4096 with reasoning off, 8192 for low, 16384 for medium/high and 32768 for
+xhigh/max, never above a quarter of the profile `context_max` nor below 4096.
+A seat may supply its own cap, such as
 the 8192 floor for docs slices. The cap and, for docs slices, disabled reasoning remain in effect for later
 requests; it is an output cap, not the model context capacity.
 The retry is an extra coder model turn, independent of failed-test repairs.
