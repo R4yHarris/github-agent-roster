@@ -4,6 +4,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { passingReview } from './helpers/review.mjs';
 import { parseConfig } from '../src/lib/config.mjs';
 import { writeAsk } from '../src/lib/ask.mjs';
 import {
@@ -248,7 +249,7 @@ test('a live builtin coder can be steered into its next scoped instruction witho
       }
       if (body.messages[0].content.startsWith('You are the builtin reviewer seat.')) {
         return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
-          content: JSON.stringify({ verdict: 'pass', reasons: ['The scoped change matches the task.'], security_notes: [] }) } }] });
+          content: passingReview(body, { reasons: ['The scoped change matches the task.'] }) } }] });
       }
       coderCalls += 1;
       if (coderCalls === 1) { firstSignal = request.signal; return new Promise(() => {}); }
@@ -567,7 +568,7 @@ test('a coder blocked only by the scope expansion limit is re-scoped instead of 
       }
       if (system.startsWith('You are the builtin reviewer seat.')) {
         return Response.json({ choices: [{ finish_reason: 'stop', message: {
-          role: 'assistant', content: JSON.stringify({ verdict: 'pass',
+          role: 'assistant', content: passingReview(body, {
             reasons: ['Expanded files are justified.'], security_notes: ['No protected paths changed.'] }),
         } }] });
       }
@@ -661,11 +662,9 @@ test('a bounded docs review failure does not start a second coder', async (conte
       if (system.startsWith('You are the builtin reviewer seat.')) {
         reviews += 1;
         return Response.json({ choices: [{ finish_reason: 'stop', message: {
-          role: 'assistant', content: JSON.stringify(reviews === 1 ? {
+          role: 'assistant', content: reviews === 1 ? JSON.stringify({
             verdict: 'fail', reasons: ['Status must say Active.'], security_notes: [],
-          } : {
-            verdict: 'pass', reasons: [], security_notes: [],
-          }),
+          }) : passingReview(body),
         } }] });
       }
       coderCalls += 1;
@@ -710,7 +709,7 @@ test('a repaired failing test passes excellence, read-only review, and declared-
           assert.equal(tests, 2);
           assert.match(body.messages[1].content, /smoke\.test\.mjs/);
           return Response.json({ choices: [{ finish_reason: 'stop', message: {
-            role: 'assistant', content: JSON.stringify({ verdict: 'pass',
+            role: 'assistant', content: passingReview(body, {
               reasons: ['Tests passed after the repair.'], security_notes: ['No protected paths changed.'] }),
           } }] });
         }
@@ -825,7 +824,7 @@ test('a configured direct ask implements and reviews the slice after its streame
       assert.match(logs.join('\n'), /Task summary:[\s\S]*Allowed files: README\.md[\s\S]*Effort:/);
       if (system.startsWith('You are the builtin reviewer seat.')) {
         return Response.json({ choices: [{ finish_reason: 'stop', message: {
-          role: 'assistant', content: JSON.stringify({ verdict: 'pass',
+          role: 'assistant', content: passingReview(body, {
             reasons: ['Diff matches the checked slice.'], security_notes: ['Documentation-only change.'] }),
         } }] });
       }
@@ -928,9 +927,7 @@ test('cold endpoint timeout preserves a valid TASK and retry skips planner rathe
       assert.doesNotMatch(body.messages[0].content, /builtin planner seat/);
       if (body.messages[0].content.startsWith('You are the builtin reviewer seat.')) {
         return Response.json({ choices: [{ finish_reason: 'stop', message: {
-          role: 'assistant', content: JSON.stringify({
-            verdict: 'pass', reasons: [], security_notes: [],
-          }),
+          role: 'assistant', content: passingReview(body),
         } }] });
       }
       retryTurns += 1;
@@ -1181,7 +1178,7 @@ test('an issue-176-shaped planner response reaches coder, real tests, and review
         assert.equal(testCalls, 1);
         assert.match(body.messages[1].content, /smoke\.test\.mjs/);
         return Response.json({ model: 'served-reviewer', choices: [{ finish_reason: 'stop', message: {
-          role: 'assistant', content: JSON.stringify({ verdict: 'pass',
+          role: 'assistant', content: passingReview(body, {
             reasons: ['The scoped regression passed node --test.'], security_notes: ['No protected files changed.'] }),
         } }] });
       }
@@ -1798,7 +1795,6 @@ test('auto-model continues the reviewer seat on an alternate profile instead of 
   twoProfileFleet(options.target);
   const requests = [];
   const reviews = [];
-  const passReview = JSON.stringify({ verdict: 'pass', reasons: [], security_notes: [] });
   const seatFetch = withResearchSummary(async (url, request) => {
     requests.push({ url: String(url), model: JSON.parse(request.body).model });
     if (requests.length === 1) return planReply('first-model');
@@ -1813,7 +1809,7 @@ test('auto-model continues the reviewer seat on an alternate profile instead of 
       const body = JSON.parse(request.body);
       if (!body.messages[0].content.startsWith('You are the builtin reviewer seat.')) return seatFetch(url, request);
       reviews.push({ url: String(url), model: body.model });
-      return textReply(reviews.length === 1 ? 'substituted-model' : 'alternate-model', passReview);
+      return textReply(reviews.length === 1 ? 'substituted-model' : 'alternate-model', passingReview(body));
     },
     runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
   });

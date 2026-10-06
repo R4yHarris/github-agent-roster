@@ -4,6 +4,7 @@ import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } f
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { passingReview, reviewedChecks } from './helpers/review.mjs';
 import { parseConfig } from '../src/lib/config.mjs';
 import { requirePassingReview, runReviewer } from '../src/seats/reviewer.mjs';
 import { LlmTimeoutError } from '../src/llm/request.mjs';
@@ -60,10 +61,8 @@ test('reviewer reads the diff, RESULT, and acceptance checks without receiving a
       assert.ok(request.headers.Authorization?.startsWith('Bearer '));
       assert.ok(!request.body.includes('not-forwarded'));
       return { status: 200, json: async () => ({
-        choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
-          verdict: 'pass', reasons: ['The diff implements the acceptance checks.'],
-          security_notes: ['No secret or policy edits in the reviewed diff.'],
-        }) } }],
+        choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: passingReview(body, { reasons: ['The diff implements the acceptance checks.'],
+          security_notes: ['No secret or policy edits in the reviewed diff.'] }) } }],
         model: 'actual-review-model',
         usage: { prompt_tokens: 7, completion_tokens: 2 },
       }) };
@@ -108,9 +107,7 @@ test('reviewer requires substantive public-path and seeded-secret evidence for t
       const body = JSON.parse(request.body);
       systemInstructions = body.messages[0].content;
       return { status: 200, json: async () => ({ choices: [{ finish_reason: 'stop', message: {
-        role: 'assistant', content: JSON.stringify({
-          verdict: 'pass', reasons: [], security_notes: [],
-        }),
+        role: 'assistant', content: passingReview(body),
       } }] }) };
     },
   });
@@ -119,6 +116,50 @@ test('reviewer requires substantive public-path and seeded-secret evidence for t
   assert.match(systemInstructions, /exact sentinel is absent from\s+that code's serialized output/);
   assert.match(systemInstructions, /generic keyword scan, or a sentinel the test removes itself, is insufficient/);
   assert.match(systemInstructions, /built inside the test itself.*tautological/);
+});
+
+test('reviewer pass is derived from per-check evidence, not the model summary', async (context) => {
+  const options = fixture(context);
+  const checks = [];
+  const rubberStamp = await runReviewer({
+    ...options, config, env: {},
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      checks.push(...reviewedChecks(body));
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+        content: JSON.stringify({ verdict: 'pass', reasons: ['Looks complete.'], security_notes: [],
+          checks: [{ id: 1, met: false, evidence: 'acquireLock is absent from the diff' },
+            ...reviewedChecks(body).slice(1).map((id) => ({ id, met: true, evidence: 'shown by the diff' }))] }),
+      } }] });
+    },
+  });
+  assert.ok(checks.length >= 1);
+  assert.equal(rubberStamp.verdict, 'fail');
+  assert.match(rubberStamp.content, /Check 1 unmet: acquireLock is absent from the diff/);
+  assert.match(rubberStamp.content, /## Acceptance checks\n\n- \[ \] 1\. /);
+  await assert.rejects(requirePassingReview({ worktreePath: options.worktree, review: rubberStamp }), /passing REVIEW\.md/);
+
+  const unjudged = fixture(context);
+  let calls = 0;
+  const silent = await runReviewer({
+    ...unjudged, config, env: {},
+    fetchImpl: async (_url, request) => {
+      calls += 1;
+      if (calls === 2) assert.match(JSON.parse(request.body).messages.at(-1).content, /must judge every numbered acceptance check/);
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+        content: JSON.stringify({ verdict: 'pass', reasons: [], security_notes: [] }) } }] });
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(silent.verdict, 'fail');
+  assert.match(silent.content, /Reviewer could not complete: .*must judge every numbered acceptance check/);
+
+  const judged = fixture(context);
+  const passed = await runReviewer({ ...judged, config, env: {},
+    fetchImpl: async (_url, request) => Response.json({ choices: [{ finish_reason: 'stop', message: {
+      role: 'assistant', content: passingReview(JSON.parse(request.body)) } }] }) });
+  assert.equal(passed.verdict, 'pass', passed.content);
+  assert.match(passed.content, /^# Review\n\nVerdict: pass\n[\s\S]*- \[x\] 1\. .+ — Check 1 is shown by the diff\./);
 });
 
 test('HTTP timeout cannot become a pass or completed review even if a caller supplies passing excellence', async (context) => {
@@ -203,7 +244,7 @@ test('reviewer repairs malformed JSON once without rerunning the coder', async (
       }
       assert.match(body.messages.at(-1).content, /Invalid reviewer JSON/);
       return Response.json({ choices: [{ finish_reason: 'stop', message: {
-        role: 'assistant', content: JSON.stringify({ verdict: 'pass', reasons: [], security_notes: [] }),
+        role: 'assistant', content: passingReview(body),
       } }] });
     },
   });

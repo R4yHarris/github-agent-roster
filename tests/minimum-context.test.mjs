@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { passingReview } from './helpers/review.mjs';
 import { parseConfig } from '../src/lib/config.mjs';
 import { planStub } from '../src/planner/stub.mjs';
 import { loadContext } from '../src/runtime/context.mjs';
@@ -112,8 +113,8 @@ test('a second docs length passes review when the required Status section is alr
   assert.equal(result.finishReason, undefined);
   assert.match(readFileSync(join(options.worktree, 'README.md'), 'utf8'), /## Status/);
   const review = await runReviewer({ ...options, coderResult: result,
-    fetchImpl: async () => Response.json({ choices: [{ finish_reason: 'stop', message: {
-      role: 'assistant', content: JSON.stringify({ verdict: 'pass',
+    fetchImpl: async (_url, request) => Response.json({ choices: [{ finish_reason: 'stop', message: {
+      role: 'assistant', content: passingReview(JSON.parse(request.body), {
         reasons: ['The saved Status section and passing checks satisfy the task.'],
         security_notes: ['Only README.md changed.'] }),
     } }] }) });
