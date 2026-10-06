@@ -54,6 +54,7 @@ server to an untrusted network.
 | `llm.api_key_optional` | `false` | Allow requests without a resolved key; set `true` for keyless local servers |
 | `llm.api_key_name` | `OPENAI_API_KEY` | Environment variable and vault entry name |
 | `llm.request_timeout_ms` | 20 minutes for loopback/private-IP hosts; 120 seconds otherwise | Total HTTP deadline, including response parsing and any HTTP retry delay; a fleet profile can override it for cold-inference gateways |
+| `llm.served_model_label` | `trust` | `ignore` treats the requested model as the served model for a gateway whose response `model` label is known to be wrong |
 | `llm.timeout_ms` | same host-based default | Low-level client compatibility alias; `request_timeout_ms` takes precedence |
 
 A streamed call to a remote (non-loopback, non-private-IP) host whose response
@@ -74,6 +75,11 @@ unrelated to the requested ID (a gateway alias), the seat prints one
 `served-model` warning, and the AI-Run records the served model. If fleet
 routing locked the request to a profile, an unrelated served model fails the
 run instead; Roster never silently substitutes a backend for a locked route.
+An operator who knows a gateway stamps every response with one fixed ID can
+declare `llm.served_model_label: ignore` (or the fleet profile field of the
+same name). Roster then records the requested model and skips the warning,
+failure, and quarantine for that endpoint. This is an explicit configuration
+declaration, not a silent switch.
 
 An absent, empty or whitespace-only `base_url` makes `createChat` return
 `null`, without accessing the vault or network. Keep the caller's existing

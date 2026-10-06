@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { ConfigError, loadConfig, parseConfig, setConfigValue } from '../src/lib/config.mjs';
+import { ConfigError, formatConfig, loadConfig, parseConfig, setConfigValue } from '../src/lib/config.mjs';
 
 const example = readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8');
 
@@ -155,6 +155,14 @@ test('optional request timeout survives profile selection and model/effort updat
   assert.equal(updated.llm.request_timeout_ms, 1_200_000);
   assert.equal(updated.llm.base_url, 'http://127.0.0.1:8000/v1');
   assert.equal(readFileSync(join(repoRoot, 'roster.config.example.yml'), 'utf8'), example);
+});
+
+test('an optional served model label policy is validated and round-trips through the config', () => {
+  const source = example.replace('  effort: m', '  served_model_label: ignore\n  effort: m');
+  assert.equal(parseConfig(source).llm.served_model_label, 'ignore');
+  assert.equal(parseConfig(formatConfig(parseConfig(source))).llm.served_model_label, 'ignore');
+  assert.throws(() => parseConfig(example.replace('  effort: m', '  served_model_label: maybe\n  effort: m')),
+    /served_model_label must be trust or ignore/);
 });
 
 test('vllm-local accepts a served HF model handle and explicit required keys', () => {

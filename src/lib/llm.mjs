@@ -32,6 +32,7 @@ export function createBuiltinChat(config, {
     api_key_optional: config.llm.api_key_optional ?? true,
     request_timeout_ms: config.llm.request_timeout_ms,
     stream_idle_timeout_ms: config.llm.stream_idle_timeout_ms,
+    served_model_label: config.llm.served_model_label,
     reasoning_effort: docsSlice ? 'none' : mappedEffort(config.llm),
     max_tokens: config.llm.max_tokens,
     ...(usesDeepseekReasoning(config.llm) ? {

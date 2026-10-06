@@ -36,6 +36,16 @@ single-line metadata, not benchmark evidence or permission grants. Optional
 routed, so gateways backed by cold local inference can use the documented
 20-minute cold-start allowance without changing every endpoint.
 
+Optional `served_model_label` is `trust` (the default) or `ignore`. Roster
+normally compares the response `model` field with the requested ID. It reports
+a substitution, and on a locked auto route it fails closed and quarantines the
+profile. Set `ignore` only for a gateway known to stamp every response with
+one ID regardless of the backend that answered. Roster then records the
+requested model as the served model and never quarantines that profile for a
+label mismatch. The setting only trusts the operator's catalog; it does not
+verify which backend answered. The [served-model guide](LLM.md) describes the
+same `llm.served_model_label` setting for the default endpoint.
+
 The small YAML subset supports one root, two-space list items, four-space
 fields, double-quoted strings, decimal integers, and inline task-class lists.
 Unknown/duplicate fields, duplicate IDs, malformed values, symlinks,
