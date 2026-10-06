@@ -78,3 +78,28 @@ export async function latestArchivedReview(worktree, { task, git, accept = () =>
   }
   return null;
 }
+
+// Scope the harness recorded for this task in earlier runs (regression-repaired tests and reviewed expansions),
+// so a resumed run's gate does not reject an earlier context's legitimate edits that are still in the worktree.
+export async function archivedRunScope(worktree, { task, git, limit = 50 }) {
+  const scope = { repairFiles: [], scopeFiles: [] };
+  if (typeof task !== 'string' || !/^(?:issue-[1-9]\d*|local-[a-f0-9]{16})$/.test(task)) return scope;
+  const common = path.resolve(worktree, (await git(['rev-parse', '--git-common-dir'])).trim());
+  const root = path.join(common, 'roster-artifacts', task);
+  const entries = await fs.readdir(root).catch(() => []);
+  const repair = new Set();
+  const expanded = new Set();
+  for (const name of entries.filter((entry) => /^\d+-[a-f0-9]{12}$/.test(entry)).sort().reverse().slice(0, limit)) {
+    const file = path.join(root, name, 'RESULT.md');
+    const stat = await fs.lstat(file).catch(() => null);
+    if (!stat?.isFile() || stat.isSymbolicLink() || stat.size > 256 * 1024) continue;
+    for (const line of (await fs.readFile(file, 'utf8')).split(/\r?\n/)) {
+      const match = line.match(/^(Additional failing-test scope|Files outside planned scope): (.+)$/);
+      if (!match || match[2] === '(none)') continue;
+      for (const entry of match[2].split(', ')) (match[1].startsWith('Additional') ? repair : expanded).add(entry.trim());
+    }
+  }
+  scope.repairFiles = [...repair].sort();
+  scope.scopeFiles = [...expanded].sort();
+  return scope;
+}

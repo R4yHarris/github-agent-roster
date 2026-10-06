@@ -8,7 +8,7 @@ import { runLoop } from '../runtime/loop.mjs';
 import { appendMemory, coderMemoryRecord, seatMemoryPath } from '../runtime/memory.mjs';
 import { runResearch } from '../runtime/research.mjs';
 import { loadSkills, previewSkills } from '../runtime/skills.mjs';
-import { createTools, isManagedFile, recipeAllowsTool, ToolAccessError } from '../runtime/tools.mjs';
+import { createTools, isAllowedFile, isManagedFile, isRepairTestFile, recipeAllowsTool, ToolAccessError } from '../runtime/tools.mjs';
 import { statusSectionPresent } from '../runtime/readme-status.mjs';
 import { isLlmTimeout, retryCommandForTask } from '../llm/request.mjs';
 import { selectReasoning } from '../llm/reasoning.mjs';
@@ -25,6 +25,7 @@ export async function runCoder({
   steeringControl,
   initialBaseline,
   initialScopeFiles = [],
+  initialRepairFiles = [],
   continuation = null,
 }) {
   const stages = [];
@@ -33,6 +34,8 @@ export async function runCoder({
   });
   const changedFiles = new Set();
   const scopeFiles = new Set(initialScopeFiles ?? []);
+  const repairFiles = new Set(initialRepairFiles ?? []);
+  const withRepairs = (files) => [...new Set([...repairFiles, ...(files ?? [])])].sort();
   const scopeBlocked = new Set();
   let context;
   let research;
@@ -73,6 +76,7 @@ export async function runCoder({
       allowRepoMap: context.contextPolicy.repoMap,
       scopeExpansion: config.seat.scope_expansion ?? 3,
       initialScopeFiles: [...scopeFiles],
+      initialRepairFiles: [...repairFiles],
       beforeWrite: lstatSync(path.join(worktree, '.git'), { throwIfNoEntry: false })
         ? async ({ allowedFiles }) => {
           try {
@@ -119,19 +123,19 @@ export async function runCoder({
         else baseline.delete(file);
       }
     }
+    const track = (written) => {
+      changedFiles.add(written.path);
+      if (written.scope_expanded) scopeFiles.add(written.scope_path);
+      else if (!isAllowedFile(written.path, allowedFiles) && isRepairTestFile(written.path)) repairFiles.add(written.path);
+      return written;
+    };
     const trackedTools = {
       ...tools,
       async write_file(args) {
-        const written = await tools.write_file(args);
-        changedFiles.add(written.path);
-        if (written.scope_expanded) scopeFiles.add(written.scope_path);
-        return written;
+        return track(await tools.write_file(args));
       },
       async edit_file(args) {
-        const written = await tools.edit_file(args);
-        changedFiles.add(written.path);
-        if (written.scope_expanded) scopeFiles.add(written.scope_path);
-        return written;
+        return track(await tools.edit_file(args));
       },
       async delete_file(args) {
         const deleted = await tools.delete_file(args);
@@ -148,7 +152,7 @@ export async function runCoder({
       config, context, tools: trackedTools, fetchImpl, env, vault, onEvent, retryCommand, signal, steeringControl,
       verify: async (candidate) => {
         const evidence = await checkExcellence({
-          worktree, task: context.task, result: { ...candidate, scopeFiles: [...scopeFiles].sort() }, baseline, memoryPath,
+          worktree, task: context.task, result: { ...candidate, scopeFiles: [...scopeFiles].sort(), repairFiles: withRepairs(candidate.repairFiles) }, baseline, memoryPath,
           env, apiKeyEnv: config.llm.api_key_env,
         });
         if (context.contextPolicy.readmeOnlyDocs && !changedFiles.has('README.md')) {
@@ -174,7 +178,7 @@ export async function runCoder({
     result = { ...result, error };
   }
   const timedOut = isLlmTimeout(result.error);
-  result = { ...result, research, stages, scopeFiles: [...scopeFiles].sort(),
+  result = { ...result, research, stages, scopeFiles: [...scopeFiles].sort(), repairFiles: withRepairs(result.repairFiles),
     scopeBlocked: [...scopeBlocked].sort(), ...(timedOut ? {
     timedOut: true,
     summary: 'Coder HTTP request timed out. No change was verified; this run did not complete.',

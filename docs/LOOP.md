@@ -13,7 +13,10 @@ A seat ends on the first of these. None of them are a model sentence.
 - `budget`: turn, token, or repair budget is exhausted. In a builtin run, an exhausted turn or repair budget (or
   a repeated denied action) ends this coder context only: the harness starts up to two fresh coder contexts
   (`Perspective escalation N of 2`), on a different eligible fleet profile when one exists. Worktree edits are kept,
-  and the last failure is passed in as evidence. A hard security denial is never escalated.
+  and the last failure is passed in as evidence. Recorded scope expansions and regression-repaired tests outside
+  Allowed Files stay in scope for the next context, so its gate does not reject an earlier context's legitimate
+  repair. A resumed run restores the same recorded scope from archived results for files still changed in the
+  worktree. A hard security denial is never escalated.
 - `host`: the endpoint timed out. Do not start another coder turn in the same run.
 
 ## Rules

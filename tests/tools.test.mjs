@@ -158,6 +158,10 @@ test('tiered scope records capped coder expansion while hard-deny surfaces stay 
   assert.equal((await resumed.write_file({ path: 'src/state.mjs', content: '' })).scope_expanded, true);
   await assert.rejects(resumed.write_file({ path: 'src/fourth.mjs', content: '' }), /Scope expansion limit/);
   await assert.rejects(createTools({ worktree, seat: 'planner', scopeExpansion: 1 }), /coder seat/);
+  const repairing = await createTools({ worktree, allowedFiles: ['README.md'], initialRepairFiles: ['tests/state.test.mjs'] });
+  assert.equal((await repairing.write_file({ path: 'tests/state.test.mjs', content: '' })).scope_expanded, undefined);
+  await assert.rejects(createTools({ worktree, allowedFiles: ['README.md'], initialRepairFiles: ['src/state.mjs'] }),
+    /Repair scope/);
   if (process.platform === 'win32') {
     const variant = await resumed.write_file({ path: 'SRC/STATE.MJS', content: '' });
     assert.equal(variant.scope_path, 'src/state.mjs');
