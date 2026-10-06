@@ -10,6 +10,14 @@ invented source edits nor a model verdict can turn an unverified coder result
 into a passing change. The coder's files and `RESULT.md` are retained on
 failure.
 
+The verdict is derived from per-check evidence. The reviewer receives the
+acceptance checks numbered and must return `checks`: one
+`{id, met, evidence}` entry per check, citing the diff file and symbol or the
+RESULT.md output. A `pass` that omits any check gets one corrective retry,
+then fails. Any `met: false` turns the verdict to `fail` with
+`Check N unmet: …` reasons, whatever the model's summary says. REVIEW.md lists
+each judged check under `## Acceptance checks`.
+
 A coder HTTP timeout is explicitly incomplete work, not a finished stub
 review. RESULT.md records `Outcome: timed out (unverified)`, failing checks
 and no verified change. REVIEW.md records `Verdict: fail` with a coder HTTP

@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { passingReview } from './helpers/review.mjs';
 import { parseConfig } from '../src/lib/config.mjs';
 import { runOnlyReview } from '../src/lib/review.mjs';
 import { requirePassingReview } from '../src/seats/reviewer.mjs';
@@ -51,8 +52,8 @@ test('explicit reviewer receives no tools and product writes are refused', async
   await assert.rejects(requirePassingReview(reviewed), /passing REVIEW/);
   await assert.rejects(runOnlyReview(reviewed, { repoRoot: run.repoRoot, config, env: {} }), /use \/review --again/);
   const second = await runOnlyReview(reviewed, { repoRoot: run.repoRoot, config, env: {}, again: true,
-    errorOutput: { write() {} }, fetchImpl: async () => Response.json({ choices: [{ finish_reason: 'stop',
-      message: { role: 'assistant', content: JSON.stringify({ verdict: 'pass', reasons: ['Current diff meets checks.'],
+    errorOutput: { write() {} }, fetchImpl: async (_url, request) => Response.json({ choices: [{ finish_reason: 'stop',
+      message: { role: 'assistant', content: passingReview(JSON.parse(request.body), { reasons: ['Current diff meets checks.'],
         security_notes: ['No protected products changed.'] }) } }] }) });
   assert.equal(second.review.verdict, 'pass');
   await requirePassingReview(second);

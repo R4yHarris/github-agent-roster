@@ -4,6 +4,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { passingReview } from './helpers/review.mjs';
 import { fileURLToPath } from 'node:url';
 import { parseConfig } from '../src/lib/config.mjs';
 import { runBuiltinTask } from '../src/lib/builtin.mjs';
@@ -61,11 +62,9 @@ function writeCall(id = 'write-1') {
   };
 }
 
-function reviewCompletion(verdict = 'pass') {
-  return completion('stop', { role: 'assistant', content: JSON.stringify({
-    verdict,
-    reasons: verdict === 'pass' ? [] : ['The bounded result needs repair.'],
-    security_notes: [],
+function reviewCompletion(verdict = 'pass', body) {
+  return completion('stop', { role: 'assistant', content: verdict === 'pass' ? passingReview(body) : JSON.stringify({
+    verdict, reasons: ['The bounded result needs repair.'], security_notes: [],
   }) });
 }
 
@@ -221,7 +220,7 @@ test('a product write runs checks, then a passing review ends the bounded loop a
       const body = JSON.parse(request.body);
       if (isReviewer(body)) {
         trace.push('review');
-        return reviewCompletion('pass');
+        return reviewCompletion('pass', body);
       }
       coderCalls += 1;
       return coderCalls === 1
@@ -246,7 +245,7 @@ test('one failed review returns to draft once and the second review ends the loo
       const body = JSON.parse(request.body);
       if (isReviewer(body)) {
         reviews += 1;
-        return reviewCompletion(reviews === 1 ? 'fail' : 'pass');
+        return reviewCompletion(reviews === 1 ? 'fail' : 'pass', body);
       }
       coderCalls += 1;
       return coderCalls % 2 === 1
