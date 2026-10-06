@@ -221,7 +221,10 @@ cap and never spawns the full suite; a repository without that file falls back
 to the full suite. Every other (code) slice runs the full `node --test` suite
 with a 5-minute cap.
 A nonzero Node exit is a failed tool result rather than completion,
-so the coder receives its summary and a fresh repair attempt. A timeout is an explicit
+so the coder receives its summary and a fresh repair attempt. Each test also
+gets `--test-timeout` of one third of the cap, so a hanging test (for example
+an unbounded retry loop) fails at its location as a repairable check instead
+of starving the whole run. A whole-process timeout is still an explicit
 error. Final verification must pass before a configured run reports
 success or publishes. The [excellence gate](EXCELLENCE.md) verifies actual
 diff paths and secret checks before RESULT.md and again before publication;

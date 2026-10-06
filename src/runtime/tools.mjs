@@ -923,7 +923,9 @@ export async function createTools({
         if (entry?.isFile()) present.push(file);
       }
       if (!present.length) return { exit_code: 0, skipped: true, stdout: 'no relevant tests exist for the changed files', stderr: '' };
-      command.args = ['--test', '--test-concurrency', command.args[2], ...present];
+      // A per-test timeout turns a hanging test into a located, repairable failure before the outer kill.
+      command.args = ['--test', '--test-concurrency', command.args[2],
+        `--test-timeout=${Math.floor(command.timeoutMs / 3)}`, ...present];
       command.label = `node ${command.args.join(' ')}`;
       try {
         await assertContractsInitialized(root);

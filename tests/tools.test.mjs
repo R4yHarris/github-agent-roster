@@ -272,6 +272,7 @@ test('a code slice runs only the matching test file', async (context) => {
     runCommand: async (_program, args, options) => { received = { args, timeout: options.timeout }; return { stdout: '', stderr: '' }; } });
   await tools.run_test();
   assert.deepEqual(received.args.slice(0, 3), ['--test', '--test-concurrency', received.args[2]]);
+  assert.equal(received.args[3], '--test-timeout=20000');
   assert.equal(received.args.at(-1), 'tests/repl.test.mjs');
   assert.equal(received.timeout, 60_000);
   const otherRepo = fixture(context);
