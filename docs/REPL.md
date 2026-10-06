@@ -121,7 +121,7 @@ agents and CI.
 | `/debug on` or `/debug off` or `/debug status` | Enable, stop or show testing metadata logging for this process only; never write config or change environment variables. |
 | `/log debug` | Tail up to 50 validated JSONL events from this process's most recent debug file. Fail closed while debug is off; reenable explicitly before reading. |
 | `/issues` | Print up to 100 current-repository open issue numbers and titles only, with a notice at the retrieval limit. Never print bodies. |
-| `/waves` or `/waves open` | Validate PLAN child drafts and display wave/title with GitHub-derived todo/running/review/done/blocked states. Plain waves is read-only. Only explicit human `open` creates missing drafts and their planned wave labels; GitHub body markers link them without another board file or local queue. Repeated open does not duplicate linked drafts. |
+| `/waves` or `/waves open` | Validate PLAN child drafts and display wave/title with GitHub-derived todo/running/review/done/blocked states. Plain waves is read-only. Explicit human `open`, or a feature issue run, creates missing drafts and their planned wave labels; seats cannot. GitHub body markers link them without another board file or local queue. Repeated open does not duplicate linked drafts. |
 | `/issue N` | Print cached title, state, branch and PR URL. Reuse cached metadata from runs/listings/status; use GitHub only when that issue is missing from cache. Unknown cached PR state stays unknown. |
 | `/diff` | Run filename-only Git diff in the current issue worktree; print tracked changed names, never file bodies. |
 | `/eval TARGET accept\|reject\|rework --minutes N --difficulty 1-5 "TEXT"` | Invoke the existing human-only evaluation writer with actual minutes, difficulty and feedback. The compact spelling records `again: n`; legacy positional difficulty/again and `--comment` remain supported. Agent seats cannot invoke the writer. |
@@ -221,9 +221,10 @@ separately from task class and model/difficulty. A README one-liner is a slice;
 "build an orchestrator" is an initiative, not a README edit. Features write
 2-5 child issue drafts in PLAN.md; initiatives write outcomes, waves, and
 issues in PLAN.md only. Waves are issue labels (`wave:N`), not another queue.
-No coder/reviewer/tests/publisher or automatic child issue creation occurs
-on these planning-only runs. Review the drafts on GitHub and create bounded
-slice issues, then `/run` those issues; rerunning the parent only plans again.
+A feature issue run opens its drafts as linked child issues and continues into
+the first runnable child slice; rerunning the parent reuses that PLAN and moves
+to the next ready child. `--confirm`, local Asks, and initiatives stop at
+PLAN.md with no coder, reviewer, tests, or publisher.
 
 The slice senior-team default uses Ask, TASK outcome/scope/checks, two small
 skills, final tests/excellence, read-only review, and a human eval hint.

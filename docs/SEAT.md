@@ -66,9 +66,10 @@ An Ask with no file scope needs clarification; it never becomes an invented
 and continues to coder in the same run. Only `--confirm` pauses after the
 summary; no second `/run` or `--auto` is required. Multiple explicitly
 stated Outcomes classify as a feature and produce child issue drafts in
-PLAN.md instead. An already valid cached slice TASK/recipe bypasses the
+PLAN.md instead; an issue run opens them as linked `wave:N` issues and
+continues into the first runnable child slice. An already valid cached slice TASK/recipe bypasses the
 planner and starts coder; a feature/initiative cannot reuse it to bypass
-planning-only execution. See [Ask classification](SDLC.md#agile-mapping).
+planning. See [Ask classification](SDLC.md#agile-mapping).
 
 The result exposes `stages`, paths to the context/research/result artifacts,
 `tests`, `testsSkipped`, `turns`, `model`, `usage`, `research`, and `excellence`.
@@ -143,7 +144,9 @@ on the standalone command. Review a passing run before the explicit App SDK
 handoff. The command never creates a draft PR or publishes by itself.
 
 For slices, `roster run --issue N` and shell `/run N` run planner, coder,
-then reviewer. Feature/initiative runs stop after PLAN.md, and `clarify`
+then reviewer. Feature issue runs open linked child issues and continue into
+the first runnable child slice (`--confirm` stops at PLAN.md); initiative runs
+and local feature Asks stop after PLAN.md, and `clarify`
 stops before any seat. For compatibility, `--issue N --seat coder` still aliases the
 full sequence;
 only the **no-issue** form above runs an already-planned coder alone.

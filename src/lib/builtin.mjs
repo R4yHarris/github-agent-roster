@@ -39,7 +39,7 @@ import { loadCapabilities } from './capabilities.mjs';
 import { initializeWorktreeSubmodules } from './contracts.mjs';
 import { createDebugLog } from './debug-log.mjs';
 import { throwIfCancelled } from '../runtime/cancel.mjs';
-import { issueWave, requireEarlierWavesClosed } from './waves.mjs';
+import { issueWave, readWavePlan, requireEarlierWavesClosed, waveBoard } from './waves.mjs';
 import { githubRepository } from './issue.mjs';
 import { routeFailure } from '../llm/openai.mjs';
 
@@ -374,7 +374,12 @@ export async function runBuiltinTask({
 
 export async function runBuiltinIssue(issueNumber, options = {}) {
   validateIssueNumber(issueNumber);
-  return runBuiltinAssignment(issueNumber, options);
+  const result = await runBuiltinAssignment(issueNumber, options);
+  if (!result?.continueWith) return result;
+  // A split feature is delivered, not parked: its next open wave slice runs in its own issue worktree.
+  const { preparedRun, onPrepared, planMode, acceptPlan, ...childOptions } = options;
+  const child = await runBuiltinAssignment(result.continueWith, childOptions);
+  return { ...child, parent: { issue: issueNumber, planPath: result.planPath, waves: result.waves } };
 }
 
 export async function runBuiltinAsk(ask, options = {}) {
@@ -450,6 +455,26 @@ function taskSummary(planner, effort) {
     `Allowed files: ${document.files_allowed.join(', ')}\n` +
     `Checks:\n${checks.map((check) => `- ${check}`).join('\n')}\n` +
     `Effort: ${shownEffort}\n`;
+}
+
+async function executableWavePlan(worktree, reference) {
+  try {
+    const { plan } = await readWavePlan(worktree);
+    if (plan.reference !== reference || !plan.issues.every((issue) => issue.files_allowed.length)) return null;
+    return { reused: true, askKind: plan.kind, planPath: path.join(worktree, 'PLAN.md'), outline: plan,
+      planningOnly: true, run: null, turns: 0, usage: null };
+  } catch {
+    return null;
+  }
+}
+
+async function openWaves({ worktree, cwd, env, apiKeyEnv, runCommand, log }) {
+  const rows = await waveBoard({ worktree, cwd, env, apiKeyEnv, open: true, runCommand });
+  log('Child issues:\n' + rows.map((row) => `- wave:${row.wave} #${row.issue} ${row.state}: ${row.title}`).join('\n'));
+  const next = rows.find((row) => row.state === 'todo');
+  const reason = rows.every((row) => row.state === 'done') ? 'every child issue is closed.'
+    : 'open children are in review or blocked by an earlier open wave; publish, merge, and close them first.';
+  return { rows, next, reason };
 }
 
 async function runBuiltinAssignment(issueNumber, {
@@ -665,7 +690,10 @@ async function runBuiltinAssignment(issueNumber, {
       planningOnly: true, failed: false };
   }
   if (existing.reason) log(existing.reason);
-  const plannerPreserve = acceptPlan ? ['PLAN.md'] : existing.plan
+  // Reuse an executable feature PLAN on rerun so its GitHub-linked child issues keep matching.
+  const existingWavePlan = !planMode && !acceptPlan && !prepared.local && prepared.reused &&
+    askKind === 'feature' ? await executableWavePlan(worktreePath, reference) : null;
+  const plannerPreserve = acceptPlan || existingWavePlan ? ['PLAN.md'] : existing.plan
     ? existing.plan.normalizedRecipe ? ['TASK.md'] : ['RECIPE.yml', 'TASK.md'] : [];
   const archivePath = prepared.reused ? await archiveRunArtifacts(worktreePath, {
     task: prepared.task, git: (args) => git(worktreePath, args, commandEnv),
@@ -684,7 +712,7 @@ async function runBuiltinAssignment(issueNumber, {
   let planner;
   for (;;) {
     try {
-      planner = acceptPlan ? await acceptPlannerPlan({ worktree: worktreePath, ask: prepared.ask,
+      planner = existingWavePlan ? existingWavePlan : acceptPlan ? await acceptPlannerPlan({ worktree: worktreePath, ask: prepared.ask,
         title: prepared.issue.title, reference, learningRoot: prepared.repoRoot, config: activeConfig, env, signal,
         lockedModel: route?.profile.model })
         : existing.plan ? await preparePlannerHandoff(existing.plan, {
@@ -695,7 +723,7 @@ async function runBuiltinAssignment(issueNumber, {
         session: sessions.planner, fetchImpl, env, vault, learningRoot: prepared.repoRoot,
         lockedModel: route?.profile.model, onEvent, askKind, retryCommand, signal, planMode,
       }));
-      if (planner.reused) log('planner skipped artifacts valid; starting coder.');
+      if (planner.reused && askKind === 'slice') log('planner skipped artifacts valid; starting coder.');
       break;
     } catch (error) {
       if (error instanceof Error && error.run) {
@@ -735,11 +763,29 @@ async function runBuiltinAssignment(issueNumber, {
       run: null, command: null, logPath: liveLog.path, logSession: liveLog.session };
   }
   if (askKind !== 'slice') {
-    log(`PLAN: ${planner.planPath}\nReview the ${askKind} child issue drafts and wave labels on GitHub, ` +
+    if (existingWavePlan) log(`Reusing executable ${askKind} PLAN with GitHub-linked child issues.`);
+    // Features deliver through their slices; initiative drafts are features that are re-planned on their own runs.
+    const delivery = askKind === 'feature' && !prepared.local && !confirm &&
+      (await executableWavePlan(worktreePath, reference)) ? await openWaves({
+        worktree: worktreePath, cwd: prepared.repoRoot, env, apiKeyEnv: activeConfig.llm.api_key_env,
+        runCommand: issueCommand, log,
+      }).catch((error) => ({ error })) : null;
+    if (delivery?.next) {
+      log(`PLAN: ${planner.planPath}\nContinuing ${askKind} #${prepared.issue.number} with wave ${delivery.next.wave} ` +
+        `child #${delivery.next.issue}: ${delivery.next.title}`);
+      return { ...prepared, askKind, classification, planner, planPath: planner.planPath, sessions,
+        runs: { planner: plannerRun, coder: null, reviewer: null }, run: null, command: null,
+        planningOnly: true, failed: false, archivePath, logPath: liveLog.path, logSession: liveLog.session,
+        waves: delivery.rows, continueWith: delivery.next.issue };
+    }
+    if (delivery?.error) log(`PLAN: ${planner.planPath}\nChild issues could not be opened: ${redactEvidence(delivery.error.message, { env, apiKeyEnv: activeConfig.llm.api_key_env })}\n` +
+      `Retry: roster run --issue ${prepared.issue.number} reuses this PLAN; no coder, reviewer, tests, or publisher ran.`);
+    else log(delivery ? `PLAN: ${planner.planPath}\nNo child issue is ready to run: ${delivery.reason}`
+      : `PLAN: ${planner.planPath}\nReview the ${askKind} child issue drafts and wave labels on GitHub, ` +
       'then run each bounded slice separately. No coder, reviewer, tests, or publisher ran.');
     return { ...prepared, askKind, classification, planner, planPath: planner.planPath, sessions,
       runs: { planner: plannerRun, coder: null, reviewer: null }, run: null, command: null,
-      planningOnly: true, failed: false, archivePath, logPath: liveLog.path, logSession: liveLog.session };
+      planningOnly: true, failed: Boolean(delivery?.error), archivePath, logPath: liveLog.path, logSession: liveLog.session };
   }
   const recipeCoder = parseRecipe(planner.recipe).seats.find(({ id }) => id === 'coder');
   let scopeBudget;

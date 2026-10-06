@@ -15,7 +15,7 @@ difficulty:
 | --- | --- |
 | `clarify` | Stop with a concrete outcome/file-scope clarification. No model seat, implementation, or publication. |
 | `slice` | One bounded outcome uses the minimum planner/coder/read-only-reviewer loop. A valid cached TASK/recipe skips planner. |
-| `feature` | Planner writes `PLAN.md` with **2-5 child issue drafts**. No coder, reviewer, tests, or publication in this run. |
+| `feature` | Planner writes `PLAN.md` with **2-5 child issue drafts**, each with planned file scope. An issue run opens them as linked GitHub child issues and continues into the first runnable wave slice. |
 | `initiative` | Planner writes `PLAN.md` only: outcomes, waves, and child issue drafts. No coder or application edits. |
 
 Classification is deterministic and conservative, not an extra model call:
@@ -32,18 +32,28 @@ but cannot turn a feature or initiative into a coder run.
 Ask -> classify
   clarify -> human clarification
   slice -> RECIPE.yml + TASK.md -> coder -> reviewer -> reviewed App PR -> human AI-Eval
-  feature / initiative -> planner -> PLAN.md -> human-created GitHub child issues
+  feature -> planner -> PLAN.md -> linked wave:N child issues -> first runnable slice
+  initiative -> planner -> PLAN.md -> human review of feature drafts
 ```
 
 Plans are bounded Markdown drafts, not another task board. Each draft has a
 title, one outcome, acceptance checks, and an issue label such as `wave:1`;
-the Waves section groups those drafts by label. File scope may only come from
-human-named paths. When unknown, the draft says to obtain explicit allowed
-files before generating an executable TASK. Review the drafts and create
-child issues on GitHub, then `/run` each slice separately. Repeating the parent
-feature/initiative run only plans again; it never executes the whole plan.
-No issues or labels are created automatically, and `--publish` or a review
-bypass cannot publish planning-only output.
+the Waves section groups those drafts by label. File scope comes from
+human-named paths. When the human named none, the feature planner proposes
+each draft's planned files from the tracked repository paths (never `**/*`,
+protected, or vendor paths), and PLAN.md records `Scope: planner-proposed`.
+A rejected PLAN is returned to the model with its validation error, up to four
+bounded attempts.
+
+For `roster run --issue N`, an executable feature PLAN is delivered rather than
+parked: Roster opens the missing drafts as GitHub issues labelled `wave:N`,
+each body naming `Parent: #N` and the PLAN markers, then runs the first `todo`
+child as an ordinary slice in its own worktree. Later waves stay blocked until
+earlier wave issues close. Rerunning the parent reuses its PLAN, so child
+issues are never duplicated, and continues with the next ready child. Use
+`--confirm` to stop at the PLAN instead. Local Asks and initiatives still stop
+at PLAN.md; initiative drafts are features that are planned on their own runs.
+Neither `--publish` nor a review bypass can publish planning-only output.
 
 The same classification applies to offline Ask drafts, Ask-file demos, and
 standalone TASK execution. Empty endpoints remain deterministic stubs.

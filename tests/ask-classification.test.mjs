@@ -6,6 +6,7 @@ import test from 'node:test';
 import { parseConfig } from '../src/lib/config.mjs';
 import { classifyAsk } from '../src/planner/classify.mjs';
 import { planOutline, validatePlan } from '../src/planner/plan.mjs';
+import { parsePlanDocument } from '../src/planner/plan-document.mjs';
 import { createTools, isForbiddenWrite, isManagedFile } from '../src/runtime/tools.mjs';
 
 const example = readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8');
@@ -117,7 +118,7 @@ test('configured planning refuses tool calls rather than executing app writes or
       } }] });
     },
   }), (error) => /Planning-only initiative failed/.test(error.message) && !/PRIVATE_/.test(error.message));
-  assert.equal(calls, 2);
+  assert.equal(calls, 4);
   await assert.rejects(planOutline('build an orchestrator', { kind: 'slice', config: configured,
     fetchImpl: () => assert.fail('Invalid PLAN kind must fail before inference') }), /feature or initiative/);
 });
@@ -184,20 +185,56 @@ test('configured planning uses one validated JSON response and never offers app 
   assert.match(plan.plan, /Labels: `wave:5`/);
 });
 
-test('malformed or over-scoped PLAN gets one bounded repair, then an explicit failure', async () => {
+test('malformed or over-scoped PLAN gets bounded repairs that show the rejected answer, then an explicit failure', async () => {
   let calls = 0;
   await assert.rejects(planOutline('Implement the profile feature.', {
     kind: 'feature', config: configured, env: {}, fetchImpl: async (_url, request) => {
       calls += 1;
       const body = JSON.parse(request.body);
       assert.equal(body.tools, undefined);
-      if (calls === 2) assert.match(body.messages.at(-1).content, /Emit only the requested PLAN JSON/);
+      if (calls === 2) {
+        assert.match(body.messages.at(-1).content, /Emit only the requested PLAN JSON/);
+        assert.deepEqual(body.messages.at(-2), { role: 'assistant', content: 'garbage' });
+      }
       return Response.json({ choices: [{ finish_reason: 'stop', message: {
         role: 'assistant', content: calls === 1 ? 'garbage' : JSON.stringify(outline()),
       } }] });
     },
-  }), /Planning-only feature failed: PLAN cannot invent allowed files[\s\S]*No coder or publisher ran/);
+  }), /Planning-only feature failed after 4 attempts: PLAN cannot invent allowed files[\s\S]*No coder or publisher ran/);
+  assert.equal(calls, 4);
+});
+
+test('with no human file scope the feature planner proposes grounded files for every draft', async () => {
+  const repositoryFiles = ['src/lib/paths.mjs', 'tests/paths.test.mjs', 'docs/STATE.md'];
+  const options = { kind: 'feature', repositoryFiles };
+  const scoped = (files) => ({ outcomes: ['State moves'], issues: [
+    { title: 'Move state', outcome: 'Moved', acceptance_checks: ['node --test exits 0'], wave: 1, files_allowed: files },
+    { title: 'Document state', outcome: 'Documented', acceptance_checks: ['docs explain it'], wave: 2,
+      files_allowed: ['docs/STATE.md'] },
+  ] });
+  const valid = validatePlan(scoped(['src/lib/paths.mjs', 'src/lib/repo-state.mjs', 'tests/**']), options);
+  assert.equal(valid.proposedScope, true);
+  assert.throws(() => validatePlan(scoped(['lib/unknown.mjs']), options), /lib\/unknown\.mjs/);
+  assert.throws(() => validatePlan(scoped([]), options));
+  assert.throws(() => validatePlan(scoped(['**/*']), options));
+  assert.throws(() => validatePlan(scoped(['.github/workflows/ci.yml']), options));
+  assert.throws(() => validatePlan(scoped(['src/lib/paths.mjs']), { kind: 'feature' }), /cannot invent allowed files/);
+  let calls = 0;
+  const plan = await planOutline('Split repo state from machine memory.', { kind: 'feature', config: configured, env: {},
+    repositoryFiles, fetchImpl: async (_url, request) => {
+      calls += 1;
+      const body = JSON.parse(request.body);
+      assert.deepEqual(JSON.parse(body.messages[1].content).repository_files, repositoryFiles);
+      const content = calls === 1 ? JSON.stringify(scoped(['nowhere/file.mjs']))
+        : '```json\n' + JSON.stringify(scoped(['src/lib/paths.mjs'])) + '\n```';
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content } }] });
+    } });
   assert.equal(calls, 2);
+  assert.match(plan.plan, /^Scope: planner-proposed$/m);
+  assert.doesNotMatch(plan.plan, /Human must name allowed files/);
+  assert.deepEqual(parsePlanDocument(plan.plan).issues.map(({ files_allowed }) => files_allowed),
+    [['src/lib/paths.mjs'], ['docs/STATE.md']]);
+  assert.throws(() => parsePlanDocument(plan.plan.replace(/^Scope: planner-proposed\n+/m, '')), /cannot invent allowed files/);
 });
 
 test('planning-only writer can write PLAN.md, never TASK/recipe/app code, and coder cannot write PLAN', async (t) => {

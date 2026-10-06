@@ -1,12 +1,13 @@
+import { execFile } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { TextDecoder } from 'node:util';
+import { promisify, TextDecoder } from 'node:util';
 import { parseRecipe, RecipeError } from '../lib/recipe.mjs';
 import { planAsk, planFromTask, runtimeRecipe as canonicalRecipe } from '../planner/stub.mjs';
 import { appendMemory, readMemory, seatMemoryPath } from '../runtime/memory.mjs';
 import { writeEstimate } from '../runtime/estimate.mjs';
 import { buildRun } from '../metrics/run.mjs';
-import { createTools, planArtifactFiles } from '../runtime/tools.mjs';
+import { createTools, isForbiddenWrite, planArtifactFiles } from '../runtime/tools.mjs';
 import { ensureLocalPath } from '../lib/paths.mjs';
 import { parseTaskDocument, taskSections } from '../planner/task.mjs';
 import { validatePlanningReceipt } from '../planner/receipt.mjs';
@@ -17,6 +18,21 @@ import { selectReasoning } from '../llm/reasoning.mjs';
 import { throwIfCancelled } from '../runtime/cancel.mjs';
 import { planSlice, validatedPlanTask } from '../planner/plan-mode.mjs';
 import { runtimeRecipe } from '../planner/stub.mjs';
+
+const execFileAsync = promisify(execFile);
+const repositoryFileLimit = 1500;
+
+// Tracked, writable paths ground planner-proposed child scope; protected and vendored paths never appear.
+export async function trackedRepositoryFiles(worktree) {
+  try {
+    const { stdout } = await execFileAsync('git', ['ls-files', '-z'], { cwd: worktree, encoding: 'utf8',
+      maxBuffer: 16 * 1024 * 1024, timeout: 30_000 });
+    const files = stdout.split('\0').filter((file) => file && !file.startsWith('vendor/') && !isForbiddenWrite(file));
+    return files.slice(0, repositoryFileLimit);
+  } catch {
+    return undefined;
+  }
+}
 
 function validateBuiltinRecipe(source, reference) {
   const recipe = parseRecipe(source);
@@ -166,7 +182,8 @@ export async function runPlanner({
       await tools.write_file({ path: 'RECIPE.yml', content: plan.recipe });
       await tools.write_file({ path: 'TASK.md', content: plan.task });
     } else {
-      plan = await planOutline(ask, { ...options, kind });
+      plan = await planOutline(ask, { ...options, kind,
+        repositoryFiles: config.llm.base_url ? await trackedRepositoryFiles(worktree) : undefined });
       await tools.write_file({ path: 'PLAN.md', content: plan.plan });
     }
   } catch (error) {
