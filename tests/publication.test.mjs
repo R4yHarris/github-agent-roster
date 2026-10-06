@@ -35,6 +35,15 @@ test('resolves publication model in config, AI_MODEL, ROSTER_MODEL order', () =>
   }), /set model/);
 });
 
+test('publish message lists files outside planned scope and rejects protected ones', () => {
+  const message = buildPublishMessage({ subject: 'feat: state root', model: 'qwen3', summary: 'Adds resolver.',
+    scopeFiles: ['src/cli.mjs'] });
+  assert.match(message, /## Files outside planned scope\n\n- `src\/cli\.mjs`/);
+  assert.doesNotMatch(buildPublishMessage({ subject: 'feat: x', model: 'qwen3', summary: 'S.' }), /outside planned scope/);
+  assert.throws(() => buildPublishMessage({ subject: 'feat: x', model: 'qwen3', summary: 'S.',
+    scopeFiles: ['.github/workflows/ci.yml'] }), /scope expansion/);
+});
+
 test('publish message includes a real model, test command, and non-closing issue reference', () => {
   const message = buildPublishMessage({
     subject: 'fix: refuse publish without a model id', model: 'GPT-6-Sol',

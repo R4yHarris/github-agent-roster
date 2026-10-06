@@ -104,6 +104,11 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         'passing existing tests or rewriting identical content is not completion. ' : '') +
       (mentionsSecrets(context.task) ? `${sentinelGuidance} ` : '') +
       'A failing test outside Allowed Files is pre-existing: report it and do not edit it. ' +
+      (!boundedTask && !docsOnly && (config.seat.scope_expansion ?? 3) > 0
+        ? `Allowed Files are the planned scope. If the outcome truly requires another product file, you may write at most ` +
+          `${config.seat.scope_expansion ?? 3} files outside it; each is recorded, judged by the reviewer, and listed in the PR, ` +
+          'so justify each one in your summary. Secrets, .git, policy, workflows, vendor, and harness files stay denied. '
+        : '') +
       'Finish with a concise summary of changes, test results, and blockers.' },
   ];
   const requiresWebSearch = /\bweb_search\b/.test(context.task);

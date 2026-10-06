@@ -29,6 +29,11 @@ export function classifyAsk(ask, { title, filesAllowed = [] } = {}) {
       : 'Whole-system or multi-wave outcome needs an issue plan');
   }
   const oneLiner = /\b(?:readme(?:\.md)?\b.*\bone[- ]liner?\b|one[- ]liner?\b.*\breadme(?:\.md)?)\b/.test(summary);
+  // A human-declared allow-list, one outcome, and acceptance checks already form a slice (spec 5.3), whatever the title says.
+  const acceptance = /^(?:#{1,6}\s*)?acceptance(?:\s+(?:checks|criteria))?\s*:?\s*$/im.test(text);
+  if (requirements.explicit && requirements.files.length && acceptance && (requirements.outcomes?.length ?? 1) <= 1) {
+    return result('slice', 'Human-declared allow-list, one outcome, and acceptance checks make an executable slice');
+  }
   if ((requirements.outcomes?.length ?? 1) > 1 ||
       !oneLiner && directives.some((line) =>
         /^(?:feature\b|(?:add|build|create|implement|deliver)\b.*\b(?:feature|end-to-end|multi-component)\b)/.test(line))) {

@@ -19,7 +19,7 @@ const defaultProfiles = {
 const fields = {
   llm: ['base_url', 'model', 'api_key_env', 'effort', 'effort_override', 'context_max', 'profile', 'api_key_optional', 'provider', 'request_timeout_ms'],
   planner: ['turn_budget'],
-  seat: ['id', 'principal', 'turn_budget', 'tools', 'context_chars'],
+  seat: ['id', 'principal', 'turn_budget', 'tools', 'context_chars', 'scope_expansion'],
   paths: ['memory', 'skills', 'asks', 'worktrees'],
   publish: ['enabled'],
   tools: ['internet', 'run_test'],
@@ -169,7 +169,7 @@ export function parseConfig(source) {
       ['llm', 'seat', 'paths'].some((name) =>
         !roots.has(name) || fields[name].some((field) =>
           !(name === 'llm' && ['profile', 'api_key_optional', 'provider', 'request_timeout_ms', 'effort_override'].includes(field)) &&
-          !(name === 'seat' && field === 'context_chars') && !Object.hasOwn(config[name], field))) ||
+          !(name === 'seat' && ['context_chars', 'scope_expansion'].includes(field)) && !Object.hasOwn(config[name], field))) ||
       (roots.has('planner') && !Object.hasOwn(config.planner, 'turn_budget'))) {
     invalid('schema, llm, seat, paths, and optional planner must contain every documented field');
   }
@@ -250,6 +250,9 @@ export function parseConfig(source) {
   seat.context_chars = Object.hasOwn(seat, 'context_chars')
     ? integerValue(seat.context_chars, 'seat.context_chars') : 200000;
   if (seat.context_chars < 1) invalid('seat.context_chars must be positive');
+  seat.scope_expansion = Object.hasOwn(seat, 'scope_expansion')
+    ? integerValue(seat.scope_expansion, 'seat.scope_expansion') : 3;
+  if (seat.scope_expansion < 0 || seat.scope_expansion > 16) invalid('seat.scope_expansion must be 0-16 files (0 is strict scope)');
   if (seat.id !== 'coder' || seat.principal !== 'coder' || seat.turn_budget < 1 || seat.turn_budget > 10000) {
     invalid('seat must be coder with principal coder and turn_budget between 1 and 10000');
   }

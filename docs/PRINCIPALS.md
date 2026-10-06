@@ -32,6 +32,15 @@ These apply to every seat and to the harness that sequences them
   Task failures such as a check failing twice (§5.4) still stop for a human;
   rerouting is for endpoint failures, not for weakening checks. Saved,
   non-routed models are never rerouted.
+- **Scope steers; security denies.** TASK.md Allowed Files are the planned
+  scope. Security boundaries always stop the run: secrets, `.git`, policy,
+  workflows, `vendor/`, harness-managed files, `.roster/`, symlinks, and
+  worktree escapes. Other repository files outside the plan may be written up to
+  `seat.scope_expansion` files (default 3; `0` restores strict scope). Each
+  expansion is logged, listed in RESULT.md and in the PR body under "Files
+  outside planned scope", and judged by the reviewer, who fails it unless it is
+  necessary and minimal. Hitting the cap is a re-plan signal (§5.3), not
+  silent acceptance.
 
 ## Builtin coder conduct
 

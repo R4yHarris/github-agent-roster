@@ -32,12 +32,21 @@ remain protected even with broad TASK scope. Test execution remains a separate
 permission; read scope does not waive the acceptance checks.
 
 Denials come in two classes. Security-boundary denials stop the coder at once:
-path escapes, writes outside TASK scope or to managed files, secrets, Git
-metadata, policy, workflows, contracts, symlinks, and unsafe web targets. Scope
-and usage mistakes (reads outside the slice, unmatched edits, disabled tools,
-disallowed commands) return `Denied: ... Continue` so the model can correct
-course without seeing the denied content. The same usage denial a third time
-stops the run with `(repeated after 2 denials)`.
+path escapes, writes to managed or protected files, strict-scope writes outside
+TASK scope, secrets, Git metadata, policy, workflows, contracts, symlinks, and
+unsafe web targets. Scope and usage mistakes (reads outside the slice, unmatched
+edits, disabled tools, disallowed commands, exceeding the scope-expansion cap)
+return `Denied: ... Continue` so the model can correct course without seeing the
+denied content. The same usage denial a third time stops the run with
+`(repeated after 2 denials)`.
+
+Tiered write scope: with `seat.scope_expansion` above 0 (default 3), a coder
+`write_file` or `edit_file` on an unprotected repository file outside TASK.md
+succeeds and returns `scope_expanded: true` with a note. The file is recorded
+once (a failed `edit_file` match does not use a slot) and survives a route
+recovery. It is accepted by the excellence gate, sent to the reviewer under
+"Files outside planned scope", staged for publication, and listed in the PR
+body. README-only and single-file bounded tasks stay strict.
 
 ## Planner artifact writer
 

@@ -143,7 +143,7 @@ export async function prepareBuiltinPublication(run, {
     git(worktree, args, commandEnv));
   const contractsPath = resolveContractsPath({ repoRoot: run.worktreePath, cwd, env });
   await stageReviewedFiles(run.worktreePath, taskAndRepairFiles(taskFilesAllowed(run.planner.task),
-    run.result.repairFiles), { env: commandEnv });
+    run.result.repairFiles, run.result.scopeFiles), { env: commandEnv });
   publishEnv.GITHUB_APP_PRIVATE_KEY_PATH = path.resolve(cwd, env.GITHUB_APP_PRIVATE_KEY_PATH);
   return { contractsPath, worktreePath: run.worktreePath, publishEnv, model: publishEnv.AI_MODEL };
 }
@@ -669,7 +669,7 @@ async function runBuiltinAssignment(issueNumber, {
       return { review, reviewerRun };
     }
   };
-  const coderSeat = (priorFeedback = planner.feedback?.context, { initialBaseline, continuation } = {}) => {
+  const coderSeat = (priorFeedback = planner.feedback?.context, { initialBaseline, initialScopeFiles, continuation } = {}) => {
     assertSeatCovers(recipeCoder, {
       ...(recipeCoder.max_difficulty === undefined ? {} : { difficulty: readTaskMetadata(planner.task).difficulty }),
       ...(recipeCoder.skills === undefined ? {} : { skills: taskSkillNames(planner.task) }),
@@ -677,15 +677,16 @@ async function runBuiltinAssignment(issueNumber, {
     return liveLog.seat('coder', sessions.coder, coderConfig, (onEvent) => runCoder({
       worktree: worktreePath, repoRoot, config: coderConfig, task: prepared.task, session: sessions.coder,
       fetchImpl, env, vault, runTestCommand, priorFeedback, onEvent, askKind, retryCommand, signal, steeringControl,
-      initialBaseline, continuation,
+      initialBaseline, initialScopeFiles, continuation,
     }));
   };
   let result;
   let coderBaseline;
+  let coderScopeFiles = [];
   let continuation;
   for (;;) {
     try {
-      result = await coderSeat(undefined, { initialBaseline: coderBaseline, continuation });
+      result = await coderSeat(undefined, { initialBaseline: coderBaseline, initialScopeFiles: coderScopeFiles, continuation });
       break;
     } catch (error) {
       if (error instanceof Error && error.result) {
@@ -694,6 +695,7 @@ async function runBuiltinAssignment(issueNumber, {
       const failedProfile = route?.profile.id;
       if (!await recoverRoute('coder', error)) throw error;
       coderBaseline ??= error.result?.baseline;
+      coderScopeFiles = [...new Set([...coderScopeFiles, ...(error.result?.scopeFiles ?? [])])];
       coderConfig = buildCoderConfig(activeConfig.llm.model);
       await archiveRunArtifacts(worktreePath, {
         task: prepared.task, git: (args) => git(worktreePath, args, commandEnv),
@@ -718,6 +720,7 @@ async function runBuiltinAssignment(issueNumber, {
     model, issueNumber: prepared.issue.number,
     summary: redactEvidence(result.summary, { env, apiKeyEnv: config.llm.api_key_env }),
     testsSkipped: result.testsSkipped,
+    scopeFiles: result.scopeFiles ?? [],
     seats: `planner, coder, reviewer (${skipReview ? 'gate bypassed with --skip-review'
       : !isReviewRequired(config) ? 'gate not required by configuration' : review.verdict})`,
   }) : null;

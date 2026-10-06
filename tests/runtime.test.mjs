@@ -238,6 +238,43 @@ test('LLM coder uses only offered tools within the turn budget, then verifies te
   assert.equal(record.next_gap, 'None reported.');
 });
 
+test('a justified write outside planned scope is recorded, passes excellence, and is listed in RESULT.md', async (context) => {
+  const config = parseConfig(example.replace('profile: ""', 'profile: vllm-local')
+    .replace('model: ""', 'model: served-model'));
+  const options = fixture(context, config);
+  let turns = 0;
+  const result = await runCoder({
+    ...options, env: { AI_PROVIDER: 'github-copilot' },
+    fetchImpl: async (_url, request) => {
+      turns += 1;
+      const sent = JSON.parse(request.body);
+      if (turns === 1) {
+        assert.match(sent.messages[1].content, /at most 3 files outside it/);
+        return { status: 200, json: async () => ({
+          choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', tool_calls: [
+            { id: 'a', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({
+              path: 'README.md', content: '# Example\n\n## Status\nReady.\n' }) } },
+            { id: 'b', type: 'function', function: { name: 'write_file', arguments: JSON.stringify({
+              path: 'src/status.mjs', content: 'export const status = "ready";\n' }) } },
+          ] } }],
+          usage: { prompt_tokens: 7, completion_tokens: 2 },
+        }) };
+      }
+      assert.match(sent.messages.at(-1).content, /scope_expanded/);
+      return { status: 200, json: async () => ({
+        choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+          content: 'Added Status; src/status.mjs was needed to export the status value.' } }],
+        usage: { prompt_tokens: 5, completion_tokens: 3 },
+      }) };
+    },
+    runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+  });
+  assert.equal(result.excellence.pass, true, result.excellence.reasons.join('; '));
+  assert.deepEqual(result.scopeFiles, ['src/status.mjs']);
+  assert.ok(result.excellence.files.includes('src/status.mjs'));
+  assert.match(readFileSync(path.join(options.worktree, 'RESULT.md'), 'utf8'), /Files outside planned scope: src\/status\.mjs/);
+});
+
 test('named vLLM profile performs one worktree tool call then stops on a passing excellence gate', async (context) => {
   const config = parseConfig(example.replace('profile: ""', 'profile: vllm-local')
     .replace('model: ""', 'model: served-model'));

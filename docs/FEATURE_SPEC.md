@@ -79,7 +79,7 @@ Map every ask onto a delivery path a good engineering manager already knows.
 3. Split. Epics become stories. Stories become slices with one acceptance check and a file allow-list.
 4. Staff. Match slice to seat, model, and hardware from history, not from a fixed favorite.
 5. Plan. Planner writes TASK.md, RECIPE.yml, ESTIMATE.md. No product code.
-6. Implement. Coder edits only allowed files, in one worktree, with a turn budget.
+6. Implement. Coder works from the planned allow-list in one worktree, with a turn budget. Protected surfaces are always denied; a capped, recorded expansion beyond the plan goes to review and the PR body.
 7. Verify. Relevant tests only. Docs are read, not suite-run. Failed tests open one repair, then stop.
 8. Review. Reviewer is not the coder. Verdict is pass, fail, or escalate.
 9. Publish. App bot opens a draft PR with trailers. Human or merger role merges when the required check is green.
@@ -118,7 +118,8 @@ Taken from CrewAI roles and Hermes profiles, then made operational.
 Taken from MetaGPT's company SOP and agile practice, without the role-play.
 
 - Ask kinds: question, slice, story, epic, incident.
-- A slice has one named outcome, an allow-list, and acceptance checks.
+- A slice has one named outcome, an allow-list, and acceptance checks. A human ask with all three is a slice whatever its title says.
+- The allow-list is planned scope, not a tripwire. A coder may expand into a few unprotected files (`seat.scope_expansion`, default 3, `0` = strict); each expansion is recorded, reviewed, and listed in the PR. Hitting the cap means re-plan.
 - An epic must split before any coder starts. The planner does not implement.
 - Dependencies are issue links, not a second kanban database.
 - Estimates are first-class: difficulty 1–5, minutes, confidence.
