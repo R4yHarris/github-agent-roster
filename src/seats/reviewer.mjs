@@ -40,12 +40,13 @@ const testReviewInstructions = 'For test changes, verify the assertions would fa
   'fed into the app code under test (input, config, or env) and an assertion that the exact sentinel is absent from ' +
   'that code\'s serialized output; a generic keyword scan, or a sentinel the test removes itself, is insufficient.';
 
-async function readRegularText(worktree, name) {
+async function readRegularText(worktree, name, limit = maxFileBytes) {
   const file = path.join(worktree, name);
   await ensureLocalPath(file, worktree);
   const entry = await fs.lstat(file);
-  if (!entry.isFile() || entry.isSymbolicLink() || entry.size > maxFileBytes) {
-    throw new Error(`${name} must be a regular file of at most 64 KiB`);
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.size > limit) {
+    throw new Error(limit === maxFileBytes ? `${name} must be a regular file of at most 64 KiB`
+      : `${name} must be a regular file within seat.context_chars`);
   }
   try {
     return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
@@ -116,9 +117,20 @@ async function readDiff(worktree, task, files, budget, repairFiles, scopeFiles) 
         !isAllowedFile(file, taskAndRepairFiles(taskFilesAllowed(task), repairFiles, scopeFiles)))) {
     throw new Error('Reviewer requires 1-32 task-allowed changed files');
   }
-  const git = async (args) => (await execute('git', args, {
-    cwd: worktree, encoding: 'utf8', timeout: 60_000, maxBuffer: maxFileBytes,
-  })).stdout;
+  // The diff is bounded by the reviewer's context budget (UTF-8 can take up to 4 bytes per character), not 64 KiB.
+  const diffBytes = Math.max(maxFileBytes, budget * 4 + 1);
+  const git = async (args) => {
+    try {
+      return (await execute('git', args, {
+        cwd: worktree, encoding: 'utf8', timeout: 60_000, maxBuffer: diffBytes,
+      })).stdout;
+    } catch (error) {
+      if (error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+        throw new Error('Reviewer diff exceeds seat.context_chars', { cause: error });
+      }
+      throw error;
+    }
+  };
   const root = (await git(['rev-parse', '--show-toplevel'])).trim();
   if (path.resolve(root) !== path.resolve(worktree)) {
     throw new Error('Reviewer requires the task worktree repository root');
@@ -134,7 +146,7 @@ async function readDiff(worktree, task, files, budget, repairFiles, scopeFiles) 
   const additions = [];
   for (const file of untracked.split('\0').filter(Boolean)) {
     if (!files.includes(file)) throw new Error('Reviewer found an unexpected untracked file');
-    additions.push(`--- /dev/null\n+++ ${file}\n${await readRegularText(worktree, file)}`);
+    additions.push(`--- /dev/null\n+++ ${file}\n${await readRegularText(worktree, file, diffBytes)}`);
   }
   const diff = [tracked, ...additions].filter(Boolean).join('\n');
   if (!diff.trim()) throw new Error('Reviewer found no task diff to inspect');
