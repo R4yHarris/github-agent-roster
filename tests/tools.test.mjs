@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createTools, isAllowedFile, isForbiddenRead, isForbiddenWrite, taskAndRepairFiles, toolDefinitions } from '../src/runtime/tools.mjs';
+import { createTools, isAllowedFile, isForbiddenRead, isForbiddenWrite, taskAndRepairFiles, testFailureEvidence, toolDefinitions } from '../src/runtime/tools.mjs';
 
 function fixture(context) {
   const worktree = mkdtempSync(path.join(tmpdir(), 'roster-tools-'));
@@ -64,11 +64,26 @@ test('a real failed node test grants only its regular failing-test file for repa
   const failed = await tools.run_test();
   assert.equal(failed.exit_code, 1);
   assert.deepEqual(failed.repair_files, [failing]);
+  assert.deepEqual(failed.failing_files, [failing]);
   assert.match(await tools.read_file({ path: failing }), /assert.equal/);
   await tools.write_file({ path: failing,
     content: "import test from 'node:test';\ntest('broken', () => {});\n" });
   await assert.rejects(tools.write_file({ path: 'tests/unrelated.test.mjs', content: '' }), /not allowed/);
   assert.equal((await tools.run_test()).exit_code, 0);
+});
+
+test('test failure evidence keeps the failures and counts, not the passing head', () => {
+  const passing = Array.from({ length: 300 }, (_, index) => `✔ passes ${index} (1ms)`).join('\n');
+  const spec = `${passing}\nℹ tests 301\nℹ pass 300\nℹ fail 1\n\n✖ failing tests:\n\ntest at tests\\a.test.mjs:3:1\n` +
+    '✖ broken (2ms)\n  AssertionError: marker\n';
+  const evidence = testFailureEvidence(spec);
+  assert.match(evidence, /ℹ fail 1/);
+  assert.match(evidence, /failing tests:[\s\S]*AssertionError: marker/);
+  assert.doesNotMatch(evidence, /passes 0 /);
+  const tap = `ok 1 - fine\nnot ok 2 - broken\n  ---\n  error: 'marker'\n  ...\nok 3 - later\n`;
+  assert.equal(testFailureEvidence(tap), "not ok 2 - broken\n  ---\n  error: 'marker'\n  ...");
+  assert.equal(testFailureEvidence('x'.repeat(5000) + 'END', 100), `${'x'.repeat(97)}END`);
+  assert.ok(testFailureEvidence(spec, 200).length <= 200);
 });
 
 test('regression classification mirrors initialized submodules into the base worktree', async (context) => {

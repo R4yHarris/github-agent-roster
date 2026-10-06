@@ -1,6 +1,6 @@
 import { createBuiltinChat } from '../lib/llm.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
-import { recipeAllowsTool, taskAndRepairFiles, toolDefinitions, ToolAccessError, ToolUsageError, verificationDecision, isDocsOnlyScope, coversTestFile } from './tools.mjs';
+import { recipeAllowsTool, taskAndRepairFiles, toolDefinitions, ToolAccessError, ToolUsageError, verificationDecision, isDocsOnlyScope, coversTestFile, testFailureEvidence } from './tools.mjs';
 import { redactEvidence, taskSkipsTests } from './excellence.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
 import { readTaskMetadata } from './estimate.mjs';
@@ -166,7 +166,8 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       await onEvent?.({ type: 'contracts-uninitialized' });
       throw new ContractsSubmoduleError({ tests: { exit_code: tests.exit_code } });
     }
-    const failingFiles = tests.repair_files ?? [];
+    // repair_files is the cumulative write grant; failing_files is what fails in this run.
+    const failingFiles = tests.failing_files ?? tests.repair_files ?? [];
     for (const file of tests.regression_files ?? []) {
       if (!progress.regressionFiles.includes(file)) progress.regressionFiles.push(file);
     }
@@ -175,9 +176,9 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     progress.repairFiles = failingFiles.filter((file) => !excused(file));
     const outside = failingFiles.filter(excused);
     const regressions = progress.repairFiles.filter((file) => progress.regressionFiles.includes(file));
-    const output = redactEvidence([tests.stdout, tests.stderr].filter(Boolean).join('\n'), {
-      env, apiKeyEnv: config.llm.api_key_env,
-    }).slice(0, 4096);
+    const redact = (text) => redactEvidence(String(text ?? ''), { env, apiKeyEnv: config.llm.api_key_env });
+    const output = [testFailureEvidence(redact(tests.stdout), 3072), redact(tests.stderr).slice(-1024)]
+      .filter(Boolean).join('\n');
     const failure = `Final node --test failed (exit ${tests.exit_code}):\n${output}`;
     if (outside.length && !progress.repairFiles.length) {
       progress.baselineFailures = outside;
@@ -477,7 +478,10 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
           await onEvent?.({ type: 'tool-result', name: call.function.name, status: 'denied' });
           continue;
         }
-        const content = redactEvidence(typeof result === 'string' ? result : JSON.stringify(result), {
+        const shown = call.function.name === 'run_test' && result && typeof result === 'object' && result.exit_code !== 0
+          ? { ...result, stdout: testFailureEvidence(result.stdout, 8000), stderr: String(result.stderr ?? '').slice(-2000) }
+          : result;
+        const content = redactEvidence(typeof shown === 'string' ? shown : JSON.stringify(shown), {
           env, apiKeyEnv: config.llm.api_key_env,
         });
         const readKey = call.function.name === 'read_file' ? String(call.args.path ?? '').replaceAll('\\', '/') : undefined;

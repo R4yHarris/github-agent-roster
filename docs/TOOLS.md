@@ -234,6 +234,12 @@ file the coder must fix, by updating the test to the intended new behavior or
 by fixing the implementation. Only failures that also fail at base, or flakes,
 are reported as pre-existing and left alone. If the base check cannot run, all
 outside failures are treated as pre-existing, as before.
+`run_test` returns `failing_files` (what failed in this run) separately from
+the cumulative `repair_files` write grant. Classification uses the current
+failures, so a test the coder already fixed cannot block the pre-existing-only
+steering path. Failed-test evidence shown to the coder and in RESULT.md keeps
+the reporter's `failing tests:` section (or `✖`/`not ok` blocks) and counts,
+plus the stderr tail, rather than the head of a long list of passing lines.
 A nonzero Node exit is a failed tool result rather than completion,
 so the coder receives its summary and a fresh repair attempt. Each test also
 gets `--test-timeout` of one third of the cap, so a hanging test (for example

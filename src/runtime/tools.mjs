@@ -214,6 +214,31 @@ export function taskAndRepairFiles(allowedFiles, repairFiles = [], scopeFiles = 
   return [...new Set([...allowedFiles, ...repairFiles, ...scopeFiles])];
 }
 
+// Spec output lists every passing test first; the failures that matter come last or in ✖/not ok blocks.
+export function testFailureEvidence(output, limit = 4096) {
+  const lines = String(output ?? '').split(/\r?\n/);
+  const summary = lines.filter((line) => /^\s*(?:ℹ|#) (?:tests|pass|fail|cancelled|skipped|todo) \d+\s*$/.test(line));
+  const start = lines.findIndex((line) => /failing tests:\s*$/.test(line));
+  let picked;
+  if (start >= 0) {
+    picked = lines.slice(start);
+  } else {
+    picked = [];
+    let indent = -1;
+    for (const line of lines) {
+      const depth = line.match(/^\s*/)[0].length;
+      if (/^\s*(?:✖|not ok\b)/.test(line)) indent = depth;
+      else if (indent >= 0 && line.trim() && depth <= indent) indent = -1;
+      if (indent >= 0) picked.push(line);
+    }
+    if (!picked.length) return lines.join('\n').slice(-limit);
+  }
+  const body = picked.filter((line) => !summary.includes(line)).join('\n').trim();
+  const tail = summary.join('\n');
+  const room = Math.max(0, limit - tail.length - 1);
+  return (tail ? `${tail}\n` : '') + body.slice(0, room);
+}
+
 function failingTestPaths(output, root) {
   const files = new Set();
   let failed = false;
@@ -1064,7 +1089,8 @@ export async function createTools({
           const outside = full && seat === 'coder'
             ? failing.filter((file) => !isAllowedFile(file, [...allowedFiles, ...scopeFiles])) : [];
           const classified = outside.length ? await classifyOutsideFailures(outside, testEnv) : {};
-          return { ...result, ...(repairFiles.size ? { repair_files: [...repairFiles] } : {}), ...classified };
+          return { ...result, failing_files: failing,
+            ...(repairFiles.size ? { repair_files: [...repairFiles] } : {}), ...classified };
         }
         throw new Error(`node --test could not run: ${error.message}`, { cause: error });
       }
