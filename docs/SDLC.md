@@ -222,10 +222,11 @@ Narration remains a live rewritten transcript line and is not the seat result.
 After a successful RESULT.md, the read-only builtin reviewer checks the task
 acceptance checks and the Git diff against that result, then writes REVIEW.md
 with pass/fail reasons and security notes. A failed or productless draft does
-not open review. For every bounded one-file slice, the first model-backed
-review failure returns once to the coder with the review feedback, then reviews
-the repaired result again; a second failure stops. Other failed reviews leave
-the coder's changes intact and block Roster-managed publication by default;
+not open review. A completed model-backed review failure returns its
+per-check findings to a fresh coder context (at most two repairs, switching
+perspective when the same checks stay unmet), then reviews the repaired result
+again. A failed review after the last repair leaves the
+coder's changes intact and blocks Roster-managed publication by default;
 see [review and explicit bypass](REVIEW.md).
 
 With no endpoint, the stub writes a deterministic `RESULT.md` summary, exits

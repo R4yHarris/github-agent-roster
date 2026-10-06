@@ -54,6 +54,11 @@ These apply to every seat and to the harness that sequences them
   necessary and minimal. Hitting the cap re-scopes rather than fails: the
   blocked files are evidence, so the orchestrator raises the budget (at most
   twice, never above 16) and continues the coder in a fresh context (§5.3).
+- **A failed review is feedback; iterate, then switch perspective.** A completed
+  reviewer fail sends its per-check findings back to a fresh coder context
+  (`Review repair N of 2`). A repair that leaves the same checks unmet is the
+  same move twice, so the next round must change strategy and, when
+  auto-routing, uses a different fleet profile (§5.5).
 
 ## Builtin coder conduct
 

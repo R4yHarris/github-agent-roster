@@ -18,6 +18,15 @@ then fails. Any `met: false` turns the verdict to `fail` with
 `Check N unmet: …` reasons, whatever the model's summary says. REVIEW.md lists
 each judged check under `## Acceptance checks`.
 
+A completed semantic review that fails is feedback, not a terminal verdict.
+`roster run` returns its findings to a fresh coder context (`Review repair N
+of 2`) with the unmet check numbers and reasons, keeps worktree edits, then
+reviews the repaired result again. If a repair leaves the same checks unmet,
+the next round is told to change strategy and, when auto-routing, moves to the
+next eligible fleet profile. A reviewer that could not complete (invalid JSON
+or endpoint failure), a non-LLM coder, and explicit `--skip-review` do not
+trigger repair. After two repairs the last REVIEW.md stands.
+
 A coder HTTP timeout is explicitly incomplete work, not a finished stub
 review. RESULT.md records `Outcome: timed out (unverified)`, failing checks
 and no verified change. REVIEW.md records `Verdict: fail` with a coder HTTP

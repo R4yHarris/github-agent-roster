@@ -285,6 +285,7 @@ export async function runReviewer({
     if (config.llm.locked_model && routeFailure(error)) throw error;
     report = {
       verdict: 'fail',
+      incomplete: true,
       reasons: [`Reviewer could not complete: ${redactEvidence(error.message, redaction)
         .replace(/\s+/g, ' ').slice(0, 450)}`],
       security_notes: ['Security review was not completed.'],
@@ -299,7 +300,8 @@ export async function runReviewer({
   await fs.writeFile(reviewPath, content, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
   await onEvent?.({ type: 'wrote', path: 'REVIEW.md' });
   return { verdict: report.verdict, reasons, securityNotes, content, reviewPath, usage, response: lastResponse, queried,
-    taskDigest, resultDigest };
+    taskDigest, resultDigest, completed: queried && report.incomplete !== true,
+    unmetChecks: (report.checks ?? []).filter((entry) => !entry.met).map((entry) => entry.id).sort((a, b) => a - b) };
 }
 
 export async function requirePassingReview(run, skipReview = false) {

@@ -45,7 +45,22 @@ const execFileAsync = promisify(execFile);
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
 export const maxPerspectiveEscalations = 2;
 export const maxRescopes = 2;
+export const maxReviewRepairs = 2;
 const maxScopeExpansion = 16;
+
+// A semantic reviewer fail is actionable feedback, not a terminal verdict: hand the findings back to the coder.
+export function reviewRepairContinuation({ round, reasons, unmetChecks = [], stalled = false, changedFiles = [] }) {
+  return `Review repair ${round}: the reviewer failed the previous result` +
+    (unmetChecks.length ? ` (unmet acceptance checks: ${unmetChecks.join(', ')})` : '') + '. Its edits remain in the ' +
+    'worktree' + (changedFiles.length ? ` (${changedFiles.join(', ')})` : '') + '. ' +
+    (stalled ? 'The same checks stayed unmet after the last repair, so do not repeat that approach: re-derive the ' +
+      'required behavior from TASK.md and change strategy. ' : '') +
+    'Address every finding below with the smallest correct change, write any missing required file in several ' +
+    'smaller write/edit calls rather than one huge call, keep work that already meets its check, and rerun ' +
+    'node --test until it exits 0. In your summary, map each acceptance check to the evidence that now meets it.' +
+    '\n\nReviewer findings (redacted, truncated):\n' +
+    reasons.map((reason) => `- ${reason}`).join('\n').slice(0, 3000);
+}
 
 // Returns the raised expansion budget when the coder was blocked only by the scope limit, else null.
 export function rescopeBudget(error, current, attempts) {
@@ -759,6 +774,11 @@ async function runBuiltinAssignment(issueNumber, {
   let continuation;
   const perspectiveAttempts = [];
   const rescopes = [];
+  const reviewRepairs = [];
+  let coderRun;
+  let review;
+  let reviewerRun;
+  for (;;) {
   for (;;) {
     try {
       result = await coderSeat(undefined, { initialBaseline: coderBaseline, initialScopeFiles: coderScopeFiles, continuation });
@@ -816,9 +836,37 @@ async function runBuiltinAssignment(issueNumber, {
       });
     }
   }
-  let coderRun = result.run;
+  coderRun = result.run;
   await recordSeat(sessions.coder, coderRun, result.excellence);
-  const { review, reviewerRun } = await reviewSeat(result);
+  ({ review, reviewerRun } = await reviewSeat(result));
+  if (review.verdict !== 'fail' || !review.completed || skipReview || result.mode !== 'llm' ||
+      reviewRepairs.length >= maxReviewRepairs) break;
+  const unmetChecks = review.unmetChecks ?? [];
+  const previousUnmet = reviewRepairs.at(-1)?.unmetChecks;
+  // Repeating a repair that left the same checks unmet is the same move twice; switch perspective instead.
+  const stalled = previousUnmet !== undefined && unmetChecks.length > 0 &&
+    unmetChecks.every((id) => previousUnmet.includes(id));
+  const failedProfile = route?.profile.id;
+  const alternate = stalled && autoModel && route ? await selectAutoRoute([...new Set([...quarantinedProfiles,
+    ...routeAttempts.map((attempt) => attempt.profile), ...perspectiveAttempts.map((attempt) => attempt.profile),
+    ...reviewRepairs.map((repair) => repair.profile), failedProfile,
+  ])]) : null;
+  if (alternate) coderConfig = buildCoderConfig(activeConfig.llm.model);
+  reviewRepairs.push({ profile: failedProfile ?? null, model: result.model ?? coderConfig.llm.model, unmetChecks });
+  log(`Review repair ${reviewRepairs.length} of ${maxReviewRepairs}: reviewer failed ` +
+    (unmetChecks.length ? `checks ${unmetChecks.join(', ')}` : 'the result') + '; ' +
+    (alternate ? `switching to profile=${alternate.profile.id} model=${alternate.profile.model}`
+      : `continuing with model=${coderConfig.llm.model}`) + ' in a fresh coder context with the findings.');
+  onRunEvent?.({ type: 'review-repair', attempt: reviewRepairs.length, unmetChecks, model: coderConfig.llm.model });
+  continuation = reviewRepairContinuation({ round: reviewRepairs.length,
+    reasons: review.reasons, unmetChecks, stalled, changedFiles: result.excellence?.files ?? [] });
+  coderBaseline ??= result.baseline;
+  coderScopeFiles = [...new Set([...coderScopeFiles, ...(result.scopeFiles ?? [])])];
+  await archiveRunArtifacts(worktreePath, {
+    task: prepared.task, git: (args) => git(worktreePath, args, commandEnv),
+    preserve: ['RECIPE.yml', 'TASK.md', 'ESTIMATE.md'],
+  });
+  }
   await ensureUnchanged(planner.recipePath, planner.recipe);
   await ensureUnchanged(planner.taskPath, planner.task);
   await ensureUnchanged(planner.estimatePath, planner.estimate);
@@ -875,7 +923,7 @@ async function runBuiltinAssignment(issueNumber, {
   const completed = {
     ...prepared, askKind, classification, recipePath: planner.recipePath, taskPath: planner.taskPath,
     planner, result, review, sessions, runs, run: coderRun, command, autoRecommendation, route, routeAttempts,
-    perspectiveAttempts, rescopes, archivePath,
+    perspectiveAttempts, rescopes, reviewRepairs, archivePath,
     failed: false,
     logPath: liveLog.path, logSession: liveLog.session,
   };
