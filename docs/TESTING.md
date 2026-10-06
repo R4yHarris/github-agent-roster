@@ -1,0 +1,60 @@
+# Testing
+
+Tests use only Node's built-in `node --test` runner (Node 20+), with no API key,
+model endpoint, or runtime package.
+
+## Running
+
+```sh
+npm test                                   # whole suite, parallel, slowest files first
+npm test -- tests/tools.test.mjs           # selected files through the same runner
+node --test tests/tools.test.mjs           # one file, plain Node
+```
+
+`npm test` runs [scripts/run-tests.mjs](../scripts/run-tests.mjs). It runs each
+`tests/*.test.mjs` file in its own `node --test` process, using a pool of
+workers:
+
+- **Workers:** all CPU cores but one. Set `ROSTER_TEST_JOBS=<n>` to change this.
+- **Order:** Node sorts the files it is given, so the pool decides the order
+  itself. New or unmeasured files start first, then measured files slowest
+  first, so the longest file never starts last.
+- **Timings:** each file's wall time is stored in
+  `<git common dir>/roster-test-timings.json`. All worktrees share it, and it
+  is never part of a diff. Timings only affect ordering, never pass or fail.
+- **Output:** a passing file prints one line. A failing file prints its full
+  output, and the summary lists every failing file and test.
+  `ROSTER_TEST_VERBOSE=1` prints every file's output.
+
+## Keeping it fast
+
+Each test file runs in one process, so the slowest file sets a lower bound on
+wall time, however many cores there are. Two budgets keep files small enough to
+spread across workers:
+
+| Budget | Where | Default |
+|---|---|---|
+| Measured per-file time | `npm test` warning | 60 s (`ROSTER_TEST_FILE_BUDGET_MS`) |
+| Lines per test file | [test-layout test](../tests/test-layout.test.mjs), fails in CI | 1000 |
+
+When a file exceeds either budget, split it by topic into shards named
+`tests/<module>.<topic>.test.mjs`, for example `tests/builtin.models.test.mjs`.
+Move shared fixtures into `tests/helpers/<module>.mjs`. The dotted name is part
+of the contract:
+
+- builtin `run_test` treats every shard as covering `src/**/<module>.mjs`, and
+  the coder may update any of them, as described in [tools](TOOLS.md);
+- hyphenated names such as `tests/tool-call-continues.test.mjs` stay separate
+  test files, not shards of `tool`.
+
+The layout test fails if a shard names a module with no source file.
+
+Avoid wall-clock thresholds that machine load can break. When a test checks a
+performance budget, judge the best of several attempts. Make waits generous,
+and resolve them as soon as the expected event happens.
+
+## CI
+
+CI runs `node --test tests/*.test.mjs` from a human-owned workflow. It gains
+from smaller test files through Node's own file concurrency. Switching CI to
+`npm test` would be a human workflow change.

@@ -462,3 +462,16 @@ test('delete_file removes scope and untracked scratch files but refuses tracked 
   await assert.rejects(tools.delete_file({ path: 'missing.mjs' }), /does not exist/);
   assert.equal(existsSync(path.join(worktree, '.env')), true);
 });
+
+test('a targeted run includes every shard of a split module test', async (context) => {
+  const worktree = fixture(context);
+  docsCheck(worktree);
+  for (const name of ['builtin.models.test.mjs', 'builtin.resume.test.mjs', 'builtin-other.test.mjs']) {
+    writeFileSync(path.join(worktree, 'tests', name), '');
+  }
+  let received;
+  const tools = await createTools({ worktree, allowedFiles: ['src/lib/builtin.mjs'],
+    runCommand: async (_program, args) => { received = args; return { stdout: '', stderr: '' }; } });
+  await tools.run_test();
+  assert.deepEqual(received.slice(4), ['tests/builtin.models.test.mjs', 'tests/builtin.resume.test.mjs']);
+});

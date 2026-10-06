@@ -12,8 +12,10 @@ repository instructions. The runner is **`node --test` only**, on Node 20+.
 Do not install packages, introduce another runner, or substitute lint, build,
 or live network workflows for the acceptance checks.
 
-In the builtin runtime, use the `run_test` tool: it runs the full suite and
-does not accept arbitrary shell commands. The focused command examples below
+In the builtin runtime, use the `run_test` tool: it runs the tests that cover
+the changed files (including every `tests/<module>.<topic>.test.mjs` shard of a
+split module test) and accepts no arbitrary shell commands. The harness runs
+the full suite as final verification. The focused command examples below
 apply to a manual worker with shell access.
 
 ## Stop condition

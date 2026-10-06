@@ -87,6 +87,6 @@ the selected key name through the existing environment/vault path.
 Routing grants no tools, App identity, policy, publication, merge, or
 deploy capabilities. Internet remains a stored-only preference.
 
-Run `node --test tests/route.test.mjs tests/builtin.test.mjs` for threshold,
+Run `node --test tests/route.test.mjs tests/builtin.*.test.mjs` for threshold,
 prior, context-boundary, missing-profile, opt-in, and saved-default
 regressions.

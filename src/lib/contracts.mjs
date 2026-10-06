@@ -42,6 +42,15 @@ export async function initializeWorktreeSubmodules(worktree, runCommand) {
     await assertContractsInitialized(root);
     return false;
   }
+  // No .gitmodules means nothing to initialize; `git submodule` is a slow shell script on Windows.
+  const declared = await fs.lstat(path.join(root, '.gitmodules')).catch((error) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (!declared) {
+    initializedWorktrees.add(root);
+    return false;
+  }
   try {
     await runCommand('git', ['submodule', 'update', '--init', '--recursive'], root);
   } catch (error) {

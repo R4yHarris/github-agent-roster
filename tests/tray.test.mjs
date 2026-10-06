@@ -76,7 +76,8 @@ test('the context bar is empty when usage is unknown and colours each occupancy 
 });
 
 test('the banner prints once with every fact and keeps an unknown fact as a dash', async () => {
-  const facts = await collectBannerFacts({ env: {}, cwd: 'D:\\oss\\github-agent-roster', branch: undefined,
+  // The 1s product git timeout is a startup budget; machine load must not fail this test.
+  const facts = await collectBannerFacts({ env: {}, cwd: 'D:\\oss\\github-agent-roster', branch: undefined, gitTimeoutMs: 30_000,
     llm: { model: 'deepseek-v4.1-flash', base_url: 'http://192.168.1.48:8888/v1' } });
   assert.equal(facts.branch, '-');
   assert.equal(facts.update, 'skipped');
@@ -88,7 +89,7 @@ test('the banner prints once with every fact and keeps an unknown fact as a dash
   assert.match(plain, /node \d+ \u00b7 .+ \u00b7 D:\\oss\\github-agent-roster \u00b7 -/);
   assert.match(plain, /endpoint configured \u00b7 deepseek-v4\.1-flash \u00b7 192\.168\.1\.48:8888/);
   assert.match(plain, /update skipped \u00b7 warnings none/);
-  const broken = await collectBannerFacts({ env: {}, cwd: process.cwd(), branch: 'main', llm: {},
+  const broken = await collectBannerFacts({ env: {}, cwd: process.cwd(), branch: 'main', llm: {}, gitTimeoutMs: 30_000,
     services: { latestRelease: () => { throw new Error('offline'); } } });
   assert.equal(broken.warnings.length, 1);
   assert.match(stripVTControlCharacters(formatBanner(broken)), /warnings 1\nupdate check failed: offline/);

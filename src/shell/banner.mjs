@@ -12,12 +12,12 @@ const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
 const clean = (value) => stripVTControlCharacters(String(value ?? '-')).replace(/[\x00-\x1f\x7f]/g, '').trim() || '-';
 const paint = (value, color, enabled) => (enabled ? `${colors[color]}${value}${colors.reset}` : String(value));
 
-function packageVersion(root) {
+function packageVersion(root, timeout) {
   const parsed = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
   const declared = typeof parsed?.version === 'string' ? parsed.version.trim() : '';
   if (declared && declared !== '0.0.0') return declared;
   const described = execFileSync('git', ['describe', '--tags', '--always'],
-    { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1000 }).trim();
+    { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout }).trim();
   if (!described) throw new TypeError('package.json has no version and git describe returned nothing');
   return described;
 }
@@ -28,10 +28,10 @@ export function shellName(env = process.env) {  if (typeof env.SHELL === 'string
   return '-';
 }
 
-function contractsVersion({ env, cwd }) {
+function contractsVersion({ env, cwd, timeout }) {
   const contracts = resolveContractsPath({ env, cwd, repoRoot: rosterRoot });
   const described = execFileSync('git', ['describe', '--tags', '--always'],
-    { cwd: contracts, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 1000 }).trim();
+    { cwd: contracts, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout }).trim();
   if (!described) throw new Error('git describe returned no tag');
   return described;
 }
@@ -53,17 +53,18 @@ export async function collectBannerFacts({
   llm = {},
   version,
   services = {},
+  gitTimeoutMs = 1000,
 } = {}) {
   const warnings = [];
   const facts = {
-    version: await check(warnings, 'version', () => version ?? packageVersion(rosterRoot)),
+    version: await check(warnings, 'version', () => version ?? packageVersion(rosterRoot, gitTimeoutMs)),
     node: await check(warnings, 'node', () => process.versions.node.split('.')[0]),
     shell: await check(warnings, 'shell', () => shellName(env)),
     cwd: await check(warnings, 'repository', () => cwd),
     branch: await check(warnings, 'branch', () => branch),
     model: await check(warnings, 'model', () => llm.model),
     host: await check(warnings, 'host', () => (llm.base_url ? new URL(llm.base_url).host : undefined)),
-    contracts: await check(warnings, 'contracts', () => contractsVersion({ env, cwd })),
+    contracts: await check(warnings, 'contracts', () => contractsVersion({ env, cwd, timeout: gitTimeoutMs })),
     endpoint: llm.base_url ? 'configured' : '-',
     update: 'skipped',
   };

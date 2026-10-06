@@ -61,6 +61,27 @@ export function relevantTestFiles(allowedFiles) {
   return [...tests];
 }
 
+// A large suite splits into shards named tests/<module>.<topic>.test.mjs; each shard covers the same module as
+// tests/<module>.test.mjs. Dotted names cannot collide with hyphenated test files for other modules.
+export function testShardBase(file) {
+  const match = /^tests\/([^/.]+)\.[^/]+\.test\.mjs$/.exec(String(file ?? '').replaceAll('\\', '/'));
+  return match ? `tests/${match[1]}.test.mjs` : null;
+}
+
+export function coversTestFile(tests, file) {
+  const normalized = String(file ?? '').replaceAll('\\', '/');
+  return tests.includes(normalized) || tests.includes(testShardBase(normalized));
+}
+
+export function expandTestShards(files, available) {
+  const expanded = new Set();
+  for (const file of files) {
+    if (available.includes(file)) expanded.add(file);
+    for (const candidate of available) if (testShardBase(candidate) === file) expanded.add(candidate);
+  }
+  return [...expanded];
+}
+
 export function verificationDecision(allowedFiles) {
   if (isDocsOnlyScope(allowedFiles)) {
     return { run: false, update: [], reason: 'docs-only change is checked by reading the file' };
@@ -975,6 +996,12 @@ export async function createTools({
           const entry = await fs.lstat(path.join(root, ...file.split('/'))).catch(() => null);
           if (entry?.isFile()) present.push(file);
         }
+        const shards = [];
+        for (const file of await fs.readdir(path.join(root, 'tests')).catch(() => [])) {
+          const entry = await fs.lstat(path.join(root, 'tests', file)).catch(() => null);
+          if (entry?.isFile()) shards.push(`tests/${file}`);
+        }
+        present.push(...expandTestShards(command.args.slice(3), shards).filter((file) => !present.includes(file)));
         if (!present.length) return { exit_code: 0, skipped: true, stdout: 'no relevant tests exist for the changed files', stderr: '' };
         // A per-test timeout turns a hanging test into a located, repairable failure before the outer kill.
         command.args = ['--test', '--test-concurrency', command.args[2],

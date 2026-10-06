@@ -69,4 +69,4 @@ The coder may read but not rewrite either document. They are rechecked after
 coding and before publication; generated estimates are not staged as app code.
 No model usage or elapsed time is fabricated, and no evaluation is written.
 
-Run `node --test tests/estimate.test.mjs tests/planner.test.mjs tests/builtin.test.mjs`.
+Run `node --test tests/estimate.test.mjs tests/planner.test.mjs tests/builtin.*.test.mjs`.

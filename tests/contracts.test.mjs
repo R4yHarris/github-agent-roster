@@ -50,11 +50,18 @@ test('worktree initialization skips submodule update when the publisher is alrea
 
 test('worktree submodule initialization executes at most once when no publisher is declared', async (t) => {
   const worktree = fixture(t);
+  writeFileSync(path.join(worktree, '.gitmodules'), '[submodule "other"]\n\tpath = vendor/other\n\turl = fixture\n');
   let calls = 0;
   const runCommand = async () => { calls += 1; return ''; };
   assert.equal(await initializeWorktreeSubmodules(worktree, runCommand), true);
   assert.equal(await initializeWorktreeSubmodules(worktree, runCommand), false);
   assert.equal(calls, 1);
+});
+
+test('worktree initialization skips git submodule when the worktree declares no submodules', async (t) => {
+  const worktree = fixture(t);
+  const runCommand = async () => assert.fail('a worktree without .gitmodules has nothing to initialize');
+  assert.equal(await initializeWorktreeSubmodules(worktree, runCommand), false);
 });
 
 test('dependency-only errors are distinguished from real or mixed test failures', () => {

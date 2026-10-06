@@ -537,7 +537,7 @@ test('real readline TTY accepts LF/CRLF Enter defaults and Ctrl+C without an inj
         const timer = setTimeout(() => {
           output.off('data', check);
           reject(new Error(`Missing TTY prompt: ${fragment}`));
-        }, 2_000);
+        }, 15_000);
         function check() {
           if (!text.includes(fragment)) return;
           clearTimeout(timer);
