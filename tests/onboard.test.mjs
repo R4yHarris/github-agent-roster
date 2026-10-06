@@ -96,7 +96,10 @@ for (const platform of ['win32', 'linux', 'darwin']) {
     assert.match(options.output.text, /Available models:\n  1\. owner\/first-model\n  2\. owner\/chosen-model/);
     assert.doesNotMatch(options.output.text, /\nAdvanced\n/);
     assert.equal(options.prompts.some((prompt) => prompt.startsWith('Internet search')), false);
-    assert.match(options.output.text, /Doctor\nOK Node\.js >=20/);
+    assert.match(options.output.text, /Doctor\n/);
+    assert.match(options.output.text, /^machine root: .+$/m);
+    assert.match(options.output.text, /^state root: .+$/m);
+    assert.match(options.output.text, /OK Node\.js >=20/);
     assert.match(options.output.text, /FAIL agent-policy\.yml/);
     assert.match(options.output.text, /not a grant to publish/);
     assert.match(options.output.text, /App env present/);

@@ -69,7 +69,13 @@ test("doctor checks prerequisites without network calls or leaking App env value
     GITHUB_APP_ID: 'test-only-app-marker', GITHUB_APP_PRIVATE_KEY_PATH: keyPath }, cli, undefined, cwd);
   assert.ifError(ready.error);
   assert.equal(ready.status, 0, ready.stderr);
-  assert.equal((ready.stdout.match(/^OK /gm) ?? []).length, 6);
+  // #194 adds three state-root checks (machine root, repository root,
+  // repository state root); the six original offline prerequisites still pass.
+  assert.equal((ready.stdout.match(/^OK /gm) ?? []).length, 9);
+  assert.ok(/^OK machine state root$/m.test(ready.stdout));
+  assert.ok(/^OK repository state root$/m.test(ready.stdout));
+  assert.ok(/^machine root: /m.test(ready.stdout));
+  assert.ok(/^state root: /m.test(ready.stdout));
   assert.ok(!ready.stdout.includes('test-only-app-marker'));
   assert.ok(!ready.stdout.includes('test-only-path-marker'));
   const missing = run(["doctor"], { ...process.env,
