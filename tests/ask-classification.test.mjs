@@ -36,9 +36,18 @@ test('README one-liners classify slice independently of task class, case and tem
 
 test('whole systems classify initiative; features and multiple outcomes are planning-only kinds', () => {
   for (const ask of ['build an orchestrator', 'Build an orchestrator in README.md.',
-    'Create a standalone platform.', 'Deliver a multi-wave initiative.']) {
+    'Create a standalone platform.', 'Deliver a multi-wave initiative.',
+    '## Epic outcome\n\nSeparate machine history from repository state.']) {
     assert.equal(classifyAsk(ask).kind, 'initiative', ask);
   }
+  assert.deepEqual(classifyAsk('## Epic outcome\n\nSeparate machine history from repository state.', {
+    title: 'feature: separate machine-local history from repository-local state',
+  }), {
+    kind: 'initiative',
+    specKind: 'epic',
+    reason: 'Explicit epic or initiative outcome needs an issue plan',
+  });
+  assert.equal(classifyAsk('Deliver the bounded change.', { title: 'epic: state ownership' }).kind, 'initiative');
   for (const ask of ['Implement the profile feature.', 'Add an end-to-end workflow.',
     'Update README.md.\n\n## Outcomes\n- Add Status\n- Rewrite intro\n\n## Allowed Files\n- `README.md`']) {
     assert.equal(classifyAsk(ask).kind, 'feature', ask);
