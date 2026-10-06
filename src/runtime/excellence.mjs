@@ -134,8 +134,12 @@ export async function checkExcellence({
   let testEvidence = false;
   let testAdditions = '';
   for (const file of files) {
-    if (isForbiddenWrite(file) || !isAllowedFile(file, allowed)) {
+    if (isForbiddenWrite(file)) {
       reasons.push(`Diff path is protected or outside TASK.md allowed paths: ${file}`);
+      continue;
+    }
+    if (!isAllowedFile(file, allowed)) {
+      reasons.push(`Diff path is outside TASK.md allowed paths: ${file}`);
       continue;
     }
     const target = path.join(worktree, file);

@@ -1,6 +1,6 @@
 import { createBuiltinChat } from '../lib/llm.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
-import { taskAndRepairFiles, toolDefinitions, ToolAccessError, ToolUsageError, verificationDecision, isDocsOnlyScope } from './tools.mjs';
+import { recipeAllowsTool, taskAndRepairFiles, toolDefinitions, ToolAccessError, ToolUsageError, verificationDecision, isDocsOnlyScope } from './tools.mjs';
 import { redactEvidence, taskSkipsTests } from './excellence.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
 import { readTaskMetadata } from './estimate.mjs';
@@ -114,9 +114,9 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   const requiresWebSearch = /\bweb_search\b/.test(context.task);
   const requiresWebFetch = /\bweb_fetch\b/.test(context.task);
   const definitions = toolDefinitions.filter((tool) =>
-    (config.seat.recipe_tools === undefined || config.seat.recipe_tools.includes(tool.function.name)) &&
+    recipeAllowsTool(config.seat.recipe_tools, tool.function.name) &&
     (config.seat.tools.includes(tool.function.name) ||
-      ['edit_file', 'glob_files', ...(requiresWebSearch || requiresWebFetch ? [] : ['run_command'])].includes(tool.function.name) ||
+      ['edit_file', 'delete_file', 'glob_files', ...(requiresWebSearch || requiresWebFetch ? [] : ['run_command'])].includes(tool.function.name) ||
       (config.tools?.internet === true &&
         (tool.function.name === 'web_search' && requiresWebSearch ||
           tool.function.name === 'web_fetch' && requiresWebFetch))) &&
@@ -595,6 +595,26 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       continue;
     }
     if (deterministic) throw new Error(`Deterministic fallback failed excellence: ${excellence.reasons[0]}`);
+    // Out-of-scope files (typically scratch probes) are a correctable mistake, not a failed run;
+    // protected paths stay a hard stop.
+    const outOfScope = reasons.filter((reason) => reason.startsWith('Diff path is outside TASK.md allowed paths: '));
+    if (outOfScope.length && definitions.some((tool) => tool.function.name === 'delete_file') &&
+        outOfScope.length === reasons.filter((reason) => !reason.startsWith('node --test failed (exit ')).length &&
+        (progress.scopeCorrections ?? 0) < 2) {
+      progress.scopeCorrections = (progress.scopeCorrections ?? 0) + 1;
+      attemptTurns = 0;
+      finalSummaryOnly = false;
+      checksPassedAfterWrite = false;
+      needsTools = false;
+      messages.push({ role: 'assistant', content: summary });
+      messages.push({ role: 'user', content: [
+        ...outOfScope,
+        'These files are in the diff but outside TASK.md Allowed Files. Delete scratch, probe, or diagnostic files ' +
+        'with delete_file. If the change genuinely needs one, rewrite it with write_file so it is recorded as a scope ' +
+        'expansion and justify it in your summary (the reviewer judges it). Rerun the required tests, then summarize.',
+      ].join('\n') });
+      continue;
+    }
     const missingWrite = reasons.find((reason) => reason.includes('must write '));
     if (missingWrite && progress.testRepairs < repairBudget) {
       progress.testRepairs += 1;

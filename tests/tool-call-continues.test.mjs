@@ -186,3 +186,39 @@ test('recipe tools deny research reads before implementation', async (context) =
   }), /allow-list denies read_file/);
   assert.equal(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), '# Example\n');
 });
+
+test('an out-of-scope scratch file in the diff gets an in-loop correction and delete_file instead of failing the run', async (context) => {
+  const options = fixture(context, planStub('Update `README.md` and `src/app.mjs` with a Status section and export.',
+    { reference: 'issue:4', metadata: { task_class: 'feat', difficulty: 4 } }).task);
+  const git = (...args) => execFileSync('git', args, { cwd: options.worktree, stdio: 'pipe' });
+  git('init', '-q');
+  git('add', '-A');
+  git('-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-qm', 'init');
+  let calls = 0;
+  const seen = [];
+  const result = await runCoder({
+    ...options, env: {},
+    runTestCommand: async () => ({ stdout: 'all tests pass', stderr: '' }),
+    fetchImpl: withResearch(async (_url, request) => {
+      calls += 1;
+      const body = JSON.parse(request.body);
+      seen.push(body.messages.at(-1).content ?? '');
+      if (calls === 1) {
+        writeFileSync(path.join(options.worktree, 'probe.mjs'), 'console.log(1);\n');
+        assert.ok(body.tools.some((tool) => tool.function.name === 'delete_file'));
+        return response('tool_calls', { role: 'assistant', content: null, tool_calls: [writeCall()] });
+      }
+      if (seen.at(-1).includes('outside TASK.md Allowed Files')) {
+        return response('tool_calls', { role: 'assistant', content: null, tool_calls: [{
+          id: 'delete-1', type: 'function', function: { name: 'delete_file', arguments: JSON.stringify({ path: 'probe.mjs' }) },
+        }] });
+      }
+      return response('stop', { role: 'assistant', content: 'Added the Status section; tests pass.' });
+    }),
+  });
+  assert.equal(result.error, undefined, result.error?.message);
+  assert.equal(result.excellence.pass, true, result.excellence.reasons.join('; '));
+  assert.ok(seen.some((text) => text.includes('Diff path is outside TASK.md allowed paths: probe.mjs')));
+  assert.equal(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), '# Example\n\n## Status\nReady.\n');
+  assert.throws(() => readFileSync(path.join(options.worktree, 'probe.mjs')), /ENOENT/);
+});

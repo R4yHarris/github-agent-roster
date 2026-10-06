@@ -9,7 +9,7 @@ import { redactSecrets } from '../runtime/memory.mjs';
 
 const execute = promisify(execFile);
 const seats = ['planner', 'coder', 'reviewer'];
-const tools = ['read_file', 'write_file', 'edit_file', 'glob_files', 'list_dir', 'run_test', 'run_command', 'search_text', 'web_search', 'web_fetch'];
+const tools = ['read_file', 'write_file', 'edit_file', 'delete_file', 'glob_files', 'list_dir', 'run_test', 'run_command', 'search_text', 'web_search', 'web_fetch'];
 const pathClasses = ['root', 'outside', 'secret', 'git', 'policy', 'workflow', 'vendor', 'managed', 'tests', 'source', 'docs', 'other'];
 const phases = ['seat-start', 'seat-end', 'seat-error', 'model', 'http-start', 'http-ok', 'http-error',
   'waiting', 'timeout', 'timeout-retry', 'stall', 'served-model', 'tool-start', 'tool-ok', 'tool-error', 'tool-denied', 'tool-refused', 'finish-reason',

@@ -15,7 +15,8 @@ const config = parseConfig(example.replace('base_url: ""', 'base_url: http://loc
 
 function fixture(context) {
   const base = mkdtempSync(path.join(tmpdir(), 'roster-reviewer-'));
-  context.after(() => rmSync(base, { recursive: true, force: true }));
+  // A git diff killed on maxBuffer can briefly hold the directory on Windows after the promise rejects.
+  context.after(() => rmSync(base, { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }));
   const repoRoot = path.join(base, 'roster');
   const worktree = path.join(base, 'task');
   mkdirSync(path.join(repoRoot, 'principals'), { recursive: true });

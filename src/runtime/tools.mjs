@@ -105,6 +105,12 @@ export function isForbiddenRead(file) {
   return isProtectedSurface(file);
 }
 
+// delete_file is part of writing: a recipe that grants the coder writes also lets it remove its own scratch files.
+export function recipeAllowsTool(recipeTools, name) {
+  return recipeTools === undefined || recipeTools.includes(name) ||
+    (name === 'delete_file' && (recipeTools.includes('write_file') || recipeTools.includes('edit_file')));
+}
+
 function isProtectedSurface(file) {
   const parts = partsOf(file);
   return hasAmbiguousComponents(file) || isSecret(file) || isDebugLog(file) || isShellHistory(file) || isCheckpoint(file) || isRepoMap(file) ||
@@ -307,6 +313,19 @@ export const toolDefinitions = [
           new_string: { type: 'string' },
         },
         required: ['path', 'old_string', 'new_string'], additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_file',
+      description: 'Delete a scratch or diagnostic file you no longer need, or a file inside TASK.md scope. ' +
+        'Files Git tracks outside TASK.md scope and protected paths cannot be deleted.',
+      parameters: {
+        type: 'object',
+        properties: { path: { type: 'string' } },
+        required: ['path'], additionalProperties: false,
       },
     },
   },
@@ -756,6 +775,54 @@ export async function createTools({
       if (await fs.readFile(file, 'utf8') !== text) throw new Error('edit_file target changed during the edit');
       await fs.writeFile(file, content, 'utf8');
       return { path: normalized, replacements: 1, ...expansionNote(normalized) };
+    },
+
+    // Lets the coder clean up its own scratch probes instead of failing the scope gate with them.
+    async delete_file(args) {
+      argumentsFor(args, ['path']);
+      throwIfCancelled(signal);
+      if (seat !== 'coder') throw new ToolAccessError('delete_file is available only to the coder');
+      const input = args.path;
+      if (isOutsideWorktreePath(input)) throw new OutsideWorktreeError();
+      if (typeof input !== 'string' || !input.trim() || input.includes('\0') ||
+          path.isAbsolute(input) || path.win32.isAbsolute(input) || hasAmbiguousComponents(input)) {
+        throw new ToolAccessError('Tool path must be relative to the worktree');
+      }
+      const file = path.resolve(root, input);
+      const relative = path.relative(root, file);
+      if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+        throw new OutsideWorktreeError();
+      }
+      const normalized = relative.split(path.sep).join('/');
+      if (isForbiddenWrite(normalized) || partsOf(normalized)[0] === '.roster' ||
+          (memoryPath && path.relative(file, path.resolve(memoryPath)) === '')) {
+        throw new ToolAccessError('delete_file refuses protected, harness, and private paths');
+      }
+      await checkComponents(relative);
+      const entry = await fs.lstat(file).catch((error) => {
+        if (error.code === 'ENOENT') return null;
+        throw error;
+      });
+      if (!entry) throw new ToolUsageError(`delete_file: ${normalized} does not exist`);
+      if (!entry.isFile()) throw new ToolUsageError('delete_file requires a regular file');
+      await checkParent(file);
+      if (!isAllowedFile(normalized, scopedFiles())) {
+        let tracked = true;
+        try {
+          await execute('git', ['ls-files', '--error-unmatch', '--', normalized], {
+            cwd: root, timeout: 30_000, encoding: 'utf8', signal,
+          });
+        } catch (error) {
+          if (error.code !== 1) throw new ToolUsageError(`delete_file could not confirm ${normalized} is untracked`);
+          tracked = false;
+        }
+        if (tracked) {
+          throw new ToolUsageError(`delete_file refuses ${normalized}: Git tracks it and it is outside TASK.md scope`);
+        }
+      }
+      await beforeWrite?.({ path: normalized, allowedFiles: scopedFiles() });
+      await fs.unlink(file);
+      return { path: normalized, deleted: true };
     },
 
     async glob_files(args) {

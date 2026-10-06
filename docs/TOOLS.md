@@ -15,6 +15,7 @@ five functions:
 | --- | --- | --- |
 | `read_file` | `{ "path": "README.md", "max_lines": 200 }` (`max_lines` optional) | UTF-8 text from a regular worktree file, optionally limited to the first positive integer number of lines. |
 | `write_file` | `{ "path": "src/app.mjs", "content": "..." }` | Creates or replaces task-allowed UTF-8 text; returns path and byte count. |
+| `delete_file` | `{ "path": "probe.mjs" }` | Deletes a regular file inside TASK scope, or an untracked unprotected scratch file; returns `{ path, deleted: true }`. |
 | `list_dir` | `{ "path": "src" }` or `{}` for root | Sorted entry names and types, excluding protected entries. |
 | `run_test` | `{}` | Runs `node --test` from the worktree root; returns `exit_code`, captured `stdout`, and `stderr`. |
 | `search_text` | `{ "query": "literal text", "path": "src" }` (`path` optional) | At most 50 `{ path, line, text }` matches and a `truncated` flag. |
@@ -54,6 +55,15 @@ re-scopes instead of stopping. It raises the budget to
 `max(2 × budget, budget + blocked + 1)`, capped at 16, at most twice, logs
 `Re-scope N of 2`, and resumes in a fresh context with the same model and the
 worktree edits. Strict scope (`0`) and hard-deny paths never re-scope.
+
+Scratch cleanup: the coder may remove its own probes with `delete_file`. It is
+offered whenever the coder may write (a recipe that grants `write_file` or
+`edit_file` grants it too) and refuses protected, harness, `.roster`, and
+Git-tracked files outside TASK scope. When the final excellence check finds
+only unprotected files outside TASK scope in the diff (for example a leftover
+`probe.mjs`), the coder gets up to two in-loop corrections to delete them or
+rewrite them as recorded scope expansions instead of failing the run.
+Protected diff paths still stop the run.
 
 ## Planner artifact writer
 
