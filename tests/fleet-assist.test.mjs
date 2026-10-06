@@ -156,7 +156,7 @@ test('failed default endpoint and forbidden tool calls visibly fall back to temp
     assert.match(options.output.text, /Model interview failed/);
     assert.match(options.output.text, /Falling back to template questions without the model/);
     assert.doesNotMatch(options.output.text, /private-server-error/);
-    assert.equal(mock.calls.filter(({ url }) => url.endsWith('/chat/completions')).length, 1);
+    assert.equal(mock.calls.filter(({ url }) => url.endsWith('/chat/completions')).length, failed.fail ? 2 : 1);
     assert.deepEqual((await loadFleet({ cwd: options.cwd })).profiles, [baseline, proposed]);
     assert.equal(existsSync(join(options.cwd, 'src', 'unsafe.mjs')), false);
   }

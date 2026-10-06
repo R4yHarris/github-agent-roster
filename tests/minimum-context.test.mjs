@@ -721,7 +721,7 @@ test('a failed final-summary turn after green checks keeps the run and omits emp
     ...options,
     fetchImpl: async (_url, request) => {
       calls += 1;
-      if (calls === 2) {
+      if (calls >= 2) {
         assert.equal(Object.hasOwn(JSON.parse(request.body), 'tools'), false);
         return Response.json({ error: { message: 'all backends failed' } }, { status: 502 });
       }
@@ -734,7 +734,7 @@ test('a failed final-summary turn after green checks keeps the run and omits emp
     },
     runTestCommand: () => assert.fail('Docs-only changes must not run node --test'),
   });
-  assert.equal(calls, 2);
+  assert.equal(calls, 3);
   assert.equal(result.excellence.pass, true);
   assert.equal(result.run.metrics.model, 'served-model');
 });

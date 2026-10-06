@@ -173,9 +173,14 @@ keys are optional. URL credentials, query strings, fragments and redirects
 are rejected to avoid accidental credential forwarding. A missing required
 key fails before any HTTP call.
 
-The low-level client retries at most once for HTTP 429. `Retry-After` seconds or dates
+The low-level client retries at most once for HTTP 429, and at most once for
+a transient gateway failure (HTTP 502/503/504, or an HTTP 200 JSON error body
+in place of a stream). `Retry-After` seconds or dates
 are honored within the same deadline; missing or invalid headers use a
-one-second delay. Other HTTP errors, invalid responses, network errors and
+one-second delay. A repeated transient gateway failure is a route failure:
+an auto-routed seat continues on another eligible fleet profile with its
+worktree edits intact instead of ending the run. Other HTTP errors, invalid
+responses, network errors and
 timeouts fail explicitly. Errors contain fixed descriptions or HTTP status
 numbers, never upstream bodies, URLs, keys or underlying error causes. The
 client does not log requests, responses or credentials.

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createChat, LockedModelMismatchError, servedModelMismatch } from '../src/llm/openai.mjs';
+import { createChat, LockedModelMismatchError, routeFailure, servedModelMismatch } from '../src/llm/openai.mjs';
 
 function client(served, events) {
   return createChat({ llm: { base_url: 'http://127.0.0.1:8000/v1', model: 'qwen3.8-27b', api_key_optional: true } }, {
@@ -83,6 +83,40 @@ test('an HTTP 200 JSON error body on a stream is an error, and empty tools are n
     return true;
   });
   assert.equal(Object.hasOwn(body, 'tools'), false);
+});
+
+test('a transient gateway error body or 5xx is retried once, and a repeat is a route failure', async () => {
+  const replies = [
+    () => new Response('{"error":{"message":"backend down"}}', { headers: sse }),
+    () => new Response('data: {"model":"m","choices":[{"index":0,"delta":{"role":"assistant","content":"pong"},' +
+      '"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', { headers: sse }),
+  ];
+  let calls = 0;
+  const chat = createChat({ llm: { base_url: 'http://127.0.0.1:8000/v1', model: 'm', api_key_optional: true } }, {
+    fetch: async () => replies[calls++](), env: {}, vault: { get: async () => undefined },
+  });
+  assert.equal((await chat(streamRequest)).message.content, 'pong');
+  assert.equal(calls, 2);
+
+  let failing = 0;
+  const down = createChat({ llm: { base_url: 'http://127.0.0.1:8000/v1', model: 'm', api_key_optional: true } }, {
+    fetch: async () => { failing += 1; return new Response('bad gateway', { status: 502 }); },
+    env: {}, vault: { get: async () => undefined },
+  });
+  await assert.rejects(down(streamRequest), (error) => {
+    assert.match(error.message, /HTTP 502/);
+    assert.deepEqual(routeFailure(error), { reason: 'endpoint-error' });
+    return true;
+  });
+  assert.equal(failing, 2);
+
+  let unauthorized = 0;
+  const denied = createChat({ llm: { base_url: 'http://127.0.0.1:8000/v1', model: 'm', api_key_optional: true } }, {
+    fetch: async () => { unauthorized += 1; return new Response('no', { status: 401 }); },
+    env: {}, vault: { get: async () => undefined },
+  });
+  await assert.rejects(denied(streamRequest), (error) => routeFailure(error) === null);
+  assert.equal(unauthorized, 1);
 });
 
 test('a stream with no data frames is an error, not an empty completion', async () => {
