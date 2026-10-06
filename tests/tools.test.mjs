@@ -80,6 +80,24 @@ test('a killed test process with numeric exit 1 is a terminal timeout, not a rep
   await assert.rejects(tools.run_test(), /timed out after 60 seconds/);
 });
 
+test('edit_file tolerates indentation drift when unambiguous and otherwise shows the closest real text', async (context) => {
+  const worktree = fixture(context);
+  const file = path.join(worktree, 'src', 'shape.mjs');
+  writeFileSync(file, 'export function shape() {\n    const width = 1;\n    return width;\n}\n' +
+    'export function other() {\n  return 2;\n}\n');
+  const tools = await createTools({ worktree, allowedFiles: ['src/shape.mjs'] });
+  await tools.edit_file({ path: 'src/shape.mjs',
+    old_string: '  const width = 1;\n  return width;', new_string: '  const width = 3;\n  return width * 2;' });
+  assert.equal(readFileSync(file, 'utf8'), 'export function shape() {\n    const width = 3;\n    return width * 2;\n}\n' +
+    'export function other() {\n  return 2;\n}\n');
+  await assert.rejects(tools.edit_file({ path: 'src/shape.mjs',
+    old_string: 'export function other() {\n  return 9;\n}', new_string: 'x' }),
+  (error) => /not found/.test(error.message) &&
+    /Closest current text starts at line 5; copy it exactly:\nexport function other\(\) \{\n  return 2;/.test(error.message));
+  writeFileSync(file, 'a();\n  x();\nb();\n    x();\n');
+  await assert.rejects(tools.edit_file({ path: 'src/shape.mjs', old_string: 'x();\n', new_string: 'y();' }), /more than once/);
+});
+
 test('tiered scope records capped coder expansion while hard-deny surfaces stay fatal', async (context) => {
   const worktree = fixture(context);
   writeFileSync(path.join(worktree, 'src', 'cli.mjs'), 'export const cli = 1;\n');

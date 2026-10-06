@@ -450,14 +450,17 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         try {
           result = await tools[call.function.name](call.args);
         } catch (error) {
+          // "Repeated" means the same call failing the same way, not unrelated misses separated by progress.
+          const denialKey = `${call.function.name}\0${error instanceof Error ? error.message : ''}\0${JSON.stringify(call.args)}`;
           const repeated = error instanceof ToolUsageError &&
-            (usageDenials.set(error.message, (usageDenials.get(error.message) ?? 0) + 1).get(error.message) > maxRepeatedDenials);
+            (usageDenials.set(denialKey, (usageDenials.get(denialKey) ?? 0) + 1).get(denialKey) > maxRepeatedDenials);
           if (error instanceof ToolAccessError && (!(error instanceof ToolUsageError) || repeated)) {
             await onEvent?.({ type: 'tool-result', name: call.function.name, status: 'denied' });
-            throw repeated ? new ToolAccessError(`${error.message} (repeated after ${maxRepeatedDenials} denials)`) : error;
+            throw repeated ? new ToolAccessError(`${error.message.split('\n')[0]} (repeated after ${maxRepeatedDenials} denials)`) : error;
           }
           messages.push({ role: 'tool', tool_call_id: call.id,
-            content: `Denied: ${error instanceof Error ? error.message : 'tool failed'}. Continue with an allowed action or summarize the blocker.` });
+            content: redactEvidence(`Denied: ${error instanceof Error ? error.message : 'tool failed'}. Continue with an allowed action or summarize the blocker.`,
+              { env, apiKeyEnv: config.llm.api_key_env }) });
           await onEvent?.({ type: 'tool-result', name: call.function.name, status: 'denied' });
           continue;
         }
@@ -472,6 +475,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
           : content });
         if (call.function.name === 'web_search') webSearchDone = true;
         if (call.function.name === 'web_fetch') webFetchDone = true;
+        if (['write_file', 'edit_file'].includes(call.function.name)) usageDenials.clear();
         if (['write_file', 'edit_file'].includes(call.function.name) &&
             result.path === singleAllowedFile) {
           wroteSingleAllowedFile = true;
