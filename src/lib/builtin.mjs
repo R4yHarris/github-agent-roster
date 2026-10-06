@@ -771,7 +771,7 @@ async function runBuiltinAssignment(issueNumber, {
       return { review, reviewerRun };
     }
   };
-  const coderSeat = (priorFeedback = planner.feedback?.context, { initialBaseline, initialScopeFiles, continuation } = {}) => {
+  const coderSeat = (priorFeedback = planner.feedback?.context, { initialBaseline, initialScopeFiles, initialRepairFiles, continuation } = {}) => {
     assertSeatCovers(recipeCoder, {
       ...(recipeCoder.max_difficulty === undefined ? {} : { difficulty: readTaskMetadata(planner.task).difficulty }),
       ...(recipeCoder.skills === undefined ? {} : { skills: taskSkillNames(planner.task) }),
@@ -779,12 +779,13 @@ async function runBuiltinAssignment(issueNumber, {
     return liveLog.seat('coder', sessions.coder, coderConfig, (onEvent) => runCoder({
       worktree: worktreePath, repoRoot, config: coderConfig, task: prepared.task, session: sessions.coder,
       fetchImpl, env, vault, runTestCommand, priorFeedback, onEvent, askKind, retryCommand, signal, steeringControl,
-      initialBaseline, initialScopeFiles, continuation,
+      initialBaseline, initialScopeFiles, initialRepairFiles, continuation,
     }));
   };
   let result;
   let coderBaseline;
   let coderScopeFiles = [];
+  let coderRepairFiles = [];
   let continuation = planner.reused ? previousReviewContinuation(previousReview) ??
     previousReviewContinuation(await latestArchivedReview(worktreePath, { task: prepared.task,
       git: (args) => git(worktreePath, args, commandEnv),
@@ -799,7 +800,8 @@ async function runBuiltinAssignment(issueNumber, {
   for (;;) {
   for (;;) {
     try {
-      result = await coderSeat(undefined, { initialBaseline: coderBaseline, initialScopeFiles: coderScopeFiles, continuation });
+      result = await coderSeat(undefined, { initialBaseline: coderBaseline, initialScopeFiles: coderScopeFiles,
+        initialRepairFiles: coderRepairFiles, continuation });
       break;
     } catch (error) {
       if (error instanceof Error && error.result) {
@@ -848,6 +850,7 @@ async function runBuiltinAssignment(issueNumber, {
       }
       coderBaseline ??= error.result?.baseline;
       coderScopeFiles = [...new Set([...coderScopeFiles, ...(error.result?.scopeFiles ?? [])])];
+      coderRepairFiles = [...new Set([...coderRepairFiles, ...(error.result?.repairFiles ?? [])])];
       await archiveRunArtifacts(worktreePath, {
         task: prepared.task, git: (args) => git(worktreePath, args, commandEnv),
         preserve: ['RECIPE.yml', 'TASK.md', 'ESTIMATE.md'],
@@ -880,6 +883,7 @@ async function runBuiltinAssignment(issueNumber, {
     reasons: review.reasons, unmetChecks, stalled, changedFiles: result.excellence?.files ?? [] });
   coderBaseline ??= result.baseline;
   coderScopeFiles = [...new Set([...coderScopeFiles, ...(result.scopeFiles ?? [])])];
+  coderRepairFiles = [...new Set([...coderRepairFiles, ...(result.repairFiles ?? [])])];
   await archiveRunArtifacts(worktreePath, {
     task: prepared.task, git: (args) => git(worktreePath, args, commandEnv),
     preserve: ['RECIPE.yml', 'TASK.md', 'ESTIMATE.md'],

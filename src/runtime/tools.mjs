@@ -469,8 +469,10 @@ export async function createTools({
   fetchImpl = globalThis.fetch,
   scopeExpansion = 0,
   initialScopeFiles = [],
+  initialRepairFiles = [],
 } = {}) {
   if (!['planner', 'coder'].includes(seat)) throw new TypeError('Only planner and coder seats have file tools');
+  if (initialRepairFiles.length && seat !== 'coder') throw new TypeError('Repair scope requires a coder seat');
   if (!Number.isSafeInteger(scopeExpansion) || scopeExpansion < 0 || scopeExpansion > 16 ||
       scopeExpansion && seat !== 'coder') {
     throw new TypeError('Scope expansion requires a coder seat and a 0-16 file limit');
@@ -510,7 +512,8 @@ export async function createTools({
     if (metadata.difficulty < 4 || metadata.task_class === 'docs') throw new Error('Repo map access requires difficulty 4+ and a non-docs task');
   }
   let readmeWritten = false;
-  const repairFiles = new Set();
+  // Regression repairs an earlier attempt in this run made stay in scope for the next perspective.
+  const repairFiles = new Set(taskAndRepairFiles([], initialRepairFiles));
   const scopeFiles = new Set(scopeExpansion ? taskAndRepairFiles([], [], initialScopeFiles).slice(0, scopeExpansion) : []);
   const scopedFiles = () => taskAndRepairFiles(allowedFiles, [...repairFiles], [...scopeFiles]);
   if (seat === 'coder' && (!Array.isArray(allowedFiles) || !allowedFiles.length)) {
