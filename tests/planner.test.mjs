@@ -726,6 +726,38 @@ test('written TASK validation rejects a changed Ask and protected paths', async 
   }
 });
 
+test('an invalid written TASK stays rewritable so the planner can correct it', async (t) => {
+  const ask = 'Update README.md.';
+  const valid = planStub(ask, { reference: 'issue:42', title: 'Update README' }).task;
+  const tooMany = valid.replace('- The requested behavior in the Ask is implemented',
+    Array.from({ length: 9 }, (_, index) => `- Check ${index + 1} holds`).join('\n'));
+  const repoRoot = mkdtempSync(join(tmpdir(), 'roster-planner-rewrite-'));
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  const worktree = join(repoRoot, 'worktree');
+  mkdirSync(worktree);
+  let calls = 0;
+  const feedback = [];
+  const plan = await runPlanner({
+    worktree, repoRoot, issue: { number: 42, title: 'Update README', body: ask },
+    config: { ...llmConfig, planner: { turn_budget: 4 } }, env: {},
+    fetchImpl: async (_url, request) => {
+      calls += 1;
+      const last = JSON.parse(request.body).messages.at(-1);
+      if (last.role === 'tool') feedback.push(JSON.parse(last.content).error);
+      return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+        role: 'assistant', tool_calls: [{ id: `task-${calls}`, type: 'function', function: {
+          name: 'write_file', arguments: JSON.stringify({ path: 'TASK.md', content: calls === 1 ? tooMany : valid }),
+        } }],
+      } }] });
+    },
+  });
+  assert.equal(calls, 2);
+  assert.match(feedback[0], /Acceptance checks must contain 1-8 entries \(got 9; merge related entries\)/);
+  assert.equal(plan.error, undefined);
+  assert.match(readFileSync(join(worktree, 'TASK.md'), 'utf8'), /^- The requested behavior in the Ask is implemented$/m);
+  assert.doesNotMatch(readFileSync(join(worktree, 'TASK.md'), 'utf8'), /Check 9 holds/);
+});
+
 test('a written TASK cannot silently switch the selected fleet model', async (t) => {
   const ask = 'Update README.md.';
   const task = planStub(ask, { reference: 'issue:42', title: 'Update README' }).task

@@ -27,6 +27,7 @@ import { archiveRunArtifacts } from './run-artifacts.mjs';
 import { createRunLog } from './run-log.mjs';
 import { humanEvalHint, recordedCoderRun } from './seat-publication.mjs';
 import { formatRoute, routeTask } from './route.mjs';
+import { loadRouteQuarantine, recordRouteQuarantine } from './route-quarantine.mjs';
 import { classifyAsk, clarificationHint } from '../planner/classify.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
 import { retryCommandForTask } from '../llm/request.mjs';
@@ -487,6 +488,7 @@ async function runBuiltinAssignment(issueNumber, {
   let autoRecommendation = null;
   let route = null;
   const routeAttempts = [];
+  let quarantinedProfiles = [];
   const routingTaskClass = prepared.metadata?.task_class ?? inferTaskClass(prepared.issue.title) ?? 'feat';
   const selectAutoRoute = async (excludedProfileIds = []) => {
     const selectedRoute = await routeTask({
@@ -512,10 +514,19 @@ async function runBuiltinAssignment(issueNumber, {
     if (!failure) return false;
     const failedProfile = route.profile.id;
     routeAttempts.push({ seat, profile: failedProfile, ...failure });
+    if (failure.reason === 'locked-model-mismatch') {
+      try {
+        await recordRouteQuarantine({ repoRoot: prepared.repoRoot, profile: failedProfile,
+          requested: failure.requested, served: failure.served, now });
+      } catch (quarantineError) {
+        log(`Route quarantine not saved for profile=${failedProfile}: ${quarantineError.message}`);
+      }
+    }
     const detail = failure.reason === 'locked-model-mismatch'
       ? `served ${failure.served} instead of ${failure.requested}` : 'endpoint timed out or stalled';
     const retryEffort = activeConfig.llm.review_retry_effort;
-    const alternate = await selectAutoRoute([...new Set(routeAttempts.map((attempt) => attempt.profile))]);
+    const alternate = await selectAutoRoute([...new Set([...quarantinedProfiles,
+      ...routeAttempts.map((attempt) => attempt.profile)])]);
     if (!alternate) {
       log(`Route recovery exhausted: seat=${seat} profile=${failedProfile} ${detail}; ` +
         'no other eligible fleet profile remains for this run.');
@@ -535,7 +546,19 @@ async function runBuiltinAssignment(issueNumber, {
     return true;
   };
   if (autoModel) {
-    route = await selectAutoRoute();
+    const quarantine = await loadRouteQuarantine({ repoRoot: prepared.repoRoot, now });
+    quarantinedProfiles = quarantine.map((entry) => entry.profile);
+    route = quarantinedProfiles.length ? await selectAutoRoute(quarantinedProfiles) : null;
+    if (route) {
+      for (const entry of quarantine) {
+        log(`Route quarantine: skipping profile=${entry.profile}; it served ${entry.served} for ${entry.requested} ` +
+          'within the last 24h.');
+      }
+    } else {
+      // Every eligible profile is quarantined (or none is): fall back to the unfiltered route rather than stopping.
+      quarantinedProfiles = [];
+      route = await selectAutoRoute();
+    }
     if (route) {
       log(`Route: ${formatRoute(route, routingTaskClass).trimEnd()}`);
       onRunEvent?.({ type: 'route', model: route.profile.model,
@@ -736,7 +759,7 @@ async function runBuiltinAssignment(issueNumber, {
         const stuck = coderStuckReason(error);
         if (!stuck || perspectiveAttempts.length >= maxPerspectiveEscalations) throw error;
         const previousModel = coderConfig.llm.model;
-        const alternate = autoModel && route ? await selectAutoRoute([...new Set([
+        const alternate = autoModel && route ? await selectAutoRoute([...new Set([...quarantinedProfiles,
           ...routeAttempts.map((attempt) => attempt.profile), ...perspectiveAttempts.map((attempt) => attempt.profile),
           failedProfile,
         ])]) : null;

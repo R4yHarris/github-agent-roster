@@ -26,7 +26,11 @@ These apply to every seat and to the harness that sequences them
 - **Never switch models silently.** Every reroute is logged
   (`Route recovery: seat=… profile=…`), recorded in `routeAttempts`, and
   measured under the model that actually answered. A substituted response is
-  never accepted under the locked model's identity.
+  never accepted under the locked model's identity. A substitution is also
+  remembered for 24 hours in the ignored `.roster/runs/route-quarantine.json`.
+  Later auto-routed runs then start on an honest profile and log
+  `Route quarantine: skipping profile=…`. If every eligible profile is
+  quarantined, routing falls back to the unfiltered choice.
 - **Fail honestly when no alternative remains.** If no eligible profile is
   left, the run stops with the original error and `Route recovery exhausted`.
   Saved, non-routed models are never rerouted.

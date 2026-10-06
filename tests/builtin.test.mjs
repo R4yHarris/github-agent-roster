@@ -11,6 +11,7 @@ import {
   prepareBuiltinPublication, runBuiltinAsk, runBuiltinIssue as runIssueWithSeats, stageReviewedFiles,
 } from '../src/lib/builtin.mjs';
 import { ToolAccessError } from '../src/runtime/tools.mjs';
+import { loadRouteQuarantine, recordRouteQuarantine, routeQuarantineTtlMs } from '../src/lib/route-quarantine.mjs';
 import { loadLearning } from '../src/lib/learn.mjs';
 import { readStatus, formatStatus } from '../src/lib/status.mjs';
 import { resolveContractsPath } from '../src/lib/paths.mjs';
@@ -1615,6 +1616,45 @@ test('auto-model excludes a dishonest profile and retries the planner with an el
   assert.equal(result.runs.planner.env.AI_MODEL, 'alternate-model');
   assert.equal(result.runs.coder.env.AI_MODEL, 'alternate-model');
   assert.ok(logs.some((line) => /Route recovery: seat=planner profile=first served substituted-model.*profile=alternate/.test(line)));
+  const quarantine = JSON.parse(readFileSync(path.join(options.target, '.roster', 'runs', 'route-quarantine.json'), 'utf8'));
+  assert.deepEqual(quarantine.entries.map(({ profile, requested, served }) => ({ profile, requested, served })),
+    [{ profile: 'first', requested: 'first-model', served: 'substituted-model' }]);
+});
+
+test('a persisted route quarantine skips a dishonest profile until its evidence expires', async (context) => {
+  const options = multiFileFixture(context);
+  options.issue.title = 'feat: Add status';
+  twoProfileFleet(options.target);
+  const recorded = new Date('2026-01-01T00:00:00Z');
+  await recordRouteQuarantine({ repoRoot: options.target, profile: 'first', requested: 'first-model',
+    served: 'substituted-model', now: () => recorded });
+  assert.deepEqual((await loadRouteQuarantine({ repoRoot: options.target,
+    now: () => new Date(recorded.getTime() + routeQuarantineTtlMs + 1) })), []);
+  const run = async (now) => {
+    const requests = [];
+    const logs = [];
+    const result = await runBuiltinIssue(42, {
+      ...options, config: llmConfig, autoModel: true, metricsLoader: () => [], now: () => now,
+      env: { ...options.env, ROSTER_API_KEY: 'test-only-key' },
+      log: (line) => logs.push(line),
+      fetchImpl: async (url, request) => {
+        const model = JSON.parse(request.body).model;
+        requests.push(model);
+        if (requests.length === 1) return planReply(model);
+        if (requests.length === 2) return editReply(model);
+        return textReply(model, requests.length === 3 ? 'Added status; tests pass.' : 'PASS');
+      },
+      runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+    });
+    return { requests, logs, result };
+  };
+  const fresh = await run(new Date(recorded.getTime() + 60_000));
+  assert.equal(fresh.requests[0], 'alternate-model');
+  assert.equal(fresh.result.route.profile.id, 'alternate');
+  assert.deepEqual(fresh.result.routeAttempts, []);
+  assert.ok(fresh.logs.some((line) => /Route quarantine: skipping profile=first; it served substituted-model for first-model/.test(line)));
+  writeFileSync(path.join(options.target, '.roster', 'runs', 'route-quarantine.json'), '{not json');
+  assert.deepEqual(await loadRouteQuarantine({ repoRoot: options.target }), []);
 });
 
 const twoProfileFleet = (target) => {
