@@ -1,9 +1,12 @@
 import { lstatSync, statSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolvePublishModel } from '../metrics/run.mjs';
 import { loadConfig, validateBaseUrl } from './config.mjs';
 import { resolveContractsPath, resolveProjectRoot } from './paths.mjs';
+import {
+  resolveMachineRoot, resolveRepositoryState, StateRootError,
+} from './paths.mjs';
 import { resolveSecret } from './secrets.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
 import { ChatError, isLocalLlmHost, resolveRequestTimeout, withRequestTimeout } from '../llm/request.mjs';
@@ -75,6 +78,116 @@ function regularFile(file, inspect) {
   }
 }
 
+// Public display path: tilde-abbreviates the private prefix so doctor output
+// never reveals the full machine location (e.g. /Users/me/... → ~/…/roster).
+export function redactRoot(root, { home = process.env.HOME ?? process.env.USERPROFILE } = {}) {
+  if (typeof root !== 'string' || root === '') return '<unknown>';
+  const separator = root.includes('\\') ? '\\' : '/';
+  let display = root;
+  if (home) {
+    const homePrefix = home.endsWith(separator) ? home : `${home}${separator}`;
+    if (root === home || root.startsWith(homePrefix)) {
+      display = `~${root.slice(home.length)}`;
+    }
+  }
+  const segments = display.split(/[\\/]/).filter(Boolean);
+  if (segments.length <= 2) return display;
+  // Home-relative paths keep the `~` anchor with separators; other absolute
+  // paths show only the first and last segments. Either way the private
+  // middle of the path never reaches doctor output.
+  if (display.startsWith('~')) return `~${separator}…${separator}${segments.at(-1)}`;
+  return `${segments[0]}…${segments.at(-1)}`;
+}
+
+const CREDENTIAL_SHAPED = /(api[_-]?key|secret|token|password|passwd|credential|bearer|private[_-]?key|authorization)/i;
+
+export function redactLine(value) {
+  if (typeof value !== 'string') return '';
+  return value
+    .split(/\s+/)
+    .map((word) => (CREDENTIAL_SHAPED.test(word) && word.includes('=')
+      ? `${word.split('=')[0]}=<redacted>`
+      : word))
+    .join(' ');
+}
+
+export function checkStateRoots({
+  cwd = process.cwd(),
+  env = process.env,
+  platform = process.platform,
+  machineRoot,
+  repositoryRoot,
+} = {}) {
+  let machine;
+  try {
+    machine = machineRoot ?? resolveMachineRoot({ env, platform });
+  } catch (error) {
+    if (!(error instanceof StateRootError)) throw error;
+    return {
+      ok: false,
+      checks: [
+        { name: 'machine state root', ok: false, reason: error.message },
+        { name: 'repository root', ok: false, reason: 'state root failed before repository check' },
+        { name: 'repository state root', ok: false, reason: 'state root failed before repository check' },
+      ],
+      roots: {
+        machine: machineRoot?.root ? redactRoot(machineRoot.root, { platform }) : '<unknown>',
+        repository: '<unknown>',
+        state: '<unknown>',
+        scope: 'repository',
+        repoId: null,
+      },
+    };
+  }
+  let repository = repositoryRoot ?? null;
+  let stateRoot = null;
+  let repoId = null;
+  const issues = [];
+  if (!repository) {
+    try {
+      repository = resolveProjectRoot(cwd);
+    } catch (error) {
+      issues.push(`repository root could not be resolved: ${error.message}`);
+    }
+  }
+  if (repository) {
+    try {
+      const handle = resolveRepositoryState({ repoRoot: repository, env, machineRoot: machine });
+      stateRoot = handle.root;
+      repoId = handle.repoId;
+    } catch (error) {
+      if (!(error instanceof StateRootError)) throw error;
+      issues.push(error.message);
+    }
+  }
+  const healthy = issues.length === 0 && Boolean(machine.root);
+  const checks = [
+    {
+      name: 'machine state root', ok: Boolean(machine.root),
+      ...(!machine.root ? { reason: 'machine state root could not be resolved' } : {}),
+    },
+    {
+      name: 'repository root', ok: Boolean(repository),
+      ...(!repository ? { reason: 'repository root could not be resolved from the current directory' } : {}),
+    },
+    {
+      name: 'repository state root', ok: healthy,
+      ...(healthy ? {} : { reason: issues[0] ?? 'state root is unhealthy' }),
+    },
+  ];
+  return {
+    ok: checks.every((check) => check.ok),
+    checks,
+    roots: {
+      machine: machine.root ? redactRoot(machine.root, { platform }) : '<unknown>',
+      repository: repository ? redactRoot(repository, { platform }) : '<unknown>',
+      state: stateRoot ? redactRoot(stateRoot, { platform }) : '<unknown>',
+      scope: 'repository',
+      repoId,
+    },
+  };
+}
+
 export function checkDoctor({
   cwd = process.cwd(),
   installationRoot = rosterRoot,
@@ -82,6 +195,8 @@ export function checkDoctor({
   nodeVersion = process.version,
   inspect = lstatSync,
   contractsResolver = resolveContractsPath,
+  stateRoots = true,
+  machineRoot,
 } = {}) {
   const projectRoot = resolveProjectRoot(cwd);
   const version = /^v?(\d+)(?:\.|$)/.exec(nodeVersion);
@@ -154,14 +269,43 @@ export function checkDoctor({
         reason: configReason ?? 'private config with a real model is required; run roster onboard',
       } : {}) },
   ];
-  return { ok: checks.every((check) => check.ok), checks };
+  let roots;
+  if (stateRoots) {
+    try {
+      const state = checkStateRoots({ cwd, env, machineRoot, repositoryRoot: projectRoot });
+      checks.push(...state.checks);
+      roots = state.roots;
+    } catch (error) {
+      if (!(error instanceof StateRootError)) throw error;
+      checks.push({ name: 'repository state root', ok: false, reason: error.message });
+    }
+  }
+  return { ok: checks.every((check) => check.ok), checks, ...(roots ? { roots } : {}) };
 }
 
 export function formatDoctor(result) {
-  if (!Array.isArray(result?.checks) || result.checks.length !== 6 ||
+  if (!Array.isArray(result?.checks) || result.checks.length < 6 ||
       result.checks.some((check) => typeof check?.name !== 'string' || typeof check.ok !== 'boolean')) {
-    throw new TypeError('Expected six doctor checks');
+    throw new TypeError('Expected at least six doctor checks');
   }
-  return `${result.checks.map((check) =>
-    `${check.skipped ? 'SKIP' : check.ok ? 'OK' : 'FAIL'} ${check.name}${check.reason ? `: ${check.reason}` : ''}`).join('\n')}\n`;
+  // `roster doctor` renders the resolved machine and state roots ahead of the
+  // per-item health lines. redactRoot tilde-abbreviates whatever the result
+  // carries and redactLine drops credential-shaped tokens, so neither a private
+  // directory prefix nor a secret reaches the output, even if a caller builds
+  // the result object by hand instead of through checkStateRoots.
+  const lines = [];
+  for (const check of result.checks) {
+    lines.push(`${check.skipped ? 'SKIP' : check.ok ? 'OK' : 'FAIL'} ${check.name}` +
+      `${check.reason ? `: ${check.reason}` : ''}`);
+  }
+  // Roots render after per-item health so consumers that anchor on the
+  // "Doctor" header followed by the first check keep working.
+  if (result.roots) {
+    const { roots } = result;
+    const home = process.env.HOME ?? process.env.USERPROFILE;
+    lines.push(`machine root: ${redactLine(redactRoot(roots.machine, { home }))}`);
+    if (roots.repository) lines.push(`repository root: ${redactLine(redactRoot(roots.repository, { home }))}`);
+    lines.push(`state root: ${redactLine(redactRoot(roots.state, { home }))}`);
+  }
+  return `${lines.join('\n')}\n`;
 }
