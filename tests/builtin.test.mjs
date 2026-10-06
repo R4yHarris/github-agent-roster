@@ -9,7 +9,7 @@ import { parseConfig } from '../src/lib/config.mjs';
 import { writeAsk } from '../src/lib/ask.mjs';
 import {
   coderStuckReason, maxPerspectiveEscalations, perspectiveContinuation, maxRescopes, rescopeBudget, rescopeContinuation,
-  maxReviewRepairs, reviewRepairContinuation,
+  maxReviewRepairs, previousReviewContinuation, reviewRepairContinuation,
   prepareBuiltinPublication, runBuiltinAsk, runBuiltinIssue as runIssueWithSeats, stageReviewedFiles,
 } from '../src/lib/builtin.mjs';
 import { ToolAccessError } from '../src/runtime/tools.mjs';
@@ -648,6 +648,17 @@ test('a semantic review failure loops back to the coder, flags a stalled repair,
   assert.deepEqual(events.filter(({ type }) => type === 'review-repair').map(({ attempt }) => attempt), [1, 2]);
   assert.match(reviewRepairContinuation({ round: 1, reasons: ['Check 1 unmet: x'], unmetChecks: [1] }),
     /^Review repair 1: .*unmet acceptance checks: 1[\s\S]*- Check 1 unmet: x$/);
+});
+
+test('a rerun of the same TASK carries the previous failed review findings, not a passing one', () => {
+  const failed = '# Review\n\nVerdict: fail\n\n## Reasons\n\n- Check 2 unmet: tests/paths.test.mjs missing.\n- Wrong key.\n\n' +
+    '## Acceptance checks\n\n- [x] 1. tests pass — ok\n- [ ] 2. table tests — missing\n\n## Security notes\n\n- None.\n';
+  const carried = previousReviewContinuation(failed);
+  assert.match(carried, /^Previous run: the reviewer failed the last result for this same TASK \(unmet acceptance checks: 2\)/);
+  assert.match(carried, /- Check 2 unmet: tests\/paths\.test\.mjs missing\.\n- Wrong key\.$/);
+  assert.doesNotMatch(carried, /Security notes|None\./);
+  assert.equal(previousReviewContinuation(failed.replace('Verdict: fail', 'Verdict: pass')), undefined);
+  assert.equal(previousReviewContinuation(null), undefined);
 });
 
 test('an incomplete reviewer gives no findings, so it does not restart the coder', async (context) => {
