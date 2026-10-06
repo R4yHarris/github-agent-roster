@@ -68,14 +68,18 @@ Before review, the coder's excellence gate applies the same rule
 deterministically to added lines of changed test files, regardless of model.
 A new test block must call an imported app function, directly or through a
 file-local helper, whenever the file imports one; `child_process` spawns count
-as black-box CLI coverage. A seeded string literal that an assertion
+as black-box CLI coverage. A source-scan guard that reads repository source
+(a relative `src/`, `lib/`, `bin/`, or `scripts/` path) and asserts on it also
+counts, because a regression in that source fails it. A seeded string literal that an assertion
 checks for absence must reach an app call as an argument, a config object
 derived from it, or `process.env`. A diff that changes only test files must
 add a test block or assertion when TASK class is `test` or the additions are
 only imports and comments; otherwise it is not test work. Failures start with
 `Test substance:` and
-get one correction turn, shared with the secret-material correction; a second
-failure stops the run. The coder context also lists export signatures of the
+get one correction turn, shared with the secret-material correction. A
+substance failure left after that correction ends the coder context, not the
+run: it escalates to a fresh perspective like a stalled repair. A secret or
+other gate failure still stops the run. The coder context also lists export signatures of the
 modules that allowed files import directly, under Public seams, so the
 coder does not spend turns probing for APIs.
 

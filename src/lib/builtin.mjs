@@ -108,6 +108,9 @@ export function coderStuckReason(error) {
   if (error.result.repairRepeated === true || /Test repair stalled: an earlier failure repeated/.test(text)) {
     return 'repeated an earlier test failure';
   }
+  if (error.result.substanceUnresolved === true) {
+    return 'left a new test that does not exercise app code after its correction';
+  }
   if (error.result.repairBudgetExhausted === true || /Test repair budget \(\d+\) exhausted/.test(text)) {
     return 'exhausted its test repair budget';
   }

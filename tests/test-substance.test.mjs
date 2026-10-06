@@ -68,6 +68,22 @@ test('a sentinel kept on an unused record is flagged even when other app calls e
   assert.match(reasons[0], /sentinel 'test-only-private-api-key'/);
 });
 
+test('a source-scan guard that reads repository source counts as substance; reading test fixtures does not', () => {
+  assert.deepEqual(analyze(`test('the literal lives only in the state API', async () => {
+  const root = fileURLToPath(new URL('../src/lib/', import.meta.url));
+  const source = await fs.readFile(path.join(root, 'checkpoints.mjs'), 'utf8');
+  assert.equal(source.includes('.roster'), false);
+});`), []);
+  const hoisted = `${header}const moduleRoot = new URL('../src/lib/', import.meta.url);\n`;
+  assert.deepEqual(analyze(`test('hoisted root', () => {
+  assert.equal(readFileSync(new URL('doctor.mjs', moduleRoot), 'utf8').includes('.roster'), false);
+});`, hoisted), []);
+  assert.equal(analyze(`test('fixture text only', async () => {
+  const text = await fs.readFile('tests/fixtures/sample.txt', 'utf8');
+  assert.ok(text.length);
+});`).length, 1);
+});
+
 test('a new test that never calls app code is flagged as tautological', () => {
   const reasons = analyze(`test('object shape', () => {
   const summary = { profile: 'fast' };
