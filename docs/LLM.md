@@ -71,7 +71,9 @@ an empty `tools` array. A streamed HTTP 200 response that carries a JSON
 `error` body, or no data frames at all, is reported as an endpoint error, not
 accepted as an empty completion. When the endpoint reports serving a model
 unrelated to the requested ID (a gateway alias), the seat prints one
-`served-model` warning, and the AI-Run records the served model.
+`served-model` warning, and the AI-Run records the served model. If fleet
+routing locked the request to a profile, an unrelated served model fails the
+run instead; Roster never silently substitutes a backend for a locked route.
 
 An absent, empty or whitespace-only `base_url` makes `createChat` return
 `null`, without accessing the vault or network. Keep the caller's existing

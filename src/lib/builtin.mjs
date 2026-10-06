@@ -469,6 +469,7 @@ async function runBuiltinAssignment(issueNumber, {
       const selected = withFleetProfile(config, route.profile);
       activeConfig = { ...selected, llm: Object.freeze({
         ...selected.llm, effort: autoRecommendation?.effort ?? config.llm.effort,
+        locked_model: route.profile.model,
       }) };
       log(`Route: ${formatRoute(route, taskClass).trimEnd()}`);
       onRunEvent?.({ type: 'route', model: route.profile.model,

@@ -24,6 +24,21 @@ test('a gateway alias to an unrelated model is reported once per client', async 
   assert.equal(chat.lastResponse.model, 'glm-5.3-flash');
 });
 
+test('a locked fleet model fails closed when the gateway serves an unrelated model', async () => {
+  const events = [];
+  const chat = createChat({
+    llm: { base_url: 'http://127.0.0.1:8000/v1', model: 'qwen3.8-27b', api_key_optional: true },
+  }, {
+    fetch: async () => Response.json({ model: 'glm-5.3-flash', choices: [{ finish_reason: 'stop',
+      message: { role: 'assistant', content: 'pong' } }] }),
+    env: {}, vault: { get: async () => undefined }, expectedModel: 'qwen3.8-27b',
+    onEvent: (event) => { events.push(event); },
+  });
+  await assert.rejects(chat(request), /Locked fleet model mismatch: requested qwen3\.8-27b, served glm-5\.3-flash/);
+  assert.equal(chat.lastResponse.model, 'glm-5.3-flash');
+  assert.equal(events.filter(({ type }) => type === 'served-model').length, 1);
+});
+
 test('the same model with a path prefix or tag is not a mismatch', async () => {
   const events = [];
   await client('Qwen/qwen3.8-27b', events)(request);
@@ -35,6 +50,13 @@ test('the same model with a path prefix or tag is not a mismatch', async () => {
 test('unsafe model names are never echoed as a mismatch', () => {
   assert.equal(servedModelMismatch('qwen', 'glm "injected"'), false);
   assert.equal(servedModelMismatch('qwen', 'x'.repeat(129)), false);
+});
+
+test('a locked fleet model ID must use the safe served-model alphabet', () => {
+  assert.throws(() => createChat({
+    llm: { base_url: 'http://127.0.0.1:8000/v1', model: 'qwen3.8-27b', api_key_optional: true },
+  }, { expectedModel: 'unsafe model', fetch: async () => assert.fail('must fail before fetch') }),
+  /Expected model must be a supported served model ID/);
 });
 
 const sse = { 'content-type': 'text/event-stream' };
