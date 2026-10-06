@@ -10,7 +10,7 @@ import { parseConfig } from '../src/lib/config.mjs';
 import { writeAsk } from '../src/lib/ask.mjs';
 import {
   coderStuckReason, maxPerspectiveEscalations, perspectiveContinuation, maxRescopes, rescopeBudget, rescopeContinuation,
-  maxReviewRepairs, previousReviewContinuation, reviewRepairContinuation,
+  maxReviewRepairs, previousReviewContinuation, previousReviewFindings, reviewRepairContinuation,
   prepareBuiltinPublication, runBuiltinAsk, runBuiltinIssue as runIssueWithSeats, stageReviewedFiles,
 } from '../src/lib/builtin.mjs';
 import { ToolAccessError } from '../src/runtime/tools.mjs';
@@ -175,6 +175,7 @@ test('a semantic review failure loops back to the coder, flags a stalled repair,
   const logs = [];
   const events = [];
   const repairs = [];
+  const reviewedPrevious = [];
   let reviews = 0;
   const result = await runIssueWithSeats(42, { ...options, config: llmConfig, log: (text) => logs.push(text),
     onRunEvent: (event) => events.push(event),
@@ -189,6 +190,8 @@ test('a semantic review failure loops back to the coder, flags a stalled repair,
       }
       if (system.startsWith('You are the builtin reviewer seat.')) {
         reviews += 1;
+        reviewedPrevious.push(/## Previous review findings\n\n- Check 2 unmet: src\/a\.mjs has no ready export\./
+          .test(body.messages[1].content));
         return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
           verdict: 'fail', reasons: ['The ready export is missing.'], security_notes: [],
           checks: reviewedChecks(body).map((id) => ({ id, met: id !== 2,
@@ -209,6 +212,7 @@ test('a semantic review failure loops back to the coder, flags a stalled repair,
   });
   assert.equal(result.review.verdict, 'fail');
   assert.equal(reviews, 1 + maxReviewRepairs);
+  assert.deepEqual(reviewedPrevious, [false, true, true], 're-reviews judge the previous findings');
   assert.deepEqual(repairs, [['1', false, true], ['2', true, true]]);
   assert.deepEqual(result.reviewRepairs.map(({ unmetChecks }) => unmetChecks), [[2], [2]]);
   assert.match(logs.join('\n'), /Review repair 1 of 2: reviewer failed checks 2; continuing with model=\S+ in a fresh coder context/);
@@ -230,6 +234,9 @@ test('a rerun of the same TASK carries the previous failed review findings, not 
   assert.equal(previousReviewContinuation('# Review\n\nVerdict: fail\n\n## Reasons\n\n' +
     '- Reviewer could not complete: stdout maxBuffer length exceeded\n\n## Security notes\n\n- None.\n'), undefined);
   assert.equal(previousReviewContinuation(null), undefined);
+  assert.deepEqual(previousReviewFindings(failed),
+    { reasons: ['Check 2 unmet: tests/paths.test.mjs missing.', 'Wrong key.'], unmetChecks: [2] });
+  assert.equal(previousReviewFindings(failed.replace('Verdict: fail', 'Verdict: pass')), undefined);
 });
 
 test('an incomplete reviewer gives no findings, so it does not restart the coder', async (context) => {
