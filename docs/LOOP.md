@@ -15,7 +15,8 @@ A seat ends on the first of these. None of them are a model sentence.
   (`Perspective escalation N of 2`), on a different eligible fleet profile when one exists. Worktree edits are kept,
   and the last failure is passed in as evidence. Recorded scope expansions and regression-repaired tests outside
   Allowed Files stay in scope for the next context, so its gate does not reject an earlier context's legitimate
-  repair. A hard security denial is never escalated.
+  repair. A resumed run restores the same recorded scope from archived results for files still changed in the
+  worktree. A hard security denial is never escalated.
 - `host`: the endpoint timed out. Do not start another coder turn in the same run.
 
 ## Rules
