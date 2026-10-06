@@ -90,7 +90,7 @@ export function reportedUsage(usage) {
 
 export function createChat(config = {}, {
   fetch: suppliedFetch, env = process.env, vault, onEvent, retryCommand, clock,
-  signal,
+  signal, expectedModel,
 } = {}) {
   if (!isObject(config) || (config.llm !== undefined && !isObject(config.llm))) {
     throw new TypeError('LLM configuration must be an object with an optional llm object.');
@@ -108,6 +108,9 @@ export function createChat(config = {}, {
   if (typeof optionalKey !== 'boolean') throw new TypeError('llm.api_key_optional must be a boolean.');
   if (typeof fetchImpl !== 'function') throw new TypeError('A fetch implementation is required.');
   if (onEvent !== undefined && typeof onEvent !== 'function') throw new TypeError('Live chat observer must be a function.');
+  if (expectedModel !== undefined && (typeof expectedModel !== 'string' || !safeModelName.test(expectedModel))) {
+    throw new TypeError('Expected model must be a supported served model ID.');
+  }
   validateRetryCommand(retryCommand);
   const url = new URL(endpoint);
   const host = redactSecrets(url.host, { env, apiKeyEnv: llm.api_key_name ?? 'OPENAI_API_KEY' });
@@ -263,6 +266,12 @@ export function createChat(config = {}, {
       if (!servedMismatchReported && servedModelMismatch(model, response.model)) {
         servedMismatchReported = true;
         await onEvent?.({ type: 'served-model', host, requested: model, served: response.model });
+      }
+      if (expectedModel !== undefined && servedModelMismatch(expectedModel, response.model)) {
+        throw new ChatError(
+          `Locked fleet model mismatch: requested ${expectedModel}, served ${response.model}.`,
+          'response',
+        );
       }
       if (response.finish_reason != null && !['stop', 'tool_calls'].includes(response.finish_reason)) {
         const rawReason = key ? response.finish_reason.split(key).join('[redacted]') : response.finish_reason;

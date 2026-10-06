@@ -1499,6 +1499,25 @@ test('fleet priors change endpoint/model only for explicit auto-model and never 
   }
 });
 
+test('auto-model fails closed when a gateway serves a model outside the locked fleet profile', async (context) => {
+  const options = multiFileFixture(context);
+  options.issue.title = 'feat: Add status';
+  mkdirSync(path.join(options.target, '.roster'));
+  writeFileSync(path.join(options.target, '.roster', 'fleet.yml'), formatFleet({ profiles: [{
+    id: 'burst', base_url: 'https://burst.example.invalid/v1', model: 'routed-model',
+    provider: 'vllm', context_max: 32768, concurrency: 1,
+    hardware: 'test-gpu', task_class: ['feat'], notes: '',
+  }] }));
+  await assert.rejects(runBuiltinIssue(42, {
+    ...options, config: llmConfig, autoModel: true, metricsLoader: () => [],
+    env: { ...options.env, ROSTER_API_KEY: 'test-only-key' },
+    fetchImpl: async () => Response.json({
+      model: 'substituted-model',
+      choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: '{}' } }],
+    }),
+  }), /Locked fleet model mismatch: requested routed-model, served substituted-model/);
+});
+
 test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the SDK only with --publish', async (context) => {
   const options = fixture(context);
   const logs = [];
