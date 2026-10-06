@@ -176,10 +176,42 @@ export async function checkExcellence({
     snapshot: current };
 }
 
-function testEvidence(tests) {
+const testNamePattern = /\b(?:test|it)\(\s*(['"`])((?:\\.|(?!\1)[^\\])*)\1/g;
+
+// Names of the tests a changed test file declares, so its results can be quoted from the full-suite output.
+export function declaredTestNames(text) {
+  return [...String(text).matchAll(testNamePattern)]
+    .filter(([, quote, name]) => !(quote === '`' && name.includes('${')))
+    .map(([, , name]) => name.replace(/\\(.)/g, '$1'));
+}
+
+// A large suite's head is unrelated tests: quote the totals and every result line from the changed test files.
+export function testEvidence(tests, changedTests = []) {
   const output = [tests.stdout, tests.stderr].filter((part) => typeof part === 'string' && part.trim()).join('\n').trim();
+  const lines = output.split(/\r?\n/);
+  const totals = lines.filter((line) => /^ℹ (tests|suites|pass|fail|cancelled|skipped|todo) \d+$/.test(line.trim()));
+  const changed = changedTests.map(({ file, names }) => {
+    const results = lines.map((line) => line.trim()).filter((line) => /^[✔✖﹣] /.test(line) &&
+      names.some((name) => line.slice(2).startsWith(`${name} (`) || line.slice(2) === name));
+    return `${file}: ${results.length} of ${names.length} declared tests reported\n` +
+      [...new Set(results)].slice(0, 40).map((line) => `  ${line}`).join('\n');
+  }).join('\n').slice(0, 4000);
   const excerpt = (output || '(no output)').slice(0, 1200);
-  return `node --test exited ${tests.exit_code}\nCommand: node --test\nExit code: ${tests.exit_code}\nOutput:\n${excerpt}`;
+  return `node --test exited ${tests.exit_code}\nCommand: node --test\nExit code: ${tests.exit_code}\n` +
+    (totals.length ? `Totals:\n${totals.map((line) => `  ${line.trim()}`).join('\n')}\n` : '') +
+    (changed ? `Changed test files:\n${changed}\n` : '') +
+    `Output:\n${excerpt}`;
+}
+
+async function changedTestNames(worktree, files) {
+  const changed = [];
+  for (const file of files.filter(isTestFile)) {
+    try {
+      const names = declaredTestNames(await fs.readFile(path.join(worktree, file), 'utf8'));
+      if (names.length) changed.push({ file, names });
+    } catch {}
+  }
+  return changed;
 }
 
 export async function writeResult({ worktree, result, excellence, env, apiKeyEnv, run }) {
@@ -188,7 +220,7 @@ export async function writeResult({ worktree, result, excellence, env, apiKeyEnv
   const passed = excellence.pass && !timedOut && !blocked;
   const summary = timedOut ? 'Coder HTTP request timed out. No change was verified; this run did not complete.' : result.summary;
   const tests = result.tests?.skipped ? `Tests skipped: ${result.tests.stdout}`
-    : result.tests ? testEvidence(result.tests)
+    : result.tests ? testEvidence(result.tests, await changedTestNames(worktree, excellence.files ?? []))
     : result.testsSkipped ? 'Tests skipped: docs-only change is checked by reading the file.' : 'Tests were not run.';
   const body = '# Result\n\n' + (blocked ? 'Outcome: blocked (contracts infrastructure)\n\n'
     : timedOut ? 'Outcome: timed out (unverified)\n\n' : '') +

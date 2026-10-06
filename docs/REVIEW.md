@@ -83,6 +83,14 @@ other gate failure still stops the run. The coder context also lists export sign
 modules that allowed files import directly, under Public seams, so the
 coder does not spend turns probing for APIs.
 
+`RESULT.md` quotes the verified run's test totals and, for each changed test
+file, how many of its declared tests the run reported, with their pass/fail
+lines. The reviewer then sees evidence for new tests even when the full-suite
+output head does not reach them. `RESULT.md` and `REVIEW.md` are written by the
+harness: a coder write to either is denied as a correctable tool error, so a
+review repair answers missing-evidence findings with passing tests, not by
+editing the report.
+
 ## Publication gate
 
 Roster-managed `roster run --issue N --publish` and REPL `/publish` require
