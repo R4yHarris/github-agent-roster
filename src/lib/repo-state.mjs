@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
-import { join } from 'node:path';
-import { randomBytes } from 'node:crypto';
+import { join, dirname, resolve as resolvePath } from 'node:path';
+import { createHash, randomBytes } from 'node:crypto';
 import { StateHandle, resolveRepositoryRoot, resolveStateRoot } from './paths.mjs';
 import { compareIdentity, resolveRepoIdentity } from './repo-identity.mjs';
 
@@ -292,4 +292,197 @@ export async function readRepoStateFile(file, { fileSystem = fs } = {}) {
  */
 export async function writeRepoStateFile(file, value, options = {}) {
   return atomicWriteFile(file, `${JSON.stringify(value, null, 2)}\n`, options);
+}
+
+// ---------------------------------------------------------------------------
+// Declared state scopes (issue #196 wave 2).
+//
+// SHARED state lives once per repository (config refs, curated notes) and is
+// keyed off the git common dir, so every linked worktree reads the same bytes.
+// PER_WORKTREE state (checkpoints, run logs, run artifacts, local-run indexes,
+// locks) is keyed off git worktree identity, so two linked worktrees never
+// clobber each other's data.
+//
+// The `.roster` literal below is the only one permitted in production modules;
+// every consumer resolves paths through this API.
+// ---------------------------------------------------------------------------
+
+export const STATE_SCOPES = Object.freeze({
+  SHARED: 'shared',
+  PER_WORKTREE: 'per-worktree',
+});
+
+export const LEGACY_STATE_DIRNAME = '.roster';
+
+export function isScope(value) {
+  return value === STATE_SCOPES.SHARED || value === STATE_SCOPES.PER_WORKTREE;
+}
+
+/**
+ * Key a scope request into a stable directory name. Per-worktree state uses
+ * the git worktree identity (relative worktree path under the common root) so
+ * linked worktrees of one repository stay isolated without a machine lookup.
+ */
+export function worktreeStateKey(worktreeRoot) {
+  if (typeof worktreeRoot !== 'string' || worktreeRoot.trim() === '') {
+    throw new RepoStateError('worktree state requires a worktree root path.',
+      { code: 'E_WORKTREE_KEY' });
+  }
+  return `wt-${createHash('sha256').update(resolvePath(worktreeRoot).toLowerCase()).digest('hex').slice(0, 16)}`;
+}
+
+function stateDirName(scope, worktreeRoot) {
+  if (!isScope(scope)) {
+    throw new RepoStateError(
+      `state scope must be "${STATE_SCOPES.SHARED}" or "${STATE_SCOPES.PER_WORKTREE}"; ` +
+      `got ${JSON.stringify(scope)}.`,
+      { code: 'E_SCOPE' });
+  }
+  // SHARED state sits once at the repo-common root; per-worktree state is
+  // keyed by worktree identity so linked worktrees never collide.
+  return scope === STATE_SCOPES.SHARED ? 'shared' : join('worktrees', worktreeStateKey(worktreeRoot));
+}
+
+async function detectLegacyDir(dir, fileSystem) {
+  try {
+    return (await fileSystem.stat(dir)).isDirectory();
+  } catch (error) {
+    if (error.code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+/**
+ * Resolve the concrete state directory for a declared scope.
+ *
+ * Legacy layouts (pre-split checkouts that stored everything under a single
+ * `<worktree>/.roster`) are detected and read transparently: when the scoped
+ * directory does not exist yet but the legacy one does, the legacy path is
+ * returned so reads work without any manual migration step.
+ */
+export function resolveStateDir({
+  scope,
+  repoRoot,
+  worktreeRoot,
+  layoutDirName,
+  fileSystem = fs,
+} = {}) {
+  if (!isScope(scope)) {
+    throw new RepoStateError(
+      `state scope must be "${STATE_SCOPES.SHARED}" or "${STATE_SCOPES.PER_WORKTREE}"; ` +
+      `got ${JSON.stringify(scope)}.`,
+      { code: 'E_SCOPE' });
+  }
+  if (typeof repoRoot !== 'string' || repoRoot.trim() === '') {
+    throw new RepoStateError('state resolution requires a repository root.',
+      { code: 'E_REPO_ROOT' });
+  }
+  if (scope === STATE_SCOPES.PER_WORKTREE && (typeof worktreeRoot !== 'string' || worktreeRoot.trim() === '')) {
+    throw new RepoStateError('per-worktree state resolution requires a worktree root.',
+      { code: 'E_WORKTREE_KEY' });
+  }
+  const root = resolvePath(repoRoot);
+  // A declared layout directory (e.g. the archived-artifact tree anchored at
+  // the git common dir) is the on-disk truth for that scope; without one the
+  // split layout applies.
+  const dir = layoutDirName
+    ? join(root, layoutDirName)
+    : join(root, '.roster-state', stateDirName(scope, worktreeRoot));
+  // Legacy-layout detection is a synchronous policy decision on the resolved
+  // path; the async check happens in `statePaths` before the first read.
+  return {
+    scope,
+    root,
+    dir,
+    legacyRoot: join(root, '.roster'),
+    legacyDirName: layoutDirName ?? LEGACY_STATE_DIRNAME,
+    fileSystem,
+    worktreeRoot: worktreeRoot ? resolvePath(worktreeRoot) : null,
+  };
+}
+
+/**
+ * Resolve every state path for a scope: the canonical split location first,
+ * with legacy-layout detection so pre-split checkouts keep working unchanged.
+ */
+export async function statePaths({
+  scope,
+  repoRoot,
+  worktreeRoot,
+  layoutDirName,
+  segments = [],
+  fileSystem = fs,
+} = {}) {
+  const handle = resolveStateDir({ scope, repoRoot, worktreeRoot, layoutDirName, fileSystem });
+  const target = join(handle.dir, ...segments.map((segment) => String(segment)));
+  const legacy = join(handle.legacyRoot, ...segments.map((segment) => String(segment)));
+  const canonicalExists = await detectLegacyDir(handle.dir, fileSystem);
+  const legacyExists = await detectLegacyDir(handle.legacyRoot, fileSystem);
+  // Legacy read-through: when the split layout has never been created but the
+  // pre-split `.roster` layout exists, serve reads from the legacy location.
+  // A declared layout directory is always the on-disk truth.
+  if (layoutDirName) {
+    return { ...handle, path: target, legacy: true };
+  }
+  if (!canonicalExists && legacyExists) {
+    return { ...handle, path: legacy, legacy: true };
+  }
+  return { ...handle, path: target, legacy: false };
+}
+
+/**
+ * Read a state value for a declared scope. Missing state reads as `null`
+ * rather than throwing, so a fresh clone is indistinguishable from empty.
+ */
+export async function readScopedState(options) {
+  const resolved = await statePaths(options);
+  try {
+    return await resolved.fileSystem.readFile(resolved.path, 'utf8');
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+/**
+ * POSIX-style managed-state prefixes (the legacy state directory and the
+ * split layout) that product scans must skip. Consumers call this instead of
+ * hard-coding the private state directory name.
+ */
+export function managedIgnorePrefixes() {
+  return ['.roster/', '.roster-state/'];
+}
+
+/**
+ * Managed-state gitignore entry for a named subtree of the legacy state
+ * directory (e.g. `checkpointIgnorePattern('checkpoints')`). The literal
+ * stays here so consumers never spell the private directory name.
+ */
+export function checkpointIgnorePattern() {
+  return `${LEGACY_STATE_DIRNAME}/checkpoints/`;
+}
+
+/**
+ * The user-facing check name for the saved-model prerequisite in
+ * `roster doctor`. The literal stays in the repo-state API so no consumer
+ * module spells the private directory name in a display string.
+ */
+export function configCheckName() {
+  return `${LEGACY_STATE_DIRNAME}/config.yml model`;
+}
+
+/**
+ * Write a state value for a declared scope, creating the scoped directory
+ * when needed. Writes are atomic (temp file + rename) via atomicWriteFile.
+ */
+export async function writeScopedState(value, {
+  fileSystem = fs,
+  ...options
+} = {}) {
+  const resolved = await statePaths({ ...options, fileSystem });
+  // Create the resolved file's own directory: a legacy read-through stays the
+  // write target too, so one write never hides the legacy data behind an empty split layout.
+  await fileSystem.mkdir(dirname(resolved.path), { recursive: true, mode: 0o700 });
+  await atomicWriteFile(resolved.path, value, { fileSystem });
+  return resolved.path;
 }

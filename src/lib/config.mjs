@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TextDecoder } from 'node:util';
 import { ensureLocalPath, resolveProjectRoot } from './paths.mjs';
+import { STATE_SCOPES, resolveStateDir } from './repo-state.mjs';
 import { validateRequestTimeout } from '../llm/request.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -350,10 +351,18 @@ export function formatConfig(config) {
   return source;
 }
 
+// The private config is SHARED repo state: it lives once at the repo-common
+// root and every linked worktree reads the same bytes through the repo-state
+// API instead of constructing its own private path. `configStatePath` stays
+// synchronous because loadConfig/setConfigValue are synchronous public APIs.
+export function configStatePath(repoRoot) {
+  return resolveStateDir({ scope: STATE_SCOPES.SHARED, repoRoot });
+}
+
 export function resolveConfigRoot({ repoRoot = rosterRoot, cwd } = {}) {
   if (cwd !== undefined) {
     const project = resolveProjectRoot(cwd);
-    const local = path.join(project, '.roster', 'config.yml');
+    const local = path.join(configStatePath(project).legacyRoot, 'config.yml');
     if (lstatSync(local, { throwIfNoEntry: false })) return project;
   }
   return path.resolve(repoRoot);
@@ -361,7 +370,7 @@ export function resolveConfigRoot({ repoRoot = rosterRoot, cwd } = {}) {
 
 export function loadConfig({ repoRoot = rosterRoot, cwd } = {}) {
   const configRoot = resolveConfigRoot({ repoRoot, cwd });
-  const local = path.join(configRoot, '.roster', 'config.yml');
+  const local = path.join(configStatePath(configRoot).legacyRoot, 'config.yml');
   let source;
   try {
     source = readConfigFile(local);
@@ -397,7 +406,7 @@ export async function setConfigValue(field, value, { repoRoot = rosterRoot, cwd 
     throw new TypeError('Set a single-line model, effort, or context budget value');
   }
   const configRoot = resolveConfigRoot({ repoRoot, cwd });
-  const file = path.join(configRoot, '.roster', 'config.yml');
+  const file = path.join(configStatePath(configRoot).legacyRoot, 'config.yml');
   await ensureLocalPath(file, configRoot);
   let source;
   try {
@@ -430,7 +439,7 @@ export async function setConfigValue(field, value, { repoRoot = rosterRoot, cwd 
 
 export async function writePrivateConfig(source, { repoRoot = rosterRoot, expectedSource } = {}) {
   const config = parseConfig(source);
-  const file = path.join(repoRoot, '.roster', 'config.yml');
+  const file = path.join(configStatePath(repoRoot).legacyRoot, 'config.yml');
   await ensureLocalPath(file, repoRoot);
   let previous = null;
   try {

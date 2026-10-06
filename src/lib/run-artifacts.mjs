@@ -2,8 +2,26 @@ import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { ensureLocalPath } from './paths.mjs';
+import { STATE_SCOPES, statePaths } from './repo-state.mjs';
 
 const names = ['RECIPE.yml', 'TASK.md', 'PLAN.md', 'ESTIMATE.md', 'CONTEXT.md', 'RESEARCH.md', 'RESULT.md', 'REVIEW.md'];
+
+// Archived run artifacts live at the repo-common root (SHARED state): the git
+// common dir is the one root every linked worktree agrees on, so a rerun from
+// any worktree sees the same archive. Paths resolve through the repo-state
+// API instead of ad hoc joins off the git dir. The legacy
+// `<common>/roster-artifacts/<task>` layout stays the on-disk truth; the
+// repo-state API owns the path construction and legacy-layout detection.
+async function archiveRoot(worktree, git, ...segments) {
+  const common = path.resolve(worktree, (await git(['rev-parse', '--git-common-dir'])).trim());
+  const resolved = await statePaths({
+    scope: STATE_SCOPES.SHARED,
+    repoRoot: common,
+    layoutDirName: 'roster-artifacts',
+    segments,
+  });
+  return { path: resolved.path, common };
+}
 
 export async function archiveRunArtifacts(worktree, { task, git, preserve = [] }) {
   if (typeof task !== 'string' || !/^(?!-$)[A-Za-z0-9._-]{1,64}$/.test(task) || typeof git !== 'function') {
@@ -32,10 +50,9 @@ export async function archiveRunArtifacts(worktree, { task, git, preserve = [] }
   if ((await git(['ls-files', '-z', '--', ...files.map(({ name }) => name)])).trim()) {
     throw new Error('Refusing to replace tracked planning/run artifacts');
   }
-  const common = path.resolve(worktree, (await git(['rev-parse', '--git-common-dir'])).trim());
   const archiveTask = /^(?:issue-[1-9]\d*|local-[a-f0-9]{16})$/.test(task)
     ? task : `task-${createHash('sha256').update(task).digest('hex').slice(0, 16)}`;
-  const directory = path.join(common, 'roster-artifacts', archiveTask,
+  const { path: directory, common } = await archiveRoot(worktree, git, archiveTask,
     `${Date.now()}-${randomBytes(6).toString('hex')}`);
   await ensureLocalPath(directory, common);
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
@@ -66,8 +83,7 @@ export async function archiveRunArtifacts(worktree, { task, git, preserve = [] }
 // The newest archived REVIEW.md lets a rerun after an interrupted run still start from the last review findings.
 export async function latestArchivedReview(worktree, { task, git, accept = () => true }) {
   if (typeof task !== 'string' || !/^(?:issue-[1-9]\d*|local-[a-f0-9]{16})$/.test(task)) return null;
-  const common = path.resolve(worktree, (await git(['rev-parse', '--git-common-dir'])).trim());
-  const root = path.join(common, 'roster-artifacts', task);
+  const root = (await archiveRoot(worktree, git, task)).path;
   const entries = await fs.readdir(root).catch(() => []);
   for (const name of entries.filter((entry) => /^\d+-[a-f0-9]{12}$/.test(entry)).sort().reverse()) {
     const file = path.join(root, name, 'REVIEW.md');
@@ -84,8 +100,7 @@ export async function latestArchivedReview(worktree, { task, git, accept = () =>
 export async function archivedRunScope(worktree, { task, git, limit = 50 }) {
   const scope = { repairFiles: [], scopeFiles: [] };
   if (typeof task !== 'string' || !/^(?:issue-[1-9]\d*|local-[a-f0-9]{16})$/.test(task)) return scope;
-  const common = path.resolve(worktree, (await git(['rev-parse', '--git-common-dir'])).trim());
-  const root = path.join(common, 'roster-artifacts', task);
+  const root = (await archiveRoot(worktree, git, task)).path;
   const entries = await fs.readdir(root).catch(() => []);
   const repair = new Set();
   const expanded = new Set();
