@@ -136,6 +136,11 @@ export function createChat(config = {}, {
   if (expectedModel !== undefined && (typeof expectedModel !== 'string' || !safeModelName.test(expectedModel))) {
     throw new TypeError('Expected model must be a supported served model ID.');
   }
+  if (llm.served_model_label !== undefined && !['trust', 'ignore'].includes(llm.served_model_label)) {
+    throw new TypeError('llm.served_model_label must be trust or ignore.');
+  }
+  // Some gateways stamp every response with one model ID regardless of the backend that answered.
+  const ignoreServedLabel = llm.served_model_label === 'ignore';
   validateRetryCommand(retryCommand);
   const url = new URL(endpoint);
   const host = redactSecrets(url.host, { env, apiKeyEnv: llm.api_key_name ?? 'OPENAI_API_KEY' });
@@ -293,10 +298,11 @@ export function createChat(config = {}, {
     }
 
     try {
-      const response = await withRequestTimeout(send, {
+      const received = await withRequestTimeout(send, {
         host, local, timeoutMs, retryCommand, clock, signal: requestSignal,
         ...(onEvent ? { onWaiting: (event) => onEvent({ type: 'waiting', ...event }) } : {}),
       });
+      const response = ignoreServedLabel ? { ...received, model } : received;
       const usage = response.usage === null ? null : Object.freeze(Object.fromEntries(
         ['prompt_tokens', 'completion_tokens'].filter((field) => response.usage[field] !== undefined)
           .map((field) => [field, response.usage[field]]),

@@ -30,7 +30,9 @@ These apply to every seat and to the harness that sequences them
   remembered for 24 hours in the ignored `.roster/runs/route-quarantine.json`.
   Later auto-routed runs then start on an honest profile and log
   `Route quarantine: skipping profile=…`. If every eligible profile is
-  quarantined, routing falls back to the unfiltered choice.
+  quarantined, routing falls back to the unfiltered choice. A profile whose
+  operator declared `served_model_label: ignore` is never quarantined for a
+  label mismatch, because its gateway's label is known to be wrong.
 - **Fail honestly when no alternative remains.** If no eligible profile is
   left, the run stops with the original error and `Route recovery exhausted`.
   Saved, non-routed models are never rerouted.

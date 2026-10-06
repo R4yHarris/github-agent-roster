@@ -17,7 +17,7 @@ const defaultProfiles = {
   openai: { base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY' },
 };
 const fields = {
-  llm: ['base_url', 'model', 'api_key_env', 'effort', 'effort_override', 'context_max', 'profile', 'api_key_optional', 'provider', 'request_timeout_ms'],
+  llm: ['base_url', 'model', 'api_key_env', 'effort', 'effort_override', 'context_max', 'profile', 'api_key_optional', 'provider', 'request_timeout_ms', 'served_model_label'],
   planner: ['turn_budget'],
   seat: ['id', 'principal', 'turn_budget', 'tools', 'context_chars', 'scope_expansion'],
   paths: ['memory', 'skills', 'asks', 'worktrees'],
@@ -168,7 +168,7 @@ export function parseConfig(source) {
   if (!roots.has('schema') ||
       ['llm', 'seat', 'paths'].some((name) =>
         !roots.has(name) || fields[name].some((field) =>
-          !(name === 'llm' && ['profile', 'api_key_optional', 'provider', 'request_timeout_ms', 'effort_override'].includes(field)) &&
+          !(name === 'llm' && ['profile', 'api_key_optional', 'provider', 'request_timeout_ms', 'effort_override', 'served_model_label'].includes(field)) &&
           !(name === 'seat' && ['context_chars', 'scope_expansion'].includes(field)) && !Object.hasOwn(config[name], field))) ||
       (roots.has('planner') && !Object.hasOwn(config.planner, 'turn_budget'))) {
     invalid('schema, llm, seat, paths, and optional planner must contain every documented field');
@@ -194,6 +194,10 @@ export function parseConfig(source) {
     }
   }
   llm.profile = Object.hasOwn(llm, 'profile') ? stringValue(llm.profile, 'llm.profile') : '';
+  if (Object.hasOwn(llm, 'served_model_label')) {
+    llm.served_model_label = stringValue(llm.served_model_label, 'llm.served_model_label');
+    if (!['trust', 'ignore'].includes(llm.served_model_label)) invalid('llm.served_model_label must be trust or ignore');
+  }
   if (Object.hasOwn(llm, 'api_key_optional')) {
     llm.api_key_optional = booleanValue(llm.api_key_optional, 'llm.api_key_optional');
   }

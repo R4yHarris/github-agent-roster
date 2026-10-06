@@ -64,6 +64,14 @@ test('unique IDs, real models, positive capacity, and optional task hints are va
     profiles: { 'vllm-local': { api_key_env: 'ROSTER_API_KEY', api_key_optional: true } },
   }, { ...profile, request_timeout_ms: 1_200_000 });
   assert.equal(selected.llm.request_timeout_ms, 1_200_000);
+  assert.equal(Object.hasOwn(selected.llm, 'served_model_label'), false);
+  const ignoring = parseFleet(formatFleet({ profiles: [{ ...profile, served_model_label: 'ignore' }] })).profiles[0];
+  assert.equal(ignoring.served_model_label, 'ignore');
+  assert.equal(withFleetProfile({ llm: {}, profiles: { 'vllm-local': { api_key_env: 'ROSTER_API_KEY' } } },
+    ignoring).llm.served_model_label, 'ignore');
+  assert.equal(withFleetProfile({ llm: { served_model_label: 'ignore' },
+    profiles: { 'vllm-local': { api_key_env: 'ROSTER_API_KEY' } } }, profile).llm.served_model_label, undefined);
+  assert.throws(() => validateFleetProfile({ ...profile, served_model_label: 'maybe' }), /served_model_label/);
 });
 
 test('unsupported YAML and duplicate catalog keys fail instead of being silently ignored', () => {

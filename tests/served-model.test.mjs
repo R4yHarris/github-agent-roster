@@ -45,6 +45,23 @@ test('a locked fleet model fails closed when the gateway serves an unrelated mod
   assert.equal(events.filter(({ type }) => type === 'served-model').length, 1);
 });
 
+test('a gateway whose response label is ignored records the requested model and never fails closed', async () => {
+  const events = [];
+  const chat = createChat({ llm: { base_url: 'http://127.0.0.1:8000/v1', model: 'qwen3.8-27b',
+    api_key_optional: true, served_model_label: 'ignore' } }, {
+    fetch: async () => Response.json({ model: 'glm-5.3-flash', choices: [{ finish_reason: 'stop',
+      message: { role: 'assistant', content: 'pong' } }] }),
+    env: {}, vault: { get: async () => undefined }, expectedModel: 'qwen3.8-27b',
+    onEvent: (event) => { events.push(event); },
+  });
+  const response = await chat(request);
+  assert.equal(response.model, 'qwen3.8-27b');
+  assert.equal(chat.lastResponse.model, 'qwen3.8-27b');
+  assert.equal(events.some(({ type }) => type === 'served-model'), false);
+  assert.throws(() => createChat({ llm: { base_url: 'http://127.0.0.1:8000/v1', model: 'm',
+    served_model_label: 'maybe' } }), /served_model_label/);
+});
+
 test('the same model with a path prefix or tag is not a mismatch', async () => {
   const events = [];
   await client('Qwen/qwen3.8-27b', events)(request);
