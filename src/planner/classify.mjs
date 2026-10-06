@@ -20,9 +20,13 @@ export function classifyAsk(ask, { title, filesAllowed = [] } = {}) {
     specKind: incident ? 'incident' : question ? 'question' :
       ({ slice: 'slice', feature: 'story', initiative: 'epic' }[kind] ?? null), reason });
   const initiative = /^(?:build|create|develop|deliver|launch|implement)\s+(?:(?:a|an|the|new|entire|complete|full|standalone|end-to-end)\s+)*(?:orchestrator|platform|product|ecosystem|suite|operating system)\b/;
-  if ((requirements.outcomes?.length ?? 0) > 5 || directives.some((line) => initiative.test(line) ||
+  const explicitEpic = /^(?:#{1,6}\s*)?(?:epic|initiative)(?:\s+outcome)?\s*:?\s*$/im.test(text) ||
+    /^(?:epic|initiative)\s*:/i.test(title ?? '');
+  if (explicitEpic || (requirements.outcomes?.length ?? 0) > 5 || directives.some((line) => initiative.test(line) ||
       /^(?:initiative\b|(?:plan|deliver|launch|build|create)\b.*\b(?:multi-wave|multi-team|initiative)\b)/.test(line))) {
-    return result('initiative', 'Whole-system or multi-wave outcome needs an issue plan');
+    return result('initiative', explicitEpic
+      ? 'Explicit epic or initiative outcome needs an issue plan'
+      : 'Whole-system or multi-wave outcome needs an issue plan');
   }
   const oneLiner = /\b(?:readme(?:\.md)?\b.*\bone[- ]liner?\b|one[- ]liner?\b.*\breadme(?:\.md)?)\b/.test(summary);
   if ((requirements.outcomes?.length ?? 1) > 1 ||
