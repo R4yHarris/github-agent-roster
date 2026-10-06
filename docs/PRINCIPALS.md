@@ -29,9 +29,17 @@ These apply to every seat and to the harness that sequences them
   never accepted under the locked model's identity.
 - **Fail honestly when no alternative remains.** If no eligible profile is
   left, the run stops with the original error and `Route recovery exhausted`.
-  Task failures such as a check failing twice (§5.4) still stop for a human;
-  rerouting is for endpoint failures, not for weakening checks. Saved,
-  non-routed models are never rerouted.
+  Saved, non-routed models are never rerouted.
+- **Work to completion; escalate perspective, not effort on the same context.**
+  When a coder context exhausts its repair or turn budget, or repeats a denied
+  action, that context is stuck, but the task is not proven impossible. The
+  harness starts a fresh coder context (`Perspective escalation N of 2`). It uses
+  the next eligible fleet profile when auto-routing, and the same model
+  otherwise. Worktree edits are kept, and the context gets the last failure
+  plus an instruction to decide which side (test or implementation) is wrong
+  and stop alternating between them. Escalation never weakens checks and
+  never applies to security denials. After two escalations, the run stops for
+  a human (§5.4).
 - **Scope steers; security denies.** TASK.md Allowed Files are the planned
   scope. Security boundaries always stop the run: secrets, `.git`, policy,
   workflows, `vendor/`, harness-managed files, `.roster/`, symlinks, and

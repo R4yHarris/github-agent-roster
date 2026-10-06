@@ -11,7 +11,7 @@ import { taskSkillNames } from '../runtime/skills.mjs';
 import { runCoder } from '../seats/coder.mjs';
 import { acceptPlannerPlan, preparePlannerHandoff, readPlannerHandoff, readPlannerTask, readPreviousReview, runPlanner } from '../seats/planner.mjs';
 import { requirePassingReview, runReviewer } from '../seats/reviewer.mjs';
-import { isAllowedFile, isForbiddenWrite, isManagedFile, taskAndRepairFiles } from '../runtime/tools.mjs';
+import { isAllowedFile, isForbiddenWrite, isManagedFile, taskAndRepairFiles, ToolAccessError } from '../runtime/tools.mjs';
 import { checkExcellence, redactEvidence } from '../runtime/excellence.mjs';
 import { isReviewRequired, loadConfig, requirePublicationEnabled, withoutLlmKeys } from './config.mjs';
 import { loadFleet, withFleetProfile } from './fleet.mjs';
@@ -42,6 +42,36 @@ import { routeFailure } from '../llm/openai.mjs';
 
 const execFileAsync = promisify(execFile);
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
+export const maxPerspectiveEscalations = 2;
+
+// Budget exhaustion means the coder's context is stuck; hard denials, cancellation, and setup errors are not.
+export function coderStuckReason(error) {
+  if (!(error instanceof Error) || !error.result) return null;
+  const chain = [];
+  for (let current = error; current instanceof Error && !chain.includes(current); current = current.cause) chain.push(current);
+  if (chain.some((entry) => entry instanceof ToolAccessError && !/\(repeated after \d+ denials\)/.test(entry.message))) {
+    return null;
+  }
+  const text = chain.map((entry) => entry.message).join('\n');
+  if (error.result.repairBudgetExhausted === true || /Test repair budget \(\d+\) exhausted/.test(text)) {
+    return 'exhausted its test repair budget';
+  }
+  if (/Coder turn budget \(\d+\) exhausted/.test(text)) return 'exhausted its turn budget';
+  if (/continued exploring after the bounded exploration budget/.test(text)) return 'kept exploring without converging';
+  if (/\(repeated after \d+ denials\)/.test(text)) return 'repeated a denied action';
+  return null;
+}
+
+export function perspectiveContinuation({ attempt, reason, evidence, changedFiles = [] }) {
+  return `Fresh perspective ${attempt}: the previous coder context ${reason} and was stopped so it would not keep ` +
+    'repeating the same moves. Its edits remain in the worktree' +
+    (changedFiles.length ? ` (${changedFiles.join(', ')})` : '') + '. Before editing, read the TASK checks, the ' +
+    'current implementation, and the current tests. For each remaining failure, decide from TASK.md which side is ' +
+    'wrong (the assertion or the implementation) and change only that side; never alternate between editing a test ' +
+    'and its implementation to chase the same assertion. Keep correct work, prefer the simplest behavior that ' +
+    'satisfies TASK.md, and rerun node --test until it exits 0.\n\nLast failure evidence (redacted, truncated):\n' +
+    String(evidence ?? '').slice(0, 2000);
+}
 
 async function git(worktree, args, env = process.env) {
   const { stdout } = await execFileAsync('git', args, {
@@ -684,6 +714,7 @@ async function runBuiltinAssignment(issueNumber, {
   let coderBaseline;
   let coderScopeFiles = [];
   let continuation;
+  const perspectiveAttempts = [];
   for (;;) {
     try {
       result = await coderSeat(undefined, { initialBaseline: coderBaseline, initialScopeFiles: coderScopeFiles, continuation });
@@ -693,18 +724,39 @@ async function runBuiltinAssignment(issueNumber, {
         await recordSeat(sessions.coder, error.result.run, error.result.excellence);
       }
       const failedProfile = route?.profile.id;
-      if (!await recoverRoute('coder', error)) throw error;
+      if (await recoverRoute('coder', error)) {
+        coderConfig = buildCoderConfig(activeConfig.llm.model);
+        continuation =
+          `The previous coder attempt on fleet profile ${failedProfile} stopped because of an endpoint route failure, ` +
+          'not a task failure. Its edits remain in the worktree: inspect them, keep what is correct, and continue ' +
+          'to a verified result with a different approach rather than repeating the same steps.';
+      } else {
+        // An exhausted repair or turn budget is evidence that this context is stuck, not that the task is
+        // impossible: retry once or twice with a fresh context (and a different profile when one is eligible).
+        const stuck = coderStuckReason(error);
+        if (!stuck || perspectiveAttempts.length >= maxPerspectiveEscalations) throw error;
+        const previousModel = coderConfig.llm.model;
+        const alternate = autoModel && route ? await selectAutoRoute([...new Set([
+          ...routeAttempts.map((attempt) => attempt.profile), ...perspectiveAttempts.map((attempt) => attempt.profile),
+          failedProfile,
+        ])]) : null;
+        if (alternate) coderConfig = buildCoderConfig(activeConfig.llm.model);
+        perspectiveAttempts.push({ profile: failedProfile ?? null, model: previousModel, reason: stuck });
+        log(`Perspective escalation ${perspectiveAttempts.length} of ${maxPerspectiveEscalations}: coder ${stuck}; ` +
+          (alternate ? `continuing with profile=${alternate.profile.id} model=${alternate.profile.model} in a fresh context.`
+            : `continuing with model=${coderConfig.llm.model} in a fresh context.`));
+        onRunEvent?.({ type: 'perspective-escalation', attempt: perspectiveAttempts.length, reason: stuck,
+          model: coderConfig.llm.model });
+        continuation = perspectiveContinuation({ attempt: perspectiveAttempts.length, reason: stuck,
+          evidence: redactEvidence(error.message, { env, apiKeyEnv: config.llm.api_key_env }),
+          changedFiles: error.result?.excellence?.files ?? [] });
+      }
       coderBaseline ??= error.result?.baseline;
       coderScopeFiles = [...new Set([...coderScopeFiles, ...(error.result?.scopeFiles ?? [])])];
-      coderConfig = buildCoderConfig(activeConfig.llm.model);
       await archiveRunArtifacts(worktreePath, {
         task: prepared.task, git: (args) => git(worktreePath, args, commandEnv),
         preserve: ['RECIPE.yml', 'TASK.md', 'ESTIMATE.md'],
       });
-      continuation =
-        `The previous coder attempt on fleet profile ${failedProfile} stopped because of an endpoint route failure, ` +
-        'not a task failure. Its edits remain in the worktree: inspect them, keep what is correct, and continue ' +
-        'to a verified result with a different approach rather than repeating the same steps.';
     }
   }
   let coderRun = result.run;
@@ -765,7 +817,8 @@ async function runBuiltinAssignment(issueNumber, {
 
   const completed = {
     ...prepared, askKind, classification, recipePath: planner.recipePath, taskPath: planner.taskPath,
-    planner, result, review, sessions, runs, run: coderRun, command, autoRecommendation, route, routeAttempts, archivePath,
+    planner, result, review, sessions, runs, run: coderRun, command, autoRecommendation, route, routeAttempts,
+    perspectiveAttempts, archivePath,
     failed: false,
     logPath: liveLog.path, logSession: liveLog.session,
   };
