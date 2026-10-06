@@ -213,6 +213,55 @@ function argumentsFor(value, required, optional = []) {
   }
 }
 
+function leadingSpace(line) {
+  return line.match(/^[ \t]*/)[0];
+}
+
+// Unique match of old_string's lines ignoring indentation and trailing spaces; new_string is re-indented to fit.
+export function whitespaceTolerantEdit(text, oldString, newString) {
+  const lines = text.split('\n');
+  const needle = oldString.split('\n');
+  while (needle.length && !needle.at(-1).trim()) needle.pop();
+  while (needle.length && !needle[0].trim()) needle.shift();
+  if (!needle.length) return { count: 0 };
+  const starts = [];
+  for (let start = 0; start + needle.length <= lines.length; start += 1) {
+    if (needle.every((line, index) => line.trim() === lines[start + index].trim())) starts.push(start);
+  }
+  if (starts.length !== 1) return { count: starts.length };
+  const [start] = starts;
+  const from = leadingSpace(needle[0]);
+  const to = leadingSpace(lines[start]);
+  const replacement = newString.replace(/\n+$/, '').split('\n')
+    .map((line) => line.startsWith(from) ? to + line.slice(from.length) : line);
+  return { count: 1, content: [...lines.slice(0, start), ...replacement, ...lines.slice(start + needle.length)].join('\n') };
+}
+
+// Shows the file text nearest old_string's first line so the next edit can copy it exactly.
+export function closestEditHint(text, oldString) {
+  const anchor = oldString.split('\n').map((line) => line.trim()).find(Boolean);
+  if (!anchor) return '';
+  const lines = text.split('\n');
+  const score = (line) => {
+    const value = line.trim();
+    if (!value) return 0;
+    if (value.includes(anchor) || anchor.includes(value)) return Math.min(value.length, anchor.length) + 1000;
+    let prefix = 0;
+    while (prefix < value.length && prefix < anchor.length && value[prefix] === anchor[prefix]) prefix += 1;
+    return prefix;
+  };
+  let best = -1;
+  let bestScore = 11;
+  lines.forEach((line, index) => {
+    const value = score(line);
+    if (value > bestScore) { best = index; bestScore = value; }
+  });
+  if (best < 0) return '';
+  const span = Math.min(12, oldString.split('\n').length + 2);
+  const excerpt = lines.slice(best, best + span).join('\n').slice(0, 1500);
+  return ` Closest current text starts at line ${best + 1}; copy it exactly:\n${excerpt}`;
+}
+
 function validateSearchTextArguments(args) {
   argumentsFor(args, ['query'], ['path']);
   if (typeof args.query !== 'string' || !args.query.length || /[\r\n\0]/.test(args.query)) {
@@ -687,6 +736,15 @@ export async function createTools({
         const needle = foldNewlines(args.old_string);
         count = fileText.split(needle).length - 1;
         if (count === 1) content = fileText.replace(needle, foldNewlines(args.new_string));
+        if (count === 0) {
+          const tolerant = whitespaceTolerantEdit(fileText, needle, foldNewlines(args.new_string));
+          if (tolerant.count === 1) ({ count, content } = tolerant);
+          else if (tolerant.count > 1) count = tolerant.count;
+        }
+        if (count === 0) {
+          throw new ToolUsageError('edit_file old_string was not found. Read the file and copy the exact text.' +
+            closestEditHint(fileText, needle));
+        }
       }
       if (count !== 1) {
         throw new ToolUsageError(count === 0

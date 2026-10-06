@@ -21,6 +21,7 @@ A seat ends on the first of these. None of them are a model sentence.
 1. A passing check is bound to the file hash. Do not run it again unless an allowed file changes.
 2. A baseline failure is reported once, then the seat returns. Remediation is a new session.
 3. A docs task does not copy `node --test` into required evidence. The reviewer receives `tests: skipped-docs`.
-4. `edit_file` compares normalized line endings. Two missed anchors append or replace a named section. They do not rewrite the file.
-5. Search results may have an empty snippet. That is a result, and the next legal call is `web_fetch` on one returned https URL.
-6. The planner writes checks that the harness can execute. A prose check is not a command.
+4. `edit_file` compares normalized line endings, then accepts a unique match that differs only in indentation (re-indenting the replacement). A miss returns the closest current text to copy. Two missed anchors append or replace a named section. They do not rewrite the file.
+5. A tool usage denial stops the seat only when the same call fails the same way three times. A successful write resets the count, because distinct misses separated by progress are not a loop.
+6. Search results may have an empty snippet. That is a result, and the next legal call is `web_fetch` on one returned https URL.
+7. The planner writes checks that the harness can execute. A prose check is not a command.

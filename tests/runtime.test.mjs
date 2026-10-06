@@ -476,6 +476,33 @@ test('a recoverable scope denial steers the coder, but the same denial repeated 
   assert.equal(stuck.turns, 3);
 });
 
+test('distinct edit misses separated by progress do not count as a repeated denial', async () => {
+  const task = planStub('Update README.md and smoke.test.mjs.').task;
+  let turns = 0;
+  const result = await runLoop({ config: { ...llmConfig, seat: { ...llmConfig.seat, turn_budget: 12 } },
+    context: { task, pack: task }, env: {},
+    tools: {
+      edit_file: async ({ old_string: old }) => {
+        if (old.startsWith('miss')) throw new ToolUsageError('edit_file old_string was not found. Read the file and copy the exact text.');
+        return { path: 'README.md', replacements: 1 };
+      },
+      run_test: async () => ({ exit_code: 0, stdout: 'pass', stderr: '' }),
+    },
+    fetchImpl: async () => {
+      turns += 1;
+      const plan = ['miss-a', 'miss-b', 'ok', 'miss-c', 'miss-d', 'ok'];
+      if (turns <= plan.length) {
+        return Response.json({ choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant',
+          tool_calls: [{ id: `c${turns}`, type: 'function', function: { name: 'edit_file',
+            arguments: JSON.stringify({ path: 'README.md', old_string: plan[turns - 1], new_string: 'x' }) } }] } }] });
+      }
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Done.' } }] });
+    },
+    verify: () => ({ pass: true, reasons: [] }),
+  });
+  assert.equal(result.error, undefined);
+});
+
 test('failed final tests receive another turn before acceptance while usage and errors stay truthful', async (context) => {
   const options = fixture(context, llmConfig);
   let turns = 0;
