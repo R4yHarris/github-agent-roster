@@ -23,8 +23,10 @@ function endpointFor(baseUrl) {
   return url.href;
 }
 
+const transientStatuses = new Set([502, 503, 504]);
+
 function retryDelay(response, timeoutMs) {
-  const value = response.headers.get('retry-after');
+  const value = response.headers?.get?.('retry-after') ?? null;
   if (value === null) return Math.min(1_000, timeoutMs);
   const milliseconds = /^\d+(?:\.\d+)?$/.test(value)
     ? Number(value) * 1_000
@@ -82,6 +84,7 @@ export function routeFailure(error) {
     if (current instanceof LockedModelMismatchError) {
       return { reason: 'locked-model-mismatch', requested: current.requested, served: current.served };
     }
+    if (current instanceof ChatError && current.transient) return { reason: 'endpoint-error' };
   }
   return isLlmTimeout(error) ? { reason: 'endpoint-timeout' } : null;
 }
@@ -218,7 +221,14 @@ export function createChat(config = {}, {
         }
         if (response.status < 200 || response.status >= 300) {
           await response.body?.cancel();
-          throw new ChatError(`The LLM request failed (HTTP ${response.status}).`, 'http');
+          const error = new ChatError(`The LLM request failed (HTTP ${response.status}).`, 'http');
+          if (transientStatuses.has(response.status)) error.transient = true;
+          if (error.transient && attempt === 0) {
+            await onEvent?.({ type: 'http', phase: 'error', status, errorClass: 'http' });
+            await delay(retryDelay(response, timeoutMs), undefined, { signal });
+            continue;
+          }
+          throw error;
         }
         let payload;
         const sseBody = typeof response.body?.getReader === 'function' &&
@@ -234,6 +244,13 @@ export function createChat(config = {}, {
             }) })
             : await response.json();
         } catch (error) {
+          // A gateway backend blip is not a task failure: retry the same stateless request once.
+          if (error instanceof ChatError && error.transient && attempt === 0) {
+            arm(false);
+            await onEvent?.({ type: 'http', phase: 'error', status, errorClass: 'http' });
+            await delay(Math.min(1_000, timeoutMs), undefined, { signal });
+            continue;
+          }
           if (error instanceof ChatError) throw error;
           throw new ChatError('The LLM response was not valid JSON.');
         }
@@ -256,10 +273,10 @@ export function createChat(config = {}, {
         signal.addEventListener('abort', relay, { once: true });
         let stalled = false;
         let timer;
-        const arm = () => {
+        const arm = (active = true) => {
           if (!idleMs) return;
           clearTimeout(timer);
-          timer = setTimeout(() => { stalled = true; attempt.abort(); }, idleMs);
+          if (active) timer = setTimeout(() => { stalled = true; attempt.abort(); }, idleMs);
         };
         try {
           return await sendOnce(attempt.signal, arm);

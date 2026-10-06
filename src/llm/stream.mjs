@@ -132,9 +132,12 @@ export async function readChatStream(response, requestedModel, { onDelta, onByte
       errorBody = isObject(parsed) && parsed.error !== undefined;
     } catch {}
     // Some gateways answer HTTP 200 with a JSON error instead of SSE; never treat that as an empty completion.
-    throw errorBody
-      ? new ChatError('The LLM endpoint returned an error body instead of a stream; a gateway backend may be down.', 'http')
-      : new ChatError('The LLM stream contained no completion data.', 'response');
+    if (errorBody) {
+      const error = new ChatError('The LLM endpoint returned an error body instead of a stream; a gateway backend may be down.', 'http');
+      error.transient = true;
+      throw error;
+    }
+    throw new ChatError('The LLM stream contained no completion data.', 'response');
   }
   return assembler.payload();
 }

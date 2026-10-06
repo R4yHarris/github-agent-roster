@@ -191,7 +191,7 @@ test('Retry-After also accepts an HTTP date', async () => {
   assert.equal(calls, 2);
 });
 
-test('HTTP errors other than 429 are not retried and their bodies are never parsed', async () => {
+test('HTTP errors other than 429 and transient gateway 5xx are not retried and their bodies are never parsed', async () => {
   for (const status of [301, 400, 401, 403, 500, 503]) {
     let calls = 0;
     let cancelled = false;
@@ -204,7 +204,7 @@ test('HTTP errors other than 429 are not retried and their bodies are never pars
       };
     });
     await assert.rejects(chat({ messages }), (error) => safeError(error, new RegExp(`HTTP ${status}`)));
-    assert.equal(calls, 1);
+    assert.equal(calls, status === 503 ? 2 : 1);
     assert.equal(cancelled, true);
   }
 });

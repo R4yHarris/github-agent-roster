@@ -568,7 +568,8 @@ async function runBuiltinAssignment(issueNumber, {
       }
     }
     const detail = failure.reason === 'locked-model-mismatch'
-      ? `served ${failure.served} instead of ${failure.requested}` : 'endpoint timed out or stalled';
+      ? `served ${failure.served} instead of ${failure.requested}`
+      : failure.reason === 'endpoint-error' ? 'gateway returned an error twice' : 'endpoint timed out or stalled';
     const retryEffort = activeConfig.llm.review_retry_effort;
     const alternate = await selectAutoRoute([...new Set([...quarantinedProfiles,
       ...routeAttempts.map((attempt) => attempt.profile)])]);
