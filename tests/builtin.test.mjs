@@ -658,6 +658,8 @@ test('a rerun of the same TASK carries the previous failed review findings, not 
   assert.match(carried, /- Check 2 unmet: tests\/paths\.test\.mjs missing\.\n- Wrong key\.$/);
   assert.doesNotMatch(carried, /Security notes|None\./);
   assert.equal(previousReviewContinuation(failed.replace('Verdict: fail', 'Verdict: pass')), undefined);
+  assert.equal(previousReviewContinuation('# Review\n\nVerdict: fail\n\n## Reasons\n\n' +
+    '- Reviewer could not complete: stdout maxBuffer length exceeded\n\n## Security notes\n\n- None.\n'), undefined);
   assert.equal(previousReviewContinuation(null), undefined);
 });
 

@@ -68,7 +68,8 @@ export function previousReviewContinuation(review) {
   if (typeof review !== 'string' || !review.startsWith('# Review\n\nVerdict: fail\n')) return undefined;
   const section = (name) => (review.split(`\n## ${name}\n`)[1] ?? '').split('\n## ')[0];
   const reasons = section('Reasons').split('\n').filter((line) => line.startsWith('- ')).map((line) => line.slice(2));
-  if (!reasons.length) return undefined;
+  // A reviewer that could not complete gave no findings; an older complete review is better evidence.
+  if (!reasons.length || reasons.every((reason) => reason.startsWith('Reviewer could not complete'))) return undefined;
   const unmetChecks = [...section('Acceptance checks').matchAll(/^- \[ \] (\d+)\. /gm)].map(([, id]) => Number(id));
   return reviewRepairContinuation({ reasons, unmetChecks,
     heading: 'Previous run: the reviewer failed the last result for this same TASK' });
@@ -784,9 +785,10 @@ async function runBuiltinAssignment(issueNumber, {
   let result;
   let coderBaseline;
   let coderScopeFiles = [];
-  let continuation = planner.reused ? previousReviewContinuation(previousReview ??
-    await latestArchivedReview(worktreePath, { task: prepared.task, git: (args) => git(worktreePath, args, commandEnv) })
-      .catch(() => null)) : undefined;
+  let continuation = planner.reused ? previousReviewContinuation(previousReview) ??
+    previousReviewContinuation(await latestArchivedReview(worktreePath, { task: prepared.task,
+      git: (args) => git(worktreePath, args, commandEnv),
+      accept: (text) => previousReviewContinuation(text) !== undefined }).catch(() => null)) : undefined;
   if (continuation) log('Carrying the previous failed review findings into the coder context.');
   const perspectiveAttempts = [];
   const rescopes = [];
