@@ -65,7 +65,6 @@ test('reads the issue in the current repository and prepares one coder worktree'
     { program: 'git', args: ['worktree', 'list', '--porcelain', '-z'], cwd: repoRoot },
     { program: 'git', args: ['for-each-ref', '--format=%(refname)', 'refs/heads/issue-42'], cwd: repoRoot },
     { program: 'git', args: ['worktree', 'add', '-b', 'issue-42', worktreePath], cwd: repoRoot },
-    { program: 'git', args: ['submodule', 'update', '--init', '--recursive'], cwd: worktreePath },
   ]);
   assert.deepEqual(writes, [
     { directory: path.join(repoRoot, '.worktrees'), options: { recursive: true } },

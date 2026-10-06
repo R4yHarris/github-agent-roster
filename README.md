@@ -179,7 +179,8 @@ It fails if no candidate contains the `scripts/agent-pr.mjs` file. See
 instructions.
 
 Run tests with `npm test`; there are no runtime package dependencies.
-Tests run with no API key or model endpoint.
+Tests run with no API key or model endpoint. See [testing](docs/TESTING.md)
+for the parallel runner and the per-file budget that keeps the suite fast.
 
 Copy [the example config](roster.config.example.yml) to ignored
 `.roster/config.yml`. The first named profile, `vllm-local`, uses the

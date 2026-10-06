@@ -44,11 +44,17 @@ async function outsideGit(directory) {
   }
 }
 
-async function secureDirectory(directory) {
+// ACL hardening spawns PowerShell/icacls on Windows; once per file identity per process keeps per-request key
+// lookups cheap. The identity includes inode and birth time, so a recreated path is hardened again.
+const securedPaths = new Set();
+const identity = (path, stat) => `${path}\0${stat.ino}\0${stat.birthtimeMs}`;
+
+async function secureDirectory(directory, stat) {
   if (process.platform !== 'win32') {
     await fs.chmod(directory, 0o700);
     return;
   }
+  if (securedPaths.has(identity(directory, stat))) return;
   // Node's chmod does not enforce owner-only access on Windows.
   const script = [
     "$ErrorActionPreference = 'Stop'",
@@ -65,6 +71,7 @@ async function secureDirectory(directory) {
     windowsHide: true,
     timeout: 10_000,
   });
+  securedPaths.add(identity(directory, stat));
 }
 
 export function createFileVault({ directory = join(homedir(), '.roster', 'vault') } = {}) {
@@ -86,7 +93,7 @@ export function createFileVault({ directory = join(homedir(), '.roster', 'vault'
     if (!stat.isDirectory() || stat.isSymbolicLink()) {
       throw new VaultError('The vault location must be a directory, not a symbolic link.');
     }
-    await secureDirectory(directory);
+    await secureDirectory(directory, stat);
     return true;
   }
 
@@ -98,9 +105,13 @@ export function createFileVault({ directory = join(homedir(), '.roster', 'vault'
     }
     const file = await fs.open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     try {
-      if (!(await file.stat()).isFile()) throw new VaultError('Vault files must be regular files.');
+      const opened = await file.stat();
+      if (!opened.isFile()) throw new VaultError('Vault files must be regular files.');
       if (process.platform === 'win32') {
-        await execute('icacls.exe', [path, '/reset', '/Q'], { windowsHide: true, timeout: 10_000 });
+        if (!securedPaths.has(identity(path, opened))) {
+          await execute('icacls.exe', [path, '/reset', '/Q'], { windowsHide: true, timeout: 10_000 });
+          securedPaths.add(identity(path, opened));
+        }
       } else {
         await file.chmod(0o600);
       }

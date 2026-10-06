@@ -170,4 +170,4 @@ model/effort default. See [learning](LEARNING.md) for exact denominators and
 missing-data handling; there is no hidden score.
 
 Run the focused tests with
-`node --test tests/openai.test.mjs tests/run-metrics.test.mjs tests/builtin.test.mjs tests/issue-board.test.mjs tests/metrics.test.mjs tests/learn.test.mjs tests/eval.test.mjs`.
+`node --test tests/openai.test.mjs tests/run-metrics.test.mjs tests/builtin.*.test.mjs tests/issue-board.test.mjs tests/metrics.test.mjs tests/learn.test.mjs tests/eval.test.mjs`.

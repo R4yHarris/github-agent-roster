@@ -220,7 +220,9 @@ file is `README.md` runs `node --test tests/repl.test.mjs` with a 60-second
 cap and never spawns the full suite; a repository without that file falls back
 to the full suite. A code slice's own `run_test` calls run the tests that cover
 its files plus any failing tests already surfaced for repair, with a 60-second
-cap. Final verification, which only the harness can request, runs the full
+cap. A module test split into `tests/<module>.<topic>.test.mjs` shards counts
+as `tests/<module>.test.mjs`: the run includes every shard, and the coder may
+update any shard (see [testing](TESTING.md)). Final verification, which only the harness can request, runs the full
 `node --test` suite with a 15-minute cap and a 2-minute per-test timeout,
 because a slice can break tests in files it never planned to touch.
 Full-suite failures outside Allowed Files are rerun alone (a pass marks a

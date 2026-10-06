@@ -1,6 +1,6 @@
 import { createBuiltinChat } from '../lib/llm.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
-import { recipeAllowsTool, taskAndRepairFiles, toolDefinitions, ToolAccessError, ToolUsageError, verificationDecision, isDocsOnlyScope } from './tools.mjs';
+import { recipeAllowsTool, taskAndRepairFiles, toolDefinitions, ToolAccessError, ToolUsageError, verificationDecision, isDocsOnlyScope, coversTestFile } from './tools.mjs';
 import { redactEvidence, taskSkipsTests } from './excellence.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
 import { readTaskMetadata } from './estimate.mjs';
@@ -96,7 +96,8 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       'do not repeat the same action against the same unchanged state. Consider a different implementation perspective ' +
       'before concluding that the bounded task cannot be completed. ' +
       (docsOnly ? 'This is a docs-only change. Do not run or edit tests. Check the written file. ' : '') +
-      (!docsOnly && verification.run ? `Run and update only these tests: ${verification.update.join(', ')}. ` : '') +
+      (!docsOnly && verification.run ? `Run and update only these tests: ${verification.update.join(', ')}` +
+        ' (a test split into tests/<module>.<topic>.test.mjs shards counts as the same test). ' : '') +
       (boundedTask && !docsOnly ? 'Read the allowed file and only direct imports needed to understand the APIs you will use; do not recursively trace transitive dependencies. ' +
         'Batch independent reads in one response, preserve existing imports and unrelated assertions, and make the smallest targeted edit. ' +
         'All tool paths are relative to the worktree root: an import like ../src/api.mjs from tests/test.mjs ' +
@@ -439,7 +440,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         }
         if ((call.function.name === 'edit_file' || call.function.name === 'write_file') &&
             /(?:^|\/)(?:test(?:[._-][^/]+)?|[^/]+[._-]test)\.[cm]?js$/.test(String(call.args.path ?? '')) &&
-            !verification.update.includes(String(call.args.path).replaceAll('\\', '/')) &&
+            !coversTestFile(verification.update, call.args.path) &&
             !progress.repairFiles.includes(String(call.args.path).replaceAll('\\', '/'))) {
           messages.push({ role: 'tool', tool_call_id: call.id,
             content: 'Denied. Update only a test that covers a file changed in this session.' });

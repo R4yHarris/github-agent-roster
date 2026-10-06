@@ -29,7 +29,8 @@ private configuration, and preflight checks.
 
 Roster runs `git submodule update --init --recursive` from every new issue or
 local-ask worktree root before writing the assignment or starting seats.
-Reused issue worktrees are initialized too. A declared contracts submodule
+Reused issue worktrees are initialized too. A worktree with no `.gitmodules`
+declares no submodules, so Roster skips the command there. A declared contracts submodule
 must then contain `scripts/agent-pr.mjs`; an environment or sibling fallback
 does not replace that local file for tests with worktree-relative imports.
 
