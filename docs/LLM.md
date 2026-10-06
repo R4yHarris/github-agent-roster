@@ -72,14 +72,12 @@ an empty `tools` array. A streamed HTTP 200 response that carries a JSON
 `error` body, or no data frames at all, is reported as an endpoint error, not
 accepted as an empty completion. When the endpoint reports serving a model
 unrelated to the requested ID (a gateway alias), the seat prints one
-`served-model` warning, and the AI-Run records the served model. If fleet
-routing locked the request to a profile, an unrelated served model fails the
-run instead; Roster never silently substitutes a backend for a locked route.
-An operator who knows a gateway stamps every response with one fixed ID can
-declare `llm.served_model_label: ignore` (or the fleet profile field of the
-same name). Roster then records the requested model and skips the warning,
-failure, and quarantine for that endpoint. This is an explicit configuration
-declaration, not a silent switch.
+`served-model` warning, and the AI-Run records the served model. An operator
+who knows a gateway stamps every response with one fixed ID can declare
+`llm.served_model_label: ignore` (or the fleet profile field of the same name).
+Roster then records the requested model and skips the warning. A fleet auto
+route always records the profile's model: the label is advisory and never
+fails or reroutes a request.
 
 An absent, empty or whitespace-only `base_url` makes `createChat` return
 `null`, without accessing the vault or network. Keep the caller's existing

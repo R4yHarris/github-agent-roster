@@ -16,8 +16,8 @@ These apply to every seat and to the harness that sequences them
   attempt is evidence. Retrying the same action against the same unchanged
   state, model, or endpoint is not progress; change the approach first.
 - **Get a different perspective.** When an auto-routed fleet profile fails as a
-  route (it serves a substituted model, times out, or stalls), the harness
-  quarantines that profile for the run and continues the *same seat* on the
+  route (the gateway errors twice, times out, or stalls), the harness
+  excludes that profile for the run and continues the *same seat* on the
   next eligible profile. The planner, coder, and reviewer each recover this
   way. A coder retry keeps the previous attempt's worktree edits and diff
   baseline and is told to continue from them with a different approach.
@@ -25,14 +25,9 @@ These apply to every seat and to the harness that sequences them
   worktree edits; it archives only the per-attempt CONTEXT.md and RESULT.md.
 - **Never switch models silently.** Every reroute is logged
   (`Route recovery: seat=… profile=…`), recorded in `routeAttempts`, and
-  measured under the model that actually answered. A substituted response is
-  never accepted under the locked model's identity. A substitution is also
-  remembered for 24 hours in the ignored `.roster/runs/route-quarantine.json`.
-  Later auto-routed runs then start on an honest profile and log
-  `Route quarantine: skipping profile=…`. If every eligible profile is
-  quarantined, routing falls back to the unfiltered choice. A profile whose
-  operator declared `served_model_label: ignore` is never quarantined for a
-  label mismatch, because its gateway's label is known to be wrong.
+  measured under the routed profile's model. A gateway's response `model`
+  label is not evidence of a failed route: gateways stamp it unreliably, so
+  it never reroutes or blocks a profile.
 - **Fail honestly when no alternative remains.** If no eligible profile is
   left, the run stops with the original error and `Route recovery exhausted`.
   Saved, non-routed models are never rerouted.

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createChat, LockedModelMismatchError, routeFailure, servedModelMismatch } from '../src/llm/openai.mjs';
+import { createChat, routeFailure, servedModelMismatch } from '../src/llm/openai.mjs';
 
 function client(served, events) {
   return createChat({ llm: { base_url: 'http://127.0.0.1:8000/v1', model: 'qwen3.8-27b', api_key_optional: true } }, {
@@ -24,25 +24,11 @@ test('a gateway alias to an unrelated model is reported once per client', async 
   assert.equal(chat.lastResponse.model, 'glm-5.3-flash');
 });
 
-test('a locked fleet model fails closed when the gateway serves an unrelated model', async () => {
-  const events = [];
-  const chat = createChat({
-    llm: { base_url: 'http://127.0.0.1:8000/v1', model: 'qwen3.8-27b', api_key_optional: true },
-  }, {
-    fetch: async () => Response.json({ model: 'glm-5.3-flash', choices: [{ finish_reason: 'stop',
-      message: { role: 'assistant', content: 'pong' } }] }),
-    env: {}, vault: { get: async () => undefined }, expectedModel: 'qwen3.8-27b',
-    onEvent: (event) => { events.push(event); },
-  });
-  await assert.rejects(chat(request), (error) => {
-    assert.ok(error instanceof LockedModelMismatchError);
-    assert.equal(error.code, 'ROSTER_LOCKED_MODEL_MISMATCH');
-    assert.equal(error.requested, 'qwen3.8-27b');
-    assert.equal(error.served, 'glm-5.3-flash');
-    return true;
-  });
-  assert.equal(chat.lastResponse.model, 'glm-5.3-flash');
-  assert.equal(events.filter(({ type }) => type === 'served-model').length, 1);
+test('an unrelated response model label is never a route failure', async () => {
+  const chat = client('glm-5.3-flash', []);
+  const response = await chat(request);
+  assert.equal(response.message.content, 'pong');
+  assert.equal(routeFailure(Object.assign(new Error('label'), { served: 'glm-5.3-flash' })), null);
 });
 
 test('a gateway whose response label is ignored records the requested model and never fails closed', async () => {
@@ -51,7 +37,7 @@ test('a gateway whose response label is ignored records the requested model and 
     api_key_optional: true, served_model_label: 'ignore' } }, {
     fetch: async () => Response.json({ model: 'glm-5.3-flash', choices: [{ finish_reason: 'stop',
       message: { role: 'assistant', content: 'pong' } }] }),
-    env: {}, vault: { get: async () => undefined }, expectedModel: 'qwen3.8-27b',
+    env: {}, vault: { get: async () => undefined },
     onEvent: (event) => { events.push(event); },
   });
   const response = await chat(request);
@@ -73,13 +59,6 @@ test('the same model with a path prefix or tag is not a mismatch', async () => {
 test('unsafe model names are never echoed as a mismatch', () => {
   assert.equal(servedModelMismatch('qwen', 'glm "injected"'), false);
   assert.equal(servedModelMismatch('qwen', 'x'.repeat(129)), false);
-});
-
-test('a locked fleet model ID must use the safe served-model alphabet', () => {
-  assert.throws(() => createChat({
-    llm: { base_url: 'http://127.0.0.1:8000/v1', model: 'qwen3.8-27b', api_key_optional: true },
-  }, { expectedModel: 'unsafe model', fetch: async () => assert.fail('must fail before fetch') }),
-  /Expected model must be a supported served model ID/);
 });
 
 const sse = { 'content-type': 'text/event-stream' };
