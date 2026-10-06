@@ -55,7 +55,8 @@ export function fixture(context) {
   git(target, 'remote', 'add', 'origin', 'https://github.com/example/project.git');
   const cwd = path.join(target, 'nested');
   mkdirSync(cwd);
-  const env = { ...process.env, ROSTER_MODEL: '', AI_MODEL: '', AI_MODEL_VERSION: '',
+  // The fixture is a human CLI: a suite run inside a coder seat must not leak ROSTER_SEAT into it.
+  const env = { ...process.env, ROSTER_MODEL: '', AI_MODEL: '', AI_MODEL_VERSION: '', ROSTER_SEAT: undefined,
     GITHUB_APP_ID: undefined, GITHUB_APP_PRIVATE_KEY_PATH: undefined,
     GITHUB_AGENT_CONTRACTS: contracts };
   const issue = {
