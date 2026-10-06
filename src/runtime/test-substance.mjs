@@ -270,6 +270,16 @@ export function addsOnlyImports(added) {
     .trim();
 }
 
+// A source-scan guard reads repository source (e.g. new URL('../src/lib/', import.meta.url)) and asserts on it,
+// so a regression in that source fails it even without calling an import.
+const sourceReadPattern = /(?<![\w$])(?:readFile|readFileSync|readdir|readdirSync)\s*\(/;
+const sourcePathPattern = /(['"`])(?:\.{1,2}\/)+(?:src|lib|bin|scripts)(?:\/[^'"`\n]*)?\1/;
+
+function scansRepositorySource(maskedBody, rawBody, rawText) {
+  if (!sourceReadPattern.test(maskedBody)) return false;
+  return sourcePathPattern.test(rawBody) || sourcePathPattern.test(rawText) && /import\.meta\.url/.test(rawText);
+}
+
 export function analyzeTestSubstance({ file, text, added }) {
   if (typeof added !== 'string' || !added.trim()) return [];
   const imports = parseImports(text);
@@ -284,7 +294,7 @@ export function analyzeTestSubstance({ file, text, added }) {
   // Only demand app calls when the file already imports an app seam the test could use.
   for (const block of appNames.size ? addedTestBlocks(added, maskedAdded) : []) {
     const body = maskedAdded.slice(block.start, block.end + 1);
-    if (!calls(body, appSinks).length) {
+    if (!calls(body, appSinks).length && !scansRepositorySource(body, added.slice(block.start, block.end + 1), text)) {
       reasons.push(`Test substance: new test "${block.title.slice(0, 80)}" in ${file} never calls imported app code; ` +
         'its assertions only inspect values the test built, so they cannot catch a regression.');
     }

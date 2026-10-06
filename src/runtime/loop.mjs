@@ -676,6 +676,9 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       continue;
     }
     const unsafe = reasons.find((reason) => !reason.startsWith('node --test failed (exit ') && !reason.includes('must write '));
+    // Unresolved test substance is a correctable quality defect, so a fresh perspective may fix it.
+    if (unsafe?.startsWith('Test substance:') && reasons.every((reason) => reason.startsWith('Test substance:') ||
+      reason.startsWith('node --test failed (exit '))) progress.substanceUnresolved = true;
     if (unsafe) throw new Error(`Coder excellence gate failed: ${unsafe}`);
     if (!tests || tests.exit_code === 0) {
       throw new Error('Coder excellence verifier did not confirm passing final tests');

@@ -724,6 +724,28 @@ test('a repair that returns to an earlier failure is steered once, then stops as
   assert.doesNotMatch(messages[1], /already occurred/);
 });
 
+test('a test-substance defect left after its one correction is marked for a fresh perspective', async () => {
+  const task = planStub('Update README.md and smoke.test.mjs.').task;
+  const reason = 'Test substance: new test "x" in tests/smoke.test.mjs never calls imported app code; nope.';
+  let verifies = 0;
+  const result = await runLoop({ config: llmConfig, context: { task, pack: task }, env: {},
+    tools: { run_test: async () => ({ exit_code: 0, stdout: 'ok', stderr: '' }) },
+    fetchImpl: async () => Response.json({ choices: [{ finish_reason: 'stop',
+      message: { role: 'assistant', content: 'Done.' } }] }),
+    verify: () => { verifies += 1; return { pass: false, reasons: [reason] }; },
+  });
+  assert.equal(verifies, 2);
+  assert.match(result.error.message, /Coder excellence gate failed: Test substance/);
+  assert.equal(result.substanceUnresolved, true);
+  const secret = await runLoop({ config: llmConfig, context: { task, pack: task }, env: {},
+    tools: { run_test: async () => ({ exit_code: 0, stdout: 'ok', stderr: '' }) },
+    fetchImpl: async () => Response.json({ choices: [{ finish_reason: 'stop',
+      message: { role: 'assistant', content: 'Done.' } }] }),
+    verify: () => ({ pass: false, reasons: [reason, 'Diff touches a protected path: .github/workflows/ci.yml'] }),
+  });
+  assert.equal(secret.substanceUnresolved, undefined);
+});
+
 test('failingTestCount reads the spec and TAP summaries', () => {
   assert.equal(failingTestCount('ℹ tests 9\nℹ pass 7\nℹ fail 2\n'), 2);
   assert.equal(failingTestCount('# tests 3\n# fail 0\n'), 0);

@@ -297,6 +297,8 @@ test('coder stuck detection escalates budget exhaustion but never security denia
     'repeated an earlier test failure');
   assert.equal(coderStuckReason(Object.assign(new Error('x'), { result: { contextHandoff: true } })),
     'filled half its context while repairs were still progressing');
+  assert.equal(coderStuckReason(Object.assign(new Error('Coder excellence gate failed: Test substance: x'),
+    { result: { substanceUnresolved: true } })), 'left a new test that does not exercise app code after its correction');
   const text = perspectiveContinuation({ attempt: 1, reason: 'exhausted its test repair budget',
     evidence: 'x'.repeat(5000), changedFiles: ['src/a.mjs'] });
   assert.match(text, /^Fresh perspective 1: .*\(src\/a\.mjs\).*never alternate between editing a test/s);
