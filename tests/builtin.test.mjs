@@ -7,8 +7,10 @@ import test from 'node:test';
 import { parseConfig } from '../src/lib/config.mjs';
 import { writeAsk } from '../src/lib/ask.mjs';
 import {
+  coderStuckReason, maxPerspectiveEscalations, perspectiveContinuation,
   prepareBuiltinPublication, runBuiltinAsk, runBuiltinIssue as runIssueWithSeats, stageReviewedFiles,
 } from '../src/lib/builtin.mjs';
+import { ToolAccessError } from '../src/runtime/tools.mjs';
 import { loadLearning } from '../src/lib/learn.mjs';
 import { readStatus, formatStatus } from '../src/lib/status.mjs';
 import { resolveContractsPath } from '../src/lib/paths.mjs';
@@ -494,12 +496,14 @@ test('an inferred-scope slice continues after the task summary without a second 
   assert.equal(next.result.mode, 'stub');
 });
 
-test('test budget exhaustion runs all four repairs and stops before review', async (context) => {
+test('test budget exhaustion escalates to fresh coder perspectives, then stops before review', async (context) => {
   const options = multiFileFixture(context);
   let tests = 0;
   let coderTurns = 0;
   let failed;
-  await assert.rejects(runBuiltinIssue(42, { ...options, config: llmConfig, log: () => {},
+  const logs = [];
+  const continuations = [];
+  await assert.rejects(runBuiltinIssue(42, { ...options, config: llmConfig, log: (text) => logs.push(text),
     fetchImpl: async (_url, request) => {
       const system = JSON.parse(request.body).messages[0].content;
       if (system.startsWith('You are the builtin planner seat.')) {
@@ -510,6 +514,8 @@ test('test budget exhaustion runs all four repairs and stops before review', asy
       }
       assert.ok(!system.startsWith('You are the builtin reviewer seat.'), 'Exhausted tests cannot request reviewer inference');
       coderTurns += 1;
+      const fresh = system.match(/Fresh perspective (\d)/);
+      if (fresh && !continuations.includes(fresh[1])) continuations.push(fresh[1]);
       return Response.json({ choices: [{ finish_reason: 'stop', message: {
         role: 'assistant', content: 'Done.',
       } }] });
@@ -523,14 +529,39 @@ test('test budget exhaustion runs all four repairs and stops before review', asy
     failed = error.result;
     return /Test repair budget \(4\) exhausted/.test(error.message);
   });
-  assert.equal(tests, 5);
-  assert.equal(coderTurns, 5);
+  const attempts = 1 + maxPerspectiveEscalations;
+  assert.equal(tests, 5 * attempts);
+  assert.equal(coderTurns, 5 * attempts);
+  assert.deepEqual(continuations, ['1', '2']);
   assert.equal(failed.repairBudgetExhausted, true);
   assert.equal(failed.review, undefined);
   assert.equal(existsSync(path.join(failed.resultPath, '..', 'REVIEW.md')), false);
   for (let attempt = 1; attempt <= 4; attempt += 1) {
     assert.match(options.stderr, new RegExp(`Tests failed\\. Repair ${attempt} of 4\\.`));
   }
+  for (let attempt = 1; attempt <= maxPerspectiveEscalations; attempt += 1) {
+    assert.match(logs.join('\n'), new RegExp(`Perspective escalation ${attempt} of ${maxPerspectiveEscalations}: ` +
+      'coder exhausted its test repair budget; continuing with model=\\S+ in a fresh context\\.'));
+  }
+});
+
+test('coder stuck detection escalates budget exhaustion but never security denials', () => {
+  const withResult = (error) => Object.assign(error, { result: {} });
+  assert.equal(coderStuckReason(withResult(new Error('x', { cause: new Error('Test repair budget (4) exhausted') }))),
+    'exhausted its test repair budget');
+  assert.equal(coderStuckReason(Object.assign(new Error('x'), { result: { repairBudgetExhausted: true } })),
+    'exhausted its test repair budget');
+  assert.equal(coderStuckReason(withResult(new Error('Coder turn budget (12) exhausted'))), 'exhausted its turn budget');
+  assert.equal(coderStuckReason(withResult(new Error('x', {
+    cause: new ToolAccessError('Scope expansion limit reached (repeated after 2 denials)') }))), 'repeated a denied action');
+  assert.equal(coderStuckReason(withResult(new Error('Test repair budget (4) exhausted', {
+    cause: new ToolAccessError('Write denied: .github/workflows/ci.yml') }))), null);
+  assert.equal(coderStuckReason(new Error('Test repair budget (4) exhausted')), null);
+  assert.equal(coderStuckReason(withResult(new Error('Cancelled'))), null);
+  const text = perspectiveContinuation({ attempt: 1, reason: 'exhausted its test repair budget',
+    evidence: 'x'.repeat(5000), changedFiles: ['src/a.mjs'] });
+  assert.match(text, /^Fresh perspective 1: .*\(src\/a\.mjs\).*never alternate between editing a test/s);
+  assert.ok(text.length < 3000);
 });
 
 test('a bounded docs review failure does not start a second coder', async (context) => {

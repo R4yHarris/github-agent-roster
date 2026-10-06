@@ -10,7 +10,10 @@ A seat ends on the first of these. None of them are a model sentence.
 - `baseline`: an in-scope check passed and every remaining failure is outside Allowed Files.
 - `docs-checked`: the only allowed file is documentation and the required note is present.
 - `repeat`: the same tool name, arguments, and target hash occurred twice.
-- `budget`: turn, token, or repair budget is exhausted.
+- `budget`: turn, token, or repair budget is exhausted. In a builtin run, an exhausted turn or repair budget (or
+  a repeated denied action) ends this coder context only: the harness starts up to two fresh coder contexts
+  (`Perspective escalation N of 2`), on a different eligible fleet profile when one exists. Worktree edits are kept,
+  and the last failure is passed in as evidence. A hard security denial is never escalated.
 - `host`: the endpoint timed out. Do not start another coder turn in the same run.
 
 ## Rules

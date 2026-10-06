@@ -210,6 +210,9 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       (progress.repairFiles.length ? `: ${progress.repairFiles.join(', ')}` : '') +
       '. Do not edit a failing test outside Allowed Files. Report it as pre-existing. ' +
       'Fix the exact reported root cause and ensure every identifier introduced by the change is defined in its scope. ' +
+      (progress.testRepairs > 1 ? 'Earlier repairs did not make the suite pass, so change strategy: decide from TASK.md ' +
+        'whether the failing assertion or the implementation is wrong and change only that side; do not alternate ' +
+        'between editing a test and its implementation to chase the same assertion. ' : '') +
       'Rerun node --test, then provide a new summary. No change is verified yet.' });
     return true;
   };

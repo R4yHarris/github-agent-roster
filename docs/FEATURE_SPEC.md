@@ -135,7 +135,9 @@ Taken from Claude Code, OpenHands, and Aider.
 - Code scope runs the matching test file, not the world.
 - Sandbox: no secrets, no vendor edits, no workflow edits, no force-push, no main push.
 - Checkpoints before the first write. Resume from the last green step.
-- Stop conditions: valid plan, named write, failed check twice, budget, policy denial.
+- Stop conditions: valid plan, named write, failed check twice, budget, policy denial. These end one coder
+  context, not the run: an exhausted turn or repair budget gets at most two fresh-context perspective
+  escalations (a different fleet profile when eligible) that keep worktree edits. Policy denials still stop.
 - Stream a transcript for the human. Do not treat the transcript as the result.
 
 ### 5.5 Review and gates
