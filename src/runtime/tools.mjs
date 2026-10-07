@@ -52,6 +52,24 @@ export function isOutsideWorktreePath(input) {
   return parts.includes('..') || parts[0] === 'vendor';
 }
 
+// An absolute path that resolves inside a worktree root is a fixable usage mistake, not an escape:
+// returns its worktree-relative POSIX form, or null when it is not absolute, escapes, or names vendor/.
+export function absoluteInsideWorktree(input, roots) {
+  if (typeof input !== 'string' || !input.trim() || input.includes('\0') || !path.isAbsolute(input)) return null;
+  const resolved = path.resolve(input);
+  for (const root of [roots].flat().filter(Boolean)) {
+    const relative = path.relative(path.resolve(root), resolved);
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) continue;
+    const normalized = relative.split(path.sep).join('/') || '.';
+    if (partsOf(normalized)[0] === 'vendor') return null;
+    return normalized;
+  }
+  return null;
+}
+
+export const absoluteInsideMessage = (relative) =>
+  `Use a worktree-relative path: "${relative}" instead of an absolute path.`;
+
 export function isReadmeOnlyScope(allowedFiles) {
   return Array.isArray(allowedFiles) && allowedFiles.length === 1 && allowedFiles[0] === 'README.md';
 }
@@ -548,6 +566,11 @@ export async function createTools({
     throw new Error('Worktree must be a real directory, not a symlink');
   }
   const canonicalRoot = await fs.realpath(root);
+  const insideRelative = (input) => absoluteInsideWorktree(input, [root, canonicalRoot]);
+  function refuseAbsoluteInside(input) {
+    const relative = insideRelative(input);
+    if (relative !== null) throw new ToolUsageError(absoluteInsideMessage(relative));
+  }
   if (allowRepoMap) {
     const file = path.join(root, 'TASK.md');
     const taskEntry = await fs.lstat(file);
@@ -591,6 +614,7 @@ export async function createTools({
 
   function locate(input, { directory = false, write = false } = {}) {
     throwIfCancelled(signal);
+    refuseAbsoluteInside(input);
     if (isOutsideWorktreePath(input)) throw new OutsideWorktreeError();
     if (typeof input !== 'string' || !input.trim() || input.includes('\0') ||
         path.isAbsolute(input) || path.win32.isAbsolute(input)) {
@@ -952,6 +976,7 @@ export async function createTools({
       throwIfCancelled(signal);
       if (seat !== 'coder') throw new ToolAccessError('delete_file is available only to the coder');
       const input = args.path;
+      refuseAbsoluteInside(input);
       if (isOutsideWorktreePath(input)) throw new OutsideWorktreeError();
       if (typeof input !== 'string' || !input.trim() || input.includes('\0') ||
           path.isAbsolute(input) || path.win32.isAbsolute(input) || hasAmbiguousComponents(input)) {
@@ -1275,6 +1300,7 @@ export async function createTools({
     },
   };
   const guarded = Object.fromEntries(Object.entries(tools).map(([name, execute]) => [name, async (args, options) => {
+    refuseAbsoluteInside(args?.path);
     if (isOutsideWorktreePath(args?.path)) throw new OutsideWorktreeError();
     return execute(args, options);
   }]));
@@ -1284,6 +1310,12 @@ export async function createTools({
   if (!onEvent) return selected;
   return Object.fromEntries(Object.entries(selected).map(([name, execute]) => [name, async (args, options) => {
     const location = args?.path ?? (['list_dir', 'search_text'].includes(name) ? '.' : undefined);
+    const relative = insideRelative(location);
+    if (relative !== null) {
+      await onEvent({ type: 'tool-refused', name, reason: 'absolute-inside' });
+      await onEvent({ type: 'tool-result', name, path: relative, status: 'denied' });
+      throw new ToolUsageError(absoluteInsideMessage(relative));
+    }
     if (isOutsideWorktreePath(location)) {
       await onEvent({ type: 'tool-refused', name });
       await onEvent({ type: 'tool-result', name, path: location, status: 'denied' });

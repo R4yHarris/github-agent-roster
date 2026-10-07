@@ -100,7 +100,7 @@ export function createDebugLog({
       time: timestamp.toISOString(), issue, seat, phase,
       tool_name: ['tool', 'tool-result', 'tool-refused'].includes(event.type) ? event.name : null,
       path_class: ['tool', 'tool-result', 'wrote'].includes(event.type) ? debugPathClass(event.path)
-        : event.type === 'tool-refused' ? 'outside' : null,
+        : event.type === 'tool-refused' ? event.reason === 'absolute-inside' ? null : 'outside' : null,
       finish_reason: ['finish-reason', 'completion'].includes(event.type) ? safeReason(event.reason ?? undefined) : null,
       test_name: ['tool', 'tool-result'].includes(event.type) && event.name === 'run_test' ? 'node --test' : null,
       exit_code: event.type === 'tool-result' ? event.exit_code ?? null : null,
