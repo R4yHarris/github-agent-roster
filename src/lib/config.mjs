@@ -381,16 +381,7 @@ export function loadConfig({ repoRoot = rosterRoot, cwd } = {}) {
   return parseConfig(source);
 }
 
-// ---------------------------------------------------------------------------
-// Retention configuration (issue #201).
-//
-// `resolveRetentionConfig` is pure over an injected `env` object so it is
-// deterministic and testable. The user-facing env keys:
-//   ROSTER_RETENTION_OPT_OUT          'true' to disable all retention
-//   ROSTER_RETENTION_WINDOW_MS_<SCOPE> positive integer ms override per scope
-// Missing keys fall back to the defaults declared in RETENTION_POLICIES.
-// ---------------------------------------------------------------------------
-
+// Pure over an injected env; see docs/STATE.md §8.5 for the keys and defaults.
 function retentionWindowKey(scope) {
   return `ROSTER_RETENTION_WINDOW_MS_${scope.toUpperCase()}`;
 }
