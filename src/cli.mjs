@@ -28,7 +28,7 @@ const help = `Usage:
   roster history list [--store DIR] [--repo HASH] [--issue N] [--seat NAME] [--model MODEL] [--outcome VALUE] [--since TIME] [--until TIME]
   roster history show <session-or-run-or-record-id> [--store DIR]
   roster bench
-  roster clean [--scope SCOPE] [--state-root PATH] [--exclude NAME]... [--execute --yes]
+  roster clean [--target issue|repo|machine-history|curated-memory] [--issue N] [--store DIR] [--scope SCOPE] [--state-root PATH] [--exclude NAME]... [--execute --yes]
   roster status [--issue N] [--offline]
   roster recipe validate PATH
   roster stats [--ref REVISION_OR_RANGE] [--evals PATH]
@@ -234,19 +234,25 @@ async function main(args) {
     process.stdout.write(await runHistory(args.slice(1)));
   } else if (args[0] === 'clean') {
     const options = cleanOptions(args.slice(1));
-    const { formatCleanReport, resolveStateRoot, runClean } =
-      await import('./lib/clean-ops.mjs');
-    const handle = await resolveStateRoot(rosterRoot, {
-      scope: options.scope,
-      stateRoot: options.stateRoot,
-    });
-    const report = await runClean(handle, {
-      execute: options.execute,
-      yes: options.yes,
-      interactive: Boolean(process.stdout.isTTY),
-      exclude: options.exclude,
-    });
-    process.stdout.write(formatCleanReport(report));
+    const clean = await import('./lib/clean-ops.mjs');
+    const { resolveProjectRoot } = await import('./lib/paths.mjs');
+    const projectRoot = options.stateRoot === undefined ? resolveProjectRoot() : undefined;
+    const confirm = { execute: options.execute, yes: options.yes, interactive: Boolean(process.stdout.isTTY) };
+    if (options.target === 'machine-history' || options.target === 'curated-memory') {
+      const { resolveHistoryRoot } = await import('./lib/history-cli.mjs');
+      const storeRoot = await resolveHistoryRoot({ cwd: projectRoot, storePath: options.storePath });
+      const report = await clean.pruneProvenance(storeRoot, { ...confirm, target: options.target, repoRoot: projectRoot });
+      process.stdout.write(clean.formatProvenanceReport(report));
+    } else {
+      const plan = options.target
+        ? await clean.resolveCleanTarget(options.target, { repoRoot: projectRoot, issue: options.issue })
+        : { handle: await clean.resolveStateRoot(projectRoot, {
+          scope: options.scope ?? (options.stateRoot === undefined ? 'repo' : 'worktree'),
+          stateRoot: options.stateRoot,
+        }), exclude: [] };
+      const report = await clean.runClean(plan.handle, { ...confirm, exclude: [...plan.exclude, ...options.exclude] });
+      process.stdout.write(clean.formatCleanReport(report));
+    }
   } else if (args.length === 1 && args[0] === 'bench') {
     const { runBench } = await import('./lib/bench.mjs');
     const result = await runBench({
@@ -260,13 +266,13 @@ async function main(args) {
 
   function cleanOptions(args) {
     const options = {
-      scope: 'worktree',
       execute: false,
       yes: false,
       exclude: [],
     };
     const seen = new Set();
-    const usage = 'Use roster clean [--scope SCOPE] [--state-root PATH] [--exclude NAME]... [--execute --yes].';
+    const usage = 'Use roster clean [--target issue|repo|machine-history|curated-memory] [--issue N] [--store DIR] ' +
+      '[--scope SCOPE] [--state-root PATH] [--exclude NAME]... [--execute --yes].';
     for (let index = 0; index < args.length; index += 1) {
       const flag = args[index];
       if (seen.has(flag) && flag !== '--exclude') {
@@ -281,8 +287,18 @@ async function main(args) {
         if (flag === '--scope') options.scope = value;
         else if (flag === '--state-root') options.stateRoot = value;
         else if (flag === '--exclude') options.exclude.push(value);
+        else if (flag === '--target') options.target = value;
+        else if (flag === '--issue') options.issue = value;
+        else if (flag === '--store') options.storePath = value;
         else throw new TypeError(usage);
       }
+    }
+    const provenance = options.target === 'machine-history' || options.target === 'curated-memory';
+    if ((options.target && (options.scope || options.stateRoot)) ||
+        (options.issue !== undefined && options.target !== 'issue') ||
+        (options.storePath !== undefined && !provenance) ||
+        (provenance && options.exclude.length)) {
+      throw new TypeError(usage);
     }
     return options;
   }

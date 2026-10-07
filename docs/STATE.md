@@ -362,6 +362,20 @@ anything else. `evaluateRetention(policy, { nowMs, windowMs, optOut, createdAtMs
 `src/lib/repo-state.mjs` is pure over an injected clock; it keeps everything when opted out
 and throws on a missing or invalid record age rather than treating it as expired.
 
+`roster clean --target <target>` is the shipped cleanup surface (#278). It is a dry-run preview
+unless `--execute --yes` is given, and each target resolves only its own root:
+
+| Target | Deletes | Never touches |
+| --- | --- | --- |
+| `issue --issue N` | Machine state for `.worktrees/issue-N` (`repos/<id>/worktrees/wt-*`) | Other issues, repo state, the checkout, `.git` |
+| `repo` | Shared repo state under `repos/<id>/` | `identity`, `schema.json`, `worktrees/`, `locks/`, machine history, other repos |
+| `machine-history [--store DIR]` | Raw-history and compaction provenance records | Curated memory, malformed records (use repair) |
+| `curated-memory [--store DIR]` | Curated-memory provenance records | Raw provenance |
+
+Provenance pruning holds the store lock, reports only record ids, and rebuilds the segment
+index so pruned content does not persist. GitHub issues, PRs, and their comments are never
+touched and remain the durable evidence after any cleanup.
+
 ### 8.6 Secret redaction before persistence
 
 Redaction happens **before** any write, not as a post-hoc filter.
