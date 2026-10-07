@@ -4,7 +4,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { ensureLocalPath } from '../lib/paths.mjs';
-import { redactEvidence } from '../lib/redaction.mjs';
+import { redactEvidence, secretMaterialLines } from '../lib/redaction.mjs';
 import { taskFilesAllowed } from '../planner/stub.mjs';
 import { splitTaskFrontmatter } from './skills.mjs';
 import { addedLinesByFile, addsOnlyImports, addsTestEvidence, analyzeTestSubstance, isTestFile } from './test-substance.mjs';
@@ -156,7 +156,8 @@ export async function checkExcellence({
       continue;
     }
     const text = await fs.readFile(target, 'utf8');
-    if (redactEvidence(text, options) !== text) reasons.push(`Secret material detected in changed file: ${file}`);
+    const secretLines = secretMaterialLines(text, options);
+    if (secretLines.length) reasons.push(`Secret material detected in changed file: ${file} (line ${secretLines.slice(0, 8).join(', ')})`);
     if (result.mode === 'llm' && git.hasGit && isTestFile(file)) {
       added ??= addedLinesByFile(git.diff);
       const fileAdded = added.get(file) ?? text;
@@ -171,7 +172,7 @@ export async function checkExcellence({
     reasons.push('Test substance: the diff changes only test files but adds no new test block or assertion; ' +
       'imports, comments, or fixtures alone do not implement the Ask.');
   }
-  if (redactEvidence(git.diff, options) !== git.diff) reasons.push('Secret material detected in the Git diff.');
+  if (secretMaterialLines(git.diff, options).length) reasons.push('Secret material detected in the Git diff.');
   return { pass: reasons.length === 0, reasons, files, model: result.model, turns: result.turns,
     snapshot: current };
 }
