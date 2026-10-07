@@ -131,6 +131,24 @@ export function ensureOriginalAsk(task, title) {
   return `${String(task).trim()}\n\n## Original Ask\n\n${required}\n`;
 }
 
+// The issue title is authoritative; a model-written heading can borrow another issue's number from code comments.
+export function ensureTitleHeading(task, title) {
+  const required = String(title ?? '').trim();
+  if (!required || /[\r\n]/.test(required)) return task;
+  let parts;
+  try {
+    parts = splitTaskFrontmatter(task);
+  } catch {
+    return task;
+  }
+  const heading = /^# +(.+?)[ \t]*$/m.exec(parts.body);
+  if (!heading || parts.body.slice(0, heading.index).trim()) return task;
+  const text = heading[1].replace(/^(?:task|title):[ \t]*/i, '');
+  if (normalizeAsk(text) === normalizeAsk(required) || /^(?:task[ \t]*)?title$|^task$/i.test(text)) return task;
+  return parts.frontmatter + parts.body.slice(0, heading.index) + `# Task: ${required}` +
+    parts.body.slice(heading.index + heading[0].length);
+}
+
 const namedPath = /(?:[\w.@-]+\/)+[\w.@-]+|[\w.@-]+\.(?:md|mjs|js|cjs|json|yml|yaml|txt)/g;
 
 export function filesNamedByAsk(ask) {

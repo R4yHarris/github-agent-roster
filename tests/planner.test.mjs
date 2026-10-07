@@ -429,6 +429,27 @@ test('a JSON tool payload embedded in planner text writes a task and finishes no
   assert.equal(readFileSync(result.taskPath, 'utf8'), result.task);
 });
 
+test('a written TASK heading that names another issue is replaced by the issue title', async (t) => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'roster-task-heading-'));
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  const worktree = join(repoRoot, 'worktree');
+  mkdirSync(worktree);
+  const ask = 'Update README.md.';
+  const task = planStub(ask, { reference: 'issue:276', title: 'Update README' }).task
+    .replace(/^# .*$/m, '# Issue #198: Update README');
+  const result = await runPlanner({
+    worktree, repoRoot, issue: { number: 276, title: 'Update README', body: ask }, config: llmConfig, env: {},
+    fetchImpl: async () => Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+      role: 'assistant', content: null, tool_calls: [{ id: 'w', type: 'function',
+        function: { name: 'write_file', arguments: JSON.stringify({ path: 'TASK.md', content: task }) } }],
+    } }] }),
+  });
+  assert.equal(result.error, undefined);
+  const written = readFileSync(result.taskPath, 'utf8');
+  assert.match(written, /^# Task: Update README$/m);
+  assert.doesNotMatch(written, /#198/);
+});
+
 test('planner normalizes an alternate JSON plan written to TASK without a repair call', async (t) => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'roster-planner-alternate-json-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));

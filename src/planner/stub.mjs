@@ -7,7 +7,7 @@ import { isAllowedFile, plannerToolDefinitions } from '../runtime/tools.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
 import { applyFeedback } from './feedback.mjs';
 import { parsePlannerToolCalls } from './tool-calls.mjs';
-import { allowedFile, checkedList, ensureAcceptanceChecks, ensureAllowedFiles, ensureOriginalAsk, oneLine, parseTaskDocument } from './task.mjs';
+import { allowedFile, checkedList, ensureAcceptanceChecks, ensureAllowedFiles, ensureOriginalAsk, ensureTitleHeading, oneLine, parseTaskDocument } from './task.mjs';
 import { selectReasoning } from '../llm/reasoning.mjs';
 import { isLlmTimeout, localRequestTimeoutMs, resolveRequestTimeout } from '../llm/request.mjs';
 import { issueWave } from '../lib/wave-labels.mjs';
@@ -333,7 +333,8 @@ export async function planAsk(ask, {
           result = await tools.write_file(args);
           writtenArtifacts.add(args.path);
           if (args.path === 'TASK.md') {
-            const stamped = ensureAcceptanceChecks(ensureAllowedFiles(ensureOriginalAsk(args.content, fixedTitle), cleanAsk), cleanAsk);
+            const stamped = ensureAcceptanceChecks(ensureAllowedFiles(ensureTitleHeading(
+              ensureOriginalAsk(args.content, fixedTitle), fixedTitle), cleanAsk), cleanAsk);
             if (stamped !== args.content) await tools.write_file({ ...args, content: stamped });
             taskDraft = stamped;
             try {
