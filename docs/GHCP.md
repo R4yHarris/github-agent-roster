@@ -95,6 +95,13 @@ or `git push` with human credentials to publish. If
 permission is not accepted on the installation. Do not use a workaround or
 fall back to human credentials.
 
+When the second publish to an already-open PR fails with "The PR no longer
+matches the published branch and head SHA", the push succeeded but GitHub had not
+yet updated the PR head (R4yHarris/github-agent-contracts#12). The PR body already
+carries the agent-run line from the first publish. For the next reviewed commit,
+clear the `AI_*` run inputs and keep `--model`, so that publish skips the
+metadata update and still waits for checks and merges.
+
 For project-management or deployment reads, update the GitHub App installation
 with only the required read permissions (`actions`, `deployments`,
 `environments`, `variables`, and/or `repository_projects` or

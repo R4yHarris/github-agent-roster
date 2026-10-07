@@ -82,6 +82,43 @@ export async function ensureLocalPath(file, repoRoot) {
 
 export const STATE_SCOPES = ['machine', 'repo', 'worktree', 'run'];
 
+// ---------------------------------------------------------------------------
+// Retention policies per state scope (issue #201).
+//
+// Each scope has a distinct root so machine history, repo state, worktree
+// data, and run artifacts are never pruned against the wrong tree. Default
+// windows are intentionally per-scope: machine history is the most durable,
+// run artifacts the most ephemeral. `optOutSupported` records whether a user
+// can fully disable retention for that scope; all scopes currently support
+// opt-out.
+// ---------------------------------------------------------------------------
+export const RETENTION_POLICIES = Object.freeze({
+  machine: Object.freeze({
+    scope: 'machine',
+    root: 'machine',
+    defaultWindowMs: 1000 * 60 * 60 * 24 * 90, // 90 days (docs/STATE.md §8.5)
+    optOutSupported: true,
+  }),
+  repo: Object.freeze({
+    scope: 'repo',
+    root: 'repos',
+    defaultWindowMs: 1000 * 60 * 60 * 24 * 14, // 14 days
+    optOutSupported: true,
+  }),
+  worktree: Object.freeze({
+    scope: 'worktree',
+    root: 'worktrees',
+    defaultWindowMs: 1000 * 60 * 60 * 24 * 7,  // 7 days
+    optOutSupported: true,
+  }),
+  run: Object.freeze({
+    scope: 'run',
+    root: 'runs',
+    defaultWindowMs: 1000 * 60 * 60 * 24,      // 1 day
+    optOutSupported: true,
+  }),
+});
+
 export class StateRootError extends Error {
   constructor(message, { scope, path } = {}) {
     super(message);

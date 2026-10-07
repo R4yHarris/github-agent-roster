@@ -3,7 +3,7 @@ import { promises as fs, lstatSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { TextDecoder } from 'node:util';
-import { ensureLocalPath, resolveProjectRoot } from './paths.mjs';
+import { ensureLocalPath, resolveProjectRoot, RETENTION_POLICIES } from './paths.mjs';
 import { STATE_SCOPES, resolveStateDir } from './repo-state.mjs';
 import { validateRequestTimeout } from '../llm/request.mjs';
 
@@ -379,6 +379,41 @@ export function loadConfig({ repoRoot = rosterRoot, cwd } = {}) {
     source = readConfigFile(path.join(repoRoot, 'roster.config.example.yml'));
   }
   return parseConfig(source);
+}
+
+// Pure over an injected env; see docs/STATE.md §8.5 for the keys and defaults.
+function retentionWindowKey(scope) {
+  return `ROSTER_RETENTION_WINDOW_MS_${scope.toUpperCase()}`;
+}
+
+export function resolveRetentionConfig(env = {}) {
+  if (typeof env !== 'object' || env === null) {
+    throw new ConfigError('resolveRetentionConfig requires an env object');
+  }
+  const rawOptOut = env.ROSTER_RETENTION_OPT_OUT;
+  let optOut = false;
+  if (rawOptOut !== undefined) {
+    if (rawOptOut === 'true') optOut = true;
+    else if (rawOptOut === 'false') optOut = false;
+    else throw new ConfigError(
+      'ROSTER_RETENTION_OPT_OUT must be "true" or "false" when set');
+  }
+  const windowsMs = {};
+  for (const scope of Object.keys(RETENTION_POLICIES)) {
+    const defaultMs = RETENTION_POLICIES[scope].defaultWindowMs;
+    const raw = env[retentionWindowKey(scope)];
+    if (raw === undefined) {
+      windowsMs[scope] = defaultMs;
+      continue;
+    }
+    if (typeof raw !== 'string' || !/^(?:0|[1-9]\d*)$/.test(raw) ||
+        !Number.isSafeInteger(Number(raw)) || Number(raw) <= 0) {
+      throw new ConfigError(
+        `${retentionWindowKey(scope)} must be a positive integer (ms) when set`);
+    }
+    windowsMs[scope] = Number(raw);
+  }
+  return Object.freeze({ optOut, windowsMs: Object.freeze(windowsMs) });
 }
 
 export function requirePublicationEnabled(config) {

@@ -18,6 +18,65 @@ export class RepoStateError extends Error {
   }
 }
 
+/**
+ * Pure retention decision for a single state scope (issue #201).
+ *
+ * Inputs are all caller-injected so the result is a function of the inputs
+ * only — no Date.now(), no env read, no filesystem. Deterministic under an
+ * injected clock.
+ *
+ * Semantics:
+ * - `optOut: true` → always kept, reason `'opted-out'` (no clock involvement).
+ * - Otherwise the record's age (`nowMs - createdAtMs`) is compared to the
+ *   retention window. `expiresAtMs = createdAtMs + windowMs`.
+ *   Expired strictly when `nowMs > expiresAtMs` (age > windowMs):
+ *     keep=false, reason='expired'.
+ *   At the exact boundary (`nowMs === expiresAtMs`, age === windowMs) the
+ *   strict inequality does not fire, so the record is kept:
+ *     keep=true, reason='within-window'.
+ *
+ * `createdAtMs` is required unless opted out: a missing or invalid age throws
+ * rather than defaulting to the epoch, which would mark every record expired.
+ *
+ * @param {object} policy One entry from `RETENTION_POLICIES` (needs `.scope`).
+ * @param {{ nowMs: number, windowMs?: number, optOut?: boolean, createdAtMs?: number }} opts
+ * @returns {{ keep: boolean, reason: string, expiresAtMs?: number }}
+ */
+export function evaluateRetention(policy, {
+  nowMs,
+  windowMs,
+  optOut = false,
+  createdAtMs,
+} = {}) {
+  if (!policy || typeof policy.scope !== 'string') {
+    throw new RepoStateError('evaluateRetention requires a retention policy with a scope.',
+      { code: 'E_RETENTION_POLICY' });
+  }
+  if (typeof nowMs !== 'number' || !Number.isFinite(nowMs) || nowMs < 0) {
+    throw new RepoStateError('evaluateRetention requires a non-negative finite nowMs (injected clock).',
+      { code: 'E_RETENTION_CLOCK' });
+  }
+  const window = windowMs ?? policy.defaultWindowMs;
+  if (typeof window !== 'number' || !Number.isFinite(window) || window <= 0) {
+    throw new RepoStateError('evaluateRetention requires a positive finite windowMs.',
+      { code: 'E_RETENTION_WINDOW' });
+  }
+  if (typeof optOut !== 'boolean') {
+    throw new RepoStateError('evaluateRetention requires a boolean optOut.', { code: 'E_RETENTION_OPT_OUT' });
+  }
+  if (optOut) return { keep: true, reason: 'opted-out' };
+  // An unknown age must never read as expired: retention decides deletions.
+  if (typeof createdAtMs !== 'number' || !Number.isFinite(createdAtMs) || createdAtMs < 0) {
+    throw new RepoStateError('evaluateRetention requires a non-negative finite createdAtMs.',
+      { code: 'E_RETENTION_CREATED' });
+  }
+  const expiresAtMs = createdAtMs + window;
+  if (nowMs > expiresAtMs) {
+    return { keep: false, reason: 'expired', expiresAtMs };
+  }
+  return { keep: true, reason: 'within-window', expiresAtMs };
+}
+
 function markerPath(stateRoot) {
   return join(stateRoot, SCHEMA_MARKER);
 }
