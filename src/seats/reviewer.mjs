@@ -41,6 +41,10 @@ const testReviewInstructions = 'For test changes, verify the assertions would fa
   'and exercise the public operation when the Ask names one; helper-only assertions do not prove a public workflow. ' +
   'Fail a test whose assertions only inspect objects or strings built inside the test itself, without passing them ' +
   'through an imported app function; that is tautological. ' +
+  'A test title is not evidence: each named case in a check (for example stale-lock recovery or crash recovery) ' +
+  'needs its own assertion on app output. For persistence, recovery, or other durable side effects, require the ' +
+  'test to read the result back through the app and assert on its content; assert.ok on a returned object, or an ' +
+  'assertion on the test\'s own clock, counter, or inputs, cannot fail when the behavior is absent. ' +
   'For any secret-leakage check, require an obvious non-credential sentinel such as test-only-private-api-key that is ' +
   'fed into the app code under test (input, config, or env) and an assertion that the exact sentinel is absent from ' +
   'that code\'s serialized output; a generic keyword scan, or a sentinel the test removes itself, is insufficient. ' +

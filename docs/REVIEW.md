@@ -84,7 +84,10 @@ must feed an obvious non-credential sentinel such as `test-only-private-api-key`
 into the app code under test and assert that exact value is absent from its
 serialized output; a generic keyword scan, or a sentinel the test strips
 itself, is not sufficient. Tests that only inspect objects built inside the
-test are failed as tautological.
+test are failed as tautological. A test title is not evidence: each named case
+in a check needs its own assertion on app output, and persistence or recovery
+tests must read the result back through the app. `assert.ok` on a returned
+object, or an assertion on the test's own clock or inputs, does not count.
 
 Before review, the coder's excellence gate applies the same rule
 deterministically to added lines of changed test files, regardless of model.
@@ -93,7 +96,9 @@ file-local helper, whenever the file imports one; `child_process` spawns count
 as black-box CLI coverage. A source-scan guard that reads repository source
 (a relative `src/`, `lib/`, `bin/`, or `scripts/` path) and asserts on it also
 counts, because a regression in that source fails it, and so does asserting on
-an imported SCREAMING_CASE app constant. A seeded string literal that an assertion
+an imported SCREAMING_CASE app constant. Calling a method on an object an app
+function returned (such as `store.query()`) is an app call; a built-in method
+on it, such as `includes`, is not. A seeded string literal that an assertion
 checks for absence must reach an app call as an argument, a config object
 derived from it, or `process.env`; a template interpolation such as
 `` `key ${SENTINEL}` `` inside the call counts as passing it. Changed app code must not
