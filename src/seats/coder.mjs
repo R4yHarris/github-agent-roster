@@ -142,6 +142,10 @@ export async function runCoder({
       async delete_file(args) {
         const deleted = await tools.delete_file(args);
         changedFiles.add(deleted.path);
+        // Deleting a file this coder created nets to no change, so it no longer counts as out-of-scope work.
+        if (!baseline.has(deleted.path)) {
+          for (const entry of scopeFiles) if (entry.toLowerCase() === deleted.path.toLowerCase()) scopeFiles.delete(entry);
+        }
         return deleted;
       },
       async run_test(args, options) {
