@@ -166,6 +166,15 @@ async function git(worktree, args, env = process.env) {
   return stdout;
 }
 
+// Diff summary of reviewed files; `git diff HEAD` omits untracked files, so new files are listed too.
+export async function reviewedDiffStat(worktree, files, env = process.env) {
+  if (!files.length) return '';
+  const changed = (await git(worktree, ['diff', '--stat', 'HEAD', '--', ...files], env)).trim();
+  const added = (await git(worktree, ['ls-files', '--others', '--exclude-standard', '--', ...files], env))
+    .split('\n').map((line) => line.trim()).filter(Boolean);
+  return [changed, ...added.map((file) => ` ${file} | new file`)].filter(Boolean).join('\n');
+}
+
 async function ensureUnchanged(file, content) {
   const status = await fs.lstat(file);
   if (!status.isFile() || status.isSymbolicLink() || await fs.readFile(file, 'utf8') !== content) {
@@ -1147,10 +1156,9 @@ async function runBuiltinAssignment(issueNumber, {
         ? 'Publication unavailable: REVIEW.md failed; rerun the reviewer or explicitly use --skip-review.'
         : 'Publication unavailable: set model and complete a configured coder run with passing checks.'));
   if (review.verdict === 'pass') {
-    const diffStat = result.excellence.files.length ? await git(worktreePath,
-      ['diff', '--stat', 'HEAD', '--', ...result.excellence.files], commandEnv) : '';
+    const stat = await reviewedDiffStat(worktreePath, result.excellence.files, commandEnv);
     log(`Reviewed worktree: ${worktreePath}\ngit diff --stat:\n` +
-      redactEvidence(diffStat.trim() || '(no application diff)', { env, apiKeyEnv: config.llm.api_key_env }) +
+      redactEvidence(stat || '(no application diff)', { env, apiKeyEnv: config.llm.api_key_env }) +
       `\nAfter merge, human AI-Eval (replace M with actual minutes):\n${humanEvalHint(sessions.coder)}`);
   }
 

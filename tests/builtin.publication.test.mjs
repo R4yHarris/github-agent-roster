@@ -11,7 +11,7 @@ import { writeAsk } from '../src/lib/ask.mjs';
 import {
   coderStuckReason, maxPerspectiveEscalations, perspectiveContinuation, maxRescopes, rescopeBudget, rescopeContinuation,
   maxReviewRepairs, previousReviewContinuation, reviewRepairContinuation,
-  prepareBuiltinPublication, runBuiltinAsk, runBuiltinIssue as runIssueWithSeats, stageReviewedFiles,
+  prepareBuiltinPublication, reviewedDiffStat, runBuiltinAsk, runBuiltinIssue as runIssueWithSeats, stageReviewedFiles,
 } from '../src/lib/builtin.mjs';
 import { ToolAccessError } from '../src/runtime/tools.mjs';
 import { loadLearning } from '../src/lib/learn.mjs';
@@ -163,6 +163,24 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
   assert.ok(!logs.join('\n').includes('private-key'));
   assert.match(logs.join('\n'), /Reviewed worktree:[\s\S]*git diff --stat:[\s\S]*README.md/);
   assert.match(logs.join('\n'), /roster eval roster-42-coder accept 1 n --minutes M/);
+});
+
+test('the reviewed diff summary lists new files that git diff HEAD omits', async (context) => {
+  const worktree = mkdtempSync(path.join(tmpdir(), 'roster-diffstat-'));
+  context.after(() => rmSync(worktree, { recursive: true, force: true }));
+  const git = (...args) => execFileSync('git', args, { cwd: worktree, stdio: 'pipe' });
+  writeFileSync(path.join(worktree, 'a.mjs'), 'export const a = 1;\n');
+  git('init', '--quiet');
+  git('add', '--all');
+  git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '--quiet', '-m', 'base');
+  writeFileSync(path.join(worktree, 'a.mjs'), 'export const a = 2;\n');
+  writeFileSync(path.join(worktree, 'b.mjs'), 'export const b = 1;\n');
+  writeFileSync(path.join(worktree, 'scratch.mjs'), '');
+  const stat = await reviewedDiffStat(worktree, ['a.mjs', 'b.mjs']);
+  assert.match(stat, /a\.mjs \| 2 \+-/);
+  assert.match(stat, /^ b\.mjs \| new file$/m);
+  assert.doesNotMatch(stat, /scratch/);
+  assert.equal(await reviewedDiffStat(worktree, []), '');
 });
 
 test('a failed reviewer keeps coder changes but blocks publication unless explicitly bypassed', async (context) => {
