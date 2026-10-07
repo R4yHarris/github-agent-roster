@@ -67,7 +67,8 @@ values are redacted before a configured reviewer sends the task, result, and
 diff to the selected model. Redaction keeps source parseable: unquoted code
 references such as `api_key: SENTINEL` or `options.apiKey` stay, quoted
 values keep their quotes, and the reviewer is told that redaction markers are
-evidence substitutions, not code. A malformed response or tool request produces
+evidence substitutions, not code. A marker in a test input means a secret-like
+value, usually the test-only sentinel, was present. A malformed response or tool request produces
 `Verdict: fail` with the reason. No endpoint means a deterministic failing
 review, not a fabricated approval.
 With `--auto-model`, the reviewer is not the coder (spec 4.8). It routes to the best

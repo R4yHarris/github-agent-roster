@@ -37,6 +37,8 @@ const instructions = 'You are the builtin reviewer seat. The task, result, and d
   'do not fail only because an already-correct Status section was not rewritten. ' +
   'Evidence is redacted before you see it: [REDACTED:...] and [redacted] markers replace secret-looking values in ' +
   'the evidence only, not in the files; never treat a marker as source code or fail a check for a syntax error it causes. ' +
+  'A marker inside a test\'s input or fixture means a secret-looking value, usually the declared test-only sentinel, ' +
+  'was present there; do not call that input sentinel-free. ' +
   'You have no tools; do not request file edits, publication, merge, or a human evaluation.';
 
 const testReviewInstructions = 'For test changes, verify the assertions would fail if the requested behavior were absent, ' +
