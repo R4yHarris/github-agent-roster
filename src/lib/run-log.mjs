@@ -96,7 +96,8 @@ export async function createRunLog({
       ? event.continued ? 'Response truncated. Continuing the same message.' : 'Response truncated. Retrying.'
       : `Unsupported LLM finish reason: ${safe(event.reason)}.`;
     if (event.type === 'contracts-uninitialized') return 'Contracts submodule was not initialized';
-    if (event.type === 'tool-refused') return 'Refused: outside the worktree.';
+    if (event.type === 'tool-refused') return event.reason === 'absolute-inside'
+      ? 'Refused: use a worktree-relative path.' : 'Refused: outside the worktree.';
     if (event.type === 'test-repair') return `Tests failed. Repair ${event.attempt} of ${event.budget}.`;
     if (event.type === 'checklist' && event.open) return `Coder tried to finish with ${event.total - event.done} open checklist items.`;
     if (event.type === 'shadow-modules' && event.findings) return `${event.findings} new exports duplicate existing modules; one repair before review.`;
@@ -145,8 +146,10 @@ export async function createRunLog({
         }
         return `served-model host=${event.host} requested=${event.requested} served=${event.served}`;
       case 'tool-refused':
-        if (!tools.includes(event.name)) throw new TypeError('Invalid live tool refusal event');
-        return `tool refused ${event.name} outside-worktree`;
+        if (!tools.includes(event.name) || ![undefined, 'absolute-inside'].includes(event.reason)) {
+          throw new TypeError('Invalid live tool refusal event');
+        }
+        return `tool refused ${event.name} ${event.reason ?? 'outside-worktree'}`;
       case 'toolset':
         if (!Array.isArray(event.tools) || event.tools.some((name) => !tools.includes(name))) {
           throw new TypeError('Invalid live toolset event');
@@ -370,7 +373,7 @@ export async function readLastRunLog({
     const validMetadata = (value) => metadata.test(value) || value === 'steering coder' || value === 'timeout retry 1/1' ||
       /^stall host=[A-Za-z0-9.:[\]-]{1,255} idle=\d+(?:\.\d+)?s retry=(?:true|false)$/.test(value) ||
       /^served-model host=[A-Za-z0-9.:[\]-]{1,255} requested=[A-Za-z0-9._:/@+-]{1,128} served=[A-Za-z0-9._:/@+-]{1,128}$/.test(value) ||
-      /^tool refused (?:read_file|write_file|list_dir|run_test|search_text) outside-worktree$/.test(value) ||
+      /^tool refused (?:read_file|write_file|edit_file|delete_file|list_dir|run_test|search_text) (?:outside-worktree|absolute-inside)$/.test(value) ||
       new RegExp(`^toolset (?:-|(?:${tools.join('|')})(?:,(?:${tools.join('|')}))*)$`).test(value) ||
       /^completion finish_reason=(?:null|"stop"|"tool_calls")$/.test(value) ||
       /^checklist \d+\/\d+(?: open-at-finish)?$/.test(value) ||
