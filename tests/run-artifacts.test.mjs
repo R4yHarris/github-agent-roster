@@ -21,6 +21,8 @@ test('the newest archived REVIEW.md is found even when a later interrupted run a
   const git = async () => common;
   assert.equal(await latestArchivedReview(root, { task: 'issue-7', git }), 'newest review');
   assert.equal(await latestArchivedReview(root, { task: 'issue-7', git, accept: (text) => text !== 'newest review' }), 'old');
+  assert.equal(await latestArchivedReview(root, { task: 'issue-7', git, accept: (text) => text === 'old',
+    supersedes: (text) => text === 'newest review' }), null);
   assert.equal(await latestArchivedReview(root, { task: 'issue-8', git }), null);
   assert.equal(await latestArchivedReview(root, { task: '../escape', git }), null);
 });
