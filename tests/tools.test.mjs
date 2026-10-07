@@ -157,6 +157,7 @@ test('final full-suite verification separates regressions this change caused fro
   assert.equal(git('worktree', 'list').trim().split('\n').length, 1, 'the base worktree is removed');
   const targeted = await tools.run_test();
   assert.notEqual(targeted.exit_code, 0, 'later targeted runs include the regressed test');
+  await tools.read_file({ path: 'tests/consumer.test.mjs' });
   await tools.write_file({ path: 'tests/consumer.test.mjs', content: check('value === 2') });
 });
 
@@ -211,6 +212,7 @@ test('tiered scope records capped coder expansion while hard-deny surfaces stay 
   const events = [];
   const tools = await createTools({ worktree, allowedFiles: ['README.md'], scopeExpansion: 2,
     onEvent: (event) => events.push(event) });
+  await tools.glob_files({ pattern: 'src/*' });
   const written = await tools.write_file({ path: 'src/state.mjs', content: 'export const state = 1;\n' });
   assert.equal(written.scope_expanded, true);
   assert.match(written.note, /outside planned TASK\.md scope \(1 of 2/);
@@ -232,6 +234,7 @@ test('tiered scope records capped coder expansion while hard-deny surfaces stay 
   await assert.rejects(strict.write_file({ path: 'src/other.mjs', content: '' }), /not allowed by TASK\.md/);
   const resumed = await createTools({ worktree, allowedFiles: ['README.md'], scopeExpansion: 2,
     initialScopeFiles: ['src/state.mjs', 'src/cli.mjs'] });
+  await resumed.read_file({ path: 'src/state.mjs' });
   assert.equal((await resumed.write_file({ path: 'src/state.mjs', content: '' })).scope_expanded, true);
   await assert.rejects(resumed.write_file({ path: 'src/fourth.mjs', content: '' }), /Scope expansion limit/);
   await assert.rejects(createTools({ worktree, seat: 'planner', scopeExpansion: 1 }), /coder seat/);

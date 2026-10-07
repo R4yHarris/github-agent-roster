@@ -288,6 +288,8 @@ test('a full-suite regression outside Allowed Files is repaired, not excused as 
       if (calls === 1) return response('tool_calls', { role: 'assistant', content: null, tool_calls: [writeCall()] });
       if (seen.at(-1).includes('so this change broke them: tests/consumer.test.mjs') && !fixed()) {
         return response('tool_calls', { role: 'assistant', content: null, tool_calls: [{
+          id: `read-${calls}`, type: 'function', function: { name: 'read_file',
+            arguments: JSON.stringify({ path: 'tests/consumer.test.mjs' }) } }, {
           id: `repair-${calls}`, type: 'function', function: { name: 'write_file', arguments: JSON.stringify({
             path: 'tests/consumer.test.mjs', content: "import test from 'node:test';\ntest('new status', () => {});\n" }) },
         }] });
@@ -333,6 +335,8 @@ test('a repaired own test no longer blocks steering when only a pre-existing out
       if (calls === 1) return response('tool_calls', { role: 'assistant', content: null, tool_calls: [writeCall()] });
       if (seen.at(-1).includes('Repair 1 of') && !ownFixed()) {
         return response('tool_calls', { role: 'assistant', content: null, tool_calls: [{
+          id: `read-${calls}`, type: 'function', function: { name: 'read_file',
+            arguments: JSON.stringify({ path: 'tests/app.test.mjs' }) } }, {
           id: `repair-${calls}`, type: 'function', function: { name: 'write_file', arguments: JSON.stringify({
             path: 'tests/app.test.mjs', content: "import test from 'node:test';\ntest('fixed', () => {});\n" }) },
         }] });

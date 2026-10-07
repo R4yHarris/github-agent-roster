@@ -169,6 +169,22 @@ directories outside the worktree.
 or directory pattern under `## Files allowed` in the generated
 [`TASK.md`](../templates/sdlc/TASK.md); a broad pattern never overrides
 the denylist.
+
+The coder's tools enforce read-before-write and search-before-create
+([#295](https://github.com/R4yHarris/github-agent-roster/issues/295)):
+
+- `write_file` cannot replace an existing code file (`.js`, `.mjs`, `.cjs`,
+  `.ts`, `.jsx`, `.tsx` and related) unless this session read or wrote it
+  first. `edit_file` needs no prior read, because its exact `old_string` match
+  already proves the content. Docs such as README.md are exempt.
+- A new `src/**/*.{js,mjs,cjs}` file is refused until the coder has run
+  `search_text`, `glob_files` or `list_dir`. Slice-only and one-file tasks are
+  exempt, because those tools are withheld from them.
+- A new `src` file is also refused until the coder has read every module listed
+  under "Earlier waves delivered". Those modules stay readable even when reads
+  are limited to the slice.
+
+Each refusal is a correctable tool error, so the turn continues.
 For a named vLLM profile the example endpoint is
 `http://127.0.0.1:8000/v1`; the coder POSTs to `/chat/completions`
 with only the selected five function tools. Its bounded context pack

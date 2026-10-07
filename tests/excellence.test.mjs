@@ -289,7 +289,8 @@ test('a test subprocess scope violation writes a failed result and cannot reach 
       turns += 1;
       return Response.json({ choices: [turns === 1 ? {
         finish_reason: 'tool_calls',
-        message: { role: 'assistant', tool_calls: [{ id: 'write', type: 'function', function: {
+        message: { role: 'assistant', tool_calls: [{ id: 'read', type: 'function', function: { name: 'read_file',
+          arguments: JSON.stringify({ path: 'src/runtime/excellence.mjs' }) } }, { id: 'write', type: 'function', function: {
           name: 'write_file', arguments: JSON.stringify({
             path: 'src/runtime/excellence.mjs', content: 'export const value = 2;\n',
           }),
@@ -346,7 +347,8 @@ test('a regression repair from an earlier coder attempt stays in scope for the n
         turns += 1;
         return Response.json({ choices: [turns === 1 ? {
           finish_reason: 'tool_calls',
-          message: { role: 'assistant', tool_calls: [{ id: 'write', type: 'function', function: {
+          message: { role: 'assistant', tool_calls: [{ id: 'read', type: 'function', function: { name: 'read_file',
+            arguments: JSON.stringify({ path: 'src/runtime/excellence.mjs' }) } }, { id: 'write', type: 'function', function: {
             name: 'write_file', arguments: JSON.stringify({
               path: 'src/runtime/excellence.mjs', content: 'export const value = 2;\n',
             }),
