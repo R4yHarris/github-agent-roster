@@ -18,6 +18,7 @@ import {
   redactRecord,
   validateProvenance,
   validateProvenanceRecords,
+  scanMalformedRecords,
 } from '../src/lib/history-redaction.mjs';
 
 import {
@@ -171,6 +172,32 @@ test('validateProvenanceRecords reports the first failing index', () => {
   assert.equal(result.index, 1);
 });
 
+test('validateProvenanceRecords quarantines schema-incompatible records without touching valid siblings', () => {
+  const good1 = makeRecord();
+  const good2 = makeRecord({ id: 'sess-002' });
+  // A non-object entry and a version-drifted record are schema-incompatible.
+  const bad0 = 'not-a-record';
+  const bad3 = { ...makeRecord({ id: 'sess-003' }), version: 99 };
+  const snapshot = [bad0, good1, good2, bad3].map((r) => JSON.parse(JSON.stringify(r)));
+
+  const result = validateProvenanceRecords([bad0, good1, good2, bad3]);
+  assert.equal(result.ok, false);
+  // The first offender is surfaced for fail-closed exports.
+  assert.equal(result.index, 0);
+  assert.equal(typeof result.error, 'string');
+  // Every offender is reported with its index and error, in order.
+  assert.deepEqual(
+    result.quarantine.map((q) => q.index),
+    [0, 3],
+  );
+  for (const q of result.quarantine) assert.equal(typeof q.error, 'string');
+  // Valid siblings are not dropped or mutated by the scan.
+  assert.deepEqual(snapshot[1], good1);
+  assert.deepEqual(snapshot[2], good2);
+  assert.equal(validateProvenance(good1).ok, true);
+  assert.equal(validateProvenance(good2).ok, true);
+});
+
 test('exportHistory applies redaction and fails closed on invalid provenance', () => {
   // Provenance is minted over the redacted bytes, so the exported record
   // carries verified provenance while still hiding the sentinels.
@@ -215,4 +242,49 @@ test('renderHistoryJson remains deterministic for identical valid input', () => 
   const a = makeRecord();
   const b = makeRecord();
   assert.equal(renderHistoryJson([a]), renderHistoryJson([b]));
+});
+
+test('redactRecord redacts env-sourced secrets before persistence and leaves no live secret in output', () => {
+  // The env secret feeds the app under test through a realistic secret
+  // context (API_KEY env var) and the record carries it in a payload.
+  const config = createRedactionConfig({ env: { API_KEY: FAKE_API_KEY } });
+  const record = {
+    id: 'sess-secret',
+    version: 1,
+    runId: 'run-001',
+    sessionId: 'sess-001',
+    payload: { api_key: FAKE_API_KEY, note: `deployed with ${FAKE_API_KEY}` },
+  };
+  const out = redactRecord(record, config);
+  const json = JSON.stringify(out);
+  assert.equal(json.includes(FAKE_API_KEY), false);
+  assert.equal(typeof out, 'object');
+  assert.notEqual(out, null);
+  // The configured value is replaced with the deterministic marker.
+  assert.ok(json.includes(REDACTION_MARKER));
+});
+
+test('scanMalformedRecords detects legacy malformed records and returns their indices', () => {
+  const good = makeRecord();
+  const good2 = makeRecord({ id: 'sess-002' });
+  const records = [
+    'legacy-text-line', // 0: non-object entry
+    null,               // 1: non-object entry
+    good,               // 2: valid
+    { id: 'sess-x', version: 1, runId: 'run-x' }, // 3: missing required field (sessionId)
+    { version: 1, runId: 'run-x', sessionId: 's-x' }, // 4: missing id
+    { id: 'sess-y', version: 99, runId: 'run-y', sessionId: 's-y' }, // 5: incompatible version
+    [1, 2, 3],          // 6: array entry
+    good2,              // 7: valid
+  ];
+  const indices = scanMalformedRecords(records);
+  assert.deepEqual(indices, [0, 1, 3, 4, 5, 6]);
+  // Valid entries are untouched by the scan.
+  assert.equal(validateProvenance(good).ok, true);
+  assert.equal(validateProvenance(good2).ok, true);
+  // A clean list yields no offenders.
+  assert.deepEqual(scanMalformedRecords([good, good2]), []);
+  // A non-array store fails closed instead of reporting nothing malformed.
+  assert.throws(() => scanMalformedRecords('nope'), TypeError);
+  assert.throws(() => scanMalformedRecords({ records: [] }), TypeError);
 });

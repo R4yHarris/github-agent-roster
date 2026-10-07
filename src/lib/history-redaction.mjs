@@ -8,6 +8,7 @@
 import { createHash } from 'node:crypto';
 import { storeRecordId } from './provenance-api.mjs';
 import { validateProvenanceRecord as validateStoredRecord } from './provenance-store.mjs';
+import { redactEvidence } from './redaction.mjs';
 
 const TYPED_SECTIONS = { 'raw-history': (record) => record.event, 'curated-memory': () => 'memory' };
 
@@ -102,8 +103,25 @@ function maskHome(value, config) {
   return value;
 }
 
+// Redacts one history record: configured secret values/paths everywhere, and
+// home-directory details unless the record opts in to keep them.
+//
+// String leaves additionally pass through the shared evidence redaction
+// (redactEvidence) so that credential-shaped material and secret-looking
+// assignments are masked even when the configuration does not name them
+// explicitly. This keeps redaction fail-closed: a record can never carry a
+// live secret into persistence merely because the config missed a value.
+export function redactRecord(record, config = {}) {
+  if (record === null || typeof record !== 'object') return record;
+  const perRecord = { ...config, keepHome: record.keepHome ? true : config.keepHome };
+  return redactValue(record, perRecord);
+}
+
 function redactValue(value, config) {
-  if (typeof value === 'string') return maskHome(redactString(value, config), config);
+  if (typeof value === 'string') {
+    const configured = maskHome(redactString(value, config), config);
+    return redactEvidence(configured, { env: config.env });
+  }
   if (Array.isArray(value)) return value.map((item) => redactValue(item, config));
   if (value !== null && typeof value === 'object') {
     const out = {};
@@ -113,14 +131,6 @@ function redactValue(value, config) {
     return out;
   }
   return value;
-}
-
-// Redacts one history record: configured secret values/paths everywhere, and
-// home-directory details unless the record opts in to keep them.
-export function redactRecord(record, config = {}) {
-  if (record === null || typeof record !== 'object') return record;
-  const perRecord = { ...config, keepHome: record.keepHome ? true : config.keepHome };
-  return redactValue(record, perRecord);
 }
 
 // ---------------------------------------------------------------------------
@@ -207,15 +217,61 @@ export function validateProvenance(record) {
   return { ok: true, integrity: 'verified' };
 }
 
-// Verifies every record up front, returning the first failure. Exporters use
-// this to fail closed before any redacted bytes are produced.
+// Verifies every record and quarantines the schema-incompatible ones.
+//
+// Fail-closed semantics: the result is `ok: false` whenever any record fails,
+// and the first offender is exposed via `index` / `error` so callers can fail
+// the export. Every offender is listed in `quarantine` (`{ index, error }`) so
+// a migration tool can set each bad record aside; valid sibling records are
+// never dropped or mutated — they simply validate successfully. The input
+// array is not modified.
 export function validateProvenanceRecords(records) {
   if (!Array.isArray(records)) {
     return { ok: false, error: 'provenance records must be an array' };
   }
+  const quarantine = [];
   for (let i = 0; i < records.length; i += 1) {
     const result = validateProvenance(records[i]);
-    if (!result.ok) return { ok: false, index: i, error: result.error };
+    if (!result.ok) quarantine.push({ index: i, error: result.error });
   }
-  return { ok: true };
+  if (quarantine.length) {
+    return { ok: false, index: quarantine[0].index, error: quarantine[0].error, quarantine };
+  }
+  return { ok: true, quarantine };
+}
+
+// ---------------------------------------------------------------------------
+// Migration scan
+// ---------------------------------------------------------------------------
+
+// Required stable fields for a legacy history record (id/version come from
+// the provenance store contract; runId/sessionId from the typed API).
+const REQUIRED_MIGRATION_FIELDS = ['id', 'version', 'runId', 'sessionId'];
+
+// Scans a legacy record array for malformed entries and returns the indices
+// of the offenders, in order. A record is malformed when it is not a plain
+// object, is missing any required field, or fails the provenance store's
+// record-shape validation (`validateProvenanceRecord` style: non-empty safe
+// id string, current record version). Non-object entries, missing required
+// fields, and shape-invalid records are all reported; valid entries are not.
+export function scanMalformedRecords(records) {
+  if (!Array.isArray(records)) throw new TypeError('legacy history records must be an array');
+  const indices = [];
+  for (let i = 0; i < records.length; i += 1) {
+    const record = records[i];
+    if (record === null || typeof record !== 'object' || Array.isArray(record)) {
+      indices.push(i);
+      continue;
+    }
+    const missing = REQUIRED_MIGRATION_FIELDS.some(
+      (field) => record[field] === undefined || record[field] === null,
+    );
+    if (missing) {
+      indices.push(i);
+      continue;
+    }
+    const verdict = validateStoredRecord(record);
+    if (!verdict.ok) indices.push(i);
+  }
+  return indices;
 }
