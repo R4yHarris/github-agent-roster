@@ -794,11 +794,14 @@ export async function resolveStateRoot({ env = process.env, repoRoot, machineRoo
   });
 }
 
-// Accepts either an already-resolved state handle or a plain root descriptor.
-// Ad-hoc descriptors are held to the same rules as resolveMachineRoot: no
-// symlink/reparse component may appear anywhere in the supplied root.
+// Accepts an already-resolved state handle, a plain root descriptor, or a root
+// path string. Ad-hoc roots are held to the same rules as resolveMachineRoot:
+// no symlink/reparse component may appear anywhere in the supplied root. An
+// unrecognized value is refused rather than silently resolving the real
+// user machine root (#361).
 async function machineHandle(machineRoot, { env }) {
   if (machineRoot instanceof StateHandle) return machineRoot;
+  if (typeof machineRoot === 'string') machineRoot = { root: machineRoot, writable: true };
   if (machineRoot && typeof machineRoot.root === 'string') {
     assertNoSymlinkComponents(machineRoot.root, { scope: 'machine' });
     // Canonicalize so containment compares real directories: a symlinked or
@@ -810,6 +813,11 @@ async function machineHandle(machineRoot, { env }) {
       platform: machineRoot.platform ?? process.platform,
       writable: Boolean(machineRoot.writable),
     };
+  }
+  if (machineRoot != null) {
+    throw new StateRootError(
+      'machineRoot must be a StateHandle, a { root } descriptor, or a root path string.',
+      { scope: 'machine' });
   }
   return resolveMachineRoot({ env });
 }

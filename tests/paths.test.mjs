@@ -455,3 +455,23 @@ test('preserved exports keep working: resolveProjectRoot and resolveContractsPat
   assert.equal(resolveProjectRoot(repoRoot), resolve(repoRoot));
   assert.throws(() => resolveContractsPath({ repoRoot, cwd: repoRoot, env: {} }), /github-agent-contracts is required/);
 });
+
+// #361: a plain-string machine root must be honored, never silently swapped
+// for the real user machine root; unknown shapes are refused.
+test('resolveStateRoot honors a string machineRoot and refuses unknown shapes (#361)', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'roster-machine-string-'));
+  try {
+    const repoRoot = join(base, 'checkout');
+    const machine = join(base, 'machine');
+    mkdirSync(join(repoRoot, '.git'), { recursive: true });
+    mkdirSync(machine, { recursive: true });
+    const env = { ROSTER_STATE_ROOT: join(base, 'must-not-be-used') };
+    const handle = await resolveStateRoot({ repoRoot, machineRoot: machine, env });
+    assert.ok(isContainedIn(handle.root, await fsp.realpath(machine)), handle.root);
+    await assert.rejects(
+      resolveStateRoot({ repoRoot, machineRoot: 42, env }),
+      (error) => error instanceof StateRootError && /machineRoot must be/.test(error.message));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
