@@ -90,7 +90,7 @@ clear inherited fields. See both blocks in [`.env.example`](../.env.example).
 Missing seat usage is omitted, not replaced with the GHCP path. Publication
 uses the same compact schema for all three sources; identity remains the App.
 
-The pinned contracts `v0.2.1` schema does **not** accept `AI_PROVIDER=vllm`.
+The pinned contracts schema does **not** accept `AI_PROVIDER=vllm`.
 Roster encodes vLLM as its supported `local` provider (`openai` for the explicit
 OpenAI profile), without modifying the submodule. The local run journal
 retains the actual `provider: "vllm"` for the named vLLM profile or explicit
@@ -107,7 +107,7 @@ known coder values before running the SDK command directly.
 
 `src/lib/metrics.mjs` reads compact AI-Run JSONL by invoking contracts
 `scripts/export-agent-metrics.mjs` with Node. Contracts resolution checks the
-required `v0.2.1` submodule first, then `GITHUB_AGENT_CONTRACTS`, then the sibling
+required contracts submodule first, then `GITHUB_AGENT_CONTRACTS`, then the sibling
 clone; see [the dependency guide](DEPENDENCY.md). It runs against local Git
 history and joins `.roster/runs/*.jsonl` and `.roster/evals.jsonl` when present.
 It does not contact GitHub or any analytics service.

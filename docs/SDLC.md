@@ -459,7 +459,7 @@ Keep the issue's agreed plan and the PR's evidence consistent with the task.
 ## 5. Publish, then let the human evaluate
 
 The PR handoff should link the issue and summarize the change, acceptance
-evidence, and remaining risks. Publication requires the fail-closed `v0.2.1`
+evidence, and remaining risks. Publication requires the fail-closed contracts
 contracts dependency and the human-owned policy described in the
 [dependency guide](DEPENDENCY.md). Contracts owns identity, policy, and trailers;
 neither the recipe nor the skills grant permissions.

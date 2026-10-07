@@ -132,7 +132,7 @@ that grant and stop using `--merge-when-green`; workers must not edit policy.
 
 ## Publication boundary
 
-Publish only through the pinned fail-closed `v0.2.1`
+Publish only through the pinned fail-closed contracts
 [vendor publisher](../vendor/github-agent-contracts/scripts/agent-pr.mjs), from
 the current worktree's repository root:
 

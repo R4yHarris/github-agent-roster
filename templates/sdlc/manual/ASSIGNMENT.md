@@ -45,7 +45,7 @@ and remaining risks. Do not claim success for unrun or skipped checks.
 ## Publication
 
 With `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_PATH` set and the required
-`v0.2.0` contracts submodule initialized, publish from this worktree's repository
+contracts submodule initialized, publish from this worktree's repository
 root through the contracts publisher:
 
 ```sh

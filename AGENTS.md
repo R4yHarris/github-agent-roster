@@ -50,7 +50,7 @@ See [metrics](docs/METRICS.md) and the [GHCP example](docs/GHCP.md).
 ## Contracts dependency
 
 Use the required [`vendor/github-agent-contracts`](vendor/github-agent-contracts)
-Git submodule, pinned to the fail-closed `v0.2.1`. Clone with `git clone --recurse-submodules`,
+Git submodule, pinned to the latest reviewed contracts commit. Clone with `git clone --recurse-submodules`,
 or initialize an existing checkout with `git submodule update --init --recursive`.
 Do not copy contracts source into this tree or rewrite files in the submodule.
 

@@ -5,7 +5,7 @@ feature, honor sections 3 and 7, cite the section in the PR body, and do not
 contradict the spec.  Do not add a Kanban DB. Zero runtime deps unless a prompt
 says otherwise. Node 20 ESM.
 
-Require the `v0.2.0` Git submodule at
+Require the latest reviewed Git submodule at
 [`vendor/github-agent-contracts`](../vendor/github-agent-contracts). Clone with
 `git clone --recurse-submodules` or run `git submodule update --init --recursive`.
 Do not copy contracts source into this tree or rewrite files in the submodule.
