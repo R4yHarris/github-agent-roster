@@ -395,4 +395,11 @@ test('ensureStateDirectory creates the state root once and refuses protected pat
       return true;
     }
   );
+
+  const worktreeRoot = path.join(tmp, 'feature-worktree');
+  fs.mkdirSync(worktreeRoot, { recursive: true });
+  await assert.rejects(
+    () => ensureStateDirectory(makeHandle({ root: worktreeRoot, repoRoot, worktreeRoot })),
+    (error) => error instanceof CleanOpsError && error.code === 'CLEAN_OPS_FORBIDDEN_PATH' && /worktree/.test(error.message)
+  );
 });

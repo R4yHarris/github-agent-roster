@@ -426,7 +426,10 @@ export async function ensureStateDirectory(handle) {
   if (!root) {
     throw new CleanOpsError('state root handle is missing a root', FORBIDDEN_CODE, { handle });
   }
-  const safe = await assertNotForbidden(root, await forbiddenStateRoots({ repoRoot: handle.repoRoot }));
+  const safe = await assertNotForbidden(
+    root,
+    await forbiddenStateRoots({ repoRoot: handle.repoRoot, worktreeRoot: handle.worktreeRoot })
+  );
   await fsp.mkdir(safe, { recursive: true });
   return safe;
 }
