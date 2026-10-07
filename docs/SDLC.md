@@ -298,6 +298,7 @@ agents and humans:
 | Worktree prepared | `roster:in-progress` | Run started, with branch and seats |
 | Review passes | `roster:review` | Review verdict, coder model, ready to publish |
 | Published and merged | `roster:review` | None (the merge comment already reports it) |
+| Feature parent run after every child slice closed | `roster:review` | Closed children; close the parent after AI-Eval |
 | Failure, cancellation, clarification, or human pause | `roster:blocked` | Redacted reason |
 
 Each run swaps out the other `roster:*` labels and creates a missing label
