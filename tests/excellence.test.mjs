@@ -91,6 +91,20 @@ test('known secret material in an allowed file fails without echoing the credent
   assert.doesNotMatch(gate.reasons.join('\n'), /fixture-only-private-value/);
 });
 
+test('PEM envelope prose and keyless fixtures pass; base64 key bodies fail with line numbers', async (context) => {
+  const options = await fixture(context);
+  writeFileSync(path.join(options.worktree, 'README.md'), [
+    '# Redaction',
+    'PEM blocks: the `-----BEGIN ... PRIVATE KEY-----` / `-----END ... PRIVATE KEY-----` envelope.',
+    "const pem = '-----BEGIN PRIVATE KEY-----\\n' + body + '\\n-----END PRIVATE KEY-----';",
+  ].join('\n'));
+  assert.equal((await checkExcellence(options)).reasons.some((reason) => reason.startsWith('Secret material')), false);
+  writeFileSync(path.join(options.worktree, 'README.md'),
+    `# Key\n\n-----BEGIN ${'RSA'} PRIVATE KEY-----\n${'MIIE'}${'A'.repeat(60)}\n-----END RSA PRIVATE KEY-----\n`);
+  const gate = await checkExcellence(options);
+  assert.match(gate.reasons.join('\n'), /Secret material detected in changed file: README\.md \(line 3\)/);
+});
+
 test('edits inside existing protected directories fail in non-Git fixtures', async (context) => {
   const options = await fixture(context);
   mkdirSync(path.join(options.worktree, '.github', 'workflows'), { recursive: true });

@@ -28,7 +28,10 @@ Its checklist is:
 - Changed paths stay inside TASK.md's allowed paths plus identified failing
   test files granted by the harness, and outside protected
   policy, workflow, secret, contracts, evaluation, notebook, and managed paths.
-- Changed file bodies and the Git diff contain no detected secret material.
+- Changed file bodies and the Git diff contain no detected secret material:
+  secret-named environment values, credential-shaped tokens, or a PEM private
+  key header followed by base64 key material. Prose naming the PEM envelope and
+  fixtures without a key body pass; failures cite the offending line numbers.
 - The result has a summary and records the actual model ID and tool-loop turns.
 - RESULT.md begins with checks passed or the first failure, not an unsupported
   success claim.
