@@ -210,12 +210,13 @@ export function createDispatcher({
     display.seat = event.seat;
     if (['finish-reason', 'completion'].includes(event.type)) display.lastFinishReason = event.reason;
     if (event.type === 'tool') display.toolCount = (display.toolCount ?? 0) + 1;
+    if (event.type === 'checklist') display.checklist = `${event.done}/${event.total}`;
     if (event.type === 'tool' && event.name === 'run_test') display.lastTestName = 'node --test';
     if (event.type === 'seat-start') {
       display.state = { planner: 'planning', coder: 'drafting', reviewer: 'reviewing' }[event.seat];
       for (const [key, value] of [['model', event.model], ['host', event.host], ['effort', event.effort],
         ['contextMax', event.contextMax]]) if (value !== undefined) display[key] = value;
-      Object.assign(display, { contextUsed: undefined, outputTokens: undefined, toolCount: 0 });
+      Object.assign(display, { contextUsed: undefined, outputTokens: undefined, toolCount: 0, checklist: undefined });
     } else if (event.type === 'tool' && event.name === 'run_test') display.state = 'testing';
     else if (event.type === 'http' && event.phase === 'start') {
       display.state = { planner: 'planning', coder: 'drafting', reviewer: 'reviewing' }[event.seat];

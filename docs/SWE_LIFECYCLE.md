@@ -61,7 +61,7 @@ the lifecycle below.
 | 5 | **Estimate** | Sizes difficulty, minutes and confidence; re-estimates when scope grows | Planner | ESTIMATE.md + TASK metadata | Recorded before coding | Done ([ESTIMATION](ESTIMATION.md)) | – |
 | 6 | **Acceptance checks** | Writes checks that can be verified against real code | Planner | TASK.md checks | Named existing symbols must exist | Done: backticked names are checked; a bad cite triggers a repair | #296 |
 | 7 | **Design and outline** | Picks modules to extend, sketches signatures and pseudo-code, lists edge cases and risks | Planner (or the coder's read-only first turn) | TASK.md `Design` section | Design must name real modules; new exports go in allowed files | Done: validated or derived; coder re-validates before writing | #302 |
-| 8 | **Checklist and todos** | Turns checks and Definition of Done into a todo list and works one item at a time | Coder | Checklist (tool state) | Can't finish with open items | Missing | #297 |
+| 8 | **Checklist and todos** | Turns checks and Definition of Done into a todo list and works one item at a time | Coder | Checklist (tool state) | Can't finish with open items | Done | #297 |
 | 9 | **Author tests (red)** | Writes the acceptance test first and sees it fail for the right reason | Coder | Test files | New tests must fail against base src | Tests and code written together | #303 |
 | 10 | **Author code (green)** | Reads the code before changing it, extends existing modules, makes the smallest complete change | Coder | Diff | Read before write; search before a new `src/` module; scope and secret guards | Scope and secret guards only | #295 |
 | 11 | **Remediate and repeat** | Uses each failure as evidence, changes approach, stops at a budget | Coder loop | Green targeted tests | Bounded repairs; perspective escalation | Done ([LOOP](LOOP.md)) | – |
@@ -94,6 +94,17 @@ coder re-validates the Design against its worktree and refuses before the first
 write if it no longer holds. A hand-written TASK.md without a Design is still
 accepted. The reviewer reports drift from the Design. Docs-only slices have no
 Design.
+
+## Checklist
+
+When TASK.md has acceptance checks and more than one allowed file, the coder
+gets an `update_checklist` tool (`src/runtime/checklist.mjs`) seeded with one
+item per check. It marks one item `in_progress` at a time, and each `done`
+or `blocked` item needs evidence. After the first update, a final answer with
+open items is returned with the open list, at most twice. A coder that never
+calls the tool is not corrected; lines such as `1. done: evidence` in its final
+summary close those items. RESULT.md gets a per-check table, the run log
+records `checklist d/t`, and the status rail shows `✓d/t`.
 
 ## Seat turn contracts
 

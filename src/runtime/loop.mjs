@@ -1,3 +1,5 @@
+import { checklistProgress, checklistTool, closeFromSummary, createChecklist, openChecklistCorrection, openItems, updateChecklist }
+  from './checklist.mjs';
 import { createBuiltinChat } from '../lib/llm.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
 import { recipeAllowsTool, taskAndRepairFiles, toolDefinitions, ToolAccessError, ToolUsageError, verificationDecision, isDocsOnlyScope, coversTestFile, testFailureEvidence } from './tools.mjs';
@@ -116,6 +118,8 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
 
   const verification = verificationDecision(parsedTask.files_allowed);
   const docsOnly = isDocsOnlyScope(parsedTask.files_allowed);
+  const checklist = !boundedTask && parsedTask.acceptance_checks.length ? createChecklist(parsedTask.acceptance_checks) : null;
+  if (checklist) progress.checklist = checklist.items;
   const rules = [
     'Work to completion within the task boundary. When an attempt fails, use the new evidence to change strategy; ' +
       'do not repeat the same action against the same unchanged state. Consider a different implementation perspective ' +
@@ -129,6 +133,8 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       'must be read as src/api.mjs, never ../src/api.mjs. Preserve existing behavior and implement the requested outcome; ' +
       'passing existing tests or rewriting identical content is not completion.' : '',
     mentionsSecrets(context.task) ? sentinelGuidance : '',
+    checklist ? 'Work the numbered checks one at a time with update_checklist: mark an item in_progress, then done ' +
+      'with evidence (file and symbol or test) or blocked with the reason. You cannot finish with open items.' : '',
     'A failing test outside Allowed Files is pre-existing: report it and do not edit it.',
     !boundedTask && !docsOnly && (config.seat.scope_expansion ?? 3) > 0
       ? `Allowed Files are the planned scope. If the outcome truly requires another product file, you may write at most ` +
@@ -170,6 +176,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         },
       } },
     });
+  if (checklist) definitions.push(checklistTool);
   const offeredTools = new Set(definitions.map((tool) => tool.function.name));
   await onEvent?.({ type: 'toolset', tools: [...offeredTools] });
   if (readmeOnlyDocs && !offeredTools.has('write_file')) {
@@ -528,6 +535,18 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
           await onEvent?.({ type: 'tool-result', name: call.function.name, status: 'denied' });
           continue;
         }
+        if (call.function.name === 'update_checklist') {
+          try {
+            messages.push({ role: 'tool', tool_call_id: call.id, content: updateChecklist(checklist, call.args) });
+            progress.checklist = checklist.items;
+            progress.checklistEngaged = true;
+            await onEvent?.({ type: 'checklist', ...checklistProgress(checklist) });
+          } catch (error) {
+            if (!(error instanceof TypeError)) throw error;
+            messages.push({ role: 'tool', tool_call_id: call.id, content: `Denied: ${error.message}` });
+          }
+          continue;
+        }
         let result;
         try {
           result = await tools[call.function.name](call.args);
@@ -610,6 +629,19 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     }
     const usage = mergeUsage(...usages);
     const summary = deterministic ?? message.content.trim();
+    // A coder that never used the checklist reports per check in its summary; one that did must close it.
+    if (checklist && !progress.checklistEngaged) closeFromSummary(checklist, summary);
+    if (checklist && progress.checklistEngaged && !deterministic && openItems(checklist).length &&
+        (progress.checklistCorrections ?? 0) < 2) {
+      progress.checklistCorrections = (progress.checklistCorrections ?? 0) + 1;
+      attemptTurns = 0;
+      finalSummaryOnly = false;
+      checksPassedAfterWrite = false;
+      needsTools = false;
+      messages.push({ role: 'assistant', content: summary }, { role: 'user', content: openChecklistCorrection(checklist) });
+      await onEvent?.({ type: 'checklist', ...checklistProgress(checklist), open: true });
+      continue;
+    }
     if (progress.baselineFailures?.length && !progress.repairFiles.length) {
       return {
         mode: 'llm', model: config.llm.model, summary, usage, turns: progress.turns,

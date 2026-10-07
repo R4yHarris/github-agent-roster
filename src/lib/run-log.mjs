@@ -9,7 +9,7 @@ import { createDebugLog } from './debug-log.mjs';
 import { buildRun } from '../metrics/run.mjs';
 
 const seats = ['planner', 'coder', 'reviewer'];
-const tools = ['read_file', 'write_file', 'edit_file', 'delete_file', 'glob_files', 'list_dir', 'run_test', 'run_command', 'search_text', 'web_search', 'web_fetch'];
+const tools = ['read_file', 'write_file', 'edit_file', 'delete_file', 'glob_files', 'list_dir', 'run_test', 'run_command', 'search_text', 'web_search', 'web_fetch', 'update_checklist'];
 const artifacts = ['RECIPE.yml', 'TASK.md', 'PLAN.md', 'ESTIMATE.md', 'RESULT.md', 'REVIEW.md'];
 const httpErrors = ['authentication', 'network', 'timeout', 'http', 'response', 'abort'];
 const maximumLineBytes = 2048;
@@ -98,6 +98,7 @@ export async function createRunLog({
     if (event.type === 'contracts-uninitialized') return 'Contracts submodule was not initialized';
     if (event.type === 'tool-refused') return 'Refused: outside the worktree.';
     if (event.type === 'test-repair') return `Tests failed. Repair ${event.attempt} of ${event.budget}.`;
+    if (event.type === 'checklist' && event.open) return `Coder tried to finish with ${event.total - event.done} open checklist items.`;
     if (event.type === 'timeout') return 'The model did not answer in time. It may still be waking.';
     if (event.type === 'timeout-retry') return 'Retrying the same planner request once after the endpoint timeout.';
     if (event.type === 'stall') return event.retry
@@ -153,6 +154,11 @@ export async function createRunLog({
           throw new TypeError('Invalid live test repair event');
         }
         return `test repair ${event.attempt}/${event.budget}`;
+      case 'checklist':
+        if (![event.done, event.total].every(Number.isSafeInteger) || event.done < 0 || event.done > event.total) {
+          throw new TypeError('Invalid live checklist event');
+        }
+        return `checklist ${event.done}/${event.total}${event.open ? ' open-at-finish' : ''}`;
       case 'waiting':
       case 'timeout': {
         if (typeof event.host !== 'string' || !/^[A-Za-z0-9.:[\]-]{1,255}$/.test(event.host) ||
@@ -334,7 +340,8 @@ export async function readLastRunLog({
       /^served-model host=[A-Za-z0-9.:[\]-]{1,255} requested=[A-Za-z0-9._:/@+-]{1,128} served=[A-Za-z0-9._:/@+-]{1,128}$/.test(value) ||
       /^tool refused (?:read_file|write_file|list_dir|run_test|search_text) outside-worktree$/.test(value) ||
       new RegExp(`^toolset (?:-|(?:${tools.join('|')})(?:,(?:${tools.join('|')}))*)$`).test(value) ||
-      /^completion finish_reason=(?:null|"stop"|"tool_calls")$/.test(value);
+      /^completion finish_reason=(?:null|"stop"|"tool_calls")$/.test(value) ||
+      /^checklist \d+\/\d+(?: open-at-finish)?$/.test(value);
     if (!parsed || !validMetadata(parsed[2]) || /[\x00-\x1f\x7f]/.test(lastLine) ||
         Buffer.byteLength(lastLine) > maximumLineBytes) {
       throw new RunLogError('Last live run log line has invalid metadata');
