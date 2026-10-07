@@ -86,6 +86,16 @@ test('opened child issues are runnable slices linked to their parent issue', asy
   }
 });
 
+test('a re-plan refuses to open a second wave set while the parent has open children from a lost plan', async (t) => {
+  const options = fixture(t);
+  writeFileSync(path.join(options.worktree, 'PLAN.md'), options.source.replace('local:wave-plan', 'issue:196'));
+  await waveBoard({ ...options, open: true });
+  writeFileSync(path.join(options.worktree, 'PLAN.md'),
+    options.source.replace('local:wave-plan', 'issue:196').replace('First outcome', 'Re-planned outcome'));
+  await assert.rejects(waveBoard({ ...options, open: true }), /already has open wave children from another plan \(#100, #101\)/);
+  assert.equal(options.issues.length, 2);
+});
+
 test('a later wave refuses startup while an earlier label issue is open and fails closed on lookup errors', async () => {
   const issue = { body: '', labels: [{ name: 'wave:2' }] };
   await assert.rejects(requireEarlierWavesClosed({ issue, repository: 'example/project', cwd: process.cwd(),
