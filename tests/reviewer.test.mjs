@@ -166,6 +166,7 @@ test('reviewer requires substantive public-path and seeded-secret evidence for t
   assert.match(systemInstructions, /A test title is not evidence/);
   assert.match(systemInstructions, /read the result back through the app/);
   assert.match(systemInstructions, /never treat a marker as source code/);
+  assert.match(systemInstructions, /do not call that input sentinel-free/);
 });
 
 test('reviewer pass is derived from per-check evidence, not the model summary', async (context) => {
