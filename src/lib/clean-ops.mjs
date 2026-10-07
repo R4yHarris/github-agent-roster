@@ -267,6 +267,15 @@ export async function resolveStatePath(handle, relativePath = '.') {
     throw new CleanOpsError('state root handle is missing a root', FORBIDDEN_CODE, { handle });
   }
   const candidate = path.resolve(canonicalRoot, relativePath);
+  // Anything outside the root is an escape, even when it also lands on a
+  // protected directory such as `/` for `../..` from a shallow temp root.
+  if (!isContainedIn(candidate, canonicalRoot)) {
+    throw new CleanOpsError(
+      `refusing to resolve path outside the state root: ${relativePath}`,
+      ESCAPE_CODE,
+      { root: canonicalRoot, candidate }
+    );
+  }
 
   const forbidden = await forbiddenStateRoots({
     repoRoot: handle.repoRoot,

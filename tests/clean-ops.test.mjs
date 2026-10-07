@@ -205,15 +205,16 @@ test('assertStateScope enforces expected scope and required fields', () => {
   assert.throws(() => assertStateScope({ scope: 'repo', root: '/tmp/x' }, 'worktree'), CleanOpsError);
 });
 
-test('resolveStatePath stays inside the state root and rejects traversal', async () => {
+test('resolveStatePath stays inside the state root and rejects traversal', async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clean-ops-root-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const handle = makeHandle({ root });
 
   const inside = await resolveStatePath(handle, 'sub/leaf.txt');
   assert.equal(typeof inside, 'string');
   assert.ok(isContainedIn(inside, path.resolve(root)));
 
-  for (const escape of ['..', '../..', path.join(root, '..', 'elsewhere'), '/absolute/elsewhere']) {
+  for (const escape of ['..', '../..', os.homedir(), path.join(root, '..', 'elsewhere'), '/absolute/elsewhere']) {
     await assert.rejects(
       () => resolveStatePath(handle, escape),
       (error) => {
