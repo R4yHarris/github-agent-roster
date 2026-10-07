@@ -25,6 +25,8 @@ const help = `Usage:
   roster run --seat coder --runtime builtin
   roster prepare --issue N
   roster run --ask-file PATH --runtime builtin
+  roster history list [--store DIR] [--repo HASH] [--issue N] [--seat NAME] [--model MODEL] [--outcome VALUE] [--since TIME] [--until TIME]
+  roster history show <session-or-run-or-record-id> [--store DIR]
   roster bench
   roster status [--issue N] [--offline]
   roster recipe validate PATH
@@ -226,6 +228,9 @@ async function main(args) {
     const route = await routeTask({ cwd, installationRoot: rosterRoot, taskClass,
       difficulty: difficulty ?? 2, records: loadAvailableMetrics({ cwd }) });
     process.stdout.write(formatRoute(route, taskClass, loadConfig({ cwd })));
+  } else if (args[0] === 'history') {
+    const { runHistory } = await import('./lib/history-cli.mjs');
+    process.stdout.write(await runHistory(args.slice(1)));
   } else if (args.length === 1 && args[0] === 'bench') {
     const { runBench } = await import('./lib/bench.mjs');
     const result = await runBench({
