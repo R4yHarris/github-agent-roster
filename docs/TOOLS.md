@@ -40,6 +40,10 @@ edits, disabled tools, disallowed commands, exceeding the scope-expansion cap)
 return `Denied: ... Continue` so the model can correct course without seeing the
 denied content. The same usage denial a third time stops the run with
 `(repeated after 2 denials)`.
+A call to a tool name that is not a Roster tool at all gets one correction
+listing the offered tools; a withheld Roster tool, or a second invented
+name, still stops the seat and names the tool. A call id a gateway reuses
+from an earlier turn is replaced with a fresh id instead of failing.
 
 Tiered write scope: with `seat.scope_expansion` above 0 (default 3), a coder
 `write_file` or `edit_file` on an unprotected repository file outside TASK.md

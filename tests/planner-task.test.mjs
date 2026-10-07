@@ -111,3 +111,11 @@ test('writing a complete fixture TASK finishes in the first model response even 
   assert.match(readFileSync(result.taskPath, 'utf8'), /## Original Ask[\s\S]*## Scope[\s\S]*## Allowed Files/);
   assert.equal(parseTaskDocument(result.task, { expectedAsk: ask }).ask, ask);
 });
+
+test('a template-copied Task title heading takes the real title from the next line', () => {
+  const body = '\n\n## Original Ask\nStore records.\n\n## Acceptance Checks\n- Works.\n\n## Allowed Files\n- `src/a.mjs`\n';
+  assert.equal(parseTaskDocument(`# Task title\nImplement atomic persistence\n\ndifficulty: 2${body}`).title,
+    'Implement atomic persistence');
+  assert.equal(parseTaskDocument(`# Task title\n\ndifficulty: 2${body}`).title, 'Task title');
+  assert.equal(parseTaskDocument(`# Ship the store\nDetails here.${body}`).title, 'Ship the store');
+});

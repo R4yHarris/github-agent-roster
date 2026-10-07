@@ -41,7 +41,12 @@ export function taskSections(task) {
   if (text.includes('\r')) throw new TypeError('TASK.md contains a lone carriage return');
   const titleHeading = /^# +(.+?)[ \t]*$/m.exec(text);
   if (!titleHeading || text.slice(0, titleHeading.index).trim()) throw new TypeError('TASK.md needs a title heading');
-  const title = oneLine(titleHeading[1].replace(/^(?:task|title):[ \t]*/i, '') || 'Task', 'Task title');
+  const heading = titleHeading[1].replace(/^(?:task|title):[ \t]*/i, '');
+  // A template-copied "# Task title" heading takes the real title from the first plain line under it.
+  const promoted = /^(?:task[ \t]*)?title$|^task$/i.test(heading)
+    ? text.slice(titleHeading.index + titleHeading[0].length).split('\n').map((line) => line.trim()).find(Boolean)
+    : undefined;
+  const title = oneLine((promoted && !/^(?:[#>|-]|\w+:)/.test(promoted) ? promoted : heading) || 'Task', 'Task title');
   const starts = [];
   const known = new Set();
   let offset = 0;
