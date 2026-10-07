@@ -10,7 +10,11 @@ import {
   isContainedIn,
   normalizeScope,
   resolveStateRoot as resolveStateRootViaPaths,
+  resolveWorktreeRoot as resolveWorktreeRootViaPaths,
 } from './paths.mjs';
+import {
+  LOCK_NAME, LOG_DIRNAME, SEGMENT_NAME, SEGMENT_SUFFIX, openProvenanceStore,
+} from './provenance-store.mjs';
 import { resolveRepoIdentity } from './repo-identity.mjs';
 import { RepoLockError, acquireRepoLock } from './repo-locks.mjs';
 
@@ -571,6 +575,180 @@ export function formatCleanReport(report) {
   if (report.activeLocks.length) {
     lines.push(`active locks: ${report.activeLocks.map(({ name, holder }) => holder ? `${name} (${holder})` : name).join(', ')}`);
   }
+  if (report.executed) lines.push(`removed: ${report.removed.length}`);
+  return `${lines.join('\n')}\n`;
+}
+
+
+// Target-specific cleanup (#278, part of #197). Each target resolves its own
+// root through paths.mjs or the history store, so a clean can never reach a
+// sibling issue, another repository, or a different kind of state.
+
+export const CLEAN_TARGETS = Object.freeze(['issue', 'repo', 'machine-history', 'curated-memory']);
+const PROVENANCE_TARGETS = Object.freeze({
+  // Raw history plus its derived compaction records; legacy records with no
+  // section are raw history. Curated memory is a separate, opt-in target.
+  'machine-history': (section) => section === undefined || section === 'raw-history' || section === 'compaction',
+  'curated-memory': (section) => section === 'curated-memory',
+});
+// Repo reset keeps the identity binding and schema marker so the root stays
+// bound to this repository, and leaves per-issue state to the issue target.
+const REPO_PRESERVED = Object.freeze(['identity', 'schema.json', 'worktrees']);
+
+function assertTarget(target) {
+  if (!CLEAN_TARGETS.includes(target)) {
+    throw new CleanOpsError(`unknown clean target "${target}"; use one of ${CLEAN_TARGETS.join(', ')}`,
+      SCOPE_CODE, { target, known: CLEAN_TARGETS });
+  }
+  return target;
+}
+
+function issueNumber(value) {
+  const number = typeof value === 'string' && /^[1-9]\d*$/.test(value) ? Number(value) : value;
+  if (!Number.isSafeInteger(number) || number < 1) {
+    throw new CleanOpsError('the issue target requires a positive issue number', SCOPE_CODE, { issue: value });
+  }
+  return number;
+}
+
+/**
+ * Resolve a directory target (`issue` or `repo`) into a runClean plan:
+ * `{ target, handle, exclude }`. Provenance targets go through pruneProvenance.
+ */
+export async function resolveCleanTarget(target, options = {}) {
+  if (!isPlainObject(options)) throw new CleanOpsError('options must be an object', SCOPE_CODE);
+  assertTarget(target);
+  if (PROVENANCE_TARGETS[target]) {
+    throw new CleanOpsError(`"${target}" prunes provenance records; use pruneProvenance`, SCOPE_CODE, { target });
+  }
+  const { repoRoot } = options;
+  if (target === 'repo') {
+    const handle = await resolveStateRoot(repoRoot, { ...options, scope: 'repo', stateRoot: undefined });
+    return { target, handle: { ...handle, repoRoot }, exclude: [...REPO_PRESERVED] };
+  }
+  const issue = issueNumber(options.issue);
+  if (typeof repoRoot !== 'string' || repoRoot.length === 0) {
+    throw new CleanOpsError('a repository root is required to resolve a state root', FORBIDDEN_CODE);
+  }
+  const worktreeRoot = path.join(repoRoot, options.worktreesDir ?? '.worktrees', `issue-${issue}`);
+  const repoId = await resolveRepositoryId(repoRoot, { run: options.run });
+  const handle = await resolveWorktreeRootViaPaths({
+    repoRoot, worktreeRoot, machineRoot: options.machineRoot,
+    env: { ...(options.env ?? process.env), ROSTER_REPO_ID: repoId },
+  });
+  assertStateScope(handle, 'worktree');
+  const scoped = { ...handle, scope: handle.scope, root: handle.root, repoRoot, worktreeRoot, issue };
+  await assertNotForbidden(scoped.root, await forbiddenStateRoots({ repoRoot, worktreeRoot }));
+  return { target, handle: scoped, exclude: [] };
+}
+
+function provenanceMatcher(target, { repoIdentity, before } = {}) {
+  const section = PROVENANCE_TARGETS[target];
+  const cutoff = before === undefined ? undefined : typeof before === 'number' ? before : Date.parse(before);
+  if (before !== undefined && !Number.isFinite(cutoff)) {
+    throw new CleanOpsError('before must be an epoch millisecond value or an ISO timestamp', SCOPE_CODE, { before });
+  }
+  if (repoIdentity !== undefined && (typeof repoIdentity !== 'string' || repoIdentity.length === 0)) {
+    throw new CleanOpsError('repoIdentity must be a non-empty string', SCOPE_CODE);
+  }
+  return (record) => section(record.section) &&
+    (repoIdentity === undefined || record.repoIdentity === repoIdentity) &&
+    // Records without a creation time are never pruned by age.
+    (cutoff === undefined || (typeof record.createdAt === 'number' && record.createdAt < cutoff));
+}
+
+async function rebuildSegment(storeRoot, records) {
+  const target = path.join(storeRoot, SEGMENT_NAME);
+  const tmp = path.join(storeRoot, `${SEGMENT_NAME}.clean-${process.pid}-${Date.now()}${SEGMENT_SUFFIX}`);
+  const body = records.map((record) => `${JSON.stringify(record)}\n`).join('');
+  const handle = await fsp.open(tmp, 'wx', 0o600);
+  try {
+    await handle.writeFile(body, 'utf8');
+    await handle.sync().catch(() => {});
+  } finally {
+    await handle.close();
+  }
+  try {
+    await fsp.rename(tmp, target);
+  } catch (error) {
+    await fsp.rm(tmp, { force: true }).catch(() => {});
+    throw error;
+  }
+}
+
+/**
+ * Selectively prune machine-history or curated-memory records from the
+ * provenance store. Dry-run by default; execute needs explicit yes. Only
+ * record ids are reported. The other section, malformed records (repair's
+ * job), and records outside the repoIdentity/before filter are kept, and
+ * the segment index is rebuilt so pruned content does not linger there.
+ */
+export async function pruneProvenance(storeRoot, options = {}) {
+  if (!isPlainObject(options)) throw new CleanOpsError('options must be an object', SCOPE_CODE);
+  const target = assertTarget(options.target);
+  if (!PROVENANCE_TARGETS[target]) {
+    throw new CleanOpsError(`"${target}" is a directory target; use resolveCleanTarget`, SCOPE_CODE, { target });
+  }
+  const execute = options.execute === true;
+  if (execute && options.yes !== true) {
+    throw new CleanOpsError(options.interactive === true
+      ? 'destructive clean requires explicit confirmation (--yes)'
+      : 'non-interactive destructive clean requires explicit --yes confirmation', CONFIRMATION_CODE);
+  }
+  if (typeof storeRoot !== 'string' || !path.isAbsolute(storeRoot)) {
+    throw new CleanOpsError('the provenance store root must be an absolute path', FORBIDDEN_CODE, { storeRoot });
+  }
+  const root = await assertNotForbidden(storeRoot,
+    await forbiddenStateRoots({ repoRoot: options.repoRoot, worktreeRoot: options.worktreeRoot }));
+  const matches = provenanceMatcher(target, options);
+  const handle = { scope: 'machine', root, repoRoot: options.repoRoot, worktreeRoot: options.worktreeRoot };
+  const store = openProvenanceStore(root, { isAlive: options.isAlive });
+  const scan = async () => {
+    const { records, skipped } = await store.readAll();
+    const pruned = records.filter(matches);
+    return { records, pruned, kept: records.length - pruned.length, skipped: skipped.length };
+  };
+  const report = (scanned, extra) => ({
+    target, scope: 'machine', root, dryRun: !execute,
+    recordCount: scanned.pruned.length, records: scanned.pruned.map(({ id }) => id).sort(),
+    kept: scanned.kept, skipped: scanned.skipped, ...extra,
+  });
+  if (!execute) return report(await scan(), { executed: false, removed: [] });
+  try {
+    return await store.withLock(async () => {
+      const scanned = await scan();
+      const removed = [];
+      for (const { id } of scanned.pruned) {
+        const relative = path.join(LOG_DIRNAME, `${id}.json`);
+        await removeStatePath(handle, relative, { scope: 'machine' });
+        removed.push(id);
+      }
+      if (removed.length) {
+        const gone = new Set(removed);
+        await rebuildSegment(root, scanned.records.filter(({ id }) => !gone.has(id)));
+      }
+      return report(scanned, { executed: true, removed: removed.sort() });
+    });
+  } catch (error) {
+    if (error instanceof RepoLockError && error.code === 'E_LOCK_HELD') {
+      throw new CleanOpsError('the provenance store is locked by an active writer; refusing to prune until it finishes',
+        LOCK_CODE, { locks: [{ name: LOCK_NAME, holder: error.holder ?? null }] });
+    }
+    throw error;
+  }
+}
+
+export function formatProvenanceReport(report) {
+  if (!isPlainObject(report)) throw new CleanOpsError('formatProvenanceReport requires a pruneProvenance result object', SCOPE_CODE);
+  const lines = [
+    `mode: ${report.dryRun ? 'dry-run (nothing deleted; rerun with --execute --yes to delete)' : 'destructive'}`,
+    `target: ${report.target}`,
+    `store root: ${report.root}`,
+    `records: ${report.recordCount}`,
+    ...report.records.map((id) => `  - record ${id}`),
+    `kept: ${report.kept}`,
+  ];
+  if (report.skipped) lines.push(`skipped malformed: ${report.skipped} (run history repair)`);
   if (report.executed) lines.push(`removed: ${report.removed.length}`);
   return `${lines.join('\n')}\n`;
 }
