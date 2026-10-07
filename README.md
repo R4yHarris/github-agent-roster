@@ -161,7 +161,7 @@ cd github-agent-roster
 
 For an existing checkout, run `git submodule update --init --recursive`.
 The submodule at [`vendor/github-agent-contracts`](vendor/github-agent-contracts)
-is pinned to the fail-closed `v0.2.1`; do not copy or rewrite its source.
+is pinned to the latest reviewed contracts commit; do not copy or rewrite its source.
 Run `roster doctor` from the target repository root to check Node 20,
 the contracts publisher, App variable presence, policy, and trailer workflow.
 It is offline, prints no App values or key paths, and exits nonzero when
@@ -259,5 +259,5 @@ templates/sdlc/   renderer templates and expanded manual handoff forms
 tests/            Node test suite and fixtures
 docs/             architecture, SDLC, seats, run loop, metrics
 AGENTS.md         harness contract
-vendor/github-agent-contracts/  required contracts submodule (v0.2.1)
+vendor/github-agent-contracts/  required contracts submodule (latest reviewed commit)
 ```

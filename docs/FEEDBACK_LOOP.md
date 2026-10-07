@@ -86,7 +86,7 @@ the coder record on the code commit.
 
 A configured model must retain its served ID. **An unknown model is a broken
 trail, not a model value to recommend.** Model-free stub runs omit AI-Run.
-The pinned contracts `v0.2.1` provider catalog encodes vLLM as `local`, not
+The pinned contracts provider catalog encodes vLLM as `local`, not
 the unsupported literal `vllm`; no contracts source is rewritten. See
 [metrics](METRICS.md) for the exact fields. The SDK's required AI-Model
 trailer also fails closed without a real model ID.

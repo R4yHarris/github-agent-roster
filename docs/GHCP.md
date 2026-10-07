@@ -33,7 +33,7 @@ code and result yourself before using the manual handoff.
 For an explicitly requested, reviewed GHCP change, when `GITHUB_APP_ID` and
 `GITHUB_APP_PRIVATE_KEY_PATH` are set, publish only through the contracts
 script from the **current feature worktree's repository root**. Initialize the
-pinned fail-closed `v0.2.1` submodule there if needed, following the
+pinned fail-closed contracts submodule there if needed, following the
 [dependency guide](DEPENDENCY.md):
 
 GHCP sessions set the real model explicitly before publication. In PowerShell:
@@ -94,3 +94,10 @@ or `git push` with human credentials to publish. If
 `--merge-when-green` fails with HTTP 422, stop and report that Checks
 permission is not accepted on the installation. Do not use a workaround or
 fall back to human credentials.
+
+For project-management or deployment reads, update the GitHub App installation
+with only the required read permissions (`actions`, `deployments`,
+`environments`, `variables`, and/or `repository_projects` or
+`organization_projects`). The contracts publisher validates these optional
+scopes; the local policy remains default-deny for capabilities and does not
+grant API permissions.

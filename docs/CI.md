@@ -20,7 +20,7 @@ Do not detach to the base revision before invoking the composite action.
 Doing so previously selected an older local checker without its
 `parse-agent-run.mjs` dependency and failed before checking trailers.
 Full history is required for the `base..head` commit range, and the
-recursive checkout supplies the fail-closed `v0.2.1` contracts submodule. The tests
+recursive checkout supplies the latest reviewed fail-closed contracts submodule. The tests
 job runs `node --test tests/*.test.mjs` on Node 20 independently of the
 trailer check.
 

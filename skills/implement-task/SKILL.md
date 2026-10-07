@@ -66,7 +66,7 @@ passing result alone does not prove unrelated acceptance checks.
 ## Publication boundary
 
 Once acceptance is met, use the [contracts dependency guide](../../docs/DEPENDENCY.md).
-The required submodule is pinned to `v0.2.0`; do not copy its source or change
+The required contracts submodule is pinned to the reviewed dependency commit; do not copy its source or change
 human-owned policy. Respect any task prohibition on dependency-directory writes.
 
 When `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_PATH` are set, publish from the

@@ -2,7 +2,7 @@
 
 Roster uses Node 20+ ESM, Git, and `gh`; it has no runtime npm dependencies.
 For the complete task loop and App publication, install from a persistent
-source checkout with its pinned fail-closed `v0.2.1` contracts submodule:
+source checkout with its pinned fail-closed contracts submodule:
 
 ## Windows PowerShell
 
@@ -161,3 +161,9 @@ The SDK enforces reviewed policy and required checks; do not edit
 `agent-policy.yml` or `.github/workflows/*` to bypass a denial. See
 [trailer CI](CI.md), the [interactive shell](REPL.md), and the
 [GitHub board](BOARD.md).
+
+The GitHub App manifest may grant read-only `actions`, `deployments`,
+`environments`, `variables`, and project permissions when the installation
+needs project-management or deployment inspection. These App permissions are
+separate from the human-owned `agent-policy.yml`; keep the policy default-deny
+and request only the scopes required by the task.

@@ -4,8 +4,9 @@
 provides identity, policy, trailers, and the publishing script. This repository
 requires it as the Git submodule at
 [`vendor/github-agent-contracts`](../vendor/github-agent-contracts), pinned to
-tag `v0.2.1`, which refuses missing or unknown model IDs. Keep the submodule
-pointer; do not copy contracts source into this
+the latest reviewed upstream commit, which refuses missing or unknown model IDs
+and validates optional orchestration permissions. Keep the submodule pointer; do
+not copy contracts source into this
 repository or rewrite files inside the submodule.
 
 ## Checkout
@@ -90,6 +91,15 @@ An absent or invalid ID aborts with `set model` before invoking the SDK.
 Completed runs retain the actual coder model even if configuration changes.
 Model-free preparation and stub runs report that publication is unavailable
 rather than printing a runnable model-free command.
+
+The contracts publisher keeps its core installation token narrow. For approved
+read-only project-management or deployment inspection, the caller may request
+additional installation permissions for `actions: read`, `deployments: read`,
+`environments: read`, `variables: read`, and
+`repository_projects: read` or `organization_projects: read`. These are GitHub
+App installation permissions, not entries in the local `agent-policy.yml`;
+organization project access is installation-wide. Request only the scopes the
+operation needs.
 
 Roster-generated messages include `## Model`, `## Summary`, and how to test,
 plus a non-closing issue reference when applicable. For direct SDK publication,
