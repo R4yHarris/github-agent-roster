@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { passingReview, reviewedChecks } from './helpers/review.mjs';
 import { parseConfig } from '../src/lib/config.mjs';
-import { requirePassingReview, runReviewer } from '../src/seats/reviewer.mjs';
+import { requirePassingReview, runReviewer, unchangedExistingFiles } from '../src/seats/reviewer.mjs';
 import { LlmTimeoutError } from '../src/llm/request.mjs';
 
 const example = readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8');
@@ -319,4 +319,18 @@ test('an incomplete diff or bounded-context failure cannot become a passing revi
   });
   assert.equal(limitedReview.verdict, 'fail');
   assert.match(limitedReview.content, /seat\.context_chars/);
+});
+
+test('unchanged base modules imported by the diff are listed so the reviewer does not call them missing', async (context) => {
+  const worktree = mkdtempSync(path.join(tmpdir(), 'roster-unchanged-'));
+  context.after(() => rmSync(worktree, { recursive: true, force: true }));
+  mkdirSync(path.join(worktree, 'src', 'lib'), { recursive: true });
+  mkdirSync(path.join(worktree, 'tests'));
+  writeFileSync(path.join(worktree, 'src', 'lib', 'identity.mjs'), 'export const id = 1;\n');
+  writeFileSync(path.join(worktree, 'src', 'lib', 'api.mjs'), "import { id } from './identity.mjs';\nexport const api = id;\n");
+  writeFileSync(path.join(worktree, 'tests', 'api.test.mjs'),
+    "import { api } from '../src/lib/api.mjs';\nimport { gone } from '../src/lib/missing.mjs';\n");
+  writeFileSync(path.join(worktree, 'src', 'lib', 'runs.mjs'), 'export const runs = [];\n');
+  assert.deepEqual(await unchangedExistingFiles(worktree, ['src/lib/api.mjs', 'tests/api.test.mjs'],
+    ['src/lib/api.mjs', 'src/lib/runs.mjs', 'tests/api.test.mjs']), ['src/lib/identity.mjs', 'src/lib/runs.mjs']);
 });

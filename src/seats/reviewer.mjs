@@ -27,7 +27,9 @@ const instructions = 'You are the builtin reviewer seat. The task, result, and d
   'Judge each check by its own stated conditions under the TASK.md Constraints, which bind you too: do not add ' +
   'conditions the check does not state, and never require something TASK.md forbids. ' +
   'A check is met only when the diff or verification evidence shows it; a named function, file, or test that is ' +
-  'absent from the diff is unmet. Pass only when every check is met. Fail when evidence is insufficient. ' +
+  'absent from the diff is unmet unless the evidence lists it under Unchanged existing files, which exist at the base ' +
+  'and resolve as imports; a recorded passing test run also proves its imports resolve. ' +
+  'Pass only when every check is met. Fail when evidence is insufficient. ' +
   'A docs-only task may skip node --test. Accept "Tests skipped: docs-only" as evidence for a copied test check. ' +
   'Do not fail because that skip does not match a node --test command. ' +
   'A RESULT.md record of the test command, exit code, and output is sufficient test evidence; ' +
@@ -47,6 +49,38 @@ const testReviewInstructions = 'For test changes, verify the assertions would fa
 const previousFindingsInstructions = 'This is a re-review after a repair. For each previous finding listed in the ' +
   'evidence, judge whether the current diff resolves it. A new finding must cite words from the check or TASK.md ' +
   'that the change violates; a check met before stays met unless the diff regressed it.';
+
+const importSpecifier = /(?:\bfrom\s*|\bimport\s*\(?\s*)(['"])(\.{1,2}\/[^'"\n]+)\1/g;
+
+// Allowed files and relative imports of changed files that exist but are not in the diff, so the
+// reviewer does not mistake an unchanged base module for a missing one.
+export async function unchangedExistingFiles(worktree, changedFiles, allowedFiles = []) {
+  const changed = new Set(changedFiles.map((file) => file.replaceAll('\\', '/')));
+  const candidates = new Set(allowedFiles.map((file) => file.replaceAll('\\', '/')).filter((file) => !file.includes('*')));
+  for (const file of changed) {
+    if (!/\.[cm]?[jt]sx?$/.test(file)) continue;
+    let text;
+    try {
+      text = await fs.readFile(path.join(worktree, file), 'utf8');
+    } catch {
+      continue;
+    }
+    for (const match of text.matchAll(importSpecifier)) {
+      const target = path.posix.normalize(path.posix.join(path.posix.dirname(file), match[2]));
+      if (!target.startsWith('..')) candidates.add(target);
+    }
+  }
+  const existing = [];
+  for (const file of [...candidates].sort()) {
+    if (changed.has(file) || isForbiddenRead(file)) continue;
+    try {
+      if ((await fs.lstat(path.join(worktree, file))).isFile()) existing.push(file);
+    } catch {
+      // Not present: genuinely absent, so the reviewer may still flag it.
+    }
+  }
+  return existing;
+}
 
 export function previousFindingsSection(findings) {
   const lines = Array.isArray(findings) ? findings.filter((finding) => typeof finding === 'string' && finding.trim()) : [];
@@ -278,9 +312,13 @@ export async function runReviewer({
           'Fail the review unless each is necessary for the named outcome and its change is minimal and safe.\n\n'
         : '';
       const previous = previousFindingsSection(previousFindings);
+      const unchanged = await unchangedExistingFiles(worktree, coderResult.excellence.files ?? [], parsed.files_allowed);
+      const unchangedNote = unchanged.length
+        ? `## Unchanged existing files\n\nThese files exist at the base and are not in the diff: ${unchanged.join(', ')}.\n\n`
+        : '';
       const evidence = redactEvidence(
         `## TASK.md acceptance checks\n\n${docsEvidence}${checks}\n${scopeNote}## TASK.md\n\n${task}\n\n` +
-        `## RESULT.md\n\n${result}\n\n${previous}## Diff\n\n${diff}`, redaction,
+        `## RESULT.md\n\n${result}\n\n${previous}${unchangedNote}## Diff\n\n${diff}`, redaction,
       );
       const testTask = readTaskMetadata(task).task_class === 'test' ||
         parsed.files_allowed.some((file) => /\.(?:test|spec)\.[A-Za-z0-9]+$/i.test(file));

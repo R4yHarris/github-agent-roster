@@ -17,6 +17,9 @@ RESULT.md output. A `pass` that omits any check gets one corrective retry,
 then fails. Any `met: false` turns the verdict to `fail` with
 `Check N unmet: …` reasons, whatever the model's summary says. REVIEW.md lists
 each judged check under `## Acceptance checks`.
+The evidence also lists `## Unchanged existing files`: allowed files and
+relative imports of changed files that exist at the base but are not in the
+diff, so an unchanged module is not judged missing.
 
 A completed semantic review that fails is feedback, not a terminal verdict.
 `roster run` returns its findings to a fresh coder context (`Review repair N
