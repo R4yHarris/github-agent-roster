@@ -23,3 +23,9 @@ Use before the first edit and before touching an unfamiliar task-allowed file.
 
 Proceed only when the affected behavior and verification are understood.
 Stop and report a blocker if safe inspection or the allowed scope is insufficient.
+
+## Enforced by tools
+
+- `write_file` refuses to replace an existing code file you have not read; read it, or use `edit_file`.
+- Creating a new `src` module requires a search first (`search_text`, `glob_files`, or `list_dir`) and a read of every earlier-wave module.
+  Extend what exists instead of writing a parallel implementation.

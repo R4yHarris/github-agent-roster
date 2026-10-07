@@ -495,9 +495,13 @@ export async function createTools({
   scopeExpansion = 0,
   initialScopeFiles = [],
   initialRepairFiles = [],
+  requiredReads = [],
 } = {}) {
   if (!['planner', 'coder'].includes(seat)) throw new TypeError('Only planner and coder seats have file tools');
   if (initialRepairFiles.length && seat !== 'coder') throw new TypeError('Repair scope requires a coder seat');
+  if (!Array.isArray(requiredReads) || requiredReads.some((file) => typeof file !== 'string')) {
+    throw new TypeError('Required reads must be a list of worktree paths');
+  }
   if (!Number.isSafeInteger(scopeExpansion) || scopeExpansion < 0 || scopeExpansion > 16 ||
       scopeExpansion && seat !== 'coder') {
     throw new TypeError('Scope expansion requires a coder seat and a 0-16 file limit');
@@ -563,7 +567,8 @@ export async function createTools({
   }
 
   function readable(file, directory = false) {
-    if (!sliceReadsOnly || file === 'TASK.md' || isAllowedFile(file, scopedFiles()) || importedByAllowed(file)) return true;
+    if (!sliceReadsOnly || file === 'TASK.md' || isAllowedFile(file, scopedFiles()) || importedByAllowed(file) ||
+      requiredReads.includes(file)) return true;
     return false;
   }
 
@@ -746,6 +751,29 @@ export async function createTools({
 
   const plannerWrites = new Map();
   const searchedUrls = new Set();
+  // Enforced, not prompted: coders overwrote modules unread and created parallel ones without searching (#284-#286).
+  const seenKey = (file) => process.platform === 'win32' ? file.toLowerCase() : file;
+  const seenFiles = new Set();
+  let searched = false;
+  function requireSeen(normalized, existing) {
+    if (seat !== 'coder') return;
+    if (existing && /\.[cm]?[jt]sx?$/.test(normalized) && !seenFiles.has(seenKey(normalized))) {
+      throw new ToolUsageError(`Read ${normalized} with read_file before replacing it with write_file; ` +
+        'use edit_file for targeted changes to the current file.');
+    }
+    if (!existing && /^src\/.+\.[cm]?js$/.test(normalized)) {
+      // Slice-only and one-file tasks have search tools withheld; their planner already chose the files.
+      if (!searched && !sliceReadsOnly && allowedFiles.length > 1) {
+        throw new ToolUsageError(`Before creating ${normalized}, use search_text, glob_files, or list_dir to find any ` +
+          'existing module that already provides this behavior. Extend existing modules instead of creating a parallel implementation.');
+      }
+      const unread = requiredReads.filter((file) => !seenFiles.has(seenKey(file)));
+      if (unread.length) {
+        throw new ToolUsageError(`Before creating ${normalized}, read the modules earlier waves delivered: ${unread.join(', ')}. ` +
+          'Import and extend them instead of re-implementing their behavior.');
+      }
+    }
+  }
   function publicHttpsUrl(value) {
     let target;
     try { target = new URL(value); } catch { throw new ToolAccessError('web_fetch requires an https URL'); }
@@ -796,6 +824,7 @@ export async function createTools({
       if (isRepoMap(relative.split(path.sep).join('/')) && entry.nlink !== 1) throw new Error('Repo map must be a single-link file');
       await checkParent(file);
       const text = await fs.readFile(file, 'utf8');
+      seenFiles.add(seenKey(relative.split(path.sep).join('/')));
       const lines = text.split(/\r?\n/);
       const start = args.offset === undefined ? 0 : args.offset - 1;
       const slice = lines.slice(start, args.max_lines === undefined ? undefined : start + args.max_lines);
@@ -822,6 +851,7 @@ export async function createTools({
         throw error;
       });
       if (existing && !existing.isFile()) throw new Error('write_file requires a regular file');
+      requireSeen(normalized, existing);
       if (expanded) await recordExpansion(normalized);
       if (seat === 'coder') await beforeWrite?.({ path: normalized, allowedFiles: scopedFiles() });
       let content = args.content;
@@ -869,6 +899,7 @@ export async function createTools({
         await handle.close();
       }
       if (readmeOnlyDocs && normalized === 'README.md') readmeWritten = true;
+      seenFiles.add(seenKey(normalized));
       return { path: normalized, bytes: Buffer.byteLength(content, 'utf8'), ...expansionNote(normalized) };
     },
 
@@ -911,6 +942,7 @@ export async function createTools({
       if (seat === 'coder') await beforeWrite?.({ path: normalized, allowedFiles: scopedFiles() });
       if (await fs.readFile(file, 'utf8') !== text) throw new Error('edit_file target changed during the edit');
       await fs.writeFile(file, content, 'utf8');
+      seenFiles.add(seenKey(normalized));
       return { path: normalized, replacements: 1, ...expansionNote(normalized) };
     },
 
@@ -967,6 +999,7 @@ export async function createTools({
       if (typeof args.pattern !== 'string' || !args.pattern || /[\r\n\0]/.test(args.pattern)) {
         throw new TypeError('glob_files pattern must be a nonempty single-line string');
       }
+      searched = true;
       const expression = new RegExp(`^${args.pattern.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*')}$`);
       const found = [];
       async function visit(input) {
@@ -1015,6 +1048,7 @@ export async function createTools({
       argumentsFor(args, [], ['path']);
       if (readmeOnlyDocs) throw new ToolUsageError('README-only docs task does not allow directory listing');
       const { file, relative, normalized } = locate(args.path ?? '.', { directory: true });
+      searched = true;
       if (relative) await checkComponents(relative);
       const entry = await fs.lstat(file);
       if (!entry.isDirectory()) throw new Error('list_dir requires a directory');
@@ -1133,6 +1167,7 @@ export async function createTools({
       if (readmeOnlyDocs) {
         throw new ToolUsageError('README-only docs task does not allow repository search; read README.md directly');
       }
+      searched = true;
       const matches = [];
       async function visit(input) {
         const { file, relative, normalized } = locate(input, { directory: true });

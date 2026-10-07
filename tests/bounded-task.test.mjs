@@ -132,7 +132,9 @@ test('an identical rewrite with green tests gets one no-progress correction and 
         }] });
       }
       if (calls === 4) assert.equal(body.messages.at(-1).content, options.source);
-      if (calls === 1 || calls === 4) return completion('tool_calls', { role: 'assistant', tool_calls: [{
+      if (calls === 1 || calls === 4) return completion('tool_calls', { role: 'assistant', tool_calls: [
+        ...calls === 1 ? [{ id: 'read-1', type: 'function', function: { name: 'read_file',
+          arguments: JSON.stringify({ path: 'tests/summary.test.mjs' }) } }] : [], {
         id: `write-${calls}`, type: 'function', function: { name: 'write_file',
           arguments: JSON.stringify({ path: 'tests/summary.test.mjs', content: calls === 1 ? options.original : updated }) },
       }] });

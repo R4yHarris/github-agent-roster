@@ -399,7 +399,8 @@ test('an issue-176-shaped planner response reaches coder, real tests, and review
       coderCalls += 1;
       assert.match(system, /smoke\.test\.mjs/);
       return Response.json({ model: 'served-coder', choices: [{ finish_reason: coderCalls === 1 ? 'tool_calls' : 'stop',
-        message: coderCalls === 1 ? { role: 'assistant', tool_calls: [{ id: 'regression', type: 'function', function: {
+        message: coderCalls === 1 ? { role: 'assistant', tool_calls: [{ id: 'read', type: 'function', function: {
+          name: 'read_file', arguments: JSON.stringify({ path: 'smoke.test.mjs' }) } }, { id: 'regression', type: 'function', function: {
           name: 'write_file', arguments: JSON.stringify({ path: 'smoke.test.mjs', content }),
         } }] } : { role: 'assistant', content: 'Added the scoped smoke regression.' },
       }] });

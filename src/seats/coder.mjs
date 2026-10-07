@@ -79,6 +79,7 @@ export async function runCoder({
       scopeExpansion: config.seat.scope_expansion ?? 3,
       initialScopeFiles: [...scopeFiles],
       initialRepairFiles: [...repairFiles],
+      requiredReads: priorWaveFiles.filter((file) => /\.[cm]?js$/.test(file)),
       beforeWrite: lstatSync(path.join(worktree, '.git'), { throwIfNoEntry: false })
         ? async ({ allowedFiles }) => {
           try {
