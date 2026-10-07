@@ -8,3 +8,4 @@ A docs-only or README-only change does not run `node --test`. A code change runs
 - Redirects are followed manually, at most three hops, and only to the same host. Each hop is checked again. Private, link-local, and localhost targets are refused.
 - Only `text/html` and `text/plain` are read, and only up to 256 KiB. The returned text is marked untrusted.
 - A task that asks for web research does not receive `run_command`.
+- The coder receives `run_command` only when TASK.md names `run_command`, `git status`, or `git diff` (and asks for no web research), or when `seat.tools` lists it. Web tools still need both `tools.internet` and the tool named in TASK.md. The coder's first live log line records the offered toolset (`toolset read_file,write_file,...`).

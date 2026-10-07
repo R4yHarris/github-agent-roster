@@ -56,6 +56,18 @@ test('a served-model alias is logged and explained without other event fields', 
   assert.doesNotMatch(readFileSync(logger.path, 'utf8'), /PRIVATE_PROMPT/);
 });
 
+test('the offered coder toolset is logged by name; an unknown tool name is skipped', async (t) => {
+  const options = fixture(t);
+  const logger = await createRunLog(options);
+  await logger.seat('coder', options.session, config, async (onEvent) => {
+    await onEvent({ type: 'toolset', tools: ['read_file', 'write_file', 'run_test'], body: 'PRIVATE_PROMPT' });
+    const status = await readLastRunLog(options);
+    assert.match(status.lastLine, /seat coder toolset read_file,write_file,run_test$/);
+    await onEvent({ type: 'toolset', tools: ['shell_exec'] });
+  });
+  assert.doesNotMatch(readFileSync(logger.path, 'utf8'), /PRIVATE_PROMPT|shell_exec/);
+});
+
 test('each valid test repair logs its exact attempt while an out-of-budget event is skipped', async (t) => {
   const options = fixture(t);
   const logger = await createRunLog(options);
