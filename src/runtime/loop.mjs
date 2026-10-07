@@ -587,7 +587,13 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
           : content });
         if (call.function.name === 'web_search') webSearchDone = true;
         if (call.function.name === 'web_fetch') webFetchDone = true;
-        if (['write_file', 'edit_file'].includes(call.function.name)) usageDenials.clear();
+        if (['write_file', 'edit_file'].includes(call.function.name)) {
+          usageDenials.clear();
+          // A saved change is convergence: later verification reads start a fresh exploration window.
+          if (progress.writeForced) attemptTurns = 0;
+          progress.writeForced = false;
+          progress.writeForcedAgain = false;
+        }
         if (['write_file', 'edit_file'].includes(call.function.name) &&
             result.path === singleAllowedFile) {
           wroteSingleAllowedFile = true;
