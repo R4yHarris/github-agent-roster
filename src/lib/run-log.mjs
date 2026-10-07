@@ -99,6 +99,8 @@ export async function createRunLog({
     if (event.type === 'tool-refused') return 'Refused: outside the worktree.';
     if (event.type === 'test-repair') return `Tests failed. Repair ${event.attempt} of ${event.budget}.`;
     if (event.type === 'checklist' && event.open) return `Coder tried to finish with ${event.total - event.done} open checklist items.`;
+    if (event.type === 'shadow-modules' && event.findings) return `${event.findings} new exports duplicate existing modules; one repair before review.`;
+    if (event.type === 'review-e2e' && event.failures) return `Reviewer end-to-end run found ${event.failures} failing CLI paths; review fails.`;
     if (event.type === 'self-review' && event.status === 'findings') return `Self-review found ${event.unmet} unmet checks and ${event.findings} findings; one repair before review.`;
     if (event.type === 'red-green' && event.notRed) return `${event.notRed} new tests already pass on the base revision (not red).`;
     if (event.type === 'timeout') return 'The model did not answer in time. It may still be waking.';
@@ -167,6 +169,22 @@ export async function createRunLog({
           throw new TypeError('Invalid live red-green event');
         }
         return `red-green ${event.status} tests=${event.tests} not-red=${event.notRed}`;
+      case 'shadow-modules':
+        if (!['none', 'checked', 'flagged', 'unavailable'].includes(event.status) || !Number.isSafeInteger(event.findings) || event.findings < 0) {
+          throw new TypeError('Invalid live shadow-modules event');
+        }
+        return `shadow-modules ${event.status} findings=${event.findings}`;
+      case 'review-e2e':
+        if (!['pass', 'fail'].includes(event.status) ||
+            ![event.commands, event.failures].every((value) => Number.isSafeInteger(value) && value >= 0)) {
+          throw new TypeError('Invalid live review-e2e event');
+        }
+        return `review-e2e ${event.status} commands=${event.commands} failures=${event.failures}`;
+      case 'review-reads':
+        if (![event.count, event.refused].every((value) => Number.isSafeInteger(value) && value >= 0)) {
+          throw new TypeError('Invalid live review-reads event');
+        }
+        return `review-reads count=${event.count} refused=${event.refused}`;
       case 'self-review':
         if (!['clean', 'findings', 'unavailable'].includes(event.status) ||
             ![event.unmet, event.findings, event.ms, event.input, event.output].every((value) => Number.isSafeInteger(value) && value >= 0)) {
@@ -357,6 +375,9 @@ export async function readLastRunLog({
       /^completion finish_reason=(?:null|"stop"|"tool_calls")$/.test(value) ||
       /^checklist \d+\/\d+(?: open-at-finish)?$/.test(value) ||
       /^red-green (?:checked|none|exempt|skipped|unavailable) tests=\d+ not-red=\d+$/.test(value) ||
+      /^shadow-modules (?:none|checked|flagged|unavailable) findings=\d+$/.test(value) ||
+      /^review-e2e (?:pass|fail) commands=\d+ failures=\d+$/.test(value) ||
+      /^review-reads count=\d+ refused=\d+$/.test(value) ||
       /^self-review (?:clean|findings|unavailable) unmet=\d+ findings=\d+ ms=\d+ in=\d+ out=\d+$/.test(value);
     if (!parsed || !validMetadata(parsed[2]) || /[\x00-\x1f\x7f]/.test(lastLine) ||
         Buffer.byteLength(lastLine) > maximumLineBytes) {

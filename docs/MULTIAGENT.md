@@ -89,7 +89,10 @@ See [opt-in routing](ROUTING.md) for the source and context constraints.
    refuses publication if either changed.
 4. After the coder writes RESULT.md, the reviewer session
    `roster-N-reviewer` reads the acceptance checks, the report, and the
-   task-allowed diff. It has no app-code tools; a `write_file` request fails.
+   task-allowed diff. It cannot write: it may only ask the harness for
+   read-only `read_file`, `search_text`, and `git_diff` answers, and a
+   `write_file` request is refused. The harness also runs the read-only
+   `roster` commands the checks name ([verifying reviewer](SWE_LIFECYCLE.md#verifying-reviewer)).
    The harness writes REVIEW.md with pass/fail reasons and security notes.
    A stub or missing evidence fails, preserving the coder's diff. The
    [review gate](REVIEW.md) blocks publication by default on a failed or
