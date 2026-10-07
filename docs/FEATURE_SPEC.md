@@ -73,6 +73,7 @@ These are product law, not prompts.
 ## 4. Lifecycle the harness must run
 
 Map every ask onto a delivery path a good engineering manager already knows.
+[SWE_LIFECYCLE.md](SWE_LIFECYCLE.md) breaks these steps into seat turns, artifacts and gates.
 
 1. Intake. Classify the ask: question, slice, story, epic, incident. Refuse unbounded work.
 2. Estimate. Difficulty, expected minutes, files, risk, test plan. Record the estimate before coding.
