@@ -231,9 +231,14 @@ submodule content is copied into that worktree, so missing dependencies cannot m
 regression look pre-existing. A test
 that passes at base is a regression this change caused: it becomes a repair
 file the coder must fix, by updating the test to the intended new behavior or
-by fixing the implementation. Only failures that also fail at base, or flakes,
-are reported as pre-existing and left alone. If the base check cannot run, all
-outside failures are treated as pre-existing, as before.
+by fixing the implementation. Only failures that also fail at base are
+reported as pre-existing and left alone. A flake is transient, not pre-existing:
+when every failure is an outside file that passes alone (a timeout or
+cancellation under full-suite load), the run counts as green with
+`transient_files`, the original `full_suite_exit_code`, and a stderr note, so
+the coder is not steered around a failure that does not exist. If the base
+check cannot run, outside failures that did not pass alone are treated as
+pre-existing, as before.
 `run_test` returns `failing_files` (what failed in this run) separately from
 the cumulative `repair_files` write grant. Classification uses the current
 failures, so a test the coder already fixed cannot block the pre-existing-only

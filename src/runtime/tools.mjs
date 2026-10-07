@@ -708,11 +708,13 @@ export async function createTools({
     const checked = files.slice(0, 8);
     const preexisting = files.slice(8);
     const persistent = [];
+    // Passing alone means full-suite load or timing failed it: transient, not a pre-existing failure.
+    const transient = [];
     for (const file of checked) {
-      if (await passes(root, file, testEnv)) preexisting.push(file);
+      if (await passes(root, file, testEnv)) transient.push(file);
       else persistent.push(file);
     }
-    if (!persistent.length) return { regression_files: [], preexisting_files: preexisting };
+    if (!persistent.length) return { regression_files: [], preexisting_files: preexisting, transient_files: transient };
     const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'roster-base-'));
     const base = path.join(temp, 'base');
     const regressions = [];
@@ -731,14 +733,15 @@ export async function createTools({
     } catch (error) {
       throwIfCancelled(signal);
       await onEvent?.({ type: 'baseline-unavailable', reason: String(error.message ?? error).slice(0, 200) });
-      return { regression_files: [], preexisting_files: files };
+      return { regression_files: [], preexisting_files: files.filter((file) => !transient.includes(file)),
+        transient_files: transient };
     } finally {
       await runCommand('git', ['worktree', 'remove', '--force', base], {
         cwd: root, timeout: 120_000, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
       }).catch(() => {});
       await fs.rm(temp, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
     }
-    return { regression_files: regressions, preexisting_files: preexisting };
+    return { regression_files: regressions, preexisting_files: preexisting, transient_files: transient };
   }
 
   const plannerWrites = new Map();
@@ -1095,6 +1098,11 @@ export async function createTools({
           const outside = full && seat === 'coder'
             ? failing.filter((file) => !isAllowedFile(file, [...allowedFiles, ...scopeFiles])) : [];
           const classified = outside.length ? await classifyOutsideFailures(outside, testEnv) : {};
+          if (failing.length && classified.transient_files?.length === failing.length) {
+            const note = `Transient full-suite failure: ${failing.join(', ')} passed when rerun alone.`;
+            return { exit_code: 0, stdout: result.stdout, stderr: [result.stderr, note].filter(Boolean).join('\n'),
+              transient_files: classified.transient_files, full_suite_exit_code: result.exit_code };
+          }
           return { ...result, failing_files: failing,
             ...(repairFiles.size ? { repair_files: [...repairFiles] } : {}), ...classified };
         }
