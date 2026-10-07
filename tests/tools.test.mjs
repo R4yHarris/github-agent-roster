@@ -142,6 +142,23 @@ test('final full-suite verification separates regressions this change caused fro
   await tools.write_file({ path: 'tests/consumer.test.mjs', content: check('value === 2') });
 });
 
+test('a full-suite failure that passes when rerun alone is transient, not pre-existing', async (context) => {
+  const worktree = fixture(context);
+  mkdirSync(path.join(worktree, 'tests'));
+  writeFileSync(path.join(worktree, 'src', 'app.mjs'), 'export const value = 1;\n');
+  // Fails only on its first run, standing in for a timeout under full-suite load.
+  writeFileSync(path.join(worktree, 'tests', 'flaky.test.mjs'), "import test from 'node:test';\n" +
+    "import { existsSync, writeFileSync } from 'node:fs';\n" +
+    "test('flaky', () => { if (!existsSync('flaky.marker')) { writeFileSync('flaky.marker', ''); throw new Error('load'); } });\n");
+  const tools = await createTools({ worktree, allowedFiles: ['src/app.mjs'] });
+  const full = await tools.run_test({}, { full: true });
+  assert.equal(full.exit_code, 0);
+  assert.equal(full.full_suite_exit_code, 1);
+  assert.deepEqual(full.transient_files, ['tests/flaky.test.mjs']);
+  assert.equal(full.failing_files, undefined);
+  assert.match(full.stderr, /tests\/flaky\.test\.mjs passed when rerun alone/);
+});
+
 test('a killed test process with numeric exit 1 is a terminal timeout, not a repairable check', async (context) => {
   const worktree = fixture(context);
   docsCheck(worktree);

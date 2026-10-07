@@ -287,7 +287,10 @@ test('a repaired own test no longer blocks steering when only a pre-existing out
   const result = await runCoder({
     ...options, env: {},
     runTestCommand: async (program, args) => {
-      if (program === 'git' || args.length !== 4) return { stdout: '', stderr: '' };
+      if (program === 'git') return { stdout: '', stderr: '' };
+      // A pre-existing outside failure also fails when rerun alone; passing alone would make it transient.
+      if (args.length === 3) throw fail([args[2]]);
+      if (args.length !== 4) return { stdout: '', stderr: '' };
       throw fail(ownFixed() ? ['tests/outside.test.mjs'] : ['tests/app.test.mjs', 'tests/outside.test.mjs']);
     },
     fetchImpl: withResearch(async (_url, request) => {
