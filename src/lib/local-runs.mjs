@@ -5,6 +5,7 @@ import { promisify, stripVTControlCharacters } from 'node:util';
 import { parseIssueBody, validateIssueNumber } from './issue.mjs';
 import { repositoryRoot } from './learn.mjs';
 import { ensureLocalPath } from './paths.mjs';
+import { createProvenanceStore, instrumentLifecycle } from './provenance-api.mjs';
 import { readStatus } from './status.mjs';
 import { readPlannerTask, readPreviousReview } from '../seats/planner.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
@@ -15,6 +16,68 @@ import { validatedPlanTask } from '../planner/plan-mode.mjs';
 const execute = promisify(execFile);
 const samePath = (left, right) => process.platform === 'win32'
   ? path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase() : path.resolve(left) === path.resolve(right);
+
+/**
+ * Opt-out environment flag: when truthy, run/session lifecycle events are
+ * captured in memory (so the lifecycle still completes and callers observe the
+ * same event order) but no durable provenance record is written.
+ */
+export function provenanceOptOut(env = process.env) {
+  const value = env?.ROSTER_PROVENANCE_OPT_OUT ?? env?.ROSTER_PROVENANCE_DISABLED;
+  if (typeof value === 'string') return /^(1|true|yes|on)$/i.test(value.trim());
+  return value === true;
+}
+
+/**
+ * Build the typed provenance store for a local run. Identity comes from
+ * repo-identity.mjs (git common dir + origin remote hash), never from a raw
+ * path, so two repositories cannot collide and records cannot leak across
+ * repositories. Returns null when identity cannot be derived; provenance is
+ * best-effort and must never break the run lifecycle.
+ */
+export function provenanceStoreForRun({ repoRoot, env = process.env, run } = {}) {
+  if (!repoRoot) return null;
+  try {
+    return createProvenanceStore({
+      root: path.join(repoRoot, '.git', 'roster', 'provenance'),
+      repoRoot,
+      run,
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Capture a run/session lifecycle event through the typed API. Resolves to a
+ * non-durable marker when provenance is opted out or unavailable, so the
+ * lifecycle still completes either way.
+ */
+export async function captureLifecycleEvent(store, { event, runId, sessionId, payload, optOut } = {}) {
+  if (!store || optOut) {
+    return { event, runId, sessionId, durable: false };
+  }
+  try {
+    const record = await store.recordEvent({ runId, sessionId, event, payload });
+    return { ...record, durable: true };
+  } catch {
+    // Provenance capture is best-effort: a failure must never break the run.
+    return { event, runId, sessionId, durable: false };
+  }
+}
+
+/**
+ * Run/session lifecycle hooks bound to a local run. Covers all five required
+ * lifecycle cases: started, session, failure, cancellation, completed.
+ */
+export function lifecycleHooks(store, { optOut = provenanceOptOut() } = {}) {
+  const base = instrumentLifecycle(store, { optOut });
+  const hooks = {};
+  for (const event of ['started', 'session', 'failure', 'cancellation', 'completed']) {
+    hooks[event] = async (ctx = {}) => captureLifecycleEvent(store, { ...ctx, event, optOut });
+  }
+  return { ...base, ...hooks };
+}
 
 export async function registeredWorktrees(root) {
   const { stdout } = await execute('git', ['worktree', 'list', '--porcelain', '-z'], {
