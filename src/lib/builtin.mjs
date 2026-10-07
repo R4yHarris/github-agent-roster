@@ -1006,10 +1006,11 @@ async function runBuiltinAssignment(issueNumber, {
   let continuation;
   let reviewFindings = [];
   if (planner.reused) {
-    const carried = previousReviewFindings(previousReview) ??
+    const passed = (text) => /^Verdict: pass\s*$/m.test(text ?? '');
+    const carried = previousReviewFindings(previousReview) ?? (passed(previousReview) ? undefined :
       previousReviewFindings(await latestArchivedReview(worktreePath, { task: prepared.task,
         git: (args) => git(worktreePath, args, commandEnv),
-        accept: (text) => previousReviewFindings(text) !== undefined }).catch(() => null));
+        accept: (text) => previousReviewFindings(text) !== undefined, supersedes: passed }).catch(() => null)));
     if (carried) {
       continuation = reviewRepairContinuation({ ...carried,
         heading: 'Previous run: the reviewer failed the last result for this same TASK' });

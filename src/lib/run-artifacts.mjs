@@ -81,7 +81,8 @@ export async function archiveRunArtifacts(worktree, { task, git, preserve = [] }
 }
 
 // The newest archived REVIEW.md lets a rerun after an interrupted run still start from the last review findings.
-export async function latestArchivedReview(worktree, { task, git, accept = () => true }) {
+// A newer review matching `supersedes` (for example a pass) retires older ones instead of being skipped.
+export async function latestArchivedReview(worktree, { task, git, accept = () => true, supersedes = () => false }) {
   if (typeof task !== 'string' || !/^(?:issue-[1-9]\d*|local-[a-f0-9]{16})$/.test(task)) return null;
   const root = (await archiveRoot(worktree, git, task)).path;
   const entries = await fs.readdir(root).catch(() => []);
@@ -91,6 +92,7 @@ export async function latestArchivedReview(worktree, { task, git, accept = () =>
     if (!stat?.isFile() || stat.isSymbolicLink() || stat.size > 64 * 1024) continue;
     const text = await fs.readFile(file, 'utf8');
     if (accept(text)) return text;
+    if (supersedes(text)) return null;
   }
   return null;
 }
