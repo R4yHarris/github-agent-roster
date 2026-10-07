@@ -9,7 +9,9 @@ import { writeEstimate } from '../runtime/estimate.mjs';
 import { buildRun } from '../metrics/run.mjs';
 import { createTools, isForbiddenWrite, planArtifactFiles } from '../runtime/tools.mjs';
 import { ensureLocalPath } from '../lib/paths.mjs';
-import { parseTaskDocument, taskSections } from '../planner/task.mjs';
+import { parseTaskDocument, taskFilesAllowed, taskSections } from '../planner/task.mjs';
+import { deriveDesign, groundingDefinitions, groundingErrors, isCodeSlice, parseDesign, symbolIndex, withDesign }
+  from '../planner/grounding.mjs';
 import { validatePlanningReceipt } from '../planner/receipt.mjs';
 import { askKinds, classifyAsk, clarificationHint } from '../planner/classify.mjs';
 import { planOutline } from '../planner/plan.mjs';
@@ -33,6 +35,29 @@ export async function trackedRepositoryFiles(worktree) {
   } catch {
     return undefined;
   }
+}
+
+// Spec 5.3/§4.5: the slice planner sees real definitions for the Ask's nouns and cannot cite names that do not exist.
+export async function sliceGrounding(worktree, askText) {
+  const repositoryFiles = await trackedRepositoryFiles(worktree);
+  if (!repositoryFiles?.length) return undefined;
+  const [index, { related, text }] = await Promise.all([symbolIndex(worktree, repositoryFiles),
+    groundingDefinitions(worktree, repositoryFiles, askText)]);
+  return { index, related, definitions: text };
+}
+
+// Every planned code slice carries a Design; an invalid planner-written Design is replaced by a derived one.
+export function ensureDesign(task, grounding, askText) {
+  let files;
+  try { files = taskFilesAllowed(task); } catch { return task; }
+  if (!isCodeSlice(files)) return task;
+  const written = parseDesign(task);
+  const errors = written ? groundingErrors({ design: written, filesAllowed: files, askText, index: grounding.index }) : [];
+  if (written && !errors.length) return task;
+  const section = taskSections(task).sections.find(({ name }) => name === 'design');
+  const stripped = section ? task.replace(section.source, '') : task;
+  const derived = deriveDesign({ filesAllowed: files, index: grounding.index, related: grounding.related });
+  return withDesign(stripped, errors.length ? { ...derived, rejected: errors[0] } : derived);
 }
 
 function validateBuiltinRecipe(source, reference) {
@@ -172,9 +197,11 @@ export async function runPlanner({
       lastResponse = plan.response;
       await tools.write_file({ path: 'PLAN.md', content: plan.plan });
     } else if (kind === 'slice') {
+      const grounding = config.llm.base_url ? await sliceGrounding(worktree, `${title ?? ''}\n${ask}`) : undefined;
       plan = await planAsk(ask, {
-        ...options, memory, learningRoot, metadata, lockedModel, tools,
+        ...options, memory, learningRoot, metadata, lockedModel, tools, grounding,
       });
+      if (grounding && !plan.error) plan = { ...plan, task: ensureDesign(plan.task, grounding, `${title ?? ''}\n${ask}`) };
       validateBuiltinRecipe(plan.recipe, reference);
       plan = { ...plan, ...await writeEstimate(plan.task, {
         worktree, learningRoot, config, env, recommendation: plan.feedback?.recommendation,
