@@ -11,6 +11,8 @@ import {
   HISTORY_EXPORT_SCHEMA_VERSION,
   canonicalizeRecord,
   exportHistory,
+  previewScopedDeletion,
+  deleteScopedRecords,
   renderHistoryJson,
   renderHistorySummary,
 } from '../src/lib/history-export.mjs';
@@ -31,6 +33,7 @@ function makeRecord(overrides = {}) {
     issue: overrides.issue,
     seat: overrides.seat,
     payload: overrides.payload,
+    scope: overrides.scope,
   };
 }
 
@@ -182,4 +185,102 @@ test('query reader shape flows through export helpers unchanged', () => {
   assert.ok(historyFields(records[0]).repository === 'repo-1234abcd');
   const reader = createHistoryReader({ root: '/does-not-exist-must-not-be-opened' });
   assert.equal(typeof reader.read, 'function');
+});
+
+// ---------------------------------------------------------------------------
+// Scoped deletion (issue #201)
+// ---------------------------------------------------------------------------
+
+// Records spanning two state scopes, one of which carries a secret-looking
+// payload field (sentinel only; never a real credential).
+function scopedFixtures() {
+  const sentinel = 'test-only-private-api-key';
+  const records = [
+    makeRecord({ id: 'rec-machine-1', scope: 'machine', runId: 'run-m-1' }),
+    makeRecord({ id: 'rec-machine-2', scope: 'machine', runId: 'run-m-2' }),
+    makeRecord({ id: 'rec-repo-1', scope: 'repo', runId: 'run-r-1' }),
+    makeRecord({ id: 'rec-worktree-1', scope: 'worktree', runId: 'run-w-1', payload: { outcome: 'ok', api_key: sentinel } }),
+  ];
+  return { records, sentinel };
+}
+
+test('previewScopedDeletion lists exactly the in-scope records and nothing else', () => {
+  const { records } = scopedFixtures();
+  const before = JSON.stringify(records);
+  const preview = previewScopedDeletion(records, { scope: 'repo' });
+  // Input is not mutated by a preview.
+  assert.equal(JSON.stringify(records), before);
+  assert.equal(preview.scope, 'repo');
+  assert.equal(preview.count, 1);
+  // Exactly the in-scope record id, and no other scope's records.
+  assert.deepEqual(preview.records.map((entry) => entry.id), ['rec-repo-1']);
+  assert.deepEqual(preview.records.every((entry) => entry.scope === 'repo'), true);
+});
+
+test('previewScopedDeletion for one scope never lists records from another scope', () => {
+  const { records } = scopedFixtures();
+  for (const scope of ['machine', 'repo', 'worktree']) {
+    const preview = previewScopedDeletion(records, { scope });
+    const foreign = preview.records.filter((entry) => entry.scope !== scope);
+    assert.deepEqual(foreign, [], `scope ${scope} preview leaked: ${JSON.stringify(preview.records)}`);
+  }
+  const preview = previewScopedDeletion(records, { scope: 'machine' });
+  assert.deepEqual(preview.records.map((entry) => entry.id).sort(), ['rec-machine-1', 'rec-machine-2']);
+});
+
+test('deleteScopedRecords leaves records belonging to other scopes untouched', () => {
+  const { records } = scopedFixtures();
+  const snapshot = (list) => JSON.stringify(list);
+  const beforeOthers = snapshot(records.filter((record) => record.scope !== 'repo'));
+  const { remaining, audit } = deleteScopedRecords(records, { scope: 'repo' });
+  // The selected scope is gone...
+  assert.deepEqual(remaining.filter((record) => record.scope === 'repo'), []);
+  // ...and every other scope's records survive, byte-for-byte.
+  assert.equal(snapshot(remaining.filter((record) => record.scope !== 'repo')), beforeOthers);
+  // The input array is not mutated: the deleted record is still present in it.
+  assert.ok(records.some((record) => record.id === 'rec-repo-1'));
+  assert.equal(audit.scope, 'repo');
+  assert.deepEqual(audit.recordIds, ['rec-repo-1']);
+  assert.equal(audit.count, 1);
+});
+
+test('deletion audit is stamped with the injected clock and defaults to the current time, not the epoch', () => {
+  const { records } = scopedFixtures();
+  assert.equal(deleteScopedRecords(records, { scope: 'repo', now: () => '2026-10-07T00:00:00.000Z' }).audit.at,
+    '2026-10-07T00:00:00.000Z');
+  assert.ok(Date.parse(deleteScopedRecords(records, { scope: 'repo' }).audit.at) > Date.parse('2020-01-01'));
+  assert.throws(() => deleteScopedRecords(records, { scope: 'session' }), /scope in/);
+});
+
+test('audit entry never contains the original secret sentinel value', () => {
+  const { records, sentinel } = scopedFixtures();
+  const { remaining, audit } = deleteScopedRecords(records, { scope: 'worktree' });
+  const auditText = JSON.stringify(audit);
+  // The audit log output must not carry the raw secret.
+  assert.ok(!auditText.includes(sentinel), `audit leaked sentinel: ${auditText}`);
+  // If a secret field is referenced at all, only the redacted form appears.
+  const entry = audit.records.find((record) => record.id === 'rec-worktree-1');
+  assert.ok(entry, 'audit must reference the deleted record');
+  const entryText = JSON.stringify(entry);
+  assert.ok(!entryText.includes(sentinel), `audit entry leaked sentinel: ${entryText}`);
+  if (entry.summary?.api_key !== undefined) {
+    assert.equal(entry.summary.api_key, '[REDACTED]');
+  }
+  // The worktree record itself is deleted from the remaining set.
+  assert.deepEqual(remaining.map((record) => record.id).sort(), ['rec-machine-1', 'rec-machine-2', 'rec-repo-1']);
+});
+
+test('deleting/expiring one scope does not delete or alter another scope\'s records', () => {
+  const { records, sentinel } = scopedFixtures();
+  const { remaining } = deleteScopedRecords(records, { scope: 'machine' });
+  const repo = remaining.find((record) => record.id === 'rec-repo-1');
+  const worktree = remaining.find((record) => record.id === 'rec-worktree-1');
+  assert.ok(repo, 'repo-scope record must survive a machine-scope deletion');
+  assert.ok(worktree, 'worktree-scope record must survive a machine-scope deletion');
+  // Records of surviving scopes are unaltered, secret field included.
+  assert.equal(worktree.payload.api_key, sentinel);
+  // The exported render of surviving records stays valid and secret-free.
+  const json = renderHistoryJson(remaining, { exportedAt: '2025-01-01T00:00:00.000Z' });
+  const parsed = JSON.parse(json);
+  assert.deepEqual(parsed.records.map((record) => record.id).sort(), ['rec-repo-1', 'rec-worktree-1']);
 });
