@@ -35,6 +35,7 @@ export async function runCoder({
   initialRepairFiles = [],
   continuation = null,
   priorWaveFiles = [],
+  priorWrites = [],
 }) {
   const stages = [];
   const memoryPath = seatMemoryPath({
@@ -190,7 +191,7 @@ export async function runCoder({
       },
     };
     result = await runLoop({
-      config, context, tools: trackedTools, fetchImpl, env, vault, onEvent, retryCommand, signal, steeringControl,
+      config, context, tools: trackedTools, fetchImpl, env, vault, onEvent, retryCommand, signal, steeringControl, priorWrites,
       verify: async (candidate) => {
         const evidence = await checkExcellence({
           worktree, task: context.task, result: { ...candidate, scopeFiles: [...scopeFiles].sort(), repairFiles: withRepairs(candidate.repairFiles) }, baseline, memoryPath,
