@@ -98,9 +98,11 @@ test('a pack fits at the exact configured character boundary', async (context) =
   });
   assert.equal(exact.pack.length, first.pack.length);
   assert.equal(exact.truncated, false);
-  await assert.rejects(loadContext({
+  const under = await loadContext({
     ...fixture(context), config: { seat: { context_chars: first.pack.length - 1 } },
-  }), /exceed seat.context_chars/);
+  });
+  assert.ok(under.pack.length <= first.pack.length - 1);
+  assert.equal(under.truncated, true, 'optional conventions truncate before required context is refused');
 });
 
 test('prior feedback is required context, redacted, and never silently omitted to meet the budget', async (context) => {

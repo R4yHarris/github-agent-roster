@@ -20,7 +20,19 @@ The order is:
    with credential redaction and quoted retrospective comments.
 5. Only task-named skills, in task order, with their names and first 40 lines.
 6. The last 20 lines of this seat's memory, labeled as data, not instructions.
-7. The relevant file/path list from TASK.md, not a repository inventory.
+7. Rule layers, in precedence order with their source labels: human policy
+   (enforced by tools), org rules, repo rules, area rules, task rules, and the
+   seat principal ([#301](https://github.com/R4yHarris/github-agent-roster/issues/301)).
+8. [Conventions](../src/runtime/conventions.mjs) derived deterministically from
+   the worktree: language and module system, package manager and runtime
+   dependency count, test runner, directory and file shape, file and export
+   naming, lint/format config, the largest module and test, and the five
+   most-imported internal modules. Only names and counts are read; secrets,
+   managed files, dot directories, `vendor/`, and `node_modules/` are skipped.
+   The result is cached per worktree and refreshed when `HEAD` changes.
+   Layers and conventions are optional: under a tight budget they truncate
+   after memory, never before required context.
+9. The relevant file/path list from TASK.md, not a repository inventory.
 
 TASK.md may select skills using frontmatter such as
 `skills: [implement-task, run-tests]`, or an indented list under `skills:`.

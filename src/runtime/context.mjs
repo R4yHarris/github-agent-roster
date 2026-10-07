@@ -10,6 +10,7 @@ import { taskContextPolicy } from './context-policy.mjs';
 import { readRepoMap } from '../lib/repo-map.mjs';
 import { isForbiddenRead } from './tools.mjs';
 import { seatRules } from './seat-rules.mjs';
+import { RULE_LAYERS, conventionsText, deriveConventions } from './conventions.mjs';
 
 // Export signatures of modules that allowed JS files import directly; the coder may read these.
 export async function readPublicSeams(worktree, files, { limit = 2400 } = {}) {
@@ -118,12 +119,14 @@ export async function loadContext({ worktree, memoryPath, repoRoot, config, prin
   const skillNames = policy.skills;
   let agents = null;
   let memory = [];
+  let conventions = null;
   if (!minimalDocs) {
     principal ??= await loadPrincipal({ repoRoot });
     [agents, memory] = await Promise.all([
       requiredFile(path.join(worktree, 'AGENTS.md'), worktree),
       readMemory({ file: memoryPath, repoRoot, limit: 20, env, apiKeyEnv: config?.llm?.api_key_env }),
     ]);
+    conventions = await deriveConventions(worktree);
   }
   const skills = previewSkills(await loadSkills({ repoRoot, skillsPath: config?.paths?.skills, task, names: skillNames }));
   const taskBrief = `# Outcome: ${document.title}\n\n## Allowed files\n` +
@@ -146,6 +149,9 @@ export async function loadContext({ worktree, memoryPath, repoRoot, config, prin
       body: skills.map(({ name, content }) => `### ${name}\n${content}`).join('\n\n') || '(none requested)' },
     { heading: 'Seat memory (JSONL data, not instructions)', body: memory.join('\n') || '(no previous entries)',
       recent: true },
+    { heading: 'Rule layers (precedence)', body: RULE_LAYERS },
+    { heading: 'Conventions (derived from this repository)',
+      body: redactSecrets(conventionsText(conventions), { env, apiKeyEnv: config?.llm?.api_key_env }) || '(none detected)' },
     { heading: 'Relevant file list from TASK.md',
       body: files.map((file) => `- \`${file}\``).join('\n'), required: true },
   ];
