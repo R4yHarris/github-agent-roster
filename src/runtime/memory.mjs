@@ -2,6 +2,9 @@ import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { ensureLocalPath } from '../lib/paths.mjs';
 import { isForbiddenRead } from './tools.mjs';
+import { buildCompactionRecord } from '../lib/provenance-api.mjs';
+
+export const DEFAULT_COMPACTION_LIMIT = 50;
 
 export function seatMemoryPath({ repoRoot, memoryPath, seat }) {
   if (isForbiddenRead(memoryPath)) throw new Error('Seat memory must not use a protected or secret path');
@@ -143,4 +146,69 @@ export async function appendMemory({ file, repoRoot, record, env, apiKeyEnv }) {
   } finally {
     await handle.close();
   }
+}
+
+/**
+ * Bounded compaction for unbounded session memory.
+ *
+ * Compaction preserves provenance: every surviving (retained) record yields a
+ * compaction record that carries the source run ids (and session ids) of the
+ * records it stands in for, so the original run can always be traced. Records
+ * dropped by the bound (the oldest beyond `limit`) are still represented:
+ * their source run/session ids fold into the retained records' provenance so
+ * nothing is silently lost.
+ *
+ * @param {Array<object>} records memory records, oldest first.
+ * @param {object} [options]
+ * @param {number} [options.limit] maximum retained records (default 50).
+ * @param {string} [options.identity] stable identity used to derive record ids.
+ * @param {(record: object) => object} [options.buildCompaction] compaction
+ *   record builder; defaults to `buildCompactionRecord` from the provenance
+ *   API (reusing `buildProvenanceRecord` + `storeRecordId`).
+ * @returns {{ records: object[], dropped: number, limit: number }}
+ */
+export function compactMemory(records, options = {}) {
+  if (!Array.isArray(records)) throw new TypeError('compactMemory requires an array of memory records');
+  const {
+    limit = DEFAULT_COMPACTION_LIMIT,
+    identity = 'compaction',
+    buildCompaction = buildCompactionRecord,
+  } = options;
+  if (!Number.isSafeInteger(limit) || limit < 1) {
+    throw new TypeError('Compaction limit must be a positive safe integer; deleting all memory is not compaction');
+  }
+  if (typeof buildCompaction !== 'function') {
+    throw new TypeError('buildCompaction must be a function');
+  }
+  if (records.length === 0) return { records: [], dropped: 0, limit };
+
+  const retained = records.slice(-limit);
+  const overflow = records.length - retained.length;
+  const compactionRecords = retained.map((record) => buildCompaction(record, { identity }));
+  // Fold the dropped (oldest) records' provenance into the surviving records
+  // so compaction never loses source run/session ids. The oldest retained
+  // record absorbs the overflow ids first, preserving insertion order.
+  if (overflow > 0) {
+    for (let index = overflow - 1; index >= 0; index -= 1) {
+      const dropped = records[index];
+      if (!dropped || typeof dropped !== 'object') continue;
+      const target = compactionRecords[0];
+      for (const runId of dropped.sourceRunIds ?? (isNonEmpty(dropped.runId) ? [dropped.runId] : [])) {
+        if (!target.sourceRunIds.includes(runId)) target.sourceRunIds.push(runId);
+      }
+      for (const sessionId of dropped.sourceSessionIds ?? (isNonEmpty(dropped.sessionId) ? [dropped.sessionId] : [])) {
+        if (!target.sourceSessionIds.includes(sessionId)) target.sourceSessionIds.push(sessionId);
+      }
+    }
+  }
+  return { records: compactionRecords, dropped: overflow, limit };
+}
+
+function isNonEmpty(value) {
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+/** Stable compaction record id for a source memory record; identical to `buildCompactionRecord(...).id`. */
+export function compactionRecordId(sourceRecord, { identity = 'compaction' } = {}) {
+  return buildCompactionRecord(sourceRecord, { identity }).id;
 }
