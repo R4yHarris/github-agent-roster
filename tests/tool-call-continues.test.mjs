@@ -164,6 +164,39 @@ test('an explicit recipe tool list restricts automatically offered tools without
   assert.equal(result.excellence.pass, true);
 });
 
+test('a hallucinated tool gets one correction and a reused gateway call id is re-minted', async (context) => {
+  const options = fixture(context);
+  const looser = parseConfig(example.replace('base_url: ""', 'base_url: http://localhost:3456/v1')
+    .replace('model: ""', 'model: local-model'));
+  let calls = 0;
+  const result = await runCoder({ ...options, config: looser, env: {}, fetchImpl: withResearch(async (_url, request) => {
+    const body = JSON.parse(request.body);
+    calls += 1;
+    if (calls === 1) {
+      return response('tool_calls', { role: 'assistant', content: null, tool_calls: [{ id: 'call_0', type: 'function',
+        function: { name: 'read_file', arguments: JSON.stringify({ path: 'README.md' }) } }] });
+    }
+    if (calls === 2) {
+      return response('tool_calls', { role: 'assistant', content: null, tool_calls: [{ id: 'call_1', type: 'function',
+        function: { name: 'bash', arguments: JSON.stringify({ command: 'ls' }) } }] });
+    }
+    if (calls === 3) {
+      assert.match(body.messages.at(-1).content, /Tool bash does not exist\. Offered tools: .*write_file/);
+      return response('tool_calls', { role: 'assistant', content: null, tool_calls: [{ ...writeCall(), id: 'call_0' }] });
+    }
+    return response('stop', { role: 'assistant', content: 'Updated README.' });
+  }) });
+  assert.equal(result.error, undefined);
+  assert.match(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), /## Status/);
+});
+
+test('a second hallucinated tool still fails the seat and names the tool', async (context) => {
+  const options = fixture(context);
+  await assert.rejects(runCoder({ ...options, env: {}, fetchImpl: withResearch(async () =>
+    response('tool_calls', { role: 'assistant', content: null, tool_calls: [{ id: `x${Math.random()}`, type: 'function',
+      function: { name: 'bash', arguments: '{}' } }] })) }), /invalid or unavailable tool: bash/);
+});
+
 test('an explicitly empty recipe tool list denies even automatic write tools', async (context) => {
   const task = planStub('Update `README.md` with documentation.',
     { reference: 'issue:4', metadata: { task_class: 'docs', difficulty: 2 } }).task;

@@ -12,6 +12,15 @@ import { throwIfCancelled } from './cancel.mjs';
 import { SteeringInterrupt } from './steering.mjs';
 
 class MalformedCoderTools extends Error {}
+const rosterToolNames = new Set(toolDefinitions.map((tool) => tool.function.name));
+const safeToolName = (name) => String(name).replace(/[^\w.-]/g, '?').slice(0, 64);
+// A hallucinated tool (not a Roster tool at all) gets one correction; a withheld Roster tool still fails the seat.
+class UnknownCoderTool extends Error {
+  constructor(name) {
+    super(`LLM coder requested an invalid or unavailable tool: ${safeToolName(name)}`);
+    this.toolName = safeToolName(name);
+  }
+}
 export const testRepairBudget = 4;
 // Progress extends the repair budget one repair at a time, never past this cap.
 export const testRepairCap = 12;
@@ -52,10 +61,17 @@ function decodeCalls(message, offered, ids, turn) {
   }
   const batchIds = new Set(ids);
   return (message.tool_calls ?? []).map((call, index) => {
-    if (!call || call.type !== 'function' || !offered.has(call.function?.name) ||
-        call.id !== undefined && (typeof call.id !== 'string' || !call.id || batchIds.has(call.id))) {
-      throw new Error('LLM coder requested an invalid or unavailable tool');
+    const name = call?.function?.name;
+    if (call && call.type === 'function' && typeof name === 'string' && !offered.has(name) &&
+        !rosterToolNames.has(name) && offered.size) {
+      throw new UnknownCoderTool(name);
     }
+    if (!call || call.type !== 'function' || !offered.has(name) ||
+        call.id !== undefined && (typeof call.id !== 'string' || !call.id)) {
+      throw new Error(`LLM coder requested an invalid or unavailable tool${typeof name === 'string' ? `: ${safeToolName(name)}` : ''}`);
+    }
+    // Gateways may restart call ids per response; a reused id is a transport quirk, so mint a fresh one.
+    if (call.id !== undefined && batchIds.has(call.id)) call = { ...call, id: undefined };
     if (typeof call.function.arguments !== 'string') throw new MalformedCoderTools('Coder tool arguments must be a JSON string');
     let args;
     try { args = JSON.parse(call.function.arguments); }
@@ -398,6 +414,14 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       }
       needsTools = false;
     } catch (error) {
+      if (error instanceof UnknownCoderTool && !progress.unknownToolCorrected) {
+        progress.unknownToolCorrected = true;
+        needsTools = true;
+        await onEvent?.({ type: 'tool-result', name: error.toolName, status: 'denied' });
+        messages.push({ role: 'user', content: `Tool ${error.toolName} does not exist. Offered tools: ` +
+          `${[...offeredTools].join(', ')}. Continue with one offered tool call, or summarize the blocker.` });
+        continue;
+      }
       if (!(error instanceof MalformedCoderTools)) throw error;
       if (!repaired) {
         repaired = true;
