@@ -1,6 +1,8 @@
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { redactRecord } from './redaction.mjs';
 
 import {
   STATE_SCOPES,
@@ -555,11 +557,61 @@ export async function runClean(handle, options = {}) {
   };
   if (!execute) return { ...report, executed: false, removed: [] };
   await checkActiveRunLock(handle, { isAlive: options.isAlive });
+  const emit = eventSink(options.onEvent, scopeOf(handle), options.env);
   const removed = [];
+  const failed = [];
   for (const { name } of included) {
-    removed.push(await removeStatePath(handle, path.relative(root, path.join(dir, name))));
+    let code;
+    try {
+      removed.push(await removeAtomically(handle, root, path.relative(root, path.join(dir, name))));
+    } catch (error) {
+      // Keep going: one bad entry must not strand the rest of a confirmed clean.
+      code = error?.code ?? 'UNKNOWN';
+      failed.push({ name, code });
+    }
+    await emit(name, code ? 'failed' : 'removed', code);
   }
-  return { ...report, activeLocks: [], executed: true, removed };
+  const result = { ...report, activeLocks: [], executed: true, removed, failed };
+  if (failed.length) {
+    throw new CleanOpsError(`clean removed ${removed.length} and failed ${failed.length} of ${included.length} ` +
+      `entries (${failed.map(({ name, code }) => `${name}: ${code}`).join(', ')}); rerun to retry`,
+    PARTIAL_CODE, { report: result });
+  }
+  return result;
+}
+
+// Trash entries are renamed out of the way before deletion, so an interrupted
+// clean leaves either the original entry or a trash entry; never a half-deleted
+// record under its original name. Leftover trash is swept by the next clean.
+export const TRASH_PREFIX = '.roster-clean-trash-';
+
+async function removeAtomically(handle, root, relative) {
+  const { target } = await removeStatePath(handle, relative, { dryRun: true });
+  if (path.basename(target).startsWith(TRASH_PREFIX)) return removeStatePath(handle, relative);
+  const trash = path.join(path.dirname(target), `${TRASH_PREFIX}${randomUUID()}`);
+  try {
+    await fsp.rename(target, trash);
+  } catch (error) {
+    if (error.code === 'ENOENT') return { removed: false, target, dryRun: false };
+    throw error;
+  }
+  await removeStatePath(handle, path.relative(root, trash));
+  return { removed: true, target, dryRun: false };
+}
+
+// Events carry identifiers and outcomes only, never record content or paths.
+function eventSink(onEvent, scope, env) {
+  if (onEvent === undefined) return async () => {};
+  if (typeof onEvent !== 'function') throw new TypeError('onEvent must be a function');
+  return async (entry, outcome, code) => {
+    try {
+      await onEvent(redactRecord({ type: 'clean', scope, entry, outcome,
+        ...(code ? { code: String(code) } : {}) }, { env }));
+    } catch (cause) {
+      throw new CleanOpsError('cleanup logging failed after an operation; inspect state before retrying',
+        'CLEAN_OPS_LOG_FAILED', { cause });
+    }
+  };
 }
 
 export function formatCleanReport(report) {
@@ -657,22 +709,34 @@ function provenanceMatcher(target, { repoIdentity, before } = {}) {
     (cutoff === undefined || (typeof record.createdAt === 'number' && record.createdAt < cutoff));
 }
 
-async function rebuildSegment(storeRoot, records) {
+async function syncSegment(storeRoot, records) {
   const target = path.join(storeRoot, SEGMENT_NAME);
   const tmp = path.join(storeRoot, `${SEGMENT_NAME}.clean-${process.pid}-${Date.now()}${SEGMENT_SUFFIX}`);
+  const keep = new Set(records.map(({ id }) => id));
+  let current = null;
+  try {
+    current = await fsp.readFile(target, 'utf8');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  // No index means nothing stale to purge; the record files stay authoritative.
+  if (current === null) return;
+  const lineIds = current.split('\n').filter(Boolean).map((line) => {
+    try { return JSON.parse(line)?.id; } catch { return undefined; }
+  });
+  if (lineIds.every((id) => keep.has(id))) return;
   const body = records.map((record) => `${JSON.stringify(record)}\n`).join('');
   const handle = await fsp.open(tmp, 'wx', 0o600);
   try {
-    await handle.writeFile(body, 'utf8');
-    await handle.sync().catch(() => {});
-  } finally {
-    await handle.close();
-  }
-  try {
+    try {
+      await handle.writeFile(body, 'utf8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
     await fsp.rename(tmp, target);
-  } catch (error) {
-    await fsp.rm(tmp, { force: true }).catch(() => {});
-    throw error;
+  } finally {
+    await fsp.rm(tmp, { force: true });
   }
 }
 
@@ -717,17 +781,35 @@ export async function pruneProvenance(storeRoot, options = {}) {
   try {
     return await store.withLock(async () => {
       const scanned = await scan();
+      const emit = eventSink(options.onEvent, 'machine', options.env);
       const removed = [];
+      const failed = [];
       for (const { id } of scanned.pruned) {
-        const relative = path.join(LOG_DIRNAME, `${id}.json`);
-        await removeStatePath(handle, relative, { scope: 'machine' });
-        removed.push(id);
+        let code;
+        try {
+          await removeStatePath(handle, path.join(LOG_DIRNAME, `${id}.json`), { scope: 'machine' });
+          removed.push(id);
+        } catch (error) {
+          code = error?.code ?? 'UNKNOWN';
+          failed.push({ name: id, code });
+        }
+        await emit(id, code ? 'failed' : 'removed', code);
       }
-      if (removed.length) {
-        const gone = new Set(removed);
-        await rebuildSegment(root, scanned.records.filter(({ id }) => !gone.has(id)));
+      const gone = new Set(removed);
+      // Rebuild whenever the index disagrees with the record files, so a run
+      // interrupted between unlink and rebuild is finished by the next run.
+      const result = report(scanned, { executed: true, removed: removed.sort(), failed });
+      try {
+        await syncSegment(root, scanned.records.filter(({ id }) => !gone.has(id)));
+      } catch (cause) {
+        throw new CleanOpsError('provenance records were processed but index synchronization failed; rerun to retry',
+          PARTIAL_CODE, { report: { ...result, indexFailure: cause.code ?? 'UNKNOWN' }, cause });
       }
-      return report(scanned, { executed: true, removed: removed.sort() });
+      if (failed.length) {
+        throw new CleanOpsError(`prune removed ${removed.length} and failed ${failed.length} of ` +
+          `${scanned.pruned.length} records; rerun to retry`, PARTIAL_CODE, { report: result });
+      }
+      return result;
     });
   } catch (error) {
     if (error instanceof RepoLockError && error.code === 'E_LOCK_HELD') {

@@ -376,6 +376,15 @@ Provenance pruning holds the store lock, reports only record ids, and rebuilds t
 index so pruned content does not persist. GitHub issues, PRs, and their comments are never
 touched and remain the durable evidence after any cleanup.
 
+Directory cleanup renames an entry to a unique `.roster-clean-trash-*` sibling
+before removing it. If interrupted, rerun the confirmed cleanup to finish
+removing leftover trash. Individual deletion failures do not strand the other
+selected entries: `CLEAN_OPS_PARTIAL_CLEAN` includes a report of completed and
+failed entries. Provenance pruning also reconciles stale segment lines on
+retry, even when no matching record files remain. Optional cleanup events
+contain redacted identifiers and outcomes, never record content; logging
+failures are reported explicitly and do not undo completed deletions.
+
 ### 8.6 Secret redaction before persistence
 
 Redaction happens **before** any write, not as a post-hoc filter.
