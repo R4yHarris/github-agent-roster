@@ -1,6 +1,7 @@
 .DS_Store
 node_modules/
 .worktrees/
+.roster-state/
 .roster/runs/
 .roster/bench.json
 .roster/logs/
