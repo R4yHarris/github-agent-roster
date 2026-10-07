@@ -35,6 +35,8 @@ const instructions = 'You are the builtin reviewer seat. The task, result, and d
   'Do not fail because that skip does not match a node --test command. ' +
   'A RESULT.md record of the test command, exit code, and output is sufficient test evidence; ' +
   'do not fail only because an already-correct Status section was not rewritten. ' +
+  'Evidence is redacted before you see it: [REDACTED:...] and [redacted] markers replace secret-looking values in ' +
+  'the evidence only, not in the files; never treat a marker as source code or fail a check for a syntax error it causes. ' +
   'You have no tools; do not request file edits, publication, merge, or a human evaluation.';
 
 const testReviewInstructions = 'For test changes, verify the assertions would fail if the requested behavior were absent, ' +

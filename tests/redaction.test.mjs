@@ -31,6 +31,16 @@ test('redactEvidence replaces secret-like assignments', () => {
   assert.equal(out, 'db_secret: [REDACTED:SECRET]');
 });
 
+test('redactEvidence keeps code references so reviewed source still parses', () => {
+  const source = "const payload = { nested: { api_key: SENTINEL }, apiKey: options.apiKey, secret: null };\n" +
+    `const literal = { api_key: '${SENTINEL}', client_secret: hunter2xyz };`;
+  const out = redactEvidence(source, { env: EMPTY_ENV });
+  assert.ok(out.includes('nested: { api_key: SENTINEL }'), out);
+  assert.ok(out.includes('apiKey: options.apiKey') && out.includes('secret: null'), out);
+  assert.ok(out.includes("api_key: '[REDACTED:API_KEY]', client_secret: [REDACTED:SECRET]"), out);
+  assert.ok(!out.includes(`'${SENTINEL}'`) && !out.includes('hunter2xyz'), out);
+});
+
 test('redactEvidence replaces private key blocks', () => {
   const block = `-----BEGIN RSA PRIVATE KEY-----\n${'A'.repeat(64)}\n-----END RSA PRIVATE KEY-----`;
   const out = redactEvidence(`preamble ${block} postamble`, { env: EMPTY_ENV });
