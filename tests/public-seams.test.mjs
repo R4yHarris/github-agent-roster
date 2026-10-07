@@ -38,3 +38,18 @@ test('earlier-wave modules render as a required reuse section in the coder conte
   assert.match(pack, /## Earlier waves delivered\n\nEarlier slices of this plan already merged these modules\. Import and extend them/);
   assert.match(pack, /- export function openStore\(root, options = \{\}\)/);
 });
+
+test('a Windows test slice tells the coder to prove link escapes with junctions, not skipped symlinks', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'roster-test-host-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  writeFileSync(join(root, 'TASK.md'), '# Task\n\n## Ask\n\nRefuse escapes.\n\n## Outcome\n\nSafe paths\n\n' +
+    '## Files allowed\n\n- `src/lib/clean.mjs`\n- `tests/clean.test.mjs`\n\n## Acceptance checks\n\n- `node --test` exits 0.\n');
+  writeFileSync(join(root, 'AGENTS.md'), '# Agents\n');
+  const load = (platform) => {
+    rmSync(join(root, 'CONTEXT.md'), { force: true });
+    return loadContext({ worktree: root, repoRoot: process.cwd(), config: { seat: { context_chars: 40000 }, llm: {} },
+      env: {}, askKind: 'slice', principal: { id: 'p', content: 'principal' }, memoryPath: join(root, 'memory.jsonl'), platform });
+  };
+  assert.match((await load('win32')).pack, /## Test host\n\n.*skipped test is not evidence.*'junction'/);
+  assert.doesNotMatch((await load('linux')).pack, /## Test host/);
+});
