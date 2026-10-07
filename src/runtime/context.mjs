@@ -102,7 +102,7 @@ function boundedPack(sections, budget, minimum = false) {
 }
 
 export async function loadContext({ worktree, memoryPath, repoRoot, config, principal, env, priorFeedback = null, askKind,
-  continuation = null, priorWaveFiles = [] }) {
+  continuation = null, priorWaveFiles = [], platform = process.platform }) {
   if (priorFeedback !== null && typeof priorFeedback !== 'string') throw new TypeError('Prior feedback must be text');
   if (continuation !== null && typeof continuation !== 'string') throw new TypeError('Continuation must be text');
   const budget = config?.seat?.context_chars ?? 8000;
@@ -157,6 +157,12 @@ export async function loadContext({ worktree, memoryPath, repoRoot, config, prin
       're-implement their records, validation, storage, or redaction in a parallel module.\n\n' +
       redactSecrets(delivered, { env, apiKeyEnv: config?.llm?.api_key_env }), required: true });
   const repoMap = policy.repoMap ? await readRepoMap(worktree, { env, apiKeyEnv: config?.llm?.api_key_env }) : null;
+  // #276: Windows coders wrote file-symlink tests that always skipped, so the reviewer saw no escape evidence.
+  if (platform === 'win32' && files.some((file) => /(?:^|\/)tests?\//.test(file))) {
+    sections.push({ heading: 'Test host', required: true, body: 'node --test runs on Windows. File symlinks ' +
+      'need privileges there and those tests skip; a skipped test is not evidence. Test link escapes with ' +
+      "directory junctions (fs.symlinkSync(targetDir, linkPath, 'junction')), which need no privilege." });
+  }
   if (repoMap) sections.push({ heading: 'Repo map (filenames only)', body: repoMap.trim(), required: false });
   const seams = await readPublicSeams(worktree, files);
   if (seams) {

@@ -116,7 +116,10 @@ substance failure left after that correction ends the coder context, not the
 run: it escalates to a fresh perspective like a stalled repair. A secret or
 other gate failure still stops the run. The coder context also lists export signatures of the
 modules that allowed files import directly, under Public seams, so the
-coder does not spend turns probing for APIs.
+coder does not spend turns probing for APIs. On Windows, a slice with test
+files also gets a Test host note: file-symlink tests skip without privilege and
+a skipped test is not evidence, so link escapes are tested with directory
+junctions.
 
 `RESULT.md` quotes the verified run's test totals and, for each changed test
 file, how many of its declared tests the run reported, with their pass/fail
