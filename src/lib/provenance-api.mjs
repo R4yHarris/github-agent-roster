@@ -88,7 +88,7 @@ export function buildProvenanceRecord({ runId, sessionId, event, payload } = {},
  * The id must consist only of [A-Za-z0-9._-] characters (≤ 256 chars) so it
  * survives the store's file-name sanitization unchanged.
  */
-function storeRecordId(identity, runId, sessionId, event, section) {
+export function storeRecordId(identity, runId, sessionId, event, section) {
   const raw = `${identity}|${runId}|${sessionId}|${event}|${section}`;
   return createHash('sha256').update(raw).digest('hex');
 }

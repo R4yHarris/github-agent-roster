@@ -22,6 +22,7 @@ const execute = promisify(execFile);
 function makeRecord(overrides = {}) {
   return {
     id: overrides.id ?? 'rec-1',
+    version: 1,
     runId: overrides.runId ?? 'run-1',
     sessionId: overrides.sessionId ?? 'session-1',
     repoIdentity: overrides.repoIdentity ?? 'repo-1234abcd',
@@ -68,7 +69,7 @@ test('renderHistoryJson is deterministic across repeated exports of equivalent i
 test('export records are self-contained diagnostic evidence', () => {
   // No servedModel: historyFields falls back to requestedModel, then payload.model.
   const record = {
-    id: 'rec-1', runId: 'run-1', sessionId: 'session-1',
+    id: 'rec-1', version: 1, runId: 'run-1', sessionId: 'session-1',
     repoIdentity: 'repo-1234abcd',
     issue: { issue: '42' }, seat: { name: 'seat-a' },
     createdAt: '2025-01-02T03:04:05.000Z',
