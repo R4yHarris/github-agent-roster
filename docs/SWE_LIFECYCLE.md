@@ -107,6 +107,25 @@ first. The section is about 1500 characters, redacted, and dropped before
 required sections when the pack is full. This exists because a coder once
 treated `repoIdentity`, a derived hash, as a filesystem path.
 
+### Check triage
+
+Before the coder's first turn, `src/runtime/check-triage.mjs` sorts each
+acceptance check into met, unmet or unknown, with evidence. It makes no model
+or network call:
+
+- **Test commands.** A backticked `node --test <file>` runs only the named
+  test files. A file that does not exist yet, or a test run that fails, makes
+  the check unmet.
+- **Exports.** A backticked `` `name` from `path` `` is looked up in that
+  module. A missing module or export makes the check unmet.
+- **Prose.** Anything else stays unknown.
+
+A check is met only when it is just a passing test command. The evidence is
+added to CONTEXT.md as `## Check triage`. When every check is met, the slice
+becomes tests-only: Files allowed shrink to the test files, and any product
+code edit fails the candidate with a `Check triage:` reason. This exists
+because a run once spent 250 lines on checks that earlier waves already met.
+
 ## Checklist
 
 When TASK.md has acceptance checks and more than one allowed file, the coder
