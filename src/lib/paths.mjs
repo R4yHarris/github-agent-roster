@@ -96,7 +96,7 @@ export const RETENTION_POLICIES = Object.freeze({
   machine: Object.freeze({
     scope: 'machine',
     root: 'machine',
-    defaultWindowMs: 1000 * 60 * 60 * 24 * 30, // 30 days
+    defaultWindowMs: 1000 * 60 * 60 * 24 * 90, // 90 days (docs/STATE.md §8.5)
     optOutSupported: true,
   }),
   repo: Object.freeze({

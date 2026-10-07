@@ -13,6 +13,7 @@ test('RETENTION_POLICIES has one entry per STATE_SCOPES scope', () => {
     assert.ok(entry.root.length > 0, `root for ${scope} must be non-empty`);
     assert.ok(Number.isFinite(entry.defaultWindowMs) && entry.defaultWindowMs > 0,
       `defaultWindowMs for ${scope} must be a positive number`);
+    if (scope === 'machine') assert.equal(entry.defaultWindowMs, 90 * 86_400_000, 'docs/STATE.md §8.5: 90 days');
     assert.equal(typeof entry.optOutSupported, 'boolean');
   }
 });

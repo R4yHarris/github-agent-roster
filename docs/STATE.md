@@ -354,6 +354,14 @@ Private config, fleet and capability declarations, memory, history, and locks st
 | Issue/worktree state | Deleted when worktree pruned | `git worktree remove` + `roster state prune-worktree <id>` |
 | Session | Gone at process exit | N/A |
 
+`RETENTION_POLICIES` in `src/lib/paths.mjs` declares one policy per scope (`machine`, `repo`,
+`worktree`, `run`) with a distinct root and default window (machine history: 90 days).
+`resolveRetentionConfig(env)` in `src/lib/config.mjs` reads `ROSTER_RETENTION_OPT_OUT`
+(`true`/`false`) and positive-integer `ROSTER_RETENTION_WINDOW_MS_<SCOPE>` overrides, rejecting
+anything else. `evaluateRetention(policy, { nowMs, windowMs, optOut, createdAtMs })` in
+`src/lib/repo-state.mjs` is pure over an injected clock; it keeps everything when opted out
+and throws on a missing or invalid record age rather than treating it as expired.
+
 ### 8.6 Secret redaction before persistence
 
 Redaction happens **before** any write, not as a post-hoc filter.
