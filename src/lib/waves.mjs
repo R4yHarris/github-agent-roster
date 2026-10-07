@@ -94,6 +94,23 @@ async function linkedIssues(repository, key, command, cwd) {
   return issues.filter((issue) => issue.body.includes(`<!-- Roster-Plan: ${key} -->`));
 }
 
+// A lost PLAN.md changes the plan key; opening a second wave set would duplicate the parent's open children.
+async function refuseOrphanWaves(repository, parent, key, command, cwd) {
+  let issues;
+  try { issues = JSON.parse(await command('gh', ['issue', 'list', '--repo', repository, '--state', 'open',
+    '--search', `in:body "Parent: #${parent}"`, '--limit', '100', '--json', 'number,body'], cwd)); }
+  catch (error) { throw new Error('GitHub wave metadata is unavailable.', { cause: error }); }
+  if (!Array.isArray(issues)) throw new Error('GitHub wave metadata is invalid or exceeds the bounded lookup');
+  const parentLine = new RegExp(`^Parent: #${parent}$`, 'm');
+  const orphans = issues.filter((issue) => typeof issue?.body === 'string' && parentLine.test(issue.body) &&
+    /<!-- Roster-Plan: [0-9a-f]{64} -->/.test(issue.body) && !issue.body.includes(`<!-- Roster-Plan: ${key} -->`))
+    .map((issue) => `#${issue.number}`);
+  if (orphans.length) {
+    throw new Error(`Parent #${parent} already has open wave children from another plan (${orphans.join(', ')}); ` +
+      'run those children directly or close them before opening a new wave set.');
+  }
+}
+
 export async function waveBoard({
   worktree, cwd, env = process.env, apiKeyEnv = 'ROSTER_API_KEY', open = false, activeIssue, activeState,
   runCommand = (program, args, root) => run(program, args, root, env),
@@ -109,6 +126,9 @@ export async function waveBoard({
     if (!Number.isSafeInteger(draft) || !plan.issues[draft - 1] || matched.has(draft) ||
         issueWave(issue) !== plan.issues[draft - 1].wave) throw new Error('Linked GitHub drafts conflict with PLAN.md');
     matched.set(draft, issue);
+  }
+  if (open && matched.size === 0 && /^issue:[1-9]\d*$/.test(plan.reference)) {
+    await refuseOrphanWaves(repository, plan.reference.slice('issue:'.length), key, runCommand, cwd);
   }
   if (open) {
     let known;
