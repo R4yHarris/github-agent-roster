@@ -10,15 +10,20 @@ import {
   CleanOpsError,
   assertSafeStatePath,
   assertStateScope,
+  checkActiveRunLock,
+  listRunLocks,
   ensureStateDirectory,
   forbiddenStateRoots,
+  formatCleanReport,
   removeStatePath,
   resolveRepositoryId,
   resolveStatePath,
   resolveStateRoot,
+  runClean,
 } from '../src/lib/clean-ops.mjs';
 import { isContainedIn } from '../src/lib/paths.mjs';
 import { identityHash } from '../src/lib/repo-identity.mjs';
+import { acquireRepoLock } from '../src/lib/repo-locks.mjs';
 
 /**
  * Directory junctions are reparse points that Windows allows without elevated
@@ -65,6 +70,18 @@ function makeHandle(override = {}) {
     runId: null,
     ...override,
   };
+}
+
+function seedRecords(t, root, names, { subdir = 'records' } = {}) {
+  const dir = path.join(root, subdir);
+  fs.mkdirSync(dir, { recursive: true });
+  for (const name of names) {
+    const target = path.join(dir, name);
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(path.join(target, 'data.txt'), `record ${name}`);
+  }
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  return dir;
 }
 
 test('forbiddenStateRoots lists filesystem root, home and repository directories', async () => {
@@ -402,4 +419,91 @@ test('ensureStateDirectory creates the state root once and refuses protected pat
     () => ensureStateDirectory(makeHandle({ root: worktreeRoot, repoRoot, worktreeRoot })),
     (error) => error instanceof CleanOpsError && error.code === 'CLEAN_OPS_FORBIDDEN_PATH' && /worktree/.test(error.message)
   );
+});
+
+// Preview/confirmation and active-run lock guards (#277).
+
+function stateRoot(t, records = ['rec-a', 'rec-b']) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clean-ops-run-'));
+  seedRecords(t, root, records);
+  return { root, handle: makeHandle({ root }) };
+}
+
+const holdLock = (root, name, pid = process.pid) => acquireRepoLock(name, { lockRoot: root, holder: `run-${pid}`,
+  isAlive: () => true });
+
+test('runClean is a dry run by default: it reports scope, sorted records, exclusions and active locks', async (t) => {
+  const { root, handle } = stateRoot(t, ['rec-b', 'rec-a', 'keep']);
+  await holdLock(root, 'issue-277');
+  const report = await runClean(handle, { relativeDir: 'records', exclude: ['keep'] });
+  assert.equal(report.dryRun, true);
+  assert.equal(report.executed, false);
+  assert.equal(report.scope, 'worktree');
+  assert.deepEqual(report.included.map(({ name }) => name), ['rec-a', 'rec-b']);
+  assert.equal(report.recordCount, 2);
+  assert.deepEqual(report.excluded, ['keep']);
+  assert.deepEqual(report.activeLocks, [{ name: 'issue-277', holder: `run-${process.pid}` }]);
+  for (const name of ['rec-a', 'rec-b', 'keep']) assert.ok(fs.existsSync(path.join(root, 'records', name)));
+  const text = formatCleanReport(report);
+  assert.match(text, /mode: dry-run[\s\S]*records: 2\n  - directory rec-a\n  - directory rec-b\nexcluded: keep\nactive locks: issue-277 \(run-\d+\)/);
+});
+
+test('destructive clean without --yes fails before any deletion, interactive or not', async (t) => {
+  const { root, handle } = stateRoot(t);
+  for (const interactive of [false, true]) {
+    await assert.rejects(runClean(handle, { relativeDir: 'records', execute: true, interactive }),
+      (error) => error.code === 'CLEAN_OPS_CONFIRMATION_REQUIRED' && /--yes/.test(error.message));
+  }
+  assert.deepEqual(fs.readdirSync(path.join(root, 'records')).sort(), ['rec-a', 'rec-b']);
+});
+
+test('a live repo-locks.mjs lock refuses execution and nothing is deleted', async (t) => {
+  const { root, handle } = stateRoot(t);
+  await holdLock(root, 'issue-277');
+  await assert.rejects(runClean(handle, { relativeDir: 'records', execute: true, yes: true, isAlive: () => true }),
+    (error) => error.code === 'CLEAN_OPS_LOCK_HELD' && /"issue-277"/.test(error.message) &&
+      error.details?.locks?.[0]?.holder === `run-${process.pid}`);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'records')).sort(), ['rec-a', 'rec-b']);
+  assert.ok(fs.existsSync(path.join(root, 'locks', 'issue-277.lock')), 'the active lock survives');
+});
+
+test('a dead holder\'s stale lock is taken over and released, then execution deletes only included records', async (t) => {
+  const { root, handle } = stateRoot(t, ['rec-a', 'rec-b', 'keep']);
+  await holdLock(root, 'issue-old');
+  const report = await runClean(handle, { relativeDir: 'records', execute: true, yes: true, exclude: ['keep'],
+    isAlive: () => false });
+  assert.equal(report.executed, true);
+  assert.equal(report.removed.length, 2);
+  assert.deepEqual(fs.readdirSync(path.join(root, 'records')), ['keep']);
+  assert.deepEqual(await listRunLocks(handle), []);
+});
+
+test('a state-root sweep never deletes the locks directory, and checkActiveRunLock passes with no locks', async (t) => {
+  const { root, handle } = stateRoot(t);
+  fs.mkdirSync(path.join(root, 'locks'), { recursive: true });
+  const preview = await runClean(handle);
+  assert.ok(preview.excluded.includes('locks'));
+  assert.ok(!preview.included.some(({ name }) => name === 'locks'));
+  assert.deepEqual(await checkActiveRunLock(handle), { locks: [] });
+  await runClean(handle, { execute: true, yes: true });
+  assert.deepEqual(fs.readdirSync(root), ['locks']);
+});
+
+test('exclusions must be plain entry names', async (t) => {
+  const { handle } = stateRoot(t);
+  for (const exclude of ['keep', ['../x'], ['a/b'], [''], [1]]) {
+    await assert.rejects(runClean(handle, { exclude }), (error) => error.code === 'CLEAN_OPS_SCOPE_MISMATCH');
+  }
+});
+
+test('roster clean previews by default and deletes only with --execute --yes', async (t) => {
+  const { root } = stateRoot(t);
+  const cli = (...args) => execFileSync(process.execPath, [path.join(import.meta.dirname, '..', 'src', 'cli.mjs'), 'clean',
+    '--state-root', root, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  assert.match(cli('--exclude', 'records'), /mode: dry-run[\s\S]*records: 0\nexcluded: records/);
+  assert.match(cli(), /mode: dry-run[\s\S]*records: 1\n  - directory records/);
+  assert.throws(() => cli('--execute'), (error) => /--yes/.test(String(error.stderr)));
+  assert.ok(fs.existsSync(path.join(root, 'records', 'rec-a')));
+  assert.match(cli('--execute', '--yes'), /mode: destructive[\s\S]*removed: 1/);
+  assert.equal(fs.existsSync(path.join(root, 'records')), false);
 });

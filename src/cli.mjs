@@ -28,6 +28,7 @@ const help = `Usage:
   roster history list [--store DIR] [--repo HASH] [--issue N] [--seat NAME] [--model MODEL] [--outcome VALUE] [--since TIME] [--until TIME]
   roster history show <session-or-run-or-record-id> [--store DIR]
   roster bench
+  roster clean [--scope SCOPE] [--state-root PATH] [--exclude NAME]... [--execute --yes]
   roster status [--issue N] [--offline]
   roster recipe validate PATH
   roster stats [--ref REVISION_OR_RANGE] [--evals PATH]
@@ -231,6 +232,21 @@ async function main(args) {
   } else if (args[0] === 'history') {
     const { runHistory } = await import('./lib/history-cli.mjs');
     process.stdout.write(await runHistory(args.slice(1)));
+  } else if (args[0] === 'clean') {
+    const options = cleanOptions(args.slice(1));
+    const { formatCleanReport, resolveStateRoot, runClean } =
+      await import('./lib/clean-ops.mjs');
+    const handle = await resolveStateRoot(rosterRoot, {
+      scope: options.scope,
+      stateRoot: options.stateRoot,
+    });
+    const report = await runClean(handle, {
+      execute: options.execute,
+      yes: options.yes,
+      interactive: Boolean(process.stdout.isTTY),
+      exclude: options.exclude,
+    });
+    process.stdout.write(formatCleanReport(report));
   } else if (args.length === 1 && args[0] === 'bench') {
     const { runBench } = await import('./lib/bench.mjs');
     const result = await runBench({
@@ -240,6 +256,35 @@ async function main(args) {
     process.stdout.write(`${JSON.stringify(result.report, null, 2)}\n`);
   } else {
     throw new TypeError('Unknown arguments. Run roster --help for usage.');
+  }
+
+  function cleanOptions(args) {
+    const options = {
+      scope: 'worktree',
+      execute: false,
+      yes: false,
+      exclude: [],
+    };
+    const seen = new Set();
+    const usage = 'Use roster clean [--scope SCOPE] [--state-root PATH] [--exclude NAME]... [--execute --yes].';
+    for (let index = 0; index < args.length; index += 1) {
+      const flag = args[index];
+      if (seen.has(flag) && flag !== '--exclude') {
+        throw new TypeError(usage);
+      }
+      seen.add(flag);
+      if (flag === '--execute') options.execute = true;
+      else if (flag === '--yes') options.yes = true;
+      else {
+        const value = args[++index];
+        if (!value || value.startsWith('--')) throw new TypeError(usage);
+        if (flag === '--scope') options.scope = value;
+        else if (flag === '--state-root') options.stateRoot = value;
+        else if (flag === '--exclude') options.exclude.push(value);
+        else throw new TypeError(usage);
+      }
+    }
+    return options;
   }
 
   function runOptions(args) {
