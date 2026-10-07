@@ -6,8 +6,17 @@ function secretValues(env, apiKeyEnv) {
 }
 
 const credentialPattern = /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{24,})\b/g;
+// API-key-like assignments, e.g. api_key = "..." or "x-api-key": "..."
+const apiKeyPattern = /(?<apiKeyKey>[A-Za-z0-9_-]*(?:api[_-]?key|x-api-key)[A-Za-z0-9_-]*)\s*[:=]\s*(?<apiKeyValue>"[^"]+"|'[^']+'|[^\s,;]+)\b/g;
+// Generic secret assignments, e.g. secret = "..." or "secret": "..."
+const secretPattern = /(?<secretKey>[A-Za-z0-9_-]*secret[A-Za-z0-9_-]*)\s*[:=]\s*(?<secretValue>"[^"]+"|'[^']+'|[^\s,;]+)\b/g;
 // Committed-file scan: a PEM header counts only when base64 key material follows it (raw or in a string literal).
 const pemKeyPattern = /-----BEGIN [^-\r\n]*PRIVATE KEY-----(?:\\[rn]|[\s'"`+,])*[A-Za-z0-9+/=]{40,}/g;
+
+function redactKeyValue(match, key, value) {
+  const sentinel = /api[_-]?key|x-api-key/i.test(key) ? '[REDACTED:API_KEY]' : '[REDACTED:SECRET]';
+  return `${key}: ${sentinel}`;
+}
 
 // 1-based lines holding secret material; prose about PEM envelopes and fixtures without key bodies are not secrets.
 export function secretMaterialLines(text, { env = process.env, apiKeyEnv = 'ROSTER_API_KEY' } = {}) {
@@ -24,10 +33,34 @@ export function secretMaterialLines(text, { env = process.env, apiKeyEnv = 'ROST
 }
 
 export function redactEvidence(text, { env = process.env, apiKeyEnv = 'ROSTER_API_KEY' } = {}) {
-  let safe = text;
+  let safe = String(text);
   for (const value of secretValues(env, apiKeyEnv)) safe = safe.split(value).join('[redacted]');
   return safe
     .replace(/-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-\r\n]*PRIVATE KEY-----|$)/g,
-      '[redacted private key]')
-    .replace(credentialPattern, '[redacted credential]');
+      '[REDACTED:PRIVATE_KEY]')
+    .replace(credentialPattern, '[REDACTED:API_KEY]')
+    .replace(apiKeyPattern, (match, key, value) => redactKeyValue(match, key, value))
+    .replace(secretPattern, (match, key, value) => redactKeyValue(match, key, value));
+}
+
+/**
+ * Apply redaction recursively to a provenance record (or any plain data tree)
+ * before persistence. String leaves are run through `redactEvidence`; objects
+ * and arrays are walked recursively. Non-plain values are passed through.
+ *
+ * @param {unknown} value
+ * @param {object} [options] same options as `redactEvidence`
+ * @returns {unknown}
+ */
+export function redactRecord(value, options = {}) {
+  if (typeof value === 'string') return redactEvidence(value, options);
+  if (Array.isArray(value)) return value.map((item) => redactRecord(item, options));
+  if (value && typeof value === 'object' && value.constructor === Object) {
+    const redacted = {};
+    for (const [key, nested] of Object.entries(value)) {
+      redacted[key] = redactRecord(nested, options);
+    }
+    return redacted;
+  }
+  return value;
 }
