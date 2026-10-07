@@ -9,6 +9,7 @@ import { loadSkills, previewSkills } from './skills.mjs';
 import { taskContextPolicy } from './context-policy.mjs';
 import { readRepoMap } from '../lib/repo-map.mjs';
 import { isForbiddenRead } from './tools.mjs';
+import { seatRules } from './seat-rules.mjs';
 
 // Export signatures of modules that allowed JS files import directly; the coder may read these.
 export async function readPublicSeams(worktree, files, { limit = 2400 } = {}) {
@@ -138,7 +139,7 @@ export async function loadContext({ worktree, memoryPath, repoRoot, config, prin
   ] : [
     { heading: `Principal ${principal.id}:`, body: principal.content.trim(), required: true },
     { heading: 'TASK.md', body: task.trim(), required: true },
-    { heading: 'AGENTS.md', body: agents.trim(), required: true },
+    { heading: 'AGENTS.md', body: seatRules(agents), required: true },
     ...(priorFeedback ? [{ heading: 'Prior feedback',
       body: redactSecrets(priorFeedback, { env, apiKeyEnv: config?.llm?.api_key_env }), required: true }] : []),
     { heading: 'Task skills (first 40 lines each)',
