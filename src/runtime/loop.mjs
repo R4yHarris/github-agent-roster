@@ -116,28 +116,33 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
 
   const verification = verificationDecision(parsedTask.files_allowed);
   const docsOnly = isDocsOnlyScope(parsedTask.files_allowed);
+  const rules = [
+    'Work to completion within the task boundary. When an attempt fails, use the new evidence to change strategy; ' +
+      'do not repeat the same action against the same unchanged state. Consider a different implementation perspective ' +
+      'before concluding that the bounded task cannot be completed.',
+    docsOnly ? 'This is a docs-only change. Do not run or edit tests. Check the written file.' : '',
+    !docsOnly && verification.run ? `Run and update only these tests: ${verification.update.join(', ')}` +
+      ' (a test split into tests/<module>.<topic>.test.mjs shards counts as the same test).' : '',
+    boundedTask && !docsOnly ? 'Read the allowed file and only direct imports needed to understand the APIs you will use; do not recursively trace transitive dependencies. ' +
+      'Batch independent reads in one response, preserve existing imports and unrelated assertions, and make the smallest targeted edit.' : '',
+    boundedTask && !docsOnly ? 'All tool paths are relative to the worktree root: an import like ../src/api.mjs from tests/test.mjs ' +
+      'must be read as src/api.mjs, never ../src/api.mjs. Preserve existing behavior and implement the requested outcome; ' +
+      'passing existing tests or rewriting identical content is not completion.' : '',
+    mentionsSecrets(context.task) ? sentinelGuidance : '',
+    'A failing test outside Allowed Files is pre-existing: report it and do not edit it.',
+    !boundedTask && !docsOnly && (config.seat.scope_expansion ?? 3) > 0
+      ? `Allowed Files are the planned scope. If the outcome truly requires another product file, you may write at most ` +
+        `${config.seat.scope_expansion ?? 3} files outside it; each is recorded, judged by the reviewer, and listed in the PR, ` +
+        'so justify each one in your summary. Secrets, .git, policy, workflows, vendor, and harness files stay denied.'
+      : '',
+  ].filter(Boolean);
   const messages = [
     { role: 'system', content: context.pack },
     { role: 'user', content: 'Complete this task using only the offered tools. ' +
-      'Work to completion within the task boundary. When an attempt fails, use the new evidence to change strategy; ' +
-      'do not repeat the same action against the same unchanged state. Consider a different implementation perspective ' +
-      'before concluding that the bounded task cannot be completed. ' +
-      (docsOnly ? 'This is a docs-only change. Do not run or edit tests. Check the written file. ' : '') +
-      (!docsOnly && verification.run ? `Run and update only these tests: ${verification.update.join(', ')}` +
-        ' (a test split into tests/<module>.<topic>.test.mjs shards counts as the same test). ' : '') +
-      (boundedTask && !docsOnly ? 'Read the allowed file and only direct imports needed to understand the APIs you will use; do not recursively trace transitive dependencies. ' +
-        'Batch independent reads in one response, preserve existing imports and unrelated assertions, and make the smallest targeted edit. ' +
-        'All tool paths are relative to the worktree root: an import like ../src/api.mjs from tests/test.mjs ' +
-        'must be read as src/api.mjs, never ../src/api.mjs. Preserve existing behavior and implement the requested outcome; ' +
-        'passing existing tests or rewriting identical content is not completion. ' : '') +
-      (mentionsSecrets(context.task) ? `${sentinelGuidance} ` : '') +
-      'A failing test outside Allowed Files is pre-existing: report it and do not edit it. ' +
-      (!boundedTask && !docsOnly && (config.seat.scope_expansion ?? 3) > 0
-        ? `Allowed Files are the planned scope. If the outcome truly requires another product file, you may write at most ` +
-          `${config.seat.scope_expansion ?? 3} files outside it; each is recorded, judged by the reviewer, and listed in the PR, ` +
-          'so justify each one in your summary. Secrets, .git, policy, workflows, vendor, and harness files stay denied. '
-        : '') +
-      'Finish with a concise summary of changes, test results, and blockers.' },
+      'Deliver each numbered TASK.md check; the task is done only when every item holds.\n\n' +
+      parsedTask.acceptance_checks.map((check, index) => `${index + 1}. ${check}`).join('\n') +
+      '\n\nRules:\n' + rules.map((rule) => `- ${rule}`).join('\n') +
+      '\n\nFinish with a concise summary of changes, test results, and blockers, naming each numbered check as done or blocked.' },
   ];
   const requiresWebSearch = /\bweb_search\b/.test(context.task);
   const requiresWebFetch = /\bweb_fetch\b/.test(context.task);

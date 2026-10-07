@@ -3,14 +3,19 @@
 The builtin coder saves [CONTEXT.md](../src/runtime/context.mjs) in its issue
 worktree before the tool loop. This is the exact initial context sent to the
 model, not a separate or more complete transcript. The loop also sends a fixed
-request to execute the task; subsequent responses and tool results are not
-part of this initial pack.
+request to execute the task. That request is a numbered checklist with one item
+per TASK.md acceptance check, followed by the rules
+([#294](https://github.com/R4yHarris/github-agent-roster/issues/294)).
+Subsequent responses and tool results are not part of this initial pack.
 
 The order is:
 
 1. The installation's [coder conduct](../principals/coder.md).
 2. TASK.md, including its title, acceptance checks, allowed paths, and Ask.
-3. The worktree's AGENTS.md.
+3. The coding rules from the worktree's AGENTS.md. The
+   [seat rules](../src/runtime/seat-rules.mjs) drop publication, App
+   credential, and session-metadata sections and items, because the harness
+   publishes after review. A note marks the omission.
 4. [Prior feedback](NEXT.md), when the planner found a same-class human evaluation,
    with credential redaction and quoted retrospective comments.
 5. Only task-named skills, in task order, with their names and first 40 lines.
