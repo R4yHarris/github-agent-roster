@@ -3,11 +3,27 @@
 // machine-history store root, and stable record ids, with no external state
 // required to interpret them.
 import { historyFields } from './history-query.mjs';
+import {
+  createRedactionConfig,
+  redactRecord,
+  validateProvenance,
+} from './history-redaction.mjs';
 
 export const HISTORY_EXPORT_SCHEMA_VERSION = 1;
 const EXPORT_SCHEMA = `roster.history-export.v${HISTORY_EXPORT_SCHEMA_VERSION}`;
 
 const SUMMARY_KEYS = ['repository', 'issue', 'seat', 'model', 'outcome', 'at'];
+
+// Every exported record must carry verified provenance. Validation fails
+// closed: a missing, malformed, version-mismatched, or tampered provenance
+// block rejects the export before any redacted bytes are produced.
+function requireValidProvenance(records) {
+  if (!Array.isArray(records)) throw new TypeError('exportHistory requires an array of provenance records.');
+  for (let i = 0; i < records.length; i += 1) {
+    const result = validateProvenance(records[i]);
+    if (!result.ok) throw new Error(`Provenance validation failed for record ${i}: ${result.error}`);
+  }
+}
 
 function sortKeys(object) {
   return Object.fromEntries(Object.keys(object).sort().map((key) => [key, object[key]]));
@@ -55,15 +71,18 @@ export function canonicalizeRecord(record) {
     runId: record.runId,
     sessionId: record.sessionId,
     fields: sortKeys(Object.fromEntries(SUMMARY_KEYS.map((key) => [key, fields[key] ?? null]))),
+    integrity: validateProvenance(record).integrity ?? 'invalid',
   };
   if (record.repoIdentity !== undefined) entry.repository = record.repoIdentity;
-  return redactSecrets(entry);
+  // Configuration-driven redaction: explicit secret values/paths, home
+  // masking with per-record opt-in, and deterministic [REDACTED] markers.
+  return redactRecord(entry, createRedactionConfig());
 }
 
 // Deterministic JSON export of equivalent input: schema version, stable
 // record ids, sorted object keys, and original record order preserved.
 export function exportHistory(records, meta = {}) {
-  if (!Array.isArray(records)) throw new TypeError('exportHistory requires an array of provenance records.');
+  requireValidProvenance(records);
   return redactSecrets({
     meta: sortKeys({
       format: EXPORT_SCHEMA,
@@ -85,7 +104,7 @@ export function renderHistoryJson(records, meta = {}) {
 // Human-readable summary that clearly distinguishes the machine-history
 // location (the provenance store root) from repository-state paths.
 export function renderHistorySummary(records, meta = {}) {
-  if (!Array.isArray(records)) throw new TypeError('renderHistorySummary requires an array of provenance records.');
+  requireValidProvenance(records);
   const lines = [`History summary: ${records.length} record(s)`];
   if (meta.storeRoot !== undefined && meta.storeRoot !== null) {
     lines.push(`Machine history store: ${meta.storeRoot}`);
