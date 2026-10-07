@@ -7,9 +7,9 @@ function secretValues(env, apiKeyEnv) {
 
 const credentialPattern = /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{24,})\b/g;
 // API-key-like assignments, e.g. api_key = "..." or "x-api-key": "..."
-const apiKeyPattern = /(?<apiKeyKey>[A-Za-z0-9_-]*(?:api[_-]?key|x-api-key)[A-Za-z0-9_-]*)\s*[:=]\s*(?<apiKeyValue>"[^"]+"|'[^']+'|[^\s,;]+)\b/g;
+const apiKeyPattern = /(?<apiKeyKey>[A-Za-z0-9_-]*(?:api[_-]?key|x-api-key)[A-Za-z0-9_-]*)\s*[:=]\s*(?<apiKeyValue>"[^"]+"|'[^']+'|[^\s,;'"]+\b)/g;
 // Generic secret assignments, e.g. secret = "..." or "secret": "..."
-const secretPattern = /(?<secretKey>[A-Za-z0-9_-]*secret[A-Za-z0-9_-]*)\s*[:=]\s*(?<secretValue>"[^"]+"|'[^']+'|[^\s,;]+)\b/g;
+const secretPattern = /(?<secretKey>[A-Za-z0-9_-]*secret[A-Za-z0-9_-]*)\s*[:=]\s*(?<secretValue>"[^"]+"|'[^']+'|[^\s,;'"]+\b)/g;
 // Committed-file scan: a PEM header counts only when base64 key material follows it (raw or in a string literal).
 const pemKeyPattern = /-----BEGIN [^-\r\n]*PRIVATE KEY-----(?:\\[rn]|[\s'"`+,])*[A-Za-z0-9+/=]{40,}/g;
 // Evidence redaction: a PEM header with its key body (optional RFC 1421 headers, base64 lines) through the footer.
@@ -20,9 +20,14 @@ const pemBlockPattern = new RegExp(String.raw`-----BEGIN [^-\r\n]*PRIVATE KEY---
   String.raw`(?:${pemSeparator}[A-Za-z0-9+/=]{16,})+` +
   String.raw`(?:${pemSeparator}[A-Za-z0-9+/=]*${pemSeparator}-----END [^-\r\n]*PRIVATE KEY-----)?`, 'g');
 
+// Unquoted code references (CONSTANT, obj.member, literals) name a value elsewhere; rewriting them corrupts source.
+const codeReferencePattern = /^(?:[A-Z][A-Z_]*[A-Z]|[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)+|null|undefined|true|false)$/;
+
 function redactKeyValue(match, key, value) {
+  if (codeReferencePattern.test(value)) return match;
   const sentinel = /api[_-]?key|x-api-key/i.test(key) ? '[REDACTED:API_KEY]' : '[REDACTED:SECRET]';
-  return `${key}: ${sentinel}`;
+  const quote = /^["']/.test(value) ? value[0] : '';
+  return `${key}: ${quote}${sentinel}${quote}`;
 }
 
 // 1-based lines holding secret material; prose about PEM envelopes and fixtures without key bodies are not secrets.
