@@ -64,6 +64,12 @@ values are redacted before a configured reviewer sends the task, result, and
 diff to the selected model. A malformed response or tool request produces
 `Verdict: fail` with the reason. No endpoint means a deterministic failing
 review, not a fabricated approval.
+With `--auto-model`, the reviewer is not the coder (spec 4.8). It routes to the best
+eligible fleet profile other than the coder's current profile, and the run log names
+both profiles. If that endpoint fails, Roster records the failure as route evidence
+and tries the next non-coder profile without moving the coder's route. Only when no
+other profile is eligible does the reviewer fall back to the coder's model, and the
+log says so.
 For test tasks and changed test files, the reviewer is additionally instructed
 to verify that assertions fail when the requested behavior is absent, and to
 exercise the public operation when the Ask names one. Secret-leakage checks
