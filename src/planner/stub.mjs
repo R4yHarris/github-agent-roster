@@ -11,7 +11,7 @@ import { allowedFile, checkedList, ensureAcceptanceChecks, ensureAllowedFiles, e
 import { selectReasoning } from '../llm/reasoning.mjs';
 import { isLlmTimeout, localRequestTimeoutMs, resolveRequestTimeout } from '../llm/request.mjs';
 import { issueWave } from '../lib/wave-labels.mjs';
-import { groundingErrors, isCodeSlice, normalizeDesign, withDesign } from './grounding.mjs';
+import { groundingErrors, isCodeSlice, normalizeDesign, parseDesign, withDesign } from './grounding.mjs';
 
 export { taskFilesAllowed } from './task.mjs';
 
@@ -131,7 +131,7 @@ export function planFromTask(task, ask, { issueTitle, issueBody } = {}) {
   const { title, acceptance_checks, files_allowed } = parseTaskDocument(task, { expectedAsk: ask, issueTitle, issueBody });
   checkAskScope(files_allowed, askRequirements(issueTitle ? `${issueTitle}\n${ask}` : ask, { allowMissing: true }));
   const { difficulty, estimate_min, task_class, model } = readTaskMetadata(task);
-  return { title, acceptance_checks, files_allowed, difficulty, estimate_min, task_class, model };
+  return { title, acceptance_checks, files_allowed, difficulty, estimate_min, task_class, model, design: parseDesign(task) };
 }
 
 function normalizePlannerPlan(plan) {
@@ -325,7 +325,7 @@ export async function planAsk(ask, {
                   reference, title: fixedTitle ?? complete.title,
                   acceptanceChecks: complete.acceptance_checks, filesAllowed: complete.files_allowed,
                   metadata: { ...metadata, ...complete, ...(lockedModel ? { model: lockedModel } : {}) },
-                  scope: requirements, grounding,
+                  scope: requirements, grounding, design: complete.design,
                 });
                 return finish({ ...validated, task: taskDraft, usage: mergeUsage(...usages), turns: turn, response: lastResponse });
               } catch (error) {
@@ -356,7 +356,7 @@ export async function planAsk(ask, {
                 reference, title: fixedTitle ?? complete.title,
                 acceptanceChecks: complete.acceptance_checks, filesAllowed: complete.files_allowed,
                 metadata: { ...metadata, ...complete, ...(lockedModel ? { model: lockedModel } : {}) },
-                scope: requirements, grounding,
+                scope: requirements, grounding, design: complete.design,
               });
               return finish({ ...validated, task: taskDraft, usage: mergeUsage(...usages), turns: turn, response: lastResponse });
             } catch (error) {
@@ -384,7 +384,7 @@ export async function planAsk(ask, {
             reference, title: fixedTitle ?? complete.title,
             acceptanceChecks: complete.acceptance_checks, filesAllowed: complete.files_allowed,
             metadata: { ...metadata, ...complete, ...(lockedModel ? { model: lockedModel } : {}) },
-            scope: requirements, grounding,
+            scope: requirements, grounding, design: complete.design,
           });
         } catch (error) {
           if (!(error instanceof Error)) throw error;

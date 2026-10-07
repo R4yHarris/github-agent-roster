@@ -153,7 +153,8 @@ export function groundingErrors({ checks = [], design = null, filesAllowed = [],
   const { names, paths } = citations(text);
   for (const name of names) {
     if (index.symbols.has(name) || declared.has(name) || askText.includes(name)) continue;
-    errors.push(`\`${name}\` does not exist in the repository; cite a real export or declare it in design.new_exports`);
+    errors.push(`\`${name}\` does not exist in the repository; cite a real export or declare it in design.new_exports ` +
+      `(in TASK.md: a \`## Design\` section with \`New exports:\` then \`- \\\`${name}\\\` in \\\`<file>\\\`\`)`);
   }
   for (const file of paths) {
     if (index.files.has(file) || isAllowedFile(file, filesAllowed) || askText.includes(file)) continue;
