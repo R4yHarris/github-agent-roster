@@ -3,6 +3,7 @@ import { promises as fs, readFileSync, readdirSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
+import { storeRecordId } from './provenance-api.mjs';
 import { materializeRun, normalizeRunEffort } from '../metrics/run.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
 
@@ -531,4 +532,147 @@ export function formatRecommendation(recommendation, taskClass, config, env = pr
   const { model, effort, acceptRate, n, medianMinutes, medianDifficulty } = recommendation;
   return `${taskClass}: ${model} effort=${effort ?? '-'} accept-rate=${(acceptRate * 100).toFixed(1)}% n=${n}` +
     ` median-min=${medianMinutes ?? '-'} median-difficulty=${medianDifficulty ?? '-'}\n`;
+}
+
+// --- Bounded curation: curate compaction records into curated memory ----
+
+const CURATED_SECTION = 'curated-memory';
+
+function isNonEmptyString(value) {
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+/**
+ * Derive a stable curated-memory record id from a compaction record.
+ * Uses `storeRecordId` so curated memory can reference compaction output
+ * deterministically.
+ */
+export function curatedRecordId(compactionRecord, { identity = 'curated' } = {}) {
+  const runId = isNonEmptyString(compactionRecord.runId) ? compactionRecord.runId : 'unknown';
+  const sessionId = isNonEmptyString(compactionRecord.sessionId) ? compactionRecord.sessionId : 'unknown';
+  const key = isNonEmptyString(compactionRecord.key) ? compactionRecord.key : 'default';
+  return storeRecordId(identity, runId, sessionId, key, CURATED_SECTION);
+}
+
+/**
+ * Curation: consume compaction records and produce curated memory entries
+ * linked to source record IDs, with safe conflict/stale pruning.
+ *
+ * Each curated memory entry links back to the compaction record IDs (via
+ * `sourceRecordIds`) so provenance can be traced all the way back to the
+ * original run. Conflict/stale detection groups entries by key: the newest
+ * non-conflicting entry is retained, older conflicting entries are pruned,
+ * and the union of source record IDs across all considered entries is
+ * preserved on the retained entry.
+ *
+ * @param {Array<object>} compactionRecords compaction output from
+ *   `compactMemory` (each record has `id`, `sourceRecordId`,
+ *   `sourceRunIds`, `sourceSessionIds`, `runId`, `sessionId`, and
+ *   optionally `key`, `value`, `timestamp`).
+ * @param {object} [options]
+ * @param {string} [options.identity] stable identity for curated record ids.
+ * @returns {{ records: object[], pruned: number }}
+ */
+export function curateMemory(compactionRecords, options = {}) {
+  if (!Array.isArray(compactionRecords)) {
+    throw new TypeError('curateMemory requires an array of compaction records');
+  }
+  const { identity = 'curated' } = options;
+  if (compactionRecords.length === 0) return { records: [], pruned: 0 };
+
+  // Group by key (from payload or top-level).
+  const byKey = new Map();
+  for (const record of compactionRecords) {
+    if (!record || typeof record !== 'object' || Array.isArray(record)) {
+      throw new TypeError('compaction record must be a plain object');
+    }
+    const payload = (record.payload && typeof record.payload === 'object') ? record.payload : {};
+    const key = isNonEmptyString(payload.key) ? payload.key
+      : isNonEmptyString(record.key) ? record.key : 'default';
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(record);
+  }
+
+  const curated = [];
+  let pruned = 0;
+
+  for (const [key, group] of byKey) {
+    // Sort by timestamp (newest first); deterministic tie-break by runId.
+    group.sort((left, right) => {
+      const leftPayload = (left.payload && typeof left.payload === 'object') ? left.payload : {};
+      const rightPayload = (right.payload && typeof right.payload === 'object') ? right.payload : {};
+      const leftTs = leftPayload.timestamp ?? left.timestamp;
+      const rightTs = rightPayload.timestamp ?? right.timestamp;
+      // Malformed timestamps sort as 0 (oldest) instead of producing NaN,
+      // keeping the newest-first ordering deterministic.
+      const toTime = (ts) => {
+        const time = typeof ts === 'string' ? Date.parse(ts) : typeof ts === 'number' ? ts : NaN;
+        return Number.isFinite(time) ? time : 0;
+      };
+      const leftTime = toTime(leftTs);
+      const rightTime = toTime(rightTs);
+      if (leftTime !== rightTime) return rightTime - leftTime;
+      // Tie-break: higher runId wins (deterministic, preserves data).
+      const leftRun = left.runId ?? '';
+      const rightRun = right.runId ?? '';
+      if (leftRun !== rightRun) return leftRun > rightRun ? -1 : 1;
+      // Final tie-break by compaction id for full determinism.
+      return String(left.id ?? '').localeCompare(String(right.id ?? ''));
+    });
+
+    // The newest non-conflicting entry is retained.
+    const retained = group[0];
+    const retainedPayload = (retained.payload && typeof retained.payload === 'object') ? retained.payload : {};
+    const retainedValue = retainedPayload.value ?? retained.value;
+    const retainedTs = retainedPayload.timestamp ?? retained.timestamp;
+
+    // Collect union of all source record/run/session IDs.
+    const sourceRecordIds = new Set();
+    const sourceRunIds = new Set();
+    const sourceSessionIds = new Set();
+
+    for (const record of group) {
+      if (isNonEmptyString(record.id)) sourceRecordIds.add(record.id);
+      if (isNonEmptyString(record.sourceRecordId)) sourceRecordIds.add(record.sourceRecordId);
+      for (const runId of record.sourceRunIds ?? (isNonEmptyString(record.runId) ? [record.runId] : [])) {
+        if (isNonEmptyString(runId)) sourceRunIds.add(runId);
+      }
+      for (const sessionId of record.sourceSessionIds ?? (isNonEmptyString(record.sessionId) ? [record.sessionId] : [])) {
+        if (isNonEmptyString(sessionId)) sourceSessionIds.add(sessionId);
+      }
+    }
+
+    // Count pruned entries: older conflicting or stale entries.
+    for (const record of group.slice(1)) {
+      const p = (record.payload && typeof record.payload === 'object') ? record.payload : {};
+      const recordTs = p.timestamp ?? record.timestamp;
+      const isStale = recordTs !== undefined && recordTs !== null &&
+        retainedTs !== undefined && recordTs !== retainedTs;
+      const isConflict = retainedValue !== undefined && p.value !== undefined &&
+        p.value !== retainedValue;
+      if (isStale || isConflict) {
+        pruned += 1;
+      }
+    }
+
+    const curatedRecord = {
+      // Curated entries get their own id (curated-memory section), so they
+      // never collide with the compaction ids they reference.
+      id: curatedRecordId({ ...retained, key }, { identity }),
+      key,
+      runId: retained.runId,
+      sessionId: retained.sessionId,
+      ...(retainedValue !== undefined ? { value: retainedValue } : {}),
+      ...(retainedTs !== undefined ? { timestamp: retainedTs } : {}),
+      sourceRecordIds: [...sourceRecordIds],
+      sourceRunIds: [...sourceRunIds],
+      sourceSessionIds: [...sourceSessionIds],
+      compactionIds: [...new Set(group.map((r) => r.id).filter(Boolean))],
+    };
+    curated.push(curatedRecord);
+  }
+
+  // Sort curated records by key for deterministic output.
+  curated.sort((left, right) => left.key.localeCompare(right.key));
+  return { records: curated, pruned };
 }

@@ -12,6 +12,10 @@ export { SCHEMA_VERSION } from './provenance-schema.mjs';
 const RUN_LIFECYCLE_EVENTS = ['started', 'session', 'failure', 'cancellation', 'completed'];
 const RAW_SECTION = 'raw-history';
 const CURATED_SECTION = 'curated-memory';
+const COMPACTION_SECTION = 'compaction';
+// Matches the event baked into compaction record ids by `buildCompactionRecord`
+// so provenance and ids never drift apart.
+const COMPACTION_EVENT = 'compacted';
 
 const isNonEmptyString = (value) => typeof value === 'string' && value.trim() !== '';
 
@@ -91,6 +95,90 @@ export function buildProvenanceRecord({ runId, sessionId, event, payload } = {},
 export function storeRecordId(identity, runId, sessionId, event, section) {
   const raw = `${identity}|${runId}|${sessionId}|${event}|${section}`;
   return createHash('sha256').update(raw).digest('hex');
+}
+
+/**
+ * Build compaction provenance for a single source memory record.
+ *
+ * Compaction re-records surviving memory records under a stable compaction
+ * identity so curated memory can link back to source record ids. Each source
+ * record yields:
+ *   - a `sourceRecordId` for the original record (stable across runs),
+ *   - a provenance record (via `buildProvenanceRecord`) stamped with the
+ *     source run/session ids so provenance survives compaction.
+ *
+ * Missing provenance fields fall back to the record's own `runId`/
+ * `sessionId` rather than throwing. `validateProvenanceRecord` is applied
+ * when the event is a lifecycle event; the compaction payload itself is
+ * always validated for shape.
+ */
+export function buildCompactionProvenance(sourceRecord, { identity = 'compaction', source = 'compaction source' } = {}) {
+  if (typeof sourceRecord !== 'object' || sourceRecord === null || Array.isArray(sourceRecord)) {
+    throw new TypeError(`${source} must be an object`);
+  }
+  const runId = isNonEmptyString(sourceRecord.runId) ? sourceRecord.runId : 'unknown';
+  const sessionId = isNonEmptyString(sourceRecord.sessionId) ? sourceRecord.sessionId : 'unknown';
+  // A missing event must not be fabricated as a lifecycle event: fall back to
+  // the compaction event itself so provenance never claims a run state that
+  // the source record did not report.
+  const event = isNonEmptyString(sourceRecord.event) ? sourceRecord.event : COMPACTION_EVENT;
+  // Same-run records share run, session, and event; the content digest keeps their ids distinct.
+  const digest = createHash('sha256').update(JSON.stringify(sourceRecord)).digest('hex');
+  const sourceRecordId = storeRecordId(identity, runId, sessionId, `${event}:${digest}`, RAW_SECTION);
+  const payload = {
+    ...sourceRecord,
+    runId,
+    sessionId,
+    // Preserve provenance already merged by an earlier compaction pass
+    // instead of overwriting it with this record's own ids.
+    sourceRunIds: [...new Set([runId, ...(sourceRecord.sourceRunIds ?? [])])],
+    sourceSessionIds: [...new Set([sessionId, ...(sourceRecord.sourceSessionIds ?? [])])],
+    sourceRecordId,
+  };
+  let provenance;
+  try {
+    provenance = buildProvenanceRecord({ runId, sessionId, event, payload });
+  } catch (error) {
+    // Only the missing-field fallback is tolerated; construction failures for
+    // otherwise-valid records must surface to the caller.
+    if (!(error instanceof TypeError)) throw error;
+    provenance = redactRecord({ runId, sessionId, event, payload });
+  }
+  // Lifecycle-event provenance is validated with the typed validator; missing
+  // provenance fields fall back to the record's own ids (TASK.md edge case)
+  // before validating, and every other validation failure surfaces.
+  if (RUN_LIFECYCLE_EVENTS.includes(event)) {
+    if (!isNonEmptyString(provenance.runId) || !isNonEmptyString(provenance.sessionId)) {
+      provenance.runId = runId;
+      provenance.sessionId = sessionId;
+    }
+    validateProvenanceRecord(provenance, 'compaction provenance');
+  }
+  return { sourceRecordId, provenance };
+}
+
+/**
+ * Build a compaction record from a source memory record. The compaction
+ * record carries the source run/session ids plus a `sourceRecordId` (the
+ * stable id of the source record) so curated memory can link back.
+ */
+export function buildCompactionRecord(sourceRecord, options = {}) {
+  const { identity = 'compaction' } = options;
+  const { sourceRecordId, provenance } = buildCompactionProvenance(sourceRecord, options);
+  const compactionRecordId = storeRecordId(identity, provenance.runId, provenance.sessionId,
+    `${COMPACTION_EVENT}:${sourceRecordId}`, COMPACTION_SECTION);
+  return {
+    id: compactionRecordId,
+    section: COMPACTION_SECTION,
+    runId: provenance.runId,
+    sessionId: provenance.sessionId,
+    event: provenance.event,
+    sourceRunIds: [...new Set([provenance.runId, ...(sourceRecord.sourceRunIds ?? [])])],
+    sourceSessionIds: [...new Set([provenance.sessionId, ...(sourceRecord.sourceSessionIds ?? [])])],
+    sourceRecordId,
+    provenance,
+    payload: provenance.payload,
+  };
 }
 
 function validateMemoryRecord(record, source = 'curated memory record') {
