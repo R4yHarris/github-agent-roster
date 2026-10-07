@@ -135,14 +135,22 @@ function parseImports(text) {
 
 function callPattern(names) {
   const escaped = [...names].map((name) => name.replace(/\$/g, '\\$'));
-  return escaped.length ? new RegExp(`(?<![\\w$.])(?:new\\s+)?(${escaped.join('|')})(?:\\s*\\.\\s*[A-Za-z_$][\\w$]*)*\\s*\\(`, 'g') : null;
+  return escaped.length ? new RegExp(`(?<![\\w$.])(?:new\\s+)?(${escaped.join('|')})((?:\\s*\\.\\s*[A-Za-z_$][\\w$]*)*)\\s*\\(`, 'g') : null;
 }
 
-function calls(masked, names) {
+// Built-in value methods: calling them on what app code returned only inspects output, not app behavior.
+const builtinMethods = new Set(['includes', 'indexOf', 'lastIndexOf', 'startsWith', 'endsWith', 'match', 'matchAll',
+  'test', 'exec', 'search', 'replace', 'replaceAll', 'split', 'slice', 'substring', 'trim', 'toString', 'toLowerCase',
+  'toUpperCase', 'some', 'every', 'map', 'filter', 'find', 'findIndex', 'forEach', 'reduce', 'join', 'at', 'concat',
+  'flat', 'flatMap', 'keys', 'values', 'entries', 'has', 'get', 'stringify', 'parse', 'valueOf']);
+
+function calls(masked, names, instances = new Set()) {
   const pattern = callPattern(names);
   if (!pattern) return [];
   const found = [];
   for (const match of masked.matchAll(pattern)) {
+    const member = /([A-Za-z_$][\w$]*)\s*$/.exec(match[2])?.[1];
+    if (instances.has(match[1]) && (!member || builtinMethods.has(member))) continue;
     const open = match.index + match[0].length - 1;
     const close = matchingClose(masked, open);
     found.push({ name: match[1], start: match.index, open, close: close < 0 ? masked.length : close });
@@ -178,6 +186,28 @@ function appHelpers(text, masked, appNames) {
     }
   }
   return helpers;
+}
+
+// Names bound to what app code returned (const { store } = await makeStore()), so store.query() is an app call.
+function appInstances(masked, sinks) {
+  const declarations = [];
+  for (const match of masked.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*|\{[^}]*\}|\[[^\]]*\])\s*=/g)) {
+    const names = match[1].match(/[A-Za-z_$][\w$]*/g)?.filter((name) => !keywords.has(name)) ?? [];
+    const start = match.index + match[0].length;
+    declarations.push({ names, body: masked.slice(start, statementEnd(masked, start) + 1) });
+  }
+  const instances = new Set();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const current = new Set([...sinks, ...instances]);
+    for (const { names, body } of declarations) {
+      if (names.every((name) => instances.has(name) || current.has(name)) || !calls(body, current, instances).length) continue;
+      for (const name of names) if (!current.has(name)) instances.add(name);
+      changed = true;
+    }
+  }
+  return instances;
 }
 
 function addedTestBlocks(added, maskedAdded) {
@@ -248,7 +278,7 @@ function seededSentinels(added, maskedAdded) {
   return sentinels;
 }
 
-function sentinelReached(added, maskedAdded, value, sinkNames) {
+function sentinelReached(added, maskedAdded, value, sinkNames, instances) {
   const literalRanges = stringLiterals(added, maskedAdded).filter((entry) => entry.value.includes(value) || value.includes(entry.value) && entry.value.length >= 6);
   const tainted = new Set();
   const containsTaint = (start, end) => literalRanges.some((range) => range.start >= start && range.start < end) ||
@@ -272,7 +302,7 @@ function sentinelReached(added, maskedAdded, value, sinkNames) {
     const start = match.index + match[0].length;
     if (containsTaint(start, statementEnd(maskedAdded, start))) return true;
   }
-  return calls(maskedAdded, sinkNames).some(({ open, close }) => containsTaint(open, close));
+  return calls(maskedAdded, sinkNames, instances).some(({ open, close }) => containsTaint(open, close));
 }
 
 // True when added test-file lines contain a new test/it block or an assertion.
@@ -317,21 +347,22 @@ export function analyzeTestSubstance({ file, text, added }) {
   const sinkNames = new Set(imports.filter(({ harness }) => !harness).map(({ name }) => name));
   const masked = maskCode(text);
   const helpers = appHelpers(text, masked, appNames);
-  const appSinks = new Set([...appNames, ...helpers]);
-  const allSinks = new Set([...sinkNames, ...helpers]);
+  const instances = appInstances(masked, new Set([...appNames, ...helpers]));
+  const appSinks = new Set([...appNames, ...helpers, ...instances]);
+  const allSinks = new Set([...sinkNames, ...helpers, ...instances]);
   const maskedAdded = maskCode(added);
   const reasons = [];
   // Only demand app calls when the file already imports an app seam the test could use.
   for (const block of appNames.size ? addedTestBlocks(added, maskedAdded) : []) {
     const body = maskedAdded.slice(block.start, block.end + 1);
-    if (!calls(body, appSinks).length && !readsAppConstant(body, appNames) &&
+    if (!calls(body, appSinks, instances).length && !readsAppConstant(body, appNames) &&
         !scansRepositorySource(body, added.slice(block.start, block.end + 1), text)) {
       reasons.push(`Test substance: new test "${block.title.slice(0, 80)}" in ${file} never calls imported app code; ` +
         'its assertions only inspect values the test built, so they cannot catch a regression.');
     }
   }
   for (const [value, name] of seededSentinels(added, maskedAdded)) {
-    if (sentinelReached(added, maskedAdded, value, allSinks)) continue;
+    if (sentinelReached(added, maskedAdded, value, allSinks, instances)) continue;
     const label = name ?? `'${value.slice(0, 40)}'`;
     reasons.push(`Test substance: sentinel ${label} in ${file} is asserted absent but never passed to app code ` +
       '(arguments, config, or process.env); the assertion cannot fail.');
