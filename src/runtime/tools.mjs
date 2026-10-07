@@ -760,6 +760,21 @@ export async function createTools({
     if (privateHost) throw new ToolAccessError('web_fetch refuses private or local hosts');
     return target;
   }
+  // Coders guess module names (provenance.mjs for provenance-store.mjs); point them at real siblings instead of a raw ENOENT.
+  async function missingFileHint(relative) {
+    const shown = relative.split(path.sep).join('/');
+    const dir = path.posix.dirname(shown);
+    const stem = path.posix.basename(shown).toLowerCase().split(/[-_.]/)[0];
+    let similar = [];
+    try {
+      const entries = await tools.list_dir({ path: dir });
+      similar = entries.filter((item) => item.type === 'file' && stem &&
+        item.name.toLowerCase().startsWith(stem)).map((item) => path.posix.join(dir, item.name)).slice(0, 5);
+    } catch {}
+    return similar.length
+      ? `read_file: ${shown} does not exist. Similar files: ${similar.join(', ')}`
+      : `read_file: ${shown} does not exist. Use list_dir or search_text to find the right path`;
+  }
   const tools = {
     async read_file(args) {
       argumentsFor(args, ['path'], ['max_lines', 'offset']);
@@ -773,7 +788,10 @@ export async function createTools({
       }
       const { file, relative } = locate(args.path);
       await checkComponents(relative);
-      const entry = await fs.lstat(file);
+      const entry = await fs.lstat(file).catch(async (error) => {
+        if (error.code !== 'ENOENT') throw error;
+        throw Object.assign(new Error(await missingFileHint(relative)), { code: 'ENOENT' });
+      });
       if (!entry.isFile()) throw new Error('read_file requires a regular file');
       if (isRepoMap(relative.split(path.sep).join('/')) && entry.nlink !== 1) throw new Error('Repo map must be a single-link file');
       await checkParent(file);
