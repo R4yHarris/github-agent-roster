@@ -135,7 +135,12 @@ next to a store that exports `readRecords` gets flagged. Re-exports
 (`export { x } from`) are not new definitions. Findings return to the coder
 once as `Shadow module:` reasons (import or extend the existing module, or say
 why a new one is needed), and the reviewer then sees the evidence.
-Exports from earlier waves of the same epic are labelled. RESULT.md gets a
+Exports from earlier waves of the same epic are labelled. A new export that no
+product module uses (only tests, or nothing) is flagged as well, unless the
+task text names it or it lives in an entry point (`src/cli.mjs`, `bin/`). For
+example, a `pathsEqual` helper called only by its test gets flagged. This
+catches helpers written to satisfy a check but never wired into the delivered
+path. RESULT.md gets a
 `## Shadow modules` section, and the run log records `shadow-modules <status>
 findings=N`.
 

@@ -45,7 +45,7 @@ test('a new readRecords file next to a readAll store is flagged; a genuine new e
   writeFileSync(path.join(worktree, 'src', 'duration.mjs'), 'export const formatDuration = (ms) => `${ms} ms`;\n');
   const status = git(worktree, 'status', '--porcelain');
   const result = await checkShadowModules({ worktree, files: ['src/records.mjs', 'src/duration.mjs'],
-    priorWaveFiles: ['src/record-store.mjs'] });
+    priorWaveFiles: ['src/record-store.mjs'], taskText: 'Add formatDuration and readRecords.' });
   assert.equal(result.status, 'flagged');
   assert.deepEqual(result.findings.map(({ file, name, existing }) => [file, name, existing]),
     [['src/records.mjs', 'readRecords', 'src/record-store.mjs']]);
@@ -57,9 +57,26 @@ test('an exact export name in another module is flagged; extending the module it
   const worktree = repo(context);
   writeFileSync(path.join(worktree, 'src', 'ledger.mjs'), 'export function appendRecord() {}\n');
   writeFileSync(path.join(worktree, 'src', 'record-store.mjs'), `${store}export function readRecords() {\n  return readAll();\n}\n`);
-  const result = await checkShadowModules({ worktree, files: ['src/ledger.mjs', 'src/record-store.mjs'] });
+  const result = await checkShadowModules({ worktree, files: ['src/ledger.mjs', 'src/record-store.mjs'],
+    taskText: 'Expose readRecords.' });
   assert.deepEqual(result.findings.map(({ name, existing }) => [name, existing]), [['appendRecord', 'src/record-store.mjs']]);
   assert.match(result.findings[0].reason, /already exports; import or extend appendRecord in src\/record-store\.mjs instead/);
+});
+
+test('new exports with no product caller are flagged unless used, task-named, or an entry point', async (context) => {
+  const worktree = repo(context);
+  writeFileSync(path.join(worktree, 'src', 'paths.mjs'), 'export function normalizePath(p) {\n  return p;\n}\n' +
+    'export function pathsEqual(a, b) {\n  return normalizePath(a) === normalizePath(b);\n}\n' +
+    'export const helperUsedInside = 1;\nexport const wired = () => helperUsedInside;\nexport const named = 2;\n');
+  writeFileSync(path.join(worktree, 'src', 'main.mjs'), "import { wired } from './paths.mjs';\nexport const run = () => wired();\n");
+  writeFileSync(path.join(worktree, 'src', 'cli.mjs'), 'export function main() {}\n');
+  writeFileSync(path.join(worktree, 'tests', 'paths.test.mjs'), "import { pathsEqual } from '../src/paths.mjs';\npathsEqual('a', 'a');\n");
+  const result = await checkShadowModules({ worktree, taskText: 'Add `named` for the next wave.',
+    files: ['src/paths.mjs', 'src/main.mjs', 'src/cli.mjs', 'tests/paths.test.mjs'] });
+  assert.equal(result.status, 'flagged');
+  assert.deepEqual(result.findings.map(({ file, name, unused }) => [file, name, unused]),
+    [['src/paths.mjs', 'pathsEqual', true], ['src/main.mjs', 'run', true]]);
+  assert.match(result.findings[0].reason, /^Shadow module: src\/paths\.mjs exports pathsEqual, but no product module uses it \(only tests, or nothing\); wire it into the production caller the task names, make it module-private, or delete it\./);
 });
 
 test('test-only diffs and non-git worktrees run no comparison', async (context) => {
@@ -120,7 +137,7 @@ test('the coder gets one shadow-module correction and RESULT.md shows the gate t
   assert.deepEqual(events.map(({ status, findings }) => [status, findings]), [['flagged', 1], ['checked', 0]]);
   assert.equal(existsSync(path.join(worktree, 'src', 'records.mjs')), false);
   assert.equal(result.excellence.pass, true);
-  assert.match(readFileSync(result.resultPath, 'utf8'), /## Shadow modules\n\nStatus: checked\n\n- No new export duplicates an existing module\./);
+  assert.match(readFileSync(result.resultPath, 'utf8'), /## Shadow modules\n\nStatus: checked\n\n- No new export duplicates an existing module or lacks a product caller\./);
 });
 
 test('shadow-module results reach the run log', async (context) => {

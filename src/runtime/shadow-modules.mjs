@@ -58,11 +58,17 @@ export function exportNames(text) {
   return [...names];
 }
 
+// Public entry points are called by users, not by other modules.
+const isEntryPoint = (file) => file === 'src/cli.mjs' || file.startsWith('bin/');
+const occurrences = (text, name) =>
+  (text ?? '').match(new RegExp(`(?<![\\w$])${name.replaceAll('$', '\\$')}(?![\\w$])`, 'g'))?.length ?? 0;
+const mentions = (text, name) => occurrences(text, name) > 0;
+
 const stemWords = (file) => words(path.posix.basename(file).replace(codeFile, '')).map(singular)
   .filter((word) => !generic.has(word) && word.length > 2);
 
 // Deterministic, LLM-free: new exports and files in the diff compared with existing modules by name, stem, and role.
-export async function checkShadowModules({ worktree, files, priorWaveFiles = [], runCommand = execute }) {
+export async function checkShadowModules({ worktree, files, priorWaveFiles = [], taskText = '', runCommand = execute }) {
   const changed = [...new Set(files.map((file) => file.replaceAll('\\', '/')))].filter(isProductCode);
   if (!changed.length) return { status: 'none', findings: [] };
   const git = async (args) => (await runCommand('git', args, { cwd: worktree, encoding: 'utf8',
@@ -85,8 +91,12 @@ export async function checkShadowModules({ worktree, files, priorWaveFiles = [],
   if (!added.length) return { status: 'checked', findings: [] };
   const earlier = new Set(priorWaveFiles.map((file) => file.replaceAll('\\', '/')));
   const modules = [];
+  const sources = new Map();
+  for (const file of new Set([...tracked, ...changed])) {
+    if (isProductCode(file)) sources.set(file, await read(file));
+  }
   for (const file of [...tracked].filter(isProductCode)) {
-    const text = changed.includes(file) ? await base(file) : await read(file);
+    const text = changed.includes(file) ? await base(file) : sources.get(file);
     const names = exportNames(text);
     if (!names.length) continue;
     modules.push({ file, names, stem: new Set(stemWords(file)), profiles: names.map((name) => ({ name, ...profile(name) })) });
@@ -118,11 +128,21 @@ export async function checkShadowModules({ worktree, files, priorWaveFiles = [],
         `duplicates the ${role} role of ${peer.name} in ${label(match)}; extend ${match.file} instead of a parallel module.` });
     }
   }
+  const flagged = new Set(findings.map(({ file, name }) => `${file}\0${name}`));
+  for (const { file, name } of added) {
+    if (flagged.has(`${file}\0${name}`) || isEntryPoint(file) || mentions(taskText, name)) continue;
+    const used = [...sources].some(([other, text]) => text !== null &&
+      (other === file ? occurrences(text, name) > 1 : occurrences(text, name) > 0));
+    if (used) continue;
+    findings.push({ file, name, unused: true, reason: `${shadowPrefix} ${file} exports ${name}, but no product module ` +
+      'uses it (only tests, or nothing); wire it into the production caller the task names, make it module-private, ' +
+      'or delete it. If a later wave owns the caller, say so in RESULT.md.' });
+  }
   return { status: findings.length ? 'flagged' : 'checked', findings, exports: added.length };
 }
 
 export function shadowSection(shadow) {
   return `Status: ${shadow.status}\n\n` + (shadow.findings.length
     ? shadow.findings.map(({ reason }) => `- ${reason.slice(shadowPrefix.length + 1)}`).join('\n')
-    : '- No new export duplicates an existing module.') + '\n';
+    : '- No new export duplicates an existing module or lacks a product caller.') + '\n';
 }

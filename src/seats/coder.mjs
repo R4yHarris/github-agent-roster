@@ -202,7 +202,7 @@ export async function runCoder({
         }
         // Deterministic: new exports that duplicate an existing module get one repair, then are shown to the reviewer.
         if (evidence.pass && config.llm.base_url) {
-          shadow = await checkShadowModules({ worktree, files: evidence.files, priorWaveFiles });
+          shadow = await checkShadowModules({ worktree, files: evidence.files, priorWaveFiles, taskText: context.task });
           await onEvent?.({ type: 'shadow-modules', status: shadow.status, findings: shadow.findings.length });
           if (shadow.findings.length && !shadowRepairUsed) {
             shadowRepairUsed = true;
