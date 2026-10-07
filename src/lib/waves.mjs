@@ -19,6 +19,8 @@ async function run(program, args, cwd, env) {
 }
 
 const labels = (issue) => (issue.labels ?? []).map((label) => typeof label === 'string' ? label : label?.name);
+// Accepts the plain board label and the label a Roster run sets through the App (e.g. roster:review).
+const hasLabel = (issue, name) => labels(issue ?? {}).some((label) => label === name || label === `roster:${name}`);
 
 export async function requireEarlierWavesClosed({ issue, repository, cwd, runCommand }) {
   const wave = issueWave(issue);
@@ -109,10 +111,12 @@ export async function waveBoard({
     const issue = matched.get(index + 1);
     let state = issue?.state === 'CLOSED' ? 'done'
       : [...matched.values()].some((earlier) => issueWave(earlier) < draft.wave && earlier.state === 'OPEN') ||
-        labels(issue ?? {}).includes('blocked') ? 'blocked'
+        hasLabel(issue, 'blocked') ? 'blocked'
       : issue && activeIssue === issue.number && ['planning', 'drafting', 'testing'].includes(activeState) ? 'running'
-      : issue && activeIssue === issue.number && ['reviewing', 'passed'].includes(activeState) || labels(issue ?? {}).includes('review')
-        ? 'review' : 'todo';
+      : issue && activeIssue === issue.number && ['reviewing', 'passed'].includes(activeState) || hasLabel(issue, 'review')
+        ? 'review'
+      // Another agent's claim is shared through the board, so it is not offered as the next wave slice.
+      : hasLabel(issue, 'in-progress') ? 'running' : 'todo';
     if (issue && state === 'todo') {
       let pulls;
       try { pulls = JSON.parse(await runCommand('gh', ['pr', 'list', '--repo', repository, '--head',

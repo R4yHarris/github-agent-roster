@@ -279,6 +279,36 @@ session and reported token counts; the single code commit published through
 the SDK carries the coder's run. Unknown slots remain unset or `-`. An API key
 is not forwarded to tests or the publisher.
 
+### Issue run status (the board follows the run)
+
+When `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY_PATH` are set, every issue
+run (CLI or REPL, including wave slices) reports itself on the issue through
+the same issue-scoped App token. No flag is needed. Human-owned policy must
+grant the coder `comment` and `label`. Labels are the shared signal for other
+agents and humans:
+
+| Moment | Label | Comment |
+| --- | --- | --- |
+| Worktree prepared | `roster:in-progress` | Run started, with branch and seats |
+| Review passes | `roster:review` | Review verdict, coder model, ready to publish |
+| Published and merged | `roster:review` | None (the merge comment already reports it) |
+| Failure, cancellation, clarification, or human pause | `roster:blocked` | Redacted reason |
+
+Each run swaps out the other `roster:*` labels and creates a missing label
+once. If the issue already carries `roster:in-progress`, the run warns that
+another agent may be working it. The wave board treats `roster:in-progress`
+as running, so a parallel run never auto-picks that slice. It treats
+`roster:review` and `roster:blocked` like `review` and `blocked`. A feature
+parent stays claimed while its wave slice reports on its own issue.
+
+Status updates are best-effort: a GitHub error is logged and never fails the
+run. The App never closes or reopens issues. If the installation holds
+**Organization projects: write**, the issue's Projects Status moves to the
+`In progress` and `In review` columns, matched by name; blocked leaves the
+column unchanged. GitHub Apps cannot write user-owned Projects. For those,
+the labels and comments are the status; use the project's built-in workflows
+(for example, closed → Done) or move the project to an organization.
+
 For a human TTY, bare `roster` opens the [interactive shell](REPL.md).
 Its `/publish` command imports the App SDK in-process; agent/CI `--publish`
 invokes the same SDK with `--merge-when-green`.
