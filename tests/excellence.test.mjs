@@ -198,6 +198,32 @@ test('test substance flags only added tests that cannot fail, never pre-existing
   assert.deepEqual((await checkExcellence(options)).reasons, [], 'Strengthening an existing assertion is real test work');
 });
 
+test('app code that special-cases a test sentinel fails test substance', async (context) => {
+  const options = await fixture(context);
+  options.task = planStub('Redact keys in src/route.mjs and test it in tests/route.test.mjs.').task;
+  writeFileSync(path.join(options.worktree, 'TASK.md'), options.task);
+  mkdirSync(path.join(options.worktree, 'src'));
+  mkdirSync(path.join(options.worktree, 'tests'));
+  const app = path.join(options.worktree, 'src', 'route.mjs');
+  writeFileSync(app, 'export const formatRoute = (text) => text;\n');
+  const file = path.join(options.worktree, 'tests', 'route.test.mjs');
+  writeFileSync(file, "import assert from 'node:assert/strict';\nimport test from 'node:test';\n" +
+    "import { formatRoute } from '../src/route.mjs';\n\ntest('legacy', () => {\n  assert.equal(formatRoute('a'), 'a');\n});\n");
+  const git = (...args) => execFileSync('git', args, { cwd: options.worktree, encoding: 'utf8', stdio: 'pipe' });
+  git('init', '--quiet');
+  git('add', '--all');
+  git('-c', 'user.name=Test Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet', '-m', 'Fixture');
+  options.baseline = await snapshotWorktree(options.worktree);
+  writeFileSync(file, `${readFileSync(file, 'utf8')}\ntest('hides keys', () => {\n  const secret = 'test-only-private-api-key';\n` +
+    '  const input = `api_key = ${secret}`;\n  assert.ok(!formatRoute(input).includes(secret));\n});\n');
+  writeFileSync(app, "export const formatRoute = (text) => text.replace(/test-only-private-api-key/g, '[REDACTED]');\n");
+  const gamed = await checkExcellence(options);
+  assert.equal(gamed.reasons.length, 1);
+  assert.match(gamed.reasons[0], /^Test substance: src\/route\.mjs special-cases the test sentinel 'test-only-private-api-key'/);
+  writeFileSync(app, "export const formatRoute = (text) => text.replace(/(api_key\\s*=\\s*)\\S+/g, '$1[REDACTED]');\n");
+  assert.deepEqual((await checkExcellence(options)).reasons, []);
+});
+
 test('Git diff checks include out-of-scope changes that already existed before the loop', async (context) => {
   const options = await fixture(context);
   const git = (...args) => execFileSync('git', args, { cwd: options.worktree, encoding: 'utf8', stdio: 'pipe' });

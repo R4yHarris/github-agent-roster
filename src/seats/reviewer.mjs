@@ -40,7 +40,9 @@ const testReviewInstructions = 'For test changes, verify the assertions would fa
   'through an imported app function; that is tautological. ' +
   'For any secret-leakage check, require an obvious non-credential sentinel such as test-only-private-api-key that is ' +
   'fed into the app code under test (input, config, or env) and an assertion that the exact sentinel is absent from ' +
-  'that code\'s serialized output; a generic keyword scan, or a sentinel the test removes itself, is insufficient.';
+  'that code\'s serialized output; a generic keyword scan, or a sentinel the test removes itself, is insufficient. ' +
+  'Fail app code that matches, hardcodes, or special-cases a test sentinel or fixture value; that games the test ' +
+  'instead of implementing the behavior.';
 
 const previousFindingsInstructions = 'This is a re-review after a repair. For each previous finding listed in the ' +
   'evidence, judge whether the current diff resolves it. A new finding must cite words from the check or TASK.md ' +

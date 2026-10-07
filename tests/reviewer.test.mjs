@@ -161,6 +161,7 @@ test('reviewer requires substantive public-path and seeded-secret evidence for t
   assert.match(systemInstructions, /exercise the public operation when the Ask names one/);
   assert.match(systemInstructions, /exact sentinel is absent from\s+that code's serialized output/);
   assert.match(systemInstructions, /generic keyword scan, or a sentinel the test removes itself, is insufficient/);
+  assert.match(systemInstructions, /Fail app code that matches, hardcodes, or special-cases a test sentinel/);
   assert.match(systemInstructions, /built inside the test itself.*tautological/);
 });
 

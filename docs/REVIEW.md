@@ -93,7 +93,9 @@ counts, because a regression in that source fails it, and so does asserting on
 an imported SCREAMING_CASE app constant. A seeded string literal that an assertion
 checks for absence must reach an app call as an argument, a config object
 derived from it, or `process.env`; a template interpolation such as
-`` `key ${SENTINEL}` `` inside the call counts as passing it. A diff that changes only test files must
+`` `key ${SENTINEL}` `` inside the call counts as passing it. Changed app code must not
+contain a sentinel that a changed test seeds; special-casing the test value is
+gaming, and the reviewer fails it too. A diff that changes only test files must
 add a test block or assertion when TASK class is `test` or the additions are
 only imports and comments; otherwise it is not test work. Failures start with
 `Test substance:` and

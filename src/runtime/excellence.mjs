@@ -7,7 +7,10 @@ import { ensureLocalPath } from '../lib/paths.mjs';
 import { redactEvidence, secretMaterialLines } from '../lib/redaction.mjs';
 import { taskFilesAllowed } from '../planner/stub.mjs';
 import { splitTaskFrontmatter } from './skills.mjs';
-import { addedLinesByFile, addsOnlyImports, addsTestEvidence, analyzeTestSubstance, isTestFile } from './test-substance.mjs';
+import { addedLinesByFile, addsOnlyImports, addsTestEvidence, analyzeTestSubstance, isTestFile, sentinelSpecialCases,
+  testSentinelValues } from './test-substance.mjs';
+
+const codeFilePattern = /\.(?:[cm]?[jt]sx?|py)$/;
 import { readTaskMetadata } from './estimate.mjs';
 import { isAllowedFile, isForbiddenRead, isForbiddenWrite, isManagedFile, isRunLog, isDebugLog, isShellHistory, isCheckpoint, isRepoMap, taskAndRepairFiles } from './tools.mjs';
 
@@ -133,6 +136,8 @@ export async function checkExcellence({
   let added;
   let testEvidence = false;
   let testAdditions = '';
+  const sentinels = [];
+  const appAdded = new Map();
   for (const file of files) {
     if (isForbiddenWrite(file)) {
       reasons.push(`Diff path is protected or outside TASK.md allowed paths: ${file}`);
@@ -164,8 +169,13 @@ export async function checkExcellence({
       testEvidence ||= addsTestEvidence(fileAdded);
       testAdditions += `${fileAdded}\n`;
       reasons.push(...analyzeTestSubstance({ file, text, added: fileAdded }));
+      sentinels.push(...testSentinelValues(fileAdded));
+    } else if (result.mode === 'llm' && git.hasGit && codeFilePattern.test(file)) {
+      added ??= addedLinesByFile(git.diff);
+      appAdded.set(file, added.get(file) ?? text);
     }
   }
+  reasons.push(...sentinelSpecialCases(appAdded, sentinels));
   const nonTestChanged = files.some((file) => !isTestFile(file) && isAllowedFile(file, allowed) && !isForbiddenWrite(file));
   if (result.mode === 'llm' && git.hasGit && !testEvidence && testAdditions.trim() && !nonTestChanged &&
       (taskClass(task) === 'test' || addsOnlyImports(testAdditions))) {
