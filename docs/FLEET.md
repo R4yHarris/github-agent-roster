@@ -1,8 +1,10 @@
 # Endpoint fleet catalog
 
 Onboarding still selects one default endpoint. The fleet is a private catalog
-of other available model endpoints, not a queue, worker swarm, or concurrency
-runtime. GitHub Issues and PRs remain the board and forge.
+of other available model endpoints, not a task queue, worker swarm, or
+concurrency runtime. GitHub Issues and PRs remain the board and forge.
+A profile's `concurrency` is only an in-process
+[admission limit](#concurrency-admission) on chat requests.
 
 The schema is a `profiles` list in ignored `.roster/fleet.yml`:
 
@@ -151,7 +153,28 @@ a prior cannot nominate a model that is absent from the private catalog.
 with sufficient rated difficulty and declared context outrank starting
 priors; otherwise matching prior/class hints guide the first run.
 Output states the profile, model, and `evals` versus `prior` reason.
-Concurrency is a weak tie-break only, never a parallel-execution command.
+Admission queue depth breaks ties only after evaluation history, priors,
+hardware cost, and context fit; declared concurrency is the last weak
+tie-break. Neither is a parallel-execution command.
+
+## Concurrency admission
+
+A fleet route carries its profile ID and `concurrency` into the seat's LLM
+config. Every chat request through that profile, from any seat in the same
+Roster process, first takes an in-process
+[admission](../src/runtime/admission.mjs) slot. At most `concurrency` requests
+are in flight per profile; later requests wait in FIFO order. The slot is held
+only for one HTTP attempt and is released on success, error, or abort, and an
+aborted waiter leaves the queue without consuming a slot.
+
+This is an admission limit, not a hard cap on connections. It does not
+coordinate separate processes or machines, and it does not limit the server's
+own sockets or batch size. A queued request logs
+`waiting host=... elapsed=Ns queued depth=N` immediately and every 30 seconds
+until admitted. Queueing is congestion, not failure: an admission wait never
+counts as a route failure, so it does not quarantine the profile or escalate
+the seat. Requests without a fleet profile, such as an ordinary run on the
+saved default, are not admission-limited.
 
 `--auto-model` is the explicit permission to select a different endpoint
 and model for one run. It does not require clearing a saved default and

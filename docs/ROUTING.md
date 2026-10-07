@@ -14,15 +14,18 @@ in `.roster/fleet.yml`:
 1. Prefer the highest acceptance rate among fleet models with at least
    **three distinct human evaluations** for the requested task class and
    effort, sufficient median human-rated difficulty, and a positive
-   declared context limit. Ties prefer more samples, then stable profile
+   declared context limit. Ties prefer more samples, then the shorter live
+   [admission queue](FLEET.md#concurrency-admission), then stable profile
    and effort ordering. A defect still turns a later human acceptance into
    a derived reject; automatic test/excellence passes are not human evals.
 2. Otherwise use matching [capability priors](CAPABILITIES.md) and fleet
    task-class hints. Profile-specific priors take precedence over model
    priors. A prior's suggested difficulty must cover the request; a bare
    class hint has no measured difficulty claim. Prefer explicit fleet
-   class hints, then higher declared concurrency as a **weak tie-break**,
-   then stable ID ordering. No throughput or benchmark claim is made.
+   class hints, then smaller sufficient hardware and context, then the
+   shorter live admission queue, then higher declared concurrency as a
+   **weak tie-break**, then stable ID ordering. Queue depth is congestion,
+   not failure. No throughput or benchmark claim is made.
 
 Both tiers exclude a model when its derived **seat + model** difficulty
 ceiling is below the task difficulty, even if a capability prior is stronger.

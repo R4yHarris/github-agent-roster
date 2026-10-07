@@ -56,6 +56,38 @@ test("release wakes FIFO order; double release is a no-op", async () => {
   release("b1");
 });
 
+test("concurrency 2 runs four requests in FIFO order with at most two in flight (#345)", async () => {
+  configure("fifo-four", 2);
+  let inFlight = 0;
+  let maxInFlight = 0;
+  const started = [];
+  const finished = [];
+  const gates = new Map();
+  const work = async (name) => {
+    const done = await acquire("fifo-four");
+    inFlight += 1;
+    maxInFlight = Math.max(maxInFlight, inFlight);
+    started.push(name);
+    await new Promise((resolve) => gates.set(name, resolve));
+    inFlight -= 1;
+    finished.push(name);
+    done();
+  };
+  const runs = ["r1", "r2", "r3", "r4"].map(work);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(started, ["r1", "r2"]);
+  assert.equal(depth("fifo-four"), 2);
+  for (const name of ["r1", "r2", "r3", "r4"]) {
+    gates.get(name)();
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  await Promise.all(runs);
+  assert.deepEqual(started, ["r1", "r2", "r3", "r4"]);
+  assert.deepEqual(finished, ["r1", "r2", "r3", "r4"]);
+  assert.equal(maxInFlight, 2);
+  assert.equal(depth("fifo-four"), 0);
+});
+
 // 3. depth never negative; correct formula.
 test("depth returns pending + inFlight - capacity, never negative", () => {
   configure("c1", 3);
