@@ -9,12 +9,12 @@ import { redactSecrets } from '../runtime/memory.mjs';
 
 const execute = promisify(execFile);
 const seats = ['planner', 'coder', 'reviewer'];
-const tools = ['read_file', 'write_file', 'edit_file', 'delete_file', 'glob_files', 'list_dir', 'run_test', 'run_command', 'search_text', 'web_search', 'web_fetch'];
+const tools = ['read_file', 'write_file', 'edit_file', 'delete_file', 'glob_files', 'list_dir', 'run_test', 'run_command', 'search_text', 'web_search', 'web_fetch', 'update_checklist'];
 const pathClasses = ['root', 'outside', 'secret', 'git', 'policy', 'workflow', 'vendor', 'managed', 'tests', 'source', 'docs', 'other'];
 const phases = ['seat-start', 'seat-end', 'seat-error', 'model', 'http-start', 'http-ok', 'http-error',
   'waiting', 'timeout', 'timeout-retry', 'stall', 'served-model', 'tool-start', 'tool-ok', 'tool-error', 'tool-denied', 'tool-refused', 'finish-reason',
   'finish-retry', 'completion', 'steering', 'test-repair', 'contracts-uninitialized', 'wrote', 'implementation',
-  'usage'];
+  'usage', 'checklist'];
 const fields = ['time', 'issue', 'seat', 'phase', 'tool_name', 'path_class', 'finish_reason',
   'test_name', 'exit_code', 'repair', 'elapsed_ms'];
 const finishReasons = ['stop', 'tool_calls', 'length', 'content_filter', 'function_call', 'eos_token',

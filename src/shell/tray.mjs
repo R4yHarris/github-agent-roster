@@ -64,7 +64,8 @@ export function formatTray(display = {}, { columns = 80, color = true, now = Dat
   const state = clean(display.state) || 'idle';
   const phase = phases[state] ?? state;
   const issue = display.issue === null || display.issue === undefined ? 'local' : `#${display.issue}`;
-  const where = state === 'idle' ? 'idle' : `${issue} ${phase}`;
+  const checklist = /^\d+\/\d+$/.test(display.checklist ?? '') ? ` \u2713${display.checklist}` : '';
+  const where = state === 'idle' ? 'idle' : `${issue} ${phase}${checklist}`;
   const effort = clean(display.effort ?? '-').trim() || '-';
   const id = clean(display.model).trim() || '-';
   const model = `${id} ${effort === '-' ? '-' : effort[0]}`;

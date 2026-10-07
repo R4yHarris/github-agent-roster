@@ -1,3 +1,4 @@
+import { checklistTable } from './checklist.mjs';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
@@ -238,7 +239,8 @@ export async function writeResult({ worktree, result, excellence, env, apiKeyEnv
     `## Verification\n\nChecks: ${blocked ? 'BLOCKED' : passed ? 'PASS' : 'FAIL'}\n` +
     (passed ? '- Operational checks passed.\n'
       : excellence.reasons.map((reason, index) => `- ${index === 0 ? 'First failure: ' : ''}${reason}`).join('\n') + '\n') +
-    `- ${tests}\n\n## Run\n\nModel: ${run?.metrics?.model ?? result.model}\nTool-loop turns: ${result.turns}\n` +
+    `- ${tests}\n\n` + (result.checklist?.length ? `## Checklist\n\n${checklistTable({ items: result.checklist })}\n` : '') +
+    `## Run\n\nModel: ${run?.metrics?.model ?? result.model}\nTool-loop turns: ${result.turns}\n` +
     `Research turns: ${result.research?.turns ?? 0}\n` +
     (result.testRepairs === undefined ? '' : `Test repairs: ${result.testRepairs} of ${result.testRepairBudget ?? 4}\n` +
       `Additional failing-test scope: ${result.repairFiles?.join(', ') || '(none)'}\n`) +
