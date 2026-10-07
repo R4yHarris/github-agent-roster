@@ -239,6 +239,18 @@ test('waiting stays log-only while timeout keeps its human hint and the technica
   });
 });
 
+test('a queued admission wait logs its depth and skips an invalid depth (#343)', async (t) => {
+  const options = fixture(t);
+  const logger = await createRunLog(options);
+  await logger.seat('coder', 'roster-42-coder', config, async (onEvent) => {
+    await onEvent({ type: 'waiting', host: 'gpu-a:8000', local: false, queued: true, elapsedSeconds: 0, depth: 2 });
+    assert.match((await readLastRunLog(options)).lastLine, /waiting host=gpu-a:8000 elapsed=0s queued depth=2$/);
+    await onEvent({ type: 'waiting', host: 'gpu-a:8000', local: false, queued: true, elapsedSeconds: 1, depth: -1 });
+    assert.match((await readLastRunLog(options)).lastLine, /waiting host=gpu-a:8000 elapsed=0s queued depth=2$/);
+    return {};
+  });
+});
+
 test('a new logger appends the next run to the session instead of truncating earlier events', async (t) => {
   const options = fixture(t);
   const first = await createRunLog(options);
