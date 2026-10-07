@@ -84,6 +84,29 @@ test('a source-scan guard that reads repository source counts as substance; read
 });`).length, 1);
 });
 
+test('a sentinel interpolated into a template argument reaches app code; one kept local does not', () => {
+  assert.deepEqual(analyze(`const SENTINEL = 'test-only-private-api-key';
+test('template argument', () => {
+  const out = formatRoute(select(), \`key = \${SENTINEL}\`);
+  assert.ok(!out.includes(SENTINEL));
+});`), []);
+  const reasons = analyze(`const SENTINEL = 'test-only-private-api-key';
+test('local template', () => {
+  const line = \`key = \${SENTINEL}\`.replace(SENTINEL, '');
+  assert.ok(formatRoute(select(), 'fix'));
+  assert.ok(!line.includes(SENTINEL));
+});`);
+  assert.equal(reasons.length, 1);
+  assert.match(reasons[0], /sentinel SENTINEL/);
+});
+
+test('asserting on an imported app constant counts as app output; a function reference alone does not', () => {
+  const base = `import assert from 'node:assert/strict';\nimport test from 'node:test';\n` +
+    `import { SCHEMA_VERSION, createRecord } from '../src/lib/provenance-schema.mjs';\n`;
+  assert.deepEqual(analyze(`test('semver', () => {\n  assert.match(SCHEMA_VERSION, /^\\d+\\.\\d+\\.\\d+$/);\n});`, base), []);
+  assert.equal(analyze(`test('exists', () => {\n  assert.equal(typeof createRecord, 'function');\n});`, base).length, 1);
+});
+
 test('a new test that never calls app code is flagged as tautological', () => {
   const reasons = analyze(`test('object shape', () => {
   const summary = { profile: 'fast' };

@@ -12,6 +12,21 @@ export function isTestFile(file) {
     /(^|\/)(tests?|__tests__)\/.+\.[cm]?[jt]s$/.test(normalized);
 }
 
+// Index of the `}` closing a template interpolation that starts at `start`, or -1.
+function interpolationEnd(text, start) {
+  let depth = 0;
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === '`') return -1;
+    if (char === '{') depth += 1;
+    else if (char === '}') {
+      if (depth === 0) return index;
+      depth -= 1;
+    }
+  }
+  return -1;
+}
+
 // Blank out comments and string/template/regex contents while keeping offsets stable.
 function maskCode(text) {
   let out = '';
@@ -38,6 +53,15 @@ function maskCode(text) {
       while (index < text.length && text[index] !== quote) {
         if (text[index] === '\\') { out += '  '; index += 2; continue; }
         if (quote !== '`' && text[index] === '\n') break;
+        // Template interpolations are code: keep them visible so sentinels passed as `${name}` reach app calls.
+        if (quote === '`' && text[index] === '$' && text[index + 1] === '{') {
+          const close = interpolationEnd(text, index + 2);
+          if (close > 0) {
+            out += `\${${maskCode(text.slice(index + 2, close))}}`;
+            index = close + 1;
+            continue;
+          }
+        }
         out += text[index] === '\n' ? '\n' : ' '; index += 1;
       }
       if (index < text.length) { out += text[index]; index += 1; }
@@ -280,6 +304,12 @@ function scansRepositorySource(maskedBody, rawBody, rawText) {
   return sourcePathPattern.test(rawBody) || sourcePathPattern.test(rawText) && /import\.meta\.url/.test(rawText);
 }
 
+// An exported app constant (SCREAMING_CASE import) asserted on is app output, not a value the test built.
+function readsAppConstant(maskedBody, appNames) {
+  return [...appNames].some((name) => /^[A-Z][A-Z0-9_]*$/.test(name) &&
+    new RegExp(`(?<![\\w$.])${name}(?![\\w$])`).test(maskedBody));
+}
+
 export function analyzeTestSubstance({ file, text, added }) {
   if (typeof added !== 'string' || !added.trim()) return [];
   const imports = parseImports(text);
@@ -294,7 +324,8 @@ export function analyzeTestSubstance({ file, text, added }) {
   // Only demand app calls when the file already imports an app seam the test could use.
   for (const block of appNames.size ? addedTestBlocks(added, maskedAdded) : []) {
     const body = maskedAdded.slice(block.start, block.end + 1);
-    if (!calls(body, appSinks).length && !scansRepositorySource(body, added.slice(block.start, block.end + 1), text)) {
+    if (!calls(body, appSinks).length && !readsAppConstant(body, appNames) &&
+        !scansRepositorySource(body, added.slice(block.start, block.end + 1), text)) {
       reasons.push(`Test substance: new test "${block.title.slice(0, 80)}" in ${file} never calls imported app code; ` +
         'its assertions only inspect values the test built, so they cannot catch a regression.');
     }

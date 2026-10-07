@@ -299,7 +299,8 @@ agents and humans:
 
 Each run swaps out the other `roster:*` labels and creates a missing label
 once. If the issue already carries `roster:in-progress`, the run warns that
-another agent may be working it. The wave board treats `roster:in-progress`
+another agent may be working it, unless this machine already holds the issue
+worktree, which it reports as a resume. The wave board treats `roster:in-progress`
 as running, so a parallel run never auto-picks that slice. It treats
 `roster:review` and `roster:blocked` like `review` and `blocked`. A feature
 parent stays claimed while its wave slice reports on its own issue.

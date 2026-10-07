@@ -454,7 +454,9 @@ async function runTrackedAssignment(issueNumber, options) {
         `Seats: ${options.seats ?? 'planner,coder,reviewer'}`,
         options.autoModel ? 'Model routing: auto' : null].filter(Boolean));
       if (posted?.claimed) {
-        log(`Issue #${ready.issue.number} was already labeled roster:in-progress; another agent may be working it.`);
+        log(ready.reused
+          ? `Resuming #${ready.issue.number}: its roster:in-progress claim and worktree are from an earlier run on this machine.`
+          : `Issue #${ready.issue.number} was already labeled roster:in-progress; another agent may be working it.`);
       }
     } });
   } catch (error) {

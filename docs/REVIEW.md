@@ -89,9 +89,11 @@ A new test block must call an imported app function, directly or through a
 file-local helper, whenever the file imports one; `child_process` spawns count
 as black-box CLI coverage. A source-scan guard that reads repository source
 (a relative `src/`, `lib/`, `bin/`, or `scripts/` path) and asserts on it also
-counts, because a regression in that source fails it. A seeded string literal that an assertion
+counts, because a regression in that source fails it, and so does asserting on
+an imported SCREAMING_CASE app constant. A seeded string literal that an assertion
 checks for absence must reach an app call as an argument, a config object
-derived from it, or `process.env`. A diff that changes only test files must
+derived from it, or `process.env`; a template interpolation such as
+`` `key ${SENTINEL}` `` inside the call counts as passing it. A diff that changes only test files must
 add a test block or assertion when TASK class is `test` or the additions are
 only imports and comments; otherwise it is not test work. Failures start with
 `Test substance:` and
