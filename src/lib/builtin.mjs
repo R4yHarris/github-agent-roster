@@ -22,6 +22,7 @@ import {
   commentMergedIssue, mergedPullNumber, mergedPullNumberFromFailure, setIssueRunStatus,
 } from './issue-board.mjs';
 import { IDENTIFIER, inferTaskClass, loadLearning, recordRun } from './learn.mjs';
+import { captureLifecycleEvent, provenanceOptOut, provenanceStoreForRun } from './local-runs.mjs';
 import { loadMetrics } from './metrics.mjs';
 import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
 import { buildPublishMessage, formatPublishCommand, formatPublishEnvironment } from './publication.mjs';
@@ -826,10 +827,21 @@ async function runBuiltinAssignment(issueNumber, {
   }
   const taskClass = askKind === 'slice' && !planMode ? planner.metadata.task_class
     : prepared.metadata?.task_class ?? inferTaskClass(prepared.issue.title) ?? 'feat';
-  const recordSeat = async (session, run, excellence) => recordRun({
-    session, task: prepared.task, task_class: taskClass, provider: run?.provider,
-    ...(excellence ? excellenceFields(excellence, { config, env }) : {}),
-  }, { cwd: prepared.repoRoot, env: { ...metricEnv, ...run?.env }, createDirectory: true, run });
+  const provenanceRunId = `run-${randomBytes(8).toString('hex')}`;
+  const provenance = provenanceOptOut(env) ? null : provenanceStoreForRun({ repoRoot: prepared.repoRoot });
+  const recordSeat = async (session, run, excellence) => {
+    await recordRun({
+      session, task: prepared.task, task_class: taskClass, provider: run?.provider,
+      ...(excellence ? excellenceFields(excellence, { config, env }) : {}),
+    }, { cwd: prepared.repoRoot, env: { ...metricEnv, ...run?.env }, createDirectory: true, run });
+    // Durable machine history for `roster history`; best-effort so provenance can never fail a run.
+    await captureLifecycleEvent(provenance, { event: 'session', runId: provenanceRunId, sessionId: session, payload: {
+      issue: prepared.issue.number ?? null, task: prepared.task, task_class: taskClass,
+      seat: Object.keys(sessions).find((name) => sessions[name] === session) ?? null,
+      model: run?.env?.AI_MODEL ?? null, provider: run?.provider ?? null,
+      ...(excellence ? { outcome: excellence.pass ? 'pass' : 'fail' } : {}),
+    } });
+  };
   const plannerRun = planner.run;
   if (!planner.reused) await recordSeat(sessions.planner, plannerRun);
   if (planner.error) {

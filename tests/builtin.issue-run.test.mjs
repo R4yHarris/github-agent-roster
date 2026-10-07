@@ -27,6 +27,7 @@ import { packAgentRun } from '../vendor/github-agent-contracts/scripts/parse-age
 import { recordedCoderRun } from '../src/lib/seat-publication.mjs';
 import { createDebugLog } from '../src/lib/debug-log.mjs';
 import { readLocalRun } from '../src/lib/local-runs.mjs';
+import { openProvenanceStore } from '../src/lib/provenance-store.mjs';
 import { createSteeringControl } from '../src/runtime/steering.mjs';
 import {
   runBuiltinIssue, example, stubConfig, llmConfig, vllmConfig, multiFileScope, git, fixture, multiFileFixture,
@@ -124,6 +125,13 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
     { session: result.sessions.reviewer, task: 'issue-42', task_class: 'feat' },
   ]);
   assert.equal(existsSync(path.join(options.target, '.roster', 'evals.jsonl')), false);
+  const { records: provenance } = await openProvenanceStore(path.join(options.target, '.git', 'roster', 'provenance')).readAll();
+  const seatEvents = provenance.filter((record) => record.event === 'session')
+    .map(({ sessionId, runId, payload }) => ({ sessionId, runId, seat: payload.seat, issue: payload.issue, outcome: payload.outcome }));
+  assert.deepEqual(seatEvents.map(({ seat }) => seat).sort(), ['coder', 'planner', 'reviewer']);
+  assert.equal(new Set(seatEvents.map(({ runId }) => runId)).size, 1, 'one durable run id per process run');
+  assert.ok(seatEvents.every(({ issue }) => issue === 42));
+  assert.equal(seatEvents.find(({ seat }) => seat === 'coder').outcome, 'fail');
   assert.doesNotThrow(() => git(options.target, 'check-ignore', '--quiet',
     '.roster/runs/runs.jsonl'));
   await assert.rejects(stageReviewedFiles(result.worktreePath, ['README.md']),
