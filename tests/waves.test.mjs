@@ -61,6 +61,12 @@ test('explicit open creates only existing drafts, is idempotent and derives stat
   assert.equal(options.issues.length, 2);
   options.issues[0].state = 'CLOSED';
   assert.deepEqual((await waveBoard(options)).map(({ state }) => state), ['done', 'todo']);
+  // Roster App labels are the shared board: another agent's claim is never offered as the next slice.
+  for (const [label, state] of [['roster:in-progress', 'running'], ['roster:review', 'review'], ['roster:blocked', 'blocked']]) {
+    options.issues[1].labels = [{ name: 'wave:2' }, { name: label }];
+    assert.equal((await waveBoard(options))[1].state, state);
+  }
+  options.issues[1].labels = [{ name: 'wave:2' }];
   options.setReview();
   assert.equal((await waveBoard(options))[1].state, 'review');
   assert.equal((await waveBoard({ ...options, activeIssue: options.issues[1].number, activeState: 'drafting' }))[1].state, 'running');

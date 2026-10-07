@@ -19,7 +19,7 @@ import { isReviewRequired, loadConfig, requirePublicationEnabled, withoutLlmKeys
 import { loadFleet, withFleetProfile } from './fleet.mjs';
 import { runIssue, validateIssueNumber } from './issue.mjs';
 import {
-  commentMergedIssue, mergedPullNumber, mergedPullNumberFromFailure,
+  commentMergedIssue, mergedPullNumber, mergedPullNumberFromFailure, setIssueRunStatus,
 } from './issue-board.mjs';
 import { IDENTIFIER, inferTaskClass, loadLearning, recordRun } from './learn.mjs';
 import { loadMetrics } from './metrics.mjs';
@@ -397,12 +397,79 @@ export async function runBuiltinTask({
 
 export async function runBuiltinIssue(issueNumber, options = {}) {
   validateIssueNumber(issueNumber);
-  const result = await runBuiltinAssignment(issueNumber, options);
+  const result = await runTrackedAssignment(issueNumber, options);
   if (!result?.continueWith) return result;
   // A split feature is delivered, not parked: its next open wave slice runs in its own issue worktree.
   const { preparedRun, onPrepared, planMode, acceptPlan, ...childOptions } = options;
-  const child = await runBuiltinAssignment(result.continueWith, childOptions);
+  const child = await runTrackedAssignment(result.continueWith, childOptions);
   return { ...child, parent: { issue: issueNumber, planPath: result.planPath, waves: result.waves } };
+}
+
+function runOutcomeStatus(result, { published }) {
+  const pause = (reason) => ['blocked', [`Waiting on a human: ${reason}`]];
+  if (result.clarification) return ['blocked', ['The Ask needs clarification before planning.',
+    String(result.clarification).split('\n')[0]]];
+  if (result.failed) return ['blocked', [result.planner?.error ? `Planning failed: ${result.planner.error}`
+    : 'The run reported a failure; see the run log.']];
+  if (result.confirmedPause) return pause('the TASK was paused by --confirm.');
+  if (result.planMode) return pause('plan mode wrote PLAN.md only.');
+  if (result.planningOnly) return pause('review the PLAN and child issue drafts, then run each slice.');
+  const verdict = result.review?.verdict;
+  if (published) return ['review', ['Published and merged; awaiting human AI-Eval.',
+    `Review: ${verdict ?? 'not run'}.`]];
+  if (verdict === 'pass') {
+    return ['review', [`Review: pass.`, result.run?.metrics?.model ? `Coder model: ${result.run.metrics.model}` : null,
+      'Reviewed worktree is ready to publish.'].filter(Boolean)];
+  }
+  return ['blocked', [`Review: ${verdict ?? 'not run'}.`, ...(result.review?.reasons ?? []).slice(0, 4)]];
+}
+
+// When the machine holds App credentials, every issue run reports itself on the issue (spec section 3:
+// the board is GitHub). Labels let other agents and humans see claimed, review, and blocked work.
+// Board updates are best-effort: a GitHub outage never fails or blocks the run itself.
+async function runTrackedAssignment(issueNumber, options) {
+  const { issueStatus = setIssueRunStatus, env = process.env, log = console.log, cwd = process.cwd(),
+    onPrepared, publish = false } = options;
+  if (typeof issueStatus !== 'function' || !env.GITHUB_APP_ID || !env.GITHUB_APP_PRIVATE_KEY_PATH) {
+    return runBuiltinAssignment(issueNumber, options);
+  }
+  let prepared = null;
+  const redact = (text) => redactEvidence(text, { env, apiKeyEnv: options.config?.llm?.api_key_env });
+  const post = async (status, detail, extra = {}) => {
+    if (!prepared || prepared.local || !prepared.issue?.url) return null;
+    try {
+      return await issueStatus({ issue: prepared.issue, status, detail, repoRoot: prepared.repoRoot,
+        cwd, env, ...extra });
+    } catch (error) {
+      log(`Issue #${prepared.issue.number} status not updated (${status}): ${redact(String(error?.message ?? error))}`);
+      return null;
+    }
+  };
+  let result;
+  try {
+    result = await runBuiltinAssignment(issueNumber, { ...options, async onPrepared(ready) {
+      prepared = ready;
+      await onPrepared?.(ready);
+      const posted = await post('in-progress', [`Branch: ${ready.task}`,
+        `Seats: ${options.seats ?? 'planner,coder,reviewer'}`,
+        options.autoModel ? 'Model routing: auto' : null].filter(Boolean));
+      if (posted?.claimed) {
+        log(`Issue #${ready.issue.number} was already labeled roster:in-progress; another agent may be working it.`);
+      }
+    } });
+  } catch (error) {
+    await post('blocked', [options.signal?.aborted ? 'The run was cancelled by the operator.'
+      : `Run stopped: ${redact(String(error?.message ?? error))}`]);
+    throw error;
+  }
+  // A feature parent stays claimed while its next wave slice runs and reports on its own issue.
+  if (result?.continueWith) return result;
+  // A completed publish run has merged its PR; the merge comment already reports it, so only the label moves.
+  const published = publish && Boolean(result) && !result.planningOnly && !result.failed;
+  const [status, detail] = runOutcomeStatus(result ?? {}, { published });
+  await post(status, detail.map((line) => redact(String(line))),
+    published ? { comment: false } : {});
+  return result;
 }
 
 export async function runBuiltinAsk(ask, options = {}) {

@@ -259,3 +259,33 @@ test('an inferred-scope slice continues after the task summary without a second 
   assert.equal(next.planningOnly, undefined);
   assert.equal(next.result.mode, 'stub');
 });
+
+test('an App-credentialed issue run reports claim and outcome on the issue without failing on board errors', async (context) => {
+  const options = fixture(context);
+  const env = { ...options.env, GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'app.pem' };
+  const statuses = [];
+  const logs = [];
+  const issueStatus = async ({ issue, status, detail, repoRoot }) => {
+    statuses.push({ number: issue.number, url: issue.url, status, detail, repoRoot });
+    if (status === 'in-progress') throw new Error('GitHub issue API request failed (HTTP 502)');
+    return { claimed: false };
+  };
+  const result = await runBuiltinIssue(42, { ...options, env, config: stubConfig, issueStatus,
+    log: (line) => logs.push(line), fetchImpl: () => { throw new Error('stub must not contact an LLM'); } });
+  assert.equal(result.failed, false);
+  assert.deepEqual(statuses.map(({ status }) => status), ['in-progress', result.review?.verdict === 'pass' ? 'review' : 'blocked']);
+  assert.equal(statuses[0].url, options.issue.url);
+  assert.equal(statuses[0].repoRoot, options.target);
+  assert.deepEqual(statuses[0].detail, ['Branch: issue-42', 'Seats: planner,coder,reviewer']);
+  assert.ok(logs.includes('Issue #42 status not updated (in-progress): GitHub issue API request failed (HTTP 502)'));
+
+  statuses.length = 0;
+  await assert.rejects(runBuiltinIssue(42, { ...options, env, config: stubConfig, issueStatus, log: () => {},
+    onPrepared() { throw new Error('operator hook failed'); } }), /operator hook failed/);
+  assert.deepEqual(statuses.map(({ status, detail }) => [status, detail]),
+    [['blocked', ['Run stopped: operator hook failed']]]);
+
+  statuses.length = 0;
+  await runBuiltinIssue(42, { ...options, config: stubConfig, issueStatus, log: () => {} });
+  assert.deepEqual(statuses, [], 'without App credentials the board is never touched');
+});
