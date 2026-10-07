@@ -246,8 +246,11 @@ export function createChat(config = {}, {
         }
         signal.throwIfAborted();
         const completion = parseCompletion(payload, model);
-        await onEvent?.({ type: 'model',
-          model: key ? completion.model.split(key).join('[redacted]') : completion.model, host });
+        // A routed seat ignores the gateway's label, so logging it would contradict the model actually measured.
+        if (!ignoreServedLabel) {
+          await onEvent?.({ type: 'model',
+            model: key ? completion.model.split(key).join('[redacted]') : completion.model, host });
+        }
         await onEvent?.({ type: 'http', phase: 'ok', status });
         const reported = reportedUsage(completion.usage);
         if (reported) await onEvent?.({ type: 'usage', ...reported });
