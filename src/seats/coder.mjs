@@ -5,8 +5,9 @@ import { withoutLlmKeys } from '../lib/config.mjs';
 import { buildRun, mergeUsage } from '../metrics/run.mjs';
 import { loadContext } from '../runtime/context.mjs';
 import { estimateTask, readTaskMetadata } from '../runtime/estimate.mjs';
-import { checkExcellence, redactEvidence, snapshotWorktree, taskSkipsTests, writeResult } from '../runtime/excellence.mjs';
+import { checkExcellence, redactEvidence, snapshotWorktree, taskSkipsTests, taskTestsMode, writeResult } from '../runtime/excellence.mjs';
 import { runLoop } from '../runtime/loop.mjs';
+import { checkRedGreen, notRedReason } from '../runtime/red-green.mjs';
 import { appendMemory, coderMemoryRecord, seatMemoryPath } from '../runtime/memory.mjs';
 import { runResearch } from '../runtime/research.mjs';
 import { loadSkills, previewSkills } from '../runtime/skills.mjs';
@@ -44,6 +45,8 @@ export async function runCoder({
   let research;
   let baseline;
   let verifiedSnapshot;
+  let redGreen;
+  let redGreenRepairUsed = false;
   let metadata;
   let tests;
   let result = {
@@ -180,6 +183,18 @@ export async function runCoder({
           evidence.pass = false;
           evidence.reasons.push(`Bounded task must write ${allowedFiles[0]} before finishing`);
         }
+        // Only a passing candidate is worth the base run; it reports "not red" once, then records the evidence.
+        if (evidence.pass && !candidate.testsSkipped) {
+          redGreen = await checkRedGreen({ worktree, files: evidence.files, mode: taskTestsMode(context.task),
+            env: withoutLlmKeys(env, config), runCommand: runTestCommand, signal });
+          await onEvent?.({ type: 'red-green', status: redGreen.status, tests: redGreen.tests.length,
+            notRed: redGreen.notRed.length });
+          if (redGreen.notRed.length && !redGreenRepairUsed) {
+            redGreenRepairUsed = true;
+            evidence.pass = false;
+            evidence.reasons.push(notRedReason(redGreen.notRed));
+          }
+        }
         if (evidence.pass) verifiedSnapshot = evidence.snapshot;
         return evidence;
       },
@@ -193,7 +208,7 @@ export async function runCoder({
     result = { ...result, error };
   }
   const timedOut = isLlmTimeout(result.error);
-  result = { ...result, research, stages, scopeFiles: [...scopeFiles].sort(), repairFiles: withRepairs(result.repairFiles),
+  result = { ...result, research, stages, ...(redGreen ? { redGreen } : {}), scopeFiles: [...scopeFiles].sort(), repairFiles: withRepairs(result.repairFiles),
     scopeBlocked: [...scopeBlocked].sort(), ...(timedOut ? {
     timedOut: true,
     summary: 'Coder HTTP request timed out. No change was verified; this run did not complete.',

@@ -28,6 +28,23 @@ export const docsTestTimeoutMs = 60_000;
 export const fullTestTimeoutMs = 900_000;
 export const fullTestPerTestTimeoutMs = 120_000;
 
+// A fresh base worktree has empty submodule directories; without the same initialized dependencies,
+// tests that need them fail at base too and a real regression is misread as pre-existing.
+export async function mirrorInitializedSubmodules(source, base) {
+  let modules;
+  try { modules = await fs.readFile(path.join(source, '.gitmodules'), 'utf8'); } catch { return; }
+  for (const match of modules.matchAll(/^\s*path\s*=\s*(.+?)\s*$/gm)) {
+    const relative = match[1];
+    if (path.isAbsolute(relative) || path.win32.isAbsolute(relative) || relative.split(/[\\/]/).includes('..')) continue;
+    const from = path.join(source, relative);
+    const to = path.join(base, relative);
+    const entries = await fs.readdir(from).catch(() => []);
+    if (!entries.some((entry) => entry !== '.git') || (await fs.readdir(to).catch(() => [])).length) continue;
+    await fs.cp(from, to, { recursive: true, verbatimSymlinks: true,
+      filter: (file) => path.basename(file) !== '.git' || path.dirname(file) !== from });
+  }
+}
+
 export function isOutsideWorktreePath(input) {
   if (typeof input !== 'string') return false;
   if (path.isAbsolute(input) || path.win32.isAbsolute(input) || /^[a-z]:/i.test(input)) return true;
@@ -688,23 +705,6 @@ export async function createTools({
 
   // Splits full-suite failures outside the planned files into regressions this change caused (they pass
   // at the base commit) and failures it did not cause (flaky when rerun alone, or failing at base too).
-  // A fresh base worktree has empty submodule directories; without the same initialized dependencies,
-  // tests that need them fail at base too and a real regression is misread as pre-existing.
-  async function mirrorInitializedSubmodules(source, base) {
-    let modules;
-    try { modules = await fs.readFile(path.join(source, '.gitmodules'), 'utf8'); } catch { return; }
-    for (const match of modules.matchAll(/^\s*path\s*=\s*(.+?)\s*$/gm)) {
-      const relative = match[1];
-      if (path.isAbsolute(relative) || path.win32.isAbsolute(relative) || relative.split(/[\\/]/).includes('..')) continue;
-      const from = path.join(source, relative);
-      const to = path.join(base, relative);
-      const entries = await fs.readdir(from).catch(() => []);
-      if (!entries.some((entry) => entry !== '.git') || (await fs.readdir(to).catch(() => [])).length) continue;
-      await fs.cp(from, to, { recursive: true, verbatimSymlinks: true,
-        filter: (file) => path.basename(file) !== '.git' || path.dirname(file) !== from });
-    }
-  }
-
   async function classifyOutsideFailures(files, testEnv) {
     const fileArgs = (file) => ['--test', `--test-timeout=${fullTestPerTestTimeoutMs}`, file];
     const passes = (cwd, file, env) => runCommand(process.execPath, fileArgs(file), {

@@ -134,7 +134,9 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       'passing existing tests or rewriting identical content is not completion.' : '',
     mentionsSecrets(context.task) ? sentinelGuidance : '',
     checklist ? 'Work the numbered checks one at a time with update_checklist: mark an item in_progress, then done ' +
-      'with evidence (file and symbol or test) or blocked with the reason. You cannot finish with open items.' : '',
+      'with evidence (file and symbol or test) or blocked with the reason. You cannot finish with open items. ' +
+      'Write the acceptance tests first and run them to see them fail, then implement: a new test that already ' +
+      'passes on the base code is rejected as not red.' : '',
     'A failing test outside Allowed Files is pre-existing: report it and do not edit it.',
     !boundedTask && !docsOnly && (config.seat.scope_expansion ?? 3) > 0
       ? `Allowed Files are the planned scope. If the outcome truly requires another product file, you may write at most ` +
@@ -689,11 +691,13 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     }
     const secretReasons = reasons.filter((reason) => reason.startsWith('Secret material detected'));
     const substanceReasons = reasons.filter((reason) => reason.startsWith('Test substance:'));
-    const repairable = secretReasons.length + substanceReasons.length === reasons.length;
+    const notRedReasons = reasons.filter((reason) => reason.startsWith('Not red:'));
+    const repairable = secretReasons.length + substanceReasons.length + notRedReasons.length === reasons.length;
     if (repairable && reasons.length && ((secretReasons.length && !progress.secretRepairUsed) ||
-        (substanceReasons.length && !progress.substanceRepairUsed))) {
+        (substanceReasons.length && !progress.substanceRepairUsed) || (notRedReasons.length && !progress.redRepairUsed))) {
       if (secretReasons.length) progress.secretRepairUsed = true;
       if (substanceReasons.length) progress.substanceRepairUsed = true;
+      if (notRedReasons.length) progress.redRepairUsed = true;
       attemptTurns = 0;
       finalSummaryOnly = false;
       checksPassedAfterWrite = false;
@@ -707,6 +711,10 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
           '(directly or via an existing helper) and assert on its output. Pass any seeded sentinel into that call ' +
           '(argument, config object, or process.env) before asserting it is absent from the output; never build, strip, and inspect your own object. ' +
           'If a module you wanted is outside read scope, use exports the test file already imports or the listed public seams instead of stopping.'] : []),
+        ...notRedReasons,
+        ...(notRedReasons.length ? ['One red/green correction is allowed. Each new test must fail against the base code and pass with your change: ' +
+          'assert the new behavior through the public function the Ask changes, not behavior that already existed. ' +
+          'If the task is a pure refactor or test-only, say so in your summary; the reviewer judges it.'] : []),
         'Rerun the required tests, and summarize.',
       ].join('\n') });
       continue;

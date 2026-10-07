@@ -1,3 +1,4 @@
+import { redGreenTable } from './red-green.mjs';
 import { checklistTable } from './checklist.mjs';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -18,14 +19,19 @@ import { isAllowedFile, isForbiddenRead, isForbiddenWrite, isManagedFile, isRunL
 const execute = promisify(execFile);
 export { redactEvidence } from '../lib/redaction.mjs';
 
-export function taskSkipsTests(task) {
+// characterization: a pure refactor or test-only task whose tests pin existing behavior, exempt from red/green.
+export function taskTestsMode(task) {
   const { frontmatter } = splitTaskFrontmatter(task);
   const declarations = frontmatter.split('\n').filter((line) => /^tests:/.test(line));
   if (declarations.length > 1) throw new Error('TASK.md must not repeat tests');
-  if (!declarations.length) return false;
-  const value = /^tests: (none|required)[ \t]*$/.exec(declarations[0]);
-  if (!value) throw new Error('TASK.md tests must be none or required');
-  return value[1] === 'none';
+  if (!declarations.length) return 'required';
+  const value = /^tests: (none|required|characterization)[ \t]*$/.exec(declarations[0]);
+  if (!value) throw new Error('TASK.md tests must be none, required, or characterization');
+  return value[1];
+}
+
+export function taskSkipsTests(task) {
+  return taskTestsMode(task) === 'none';
 }
 
 function ignoredNotebook(file, worktree, memoryPath) {
@@ -240,6 +246,7 @@ export async function writeResult({ worktree, result, excellence, env, apiKeyEnv
     (passed ? '- Operational checks passed.\n'
       : excellence.reasons.map((reason, index) => `- ${index === 0 ? 'First failure: ' : ''}${reason}`).join('\n') + '\n') +
     `- ${tests}\n\n` + (result.checklist?.length ? `## Checklist\n\n${checklistTable({ items: result.checklist })}\n` : '') +
+    (result.redGreen ? `## Red/green\n\n${redGreenTable(result.redGreen)}\n` : '') +
     `## Run\n\nModel: ${run?.metrics?.model ?? result.model}\nTool-loop turns: ${result.turns}\n` +
     `Research turns: ${result.research?.turns ?? 0}\n` +
     (result.testRepairs === undefined ? '' : `Test repairs: ${result.testRepairs} of ${result.testRepairBudget ?? 4}\n` +

@@ -118,6 +118,8 @@ coder HTTP timeout reason and explicitly says review was not completed; it
 does not request a model verdict for timed-out work.
 Duplicate or malformed test declarations fail during preparation rather than
 silently waiving verification; `tests: required` explicitly retains the default.
+`tests: characterization` still runs tests but exempts a pure refactor or
+test-only task from the red/green gate ([SWE lifecycle](SWE_LIFECYCLE.md)).
 
 ## Existing-task command
 
