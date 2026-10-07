@@ -95,6 +95,18 @@ write if it no longer holds. A hand-written TASK.md without a Design is still
 accepted. The reviewer reports drift from the Design. Docs-only slices have no
 Design.
 
+### Field contracts
+
+The coder's context also gets a `## Field contracts` section
+(`src/runtime/field-contracts.mjs`). It lists the record fields that the
+allowed source files read, plus camelCase names in the Ask and checks. For each
+field it cites up to three `file:line` lines in `src/` that state a contract:
+a `must` message, a thrown error, a `typeof` check or a pattern test. Only
+fields with at least one `must` line are kept. Fields the task names come
+first. The section is about 1500 characters, redacted, and dropped before
+required sections when the pack is full. This exists because a coder once
+treated `repoIdentity`, a derived hash, as a filesystem path.
+
 ## Checklist
 
 When TASK.md has acceptance checks and more than one allowed file, the coder

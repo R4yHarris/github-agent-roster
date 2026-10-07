@@ -11,6 +11,7 @@ import { readRepoMap } from '../lib/repo-map.mjs';
 import { isForbiddenRead } from './tools.mjs';
 import { seatRules } from './seat-rules.mjs';
 import { RULE_LAYERS, conventionsText, deriveConventions } from './conventions.mjs';
+import { fieldContracts } from './field-contracts.mjs';
 
 // Export signatures of modules that allowed JS files import directly; the coder may read these.
 export async function readPublicSeams(worktree, files, { limit = 2400 } = {}) {
@@ -175,6 +176,13 @@ export async function loadContext({ worktree, memoryPath, repoRoot, config, prin
   if (seams) {
     sections.push({ heading: 'Public seams (exports of direct imports; read the module before relying on a signature)',
       body: redactSecrets(seams, { env, apiKeyEnv: config?.llm?.api_key_env }), required: false });
+  }
+  const contracts = files.some((file) => /\.[cm]?js$/.test(file))
+    ? await fieldContracts(worktree, { files, taskText: `${document.title}\n${document.ask}\n${document.acceptance_checks.join('\n')}` })
+    : '';
+  if (contracts) {
+    sections.push({ heading: 'Field contracts (existing validators for record fields these files use; honor them)',
+      body: redactSecrets(contracts, { env, apiKeyEnv: config?.llm?.api_key_env }), required: false });
   }
   const { pack, truncated } = boundedPack(sections, budget, minimalDocs);
   const contextPath = path.join(worktree, 'CONTEXT.md');
