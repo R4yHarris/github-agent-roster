@@ -142,6 +142,11 @@ export async function createRunLog({
       case 'tool-refused':
         if (!tools.includes(event.name)) throw new TypeError('Invalid live tool refusal event');
         return `tool refused ${event.name} outside-worktree`;
+      case 'toolset':
+        if (!Array.isArray(event.tools) || event.tools.some((name) => !tools.includes(name))) {
+          throw new TypeError('Invalid live toolset event');
+        }
+        return `toolset ${event.tools.join(',') || '-'}`;
       case 'test-repair':
         if (![1, 2, 4].includes(event.budget) || !Number.isInteger(event.attempt) ||
             event.attempt < 1 || event.attempt > event.budget) {
@@ -328,6 +333,7 @@ export async function readLastRunLog({
       /^stall host=[A-Za-z0-9.:[\]-]{1,255} idle=\d+(?:\.\d+)?s retry=(?:true|false)$/.test(value) ||
       /^served-model host=[A-Za-z0-9.:[\]-]{1,255} requested=[A-Za-z0-9._:/@+-]{1,128} served=[A-Za-z0-9._:/@+-]{1,128}$/.test(value) ||
       /^tool refused (?:read_file|write_file|list_dir|run_test|search_text) outside-worktree$/.test(value) ||
+      new RegExp(`^toolset (?:-|(?:${tools.join('|')})(?:,(?:${tools.join('|')}))*)$`).test(value) ||
       /^completion finish_reason=(?:null|"stop"|"tool_calls")$/.test(value);
     if (!parsed || !validMetadata(parsed[2]) || /[\x00-\x1f\x7f]/.test(lastLine) ||
         Buffer.byteLength(lastLine) > maximumLineBytes) {

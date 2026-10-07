@@ -141,10 +141,14 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   ];
   const requiresWebSearch = /\bweb_search\b/.test(context.task);
   const requiresWebFetch = /\bweb_fetch\b/.test(context.task);
+  // run_command only runs git status/diff and node --test; offer it when TASK.md asks for one of those,
+  // never alongside web research, whose untrusted pages must not steer commands.
+  const requiresCommand = /\brun_command\b|\bgit (?:status|diff)\b/.test(context.task) &&
+    !requiresWebSearch && !requiresWebFetch;
   const definitions = toolDefinitions.filter((tool) =>
     recipeAllowsTool(config.seat.recipe_tools, tool.function.name) &&
     (config.seat.tools.includes(tool.function.name) ||
-      ['edit_file', 'delete_file', 'glob_files', ...(requiresWebSearch || requiresWebFetch ? [] : ['run_command'])].includes(tool.function.name) ||
+      ['edit_file', 'delete_file', 'glob_files', ...(requiresCommand ? ['run_command'] : [])].includes(tool.function.name) ||
       (config.tools?.internet === true &&
         (tool.function.name === 'web_search' && requiresWebSearch ||
           tool.function.name === 'web_fetch' && requiresWebFetch))) &&
@@ -162,6 +166,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       } },
     });
   const offeredTools = new Set(definitions.map((tool) => tool.function.name));
+  await onEvent?.({ type: 'toolset', tools: [...offeredTools] });
   if (readmeOnlyDocs && !offeredTools.has('write_file')) {
     throw new Error('README-only docs task requires write_file; enable it before running the coder');
   }

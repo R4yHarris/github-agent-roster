@@ -150,7 +150,7 @@ test('an explicit task waiver runs without offering or automatically invoking di
     ...options, env: {},
     fetchImpl: async (_url, request) => {
       assert.deepEqual(JSON.parse(request.body).tools.map(({ function: tool }) => tool.name),
-        ['read_file', 'write_file', 'edit_file', 'delete_file', 'run_command']);
+        ['read_file', 'write_file', 'edit_file', 'delete_file']);
       return { status: 200, json: async () => ({
         choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Inspected README.' } }],
       }) };
@@ -177,7 +177,7 @@ test('LLM coder uses only offered tools within the turn budget, then verifies te
     assert.ok(sent.messages[0].content.length <= options.config.seat.context_chars);
     assert.equal(options.config.seat.context_chars, 200000);
     assert.deepEqual(sent.tools.map((tool) => tool.function.name),
-      ['read_file', 'write_file', 'edit_file', 'delete_file', 'run_command', 'run_test']);
+      ['read_file', 'write_file', 'edit_file', 'delete_file', 'run_test']);
     if (calls === 1) {
       return { status: 200, json: async () => ({
         choices: [{ finish_reason: 'tool_calls', message: {
@@ -290,7 +290,7 @@ test('named vLLM profile performs one worktree tool call then stops on a passing
       const sent = JSON.parse(request.body);
       assert.equal(sent.model, 'served-model');
       assert.deepEqual(sent.tools.map(({ function: tool }) => tool.name),
-        ['read_file', 'write_file', 'edit_file', 'delete_file', 'run_command', 'run_test']);
+        ['read_file', 'write_file', 'edit_file', 'delete_file', 'run_test']);
       assert.match(sent.messages[0].content, /Principal coder:[\s\S]*## TASK\.md[\s\S]*Task skills/);
       if (turns === 1) return { status: 200, json: async () => ({
         choices: [{ finish_reason: 'tool_calls', message: {
