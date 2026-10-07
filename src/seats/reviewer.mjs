@@ -170,7 +170,7 @@ function parseResponse(content, checkCount = 0) {
   return { ...report, checks };
 }
 
-async function readDiff(worktree, task, files, budget, repairFiles, scopeFiles) {
+export async function readDiff(worktree, task, files, budget, repairFiles, scopeFiles) {
   if (!Array.isArray(files) || !files.length || files.length > 32 ||
       files.some((file) => typeof file !== 'string' || isForbiddenRead(file) ||
         !isAllowedFile(file, taskAndRepairFiles(taskFilesAllowed(task), repairFiles, scopeFiles)))) {

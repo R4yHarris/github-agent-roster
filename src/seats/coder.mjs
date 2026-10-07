@@ -8,6 +8,7 @@ import { estimateTask, readTaskMetadata } from '../runtime/estimate.mjs';
 import { checkExcellence, redactEvidence, snapshotWorktree, taskSkipsTests, taskTestsMode, writeResult } from '../runtime/excellence.mjs';
 import { runLoop } from '../runtime/loop.mjs';
 import { checkRedGreen, notRedReason } from '../runtime/red-green.mjs';
+import { needsSelfReview, runSelfReview, selfReviewReasons } from '../runtime/self-review.mjs';
 import { appendMemory, coderMemoryRecord, seatMemoryPath } from '../runtime/memory.mjs';
 import { runResearch } from '../runtime/research.mjs';
 import { loadSkills, previewSkills } from '../runtime/skills.mjs';
@@ -47,6 +48,7 @@ export async function runCoder({
   let verifiedSnapshot;
   let redGreen;
   let redGreenRepairUsed = false;
+  let selfReview;
   let metadata;
   let tests;
   let result = {
@@ -195,6 +197,19 @@ export async function runCoder({
             evidence.reasons.push(notRedReason(redGreen.notRed));
           }
         }
+        // The author reads its own diff once before the independent reviewer; findings get one repair.
+        if (evidence.pass && !selfReview && needsSelfReview(evidence.files)) {
+          selfReview = await runSelfReview({ worktree, task: context.task, files: evidence.files,
+            repairFiles: withRepairs(candidate.repairFiles), scopeFiles: [...scopeFiles], redGreen, config, fetchImpl,
+            env, vault, onEvent, retryCommand, signal });
+          await onEvent?.({ type: 'self-review', status: selfReview.status,
+            unmet: selfReview.checks.filter(({ met }) => !met).length, findings: selfReview.findings.length,
+            ms: selfReview.ms, input: selfReview.usage?.prompt_tokens ?? 0, output: selfReview.usage?.completion_tokens ?? 0 });
+          if (selfReview.status === 'findings') {
+            evidence.pass = false;
+            evidence.reasons.push(...selfReviewReasons(selfReview));
+          }
+        }
         if (evidence.pass) verifiedSnapshot = evidence.snapshot;
         return evidence;
       },
@@ -203,12 +218,13 @@ export async function runCoder({
     result = { ...result, tests: result.tests ?? tests,
       response: result.response ?? research?.response ?? null,
       usage: research?.turns ? mergeUsage(research.usage, result.usage) : result.usage };
+    if (selfReview?.usage) result.usage = mergeUsage(result.usage, selfReview.usage);
   } catch (error) {
     if (!(error instanceof Error)) throw error;
     result = { ...result, error };
   }
   const timedOut = isLlmTimeout(result.error);
-  result = { ...result, research, stages, ...(redGreen ? { redGreen } : {}), scopeFiles: [...scopeFiles].sort(), repairFiles: withRepairs(result.repairFiles),
+  result = { ...result, research, stages, ...(redGreen ? { redGreen } : {}), ...(selfReview ? { selfReview } : {}), scopeFiles: [...scopeFiles].sort(), repairFiles: withRepairs(result.repairFiles),
     scopeBlocked: [...scopeBlocked].sort(), ...(timedOut ? {
     timedOut: true,
     summary: 'Coder HTTP request timed out. No change was verified; this run did not complete.',
@@ -216,7 +232,7 @@ export async function runCoder({
   const remember = (result, error) => appendMemory({
     file: memoryPath, repoRoot, env, apiKeyEnv: config.llm.api_key_env,
     record: coderMemoryRecord({
-      task, session, mode: result?.mode, changedFiles: [...changedFiles].sort(), tests, error,
+      task, session, mode: result?.mode, changedFiles: [...changedFiles].sort(), tests, error, selfReview,
     }),
   });
   let memoryFailure;

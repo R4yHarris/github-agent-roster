@@ -50,7 +50,7 @@ function safeRecord(record, options = {}) {
   return safe;
 }
 
-export function coderMemoryRecord({ task, session, mode, changedFiles = [], tests, error, time = new Date().toISOString() }) {
+export function coderMemoryRecord({ task, session, mode, changedFiles = [], tests, error, selfReview, time = new Date().toISOString() }) {
   const match = /^issue-([1-9]\d*)$/.exec(task);
   const changed = changedFiles.length
     ? `Updated ${changedFiles.length} task-scoped file(s): ${changedFiles.slice(0, 4).join(', ')}` : 'No code changes.';
@@ -62,6 +62,10 @@ export function coderMemoryRecord({ task, session, mode, changedFiles = [], test
       ? 'Configure an LLM endpoint to implement and test this task.' : 'None reported.'),
     status: error ? 'failed' : mode,
     summary: `${changed} ${testResult}`,
+    // Self-review misses are kept so repeated ones can become skills (spec §5.6).
+    ...(selfReview ? { self_review: selfReview.status === 'findings'
+      ? [...selfReview.checks.filter(({ met }) => !met).map(({ id }) => `check ${id} unmet`), ...selfReview.findings].join('; ')
+      : selfReview.status } : {}),
   };
 }
 

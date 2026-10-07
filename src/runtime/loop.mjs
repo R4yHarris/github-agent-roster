@@ -692,12 +692,16 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     const secretReasons = reasons.filter((reason) => reason.startsWith('Secret material detected'));
     const substanceReasons = reasons.filter((reason) => reason.startsWith('Test substance:'));
     const notRedReasons = reasons.filter((reason) => reason.startsWith('Not red:'));
-    const repairable = secretReasons.length + substanceReasons.length + notRedReasons.length === reasons.length;
+    const selfReviewReasons = reasons.filter((reason) => reason.startsWith('Self-review:'));
+    const repairable = secretReasons.length + substanceReasons.length + notRedReasons.length +
+      selfReviewReasons.length === reasons.length;
     if (repairable && reasons.length && ((secretReasons.length && !progress.secretRepairUsed) ||
-        (substanceReasons.length && !progress.substanceRepairUsed) || (notRedReasons.length && !progress.redRepairUsed))) {
+        (substanceReasons.length && !progress.substanceRepairUsed) || (notRedReasons.length && !progress.redRepairUsed) ||
+        (selfReviewReasons.length && !progress.selfReviewRepairUsed))) {
       if (secretReasons.length) progress.secretRepairUsed = true;
       if (substanceReasons.length) progress.substanceRepairUsed = true;
       if (notRedReasons.length) progress.redRepairUsed = true;
+      if (selfReviewReasons.length) progress.selfReviewRepairUsed = true;
       attemptTurns = 0;
       finalSummaryOnly = false;
       checksPassedAfterWrite = false;
@@ -715,6 +719,9 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         ...(notRedReasons.length ? ['One red/green correction is allowed. Each new test must fail against the base code and pass with your change: ' +
           'assert the new behavior through the public function the Ask changes, not behavior that already existed. ' +
           'If the task is a pure refactor or test-only, say so in your summary; the reviewer judges it.'] : []),
+        ...selfReviewReasons,
+        ...(selfReviewReasons.length ? ['One self-review correction is allowed. Fix each unmet check and finding above in Allowed Files, ' +
+          'or, if a finding is wrong, say why in your summary; the independent reviewer judges it.'] : []),
         'Rerun the required tests, and summarize.',
       ].join('\n') });
       continue;
