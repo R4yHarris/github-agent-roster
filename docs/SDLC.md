@@ -42,6 +42,9 @@ the Waves section groups those drafts by label. File scope comes from
 human-named paths. When the human named none, the feature planner proposes
 each draft's planned files from the tracked repository paths (never `**/*`,
 protected, or vendor paths), and PLAN.md records `Scope: planner-proposed`.
+The planner also receives `existing_exports`: up to 12 tracked source modules whose
+paths or exported names share terms with the Ask, so drafts reuse resolvers such as
+the machine root instead of inventing parallel modules or hardcoded paths.
 A rejected PLAN is returned to the model with its validation error, up to four
 bounded attempts.
 

@@ -130,7 +130,7 @@ export function renderPlan(plan, { ask, title, kind, reference }) {
 
 export async function planOutline(ask, {
   kind, config, title, reference = 'local:draft', fetchImpl, env, vault, onEvent, onResponse, retryCommand, signal,
-  repositoryFiles,
+  repositoryFiles, existingExports = [],
 } = {}) {
   const text = cleanAskText(ask);
   config = selectReasoning(config, { kind });
@@ -158,10 +158,15 @@ export async function planOutline(ask, {
           'with review; never name workflows, policy, secrets, or vendor sources. Order waves so each draft can ' +
           'be delivered and tested on its own. '
         : 'and optional files_allowed. Files may only come from the human-named scope; omit them when scope is unknown. ') +
+      (existingExports.length
+        ? 'existing_exports lists modules that already own concepts in this Ask. Drafts must reuse or extend ' +
+          'them; never invent a parallel module, state root, or hardcoded path that an existing export resolves. '
+        : '') +
       'Waves will be issue labels wave:N, not a new board. The harness writes PLAN.md only. ' +
       'Use validation feedback to change the plan rather than repeating an invalid answer.' },
     { role: 'user', content: JSON.stringify({ title, ask: text, human_files_allowed: filesAllowed,
-      ...(proposeScope ? { repository_files: repositoryFiles } : {}) }) },
+      ...(proposeScope ? { repository_files: repositoryFiles } : {}),
+      ...(existingExports.length ? { existing_exports: existingExports } : {}) }) },
   ];
   const attempts = Math.min(budget, 4);
   const usages = [];

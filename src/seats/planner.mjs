@@ -13,6 +13,7 @@ import { parseTaskDocument, taskSections } from '../planner/task.mjs';
 import { validatePlanningReceipt } from '../planner/receipt.mjs';
 import { askKinds, classifyAsk, clarificationHint } from '../planner/classify.mjs';
 import { planOutline } from '../planner/plan.mjs';
+import { relatedExports } from '../planner/related-exports.mjs';
 import { retryCommandForTask } from '../llm/request.mjs';
 import { selectReasoning } from '../llm/reasoning.mjs';
 import { throwIfCancelled } from '../runtime/cancel.mjs';
@@ -182,8 +183,9 @@ export async function runPlanner({
       await tools.write_file({ path: 'RECIPE.yml', content: plan.recipe });
       await tools.write_file({ path: 'TASK.md', content: plan.task });
     } else {
-      plan = await planOutline(ask, { ...options, kind,
-        repositoryFiles: config.llm.base_url ? await trackedRepositoryFiles(worktree) : undefined });
+      const repositoryFiles = config.llm.base_url ? await trackedRepositoryFiles(worktree) : undefined;
+      plan = await planOutline(ask, { ...options, kind, repositoryFiles,
+        existingExports: await relatedExports(worktree, repositoryFiles, `${title ?? ''}\n${ask}`) });
       await tools.write_file({ path: 'PLAN.md', content: plan.plan });
     }
   } catch (error) {
