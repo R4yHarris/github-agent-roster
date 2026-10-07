@@ -289,3 +289,17 @@ test('an App-credentialed issue run reports claim and outcome on the issue witho
   await runBuiltinIssue(42, { ...options, config: stubConfig, issueStatus, log: () => {} });
   assert.deepEqual(statuses, [], 'without App credentials the board is never touched');
 });
+
+test('a claimed issue warns of another agent on a fresh worktree and reports a resume on a reused one', async (context) => {
+  const options = fixture(context);
+  const env = { ...options.env, GITHUB_APP_ID: '123', GITHUB_APP_PRIVATE_KEY_PATH: 'app.pem' };
+  const logs = [];
+  const issueStatus = async ({ status }) => ({ claimed: status === 'in-progress' });
+  const run = () => runBuiltinIssue(42, { ...options, env, config: stubConfig, issueStatus,
+    log: (line) => logs.push(line), fetchImpl: () => { throw new Error('stub must not contact an LLM'); } });
+  await run();
+  assert.ok(logs.some((line) => /Issue #42 was already labeled roster:in-progress; another agent/.test(line)), logs.join('\n'));
+  logs.length = 0;
+  await run();
+  assert.ok(logs.some((line) => /Resuming #42: its roster:in-progress claim and worktree are from an earlier run/.test(line)), logs.join('\n'));
+});
