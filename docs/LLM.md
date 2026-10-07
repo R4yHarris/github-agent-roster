@@ -77,7 +77,9 @@ who knows a gateway stamps every response with one fixed ID can declare
 `llm.served_model_label: ignore` (or the fleet profile field of the same name).
 Roster then records the requested model and skips the warning. A fleet auto
 route always records the profile's model: the label is advisory and never
-fails or reroutes a request.
+fails or reroutes a request. When the label is ignored, the live run log shows
+only the requested `model=` line, not the gateway's label, so a routed seat
+never appears to run a model it did not request.
 
 An absent, empty or whitespace-only `base_url` makes `createChat` return
 `null`, without accessing the vault or network. Keep the caller's existing

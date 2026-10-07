@@ -44,6 +44,8 @@ test('a gateway whose response label is ignored records the requested model and 
   assert.equal(response.model, 'qwen3.8-27b');
   assert.equal(chat.lastResponse.model, 'qwen3.8-27b');
   assert.equal(events.some(({ type }) => type === 'served-model'), false);
+  assert.deepEqual(events.filter(({ type }) => type === 'model').map(({ model }) => model), ['qwen3.8-27b'],
+    'the live log shows only the requested model, never the ignored gateway label');
   assert.throws(() => createChat({ llm: { base_url: 'http://127.0.0.1:8000/v1', model: 'm',
     served_model_label: 'maybe' } }), /served_model_label/);
 });
