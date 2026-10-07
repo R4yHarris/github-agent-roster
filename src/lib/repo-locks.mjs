@@ -40,10 +40,14 @@ export class RepoLockError extends Error {
  * - `repoRoot`/`worktreeRoot` resolve the per-worktree lock directory.
  * - `staleMs` bounds how old a lock may be before its holder is probed for
  *   liveness; a lock whose holder is provably dead is taken over.
+ * - `lockRoot` may be supplied directly (test seam) to anchor the lock files
+ *   in an explicit directory; otherwise the per-worktree state directory is
+ *   resolved through `statePaths` with the legacy state layout directory name.
  */
 export async function acquireRepoLock(name, {
   repoRoot,
   worktreeRoot,
+  lockRoot,
   holder = `pid-${process.pid}`,
   waitMs = 0,
   staleMs = 30_000,
@@ -56,17 +60,24 @@ export async function acquireRepoLock(name, {
   if (typeof name !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(name)) {
     throw new RepoLockError('Lock name must be an opaque identifier of at most 64 characters.');
   }
-  const resolved = await statePaths({
-    scope: STATE_SCOPES.PER_WORKTREE,
-    repoRoot,
-    worktreeRoot,
-    layoutDirName: LEGACY_STATE_DIRNAME,
-    segments: ['locks', `${name}.lock`],
-    fileSystem,
-  });
+  let resolvedPath;
+  if (typeof lockRoot === 'string' && lockRoot.trim() !== '') {
+    // Explicit lock directory: still anchored under the private state layout
+    // name so every production lock path routes through the same root.
+    resolvedPath = path.join(lockRoot, 'locks', `${name}.lock`);
+  } else {
+    resolvedPath = (await statePaths({
+      scope: STATE_SCOPES.PER_WORKTREE,
+      repoRoot,
+      worktreeRoot,
+      layoutDirName: LEGACY_STATE_DIRNAME,
+      segments: ['locks', `${name}.lock`],
+      fileSystem,
+    })).path;
+  }
   // The lock file's parent (locks/) must exist before the exclusive create;
   // mkdir is idempotent so concurrent acquirers never race on it.
-  await fileSystem.mkdir(path.dirname(resolved.path), { recursive: true, mode: 0o700 });
+  await fileSystem.mkdir(path.dirname(resolvedPath), { recursive: true, mode: 0o700 });
   const deadline = clock() + waitMs;
   for (;;) {
     const record = { holder, pid: process.pid, acquiredAt: now() };
@@ -75,7 +86,7 @@ export async function acquireRepoLock(name, {
       // Exclusive create ('wx'): the atomicity guarantee. Exactly one writer
       // successfully creates the lock file; every other concurrent writer
       // rejects with EEXIST in the same instant.
-      handle = await fileSystem.open(resolved.path, 'wx', 0o600);
+      handle = await fileSystem.open(resolvedPath, 'wx', 0o600);
     } catch (error) {
       if (error.code !== 'EEXIST') {
         throw new RepoLockError(`Lock ${name} could not be created (${error.code ?? error.message}).`,
@@ -84,7 +95,7 @@ export async function acquireRepoLock(name, {
       // The lock exists: identify the holder before any refusal or takeover.
       let existing = null;
       try {
-        existing = JSON.parse(await fileSystem.readFile(resolved.path, 'utf8'));
+        existing = JSON.parse(await fileSystem.readFile(resolvedPath, 'utf8'));
       } catch (readError) {
         if (readError.code !== 'ENOENT') {
           existing = null;
@@ -114,7 +125,7 @@ export async function acquireRepoLock(name, {
       // unlink keeps the lock in place so the error surfaces instead of
       // silently taking the lock anyway.
       try {
-        await fileSystem.unlink(resolved.path);
+        await fileSystem.unlink(resolvedPath);
       } catch (unlinkError) {
         if (unlinkError.code !== 'ENOENT') {
           throw new RepoLockError(
@@ -132,13 +143,13 @@ export async function acquireRepoLock(name, {
       handle = undefined;
     } catch (writeError) {
       await handle?.close().catch(() => {});
-      await fileSystem.rm(resolved.path, { force: true }).catch(() => {});
+      await fileSystem.rm(resolvedPath, { force: true }).catch(() => {});
       throw new RepoLockError(`Lock ${name} could not record its holder (${writeError.code ?? writeError.message}).`,
         { code: 'E_LOCK_RECORD', lock: name, cause: writeError });
     }
     return {
-      name, path: resolved.path, holder, acquiredAt: record.acquiredAt,
-      release: () => releaseRepoLock(resolved.path, { holder, fileSystem }),
+      name, path: resolvedPath, holder, acquiredAt: record.acquiredAt,
+      release: () => releaseRepoLock(resolvedPath, { holder, fileSystem }),
     };
   }
 }
