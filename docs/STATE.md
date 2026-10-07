@@ -209,6 +209,10 @@ computed as follows:
    once and store it in repo state; until that ID exists, durable machine persistence is
    refused. Offline identity is flagged `"identity_strength": "local"`. Basenames and
    absolute checkout paths are never identity inputs because they collide or break on moves.
+   Identity never depends on the checkout directory, so a reclone or replaced checkout of
+   the same remote keeps reading prior machine history. `ROSTER_REPO_ID`, when set,
+   overrides the derived id (`resolveRepositoryIdentity` in `src/lib/paths.mjs`) for
+   checkouts without a usable remote.
 4. **Forks are distinct repositories.** Identity includes the owner, so
    `owner/name` and `other-fork/name` never share machine history or memory. There is no
    fork-merging rule; if a fork's memory is wanted upstream, memory entries must be
@@ -383,7 +387,7 @@ Redaction happens **before** any write, not as a post-hoc filter.
 | Symlink / path traversal | A symlink inside `.roster/` or `<machine-root>` pointing outside, or a run id like `../../etc/passwd` | Reject symlinked entries inside state roots; canonicalize and verify every resolved path is inside its declared root; ids are validated against `^[A-Za-z0-9][A-Za-z0-9._-]*$`; refuse `..`, absolute, and multi-segment ids |
 | Shared machine | Another local user reads or tampers with state | Machine root is user-only `0700`/`0600`; a root with wider permissions is refused, not adopted; no machine-wide or group-writable state root is ever created |
 | Backups | Machine or repo state captured into an unintended backup target | Redaction happens before persistence, so nothing secret is ever present to back up; published record is the only intended egress and is allow-listed; `.roster/` is gitignored so it does not ride along in repo archives |
-| Accidental git inclusion | `.roster/` or worktree state committed and pushed | `.roster/` is in `.gitignore` from first write; writers verify it is ignored and refuse to write if not; state writers never run `git add`; a check refuses to proceed if a state path is tracked |
+| Accidental git inclusion | `.roster/` or worktree state committed and pushed | `.gitignore` lists every runtime state path under `.roster/` explicitly plus `.roster-state/`, with no blanket `.roster/` rule, so tracked templates, docs, and any shared setup a repo chooses to commit stay trackable; writers verify it is ignored and refuse to write if not; state writers never run `git add`; `scripts/check-roster-scope.mjs` (`checkRosterScope`) fails a commit scope check when a runtime state path is missing from `.gitignore` or present in the index |
 | Identity collision | Two different repos resolving to the same key under a weak identity | Weak identity is flagged; consumers must treat weak-identity records as non-authoritative; collisions are reported, not silently merged |
 | Memory poisoning | A model-adjacent transcript quietly becomes "memory" | Memory requires an explicit promotion step; no code path may read machine history as context |
 
@@ -400,6 +404,12 @@ Redaction happens **before** any write, not as a post-hoc filter.
   the lock path. Never break or steal a lock.
 - **Identity unresolvable** (no repo root found) → operate in session-only mode. Persist
   nothing except ephemeral session state. Do not guess an identity.
+- **Fresh clone / replaced checkout** → a missing state directory is created on first open
+  with an empty state object (`openRepoState` returns `initialized: true` and `state: {}`).
+  Reads return `null` rather than throwing, so empty is indistinguishable from absent and
+  the empty-state contract holds. Runtime state files carry no secrets, and deleting
+  `.roster/` never touches vault secrets, tracked source, machine history, or published
+  GitHub evidence.
 - **Redaction error** → do not persist the record. Surface the error.
 
 ---
