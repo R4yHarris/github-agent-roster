@@ -5,6 +5,7 @@ import {
 } from './learn.mjs';
 import { hardwareCost } from './hardware.mjs';
 import { resolveProjectRoot } from './paths.mjs';
+import { depth as admissionDepth } from '../runtime/admission.mjs';
 
 function preference(profile, difficulty) {
   return -hardwareCost(profile, difficulty);
@@ -16,7 +17,7 @@ function contextFit(profile) {
 
 export function chooseRoute({
   fleet, capabilities, records = [], taskClass, difficulty = 2, contextRequired = 0, profileId, seat = 'coder',
-  excludedProfileIds = [],
+  excludedProfileIds = [], queueDepth = admissionDepth,
 }) {
   if (!TASK_CLASSES.includes(taskClass)) throw new TypeError('Routing task class must be feat, fix, docs, or test');
   if (!Number.isInteger(difficulty) || difficulty < 1 || difficulty > 5) {
@@ -46,6 +47,9 @@ export function chooseRoute({
   const profiles = (profileId === undefined ? catalog.profiles : [getFleetProfile(catalog, profileId)])
     .filter((profile) => !excluded.has(profile.id))
     .filter((profile) => !ceilings.has(profile.model) || ceilings.get(profile.model) >= difficulty);
+  // Spec §5 fleet: queue depth only breaks ties left by eval history and priors; a busy profile is not a failed one.
+  const depths = new Map(profiles.map((profile) => [profile.id, queueDepth(profile.id)]));
+  const byDepth = (left, right) => depths.get(left.profile.id) - depths.get(right.profile.id);
   const human = records.filter((record) => record.evaluation != null &&
     learningSeat(record) === seat);
   const groups = summarizeLearning(human).filter((group) =>
@@ -59,7 +63,7 @@ export function chooseRoute({
         'medianMinutes', 'medianDifficulty', 'estimate_min'].map((name) => [name, group[name]])),
     })));
   evaluated.sort((left, right) => right.recommendation.acceptRate - left.recommendation.acceptRate ||
-    right.recommendation.n - left.recommendation.n || left.profile.id.localeCompare(right.profile.id) ||
+    right.recommendation.n - left.recommendation.n || byDepth(left, right) || left.profile.id.localeCompare(right.profile.id) ||
     [...EFFORTS, null].indexOf(left.recommendation.effort) - [...EFFORTS, null].indexOf(right.recommendation.effort));
   if (evaluated.length) return evaluated[0];
 
@@ -77,7 +81,7 @@ export function chooseRoute({
   });
   candidates.sort((left, right) => Number(right.hinted) - Number(left.hinted) ||
     Number(preference(right.profile, difficulty)) - Number(preference(left.profile, difficulty)) ||
-    contextFit(left.profile) - contextFit(right.profile) ||
+    contextFit(left.profile) - contextFit(right.profile) || byDepth(left, right) ||
     right.profile.concurrency - left.profile.concurrency || left.profile.id.localeCompare(right.profile.id));
   if (!candidates.length) return null;
   const { hinted, ...choice } = candidates[0];

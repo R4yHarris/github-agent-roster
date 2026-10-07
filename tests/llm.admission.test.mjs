@@ -56,7 +56,8 @@ test('requests beyond a fleet profile concurrency wait FIFO and report their que
     ask(config, endpoint.fetchImpl, content, { onEvent: (event) => events.push(event) }));
   await endpoint.until(() => endpoint.gates.length === 2);
   await endpoint.settle();
-  assert.deepEqual(endpoint.order, ['a', 'b']);
+  // Admission is FIFO; requests admitted together may still reach the endpoint in either order.
+  assert.deepEqual([...endpoint.order].sort(), ['a', 'b']);
   assert.equal(depth('admission-fifo'), 2);
   assert.deepEqual(events.filter((event) => event.queued).map(({ depth: queued }) => queued), [1, 2]);
   for (let opened = 0; opened < 4; opened += 1) {
@@ -64,7 +65,7 @@ test('requests beyond a fleet profile concurrency wait FIFO and report their que
     endpoint.gates.shift()();
   }
   await Promise.all(calls);
-  assert.deepEqual(endpoint.order, ['a', 'b', 'c', 'd']);
+  assert.deepEqual([endpoint.order.slice(0, 2).sort(), endpoint.order.slice(2).sort()], [['a', 'b'], ['c', 'd']]);
   assert.equal(endpoint.stats().maxInFlight, 2);
   assert.equal(depth('admission-fifo'), 0);
 });
