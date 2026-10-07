@@ -577,6 +577,10 @@ test('auto-model reviewer retries once on another independent profile after an i
   assert.equal(result.review.completed, true);
   assert.equal(result.runs.reviewer.env.AI_MODEL, reviews[2].model);
   assert.match(readFileSync(path.join(result.worktreePath, 'REVIEW.md'), 'utf8'), /^# Review\n\nVerdict: pass\n/);
+  const recorded = readFileSync(path.join(options.target, '.roster', 'runs', 'runs.jsonl'), 'utf8')
+    .trim().split('\n').map((line) => JSON.parse(line)).filter(({ session }) => /reviewer/.test(session ?? ''))
+    .map(({ model }) => model);
+  assert.deepEqual(recorded, [reviews[0].model, reviews[2].model], 'both reviewer attempts are recorded');
 });
 
 test('auto-model returns the incomplete review when no other independent profile remains', async (context) => {

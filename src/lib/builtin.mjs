@@ -942,6 +942,10 @@ async function runBuiltinAssignment(issueNumber, {
         if (next) {
           log(`Reviewer profile=${incompleteProfile} returned an incomplete review; ` +
             `retrying with profile=${next.profile.id} model=${next.profile.model}.`);
+          // The discarded attempt still spent real tokens; record it so seat metrics do not undercount.
+          await recordSeat(sessions.reviewer, buildRun({
+            config: reviewConfig, response: review.response, session: sessions.reviewer, task: prepared.task, env,
+          }));
           await removeIncompleteReview(review.reviewPath);
           independent = next;
           continue;
