@@ -126,6 +126,25 @@ test('helpers and namespace imports count as app calls; keyword scans are not se
   assert.deepEqual(analyze(`test('only node builtins', () => {\n  assert.ok(true);\n});`, base).length, 1);
 });
 
+test('methods on objects app code returned are app calls; built-in methods on them are not', () => {
+  const base = `import test from 'node:test';\nimport assert from 'node:assert';\nimport { openStore } from '../src/lib/store.mjs';\n` +
+    `async function makeStore() {\n  return { store: openStore() };\n}\n`;
+  assert.deepEqual(analyze(`test('redacts', async () => {
+  const { store } = await makeStore();
+  const sentinel = 'test-only-private-api-key';
+  await store.record({ output: \`api_key = "\${sentinel}"\` });
+  const rows = await store.query({});
+  assert.doesNotMatch(JSON.stringify(rows), new RegExp(sentinel));
+});`, base), []);
+  const reasons = analyze(`test('builtin only', async () => {
+  const rows = await openStore().query({});
+  const sentinel = 'test-only-private-api-key';
+  assert.equal(rows.includes(sentinel), false);
+});`, base);
+  assert.equal(reasons.length, 1);
+  assert.match(reasons[0], /sentinel sentinel .* never passed to app code/);
+});
+
 test('added lines are grouped per file from a zero-context diff', () => {
   const added = addedLinesByFile([
     'diff --git a/tests/a.test.mjs b/tests/a.test.mjs', '--- a/tests/a.test.mjs', '+++ b/tests/a.test.mjs',
