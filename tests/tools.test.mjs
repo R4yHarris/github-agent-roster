@@ -20,6 +20,24 @@ function docsCheck(worktree) {
   writeFileSync(path.join(worktree, 'tests', 'repl.test.mjs'), '');
 }
 
+test('read_file on a missing path names real similar siblings without leaking the host path', async (context) => {
+  const worktree = fixture(context);
+  mkdirSync(path.join(worktree, 'src', 'lib'), { recursive: true });
+  for (const name of ['provenance-api.mjs', 'provenance-store.mjs', 'paths.mjs']) {
+    writeFileSync(path.join(worktree, 'src', 'lib', name), '');
+  }
+  writeFileSync(path.join(worktree, '.envrc'), 'SECRET=1\n');
+  const tools = await createTools({ worktree, allowedFiles: ['src/lib/history.mjs'] });
+  await assert.rejects(tools.read_file({ path: 'src/lib/provenance.mjs' }), (error) => {
+    assert.equal(error.message,
+      'read_file: src/lib/provenance.mjs does not exist. Similar files: src/lib/provenance-api.mjs, src/lib/provenance-store.mjs');
+    assert.ok(!error.message.includes(worktree));
+    return true;
+  });
+  await assert.rejects(tools.read_file({ path: '.env.local' }), /Tool access to secrets/);
+  await assert.rejects(tools.read_file({ path: 'missing/nowhere.mjs' }), /does not exist\. Use list_dir/);
+});
+
 test('every slice denies out-of-scope file reads, including fixtures and harness sources', async (context) => {
   const worktree = fixture(context);
   mkdirSync(path.join(worktree, 'docs'));
