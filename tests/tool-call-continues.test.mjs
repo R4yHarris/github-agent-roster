@@ -352,3 +352,44 @@ test('a repaired own test no longer blocks steering when only a pre-existing out
   assert.ok(!seen.some((text) => text.includes('Repair 2 of')), 'the cumulative repair grant is not mistaken for a current failure');
   assert.equal(result.progress?.testRepairs ?? 1, 1);
 });
+
+test('a failing test the coder wrote outside Allowed Files is repaired, never excused as pre-existing', async (context) => {
+  const options = fixture(context, planStub('Update `README.md` and `src/app.mjs` with a Status section and export.',
+    { reference: 'issue:6', metadata: { task_class: 'feat', difficulty: 4 } }).task);
+  mkdirSync(path.join(options.worktree, 'src'));
+  writeFileSync(path.join(options.worktree, 'src', 'app.mjs'), 'export const value = 1;\n');
+  const own = path.join(options.worktree, 'tests', 'app.test.mjs');
+  const ownFixed = () => { try { return readFileSync(own, 'utf8').includes('fixed'); } catch { return false; } };
+  const fail = (file) => Object.assign(new Error('tests failed'), { code: 1,
+    stdout: `✖ failing tests:\n\ntest at ${file}:1:1\n✖ ${file} broke (2ms)\n  AssertionError: red first\n`, stderr: '' });
+  const write = (id, file, content) => ({ id, type: 'function', function: { name: 'write_file',
+    arguments: JSON.stringify({ path: file, content }) } });
+  let calls = 0;
+  const seen = [];
+  await runCoder({
+    ...options, env: {},
+    runTestCommand: async (program, args) => {
+      if (program === 'git') return { stdout: '', stderr: '' };
+      if (args.length < 3 || ownFixed()) return { stdout: '', stderr: '' };
+      throw fail('tests/app.test.mjs');
+    },
+    fetchImpl: withResearch(async (_url, request) => {
+      calls += 1;
+      seen.push(JSON.parse(request.body).messages.at(-1).content ?? '');
+      if (calls === 1) {
+        return response('tool_calls', { role: 'assistant', content: null, tool_calls: [
+          write('w1', 'tests/app.test.mjs', "import test from 'node:test';\ntest('red', () => { throw new Error('x'); });\n"),
+          write('w2', 'src/app.mjs', 'export const value = 2;\n'), writeCall()] });
+      }
+      if (seen.at(-1).includes('Repair 1 of') && !ownFixed()) {
+        return response('tool_calls', { role: 'assistant', content: null, tool_calls: [
+          { id: `r${calls}`, type: 'function', function: { name: 'read_file', arguments: JSON.stringify({ path: 'tests/app.test.mjs' }) } },
+          write(`f${calls}`, 'tests/app.test.mjs', "import test from 'node:test';\ntest('fixed', () => {});\n")] });
+      }
+      return response('stop', { role: 'assistant', content: 'Added the Status section and export; tests pass.' });
+    }),
+  });
+  assert.ok(!seen.some((text) => text.includes('are outside Allowed Files and are pre-existing')), seen.join('\n---\n'));
+  assert.ok(seen.some((text) => text.includes('Repair 1 of')), seen.join('\n---\n'));
+  assert.ok(ownFixed());
+});

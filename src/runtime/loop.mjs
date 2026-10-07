@@ -137,7 +137,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       'with evidence (file and symbol or test) or blocked with the reason. You cannot finish with open items. ' +
       'Write the acceptance tests first and run them to see them fail, then implement: a new test that already ' +
       'passes on the base code is rejected as not red.' : '',
-    'A failing test outside Allowed Files is pre-existing: report it and do not edit it.',
+    'A failing test you did not write that is outside Allowed Files is pre-existing: report it and do not edit it.',
     !boundedTask && !docsOnly && (config.seat.scope_expansion ?? 3) > 0
       ? `Allowed Files are the planned scope. If the outcome truly requires another product file, you may write at most ` +
         `${config.seat.scope_expansion ?? 3} files outside it; each is recorded, judged by the reviewer, and listed in the PR, ` +
@@ -202,6 +202,8 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   progress.testRepairBudget = repairBudget;
   progress.repairFiles = [];
   progress.regressionFiles = [];
+  // Files this coder wrote; their failures (for example red tests written first) are never pre-existing.
+  const sessionWrites = new Set();
   const repairTests = async (tests) => {
     if (!Number.isSafeInteger(tests?.exit_code) || tests.exit_code < 0) {
       throw new TypeError('run_test must return a nonnegative integer exit_code');
@@ -218,7 +220,8 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       if (!progress.regressionFiles.includes(file)) progress.regressionFiles.push(file);
     }
     // Regressions this change caused outside Allowed Files are repairable; only proven non-regressions are excused.
-    const excused = (file) => !parsedTask.files_allowed.includes(file) && !progress.regressionFiles.includes(file);
+    const excused = (file) => !parsedTask.files_allowed.includes(file) && !progress.regressionFiles.includes(file) &&
+      !sessionWrites.has(file);
     progress.repairFiles = failingFiles.filter((file) => !excused(file));
     const outside = failingFiles.filter(excused);
     const regressions = progress.repairFiles.filter((file) => progress.regressionFiles.includes(file));
@@ -552,6 +555,9 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         let result;
         try {
           result = await tools[call.function.name](call.args);
+          if (['write_file', 'edit_file'].includes(call.function.name) && typeof call.args?.path === 'string') {
+            sessionWrites.add(String(result?.path ?? call.args.path).replaceAll('\\', '/'));
+          }
         } catch (error) {
           // "Repeated" means the same call failing the same way, not unrelated misses separated by progress.
           const denialKey = `${call.function.name}\0${error instanceof Error ? error.message : ''}\0${JSON.stringify(call.args)}`;

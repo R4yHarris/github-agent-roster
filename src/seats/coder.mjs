@@ -18,9 +18,11 @@ import { statusSectionPresent } from '../runtime/readme-status.mjs';
 import { isLlmTimeout, retryCommandForTask } from '../llm/request.mjs';
 import { selectReasoning } from '../llm/reasoning.mjs';
 import { throwIfCancelled } from '../runtime/cancel.mjs';
-import { lstatSync } from 'node:fs';
+import { lstatSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { captureCheckpoint } from '../lib/checkpoints.mjs';
+import { parseTaskDocument } from '../planner/task.mjs';
+import { isTestPath, triageChecks, triageText } from '../runtime/check-triage.mjs';
 
 export async function runCoder({
   worktree, repoRoot, config, task, session, fetchImpl, env = process.env, vault, runTestCommand,
@@ -48,6 +50,7 @@ export async function runCoder({
   let baseline;
   let verifiedSnapshot;
   let redGreen;
+  let triage;
   let redGreenRepairUsed = false;
   let selfReview;
   let shadow;
@@ -69,12 +72,27 @@ export async function runCoder({
     if (config.llm.base_url && !skipsTests && config.tools?.run_test === false) {
       throw new Error('run_test is disabled by tools.run_test; enable it or explicitly declare TASK.md tests: none');
     }
-    const allowedFiles = taskFilesAllowed(context.task);
+    let allowedFiles = taskFilesAllowed(context.task);
     if (config.llm.base_url && /^#{2,6} +Design\s*$/im.test(context.task)) {
       // Spec §4.5/§5.5: the Design is validated against this worktree before the first product write.
       const errors = await designGateErrors({ worktree, task: context.task, filesAllowed: allowedFiles,
         repositoryFiles: await trackedRepositoryFiles(worktree) });
       if (errors.length) throw new Error(`Design gate refused TASK.md before coding: ${errors.slice(0, 4).join('; ')}`);
+    }
+    // Spec §4.2/§5.5: a senior engineer confirms the ask is not already done before writing code.
+    if (config.llm.base_url && !skipsTests && !context.minimalDocs) {
+      triage = await triageChecks({ worktree, checks: parseTaskDocument(context.task).acceptance_checks,
+        env: withoutLlmKeys(env, config), runCommand: runTestCommand, signal });
+      const text = triageText(triage);
+      if (text) {
+        context = { ...context, pack: `${context.pack}\n\n## Check triage\n\n${text}\n` };
+        if (context.contextPath) writeFileSync(context.contextPath, context.pack);
+      }
+      if (triage.allMet) {
+        const named = triage.entries.flatMap(({ check }) => [...check.matchAll(/[^`\s]+\.test\.[cm]?js/g)].map(([file]) => file));
+        const tests = [...new Set([...allowedFiles.filter(isTestPath), ...named])];
+        if (tests.length) allowedFiles = tests;
+      }
     }
     metadata = estimateTask(readTaskMetadata(context.task), [], config.llm.model || env?.ROSTER_MODEL || '');
     // A harness reroute locks a new fleet model; TASK.md still names the planner's original route.
@@ -187,6 +205,13 @@ export async function runCoder({
         } else if (allowedFiles.length === 1 && !changedFiles.has(allowedFiles[0])) {
           evidence.pass = false;
           evidence.reasons.push(`Bounded task must write ${allowedFiles[0]} before finishing`);
+        }
+        const productEdits = triage?.allMet
+          ? evidence.files.filter((file) => /\.[cm]?[jt]sx?$/.test(file) && !isTestPath(file)) : [];
+        if (productEdits.length) {
+          evidence.pass = false;
+          evidence.reasons.push(`Check triage: every acceptance check held before coding, so this slice is tests-only; ` +
+            `revert product changes to ${productEdits.join(', ')} and pin the behavior with tests.`);
         }
         // Only a passing candidate is worth the base run; it reports "not red" once, then records the evidence.
         if (evidence.pass && !candidate.testsSkipped) {
