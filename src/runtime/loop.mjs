@@ -92,7 +92,8 @@ function stubSummary(task) {
     'Deterministic stub only: no implementation or tests were run. Configure llm.base_url to run a coder.';
 }
 
-async function executeLoop({ config, context, tools, fetchImpl, env, vault, verify, onEvent, retryCommand, signal, steeringControl }, progress) {
+async function executeLoop({ config, context, tools, fetchImpl, env, vault, verify, onEvent, retryCommand, signal, steeringControl,
+  priorWrites = [] }, progress) {
   throwIfCancelled(signal);
   if (!config.llm.base_url) {
     const summary = stubSummary(context.task);
@@ -202,8 +203,8 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
   progress.testRepairBudget = repairBudget;
   progress.repairFiles = [];
   progress.regressionFiles = [];
-  // Files this coder wrote; their failures (for example red tests written first) are never pre-existing.
-  const sessionWrites = new Set();
+  // Files this run's coder contexts wrote; their failures (for example red tests written first) are never pre-existing.
+  const sessionWrites = new Set(priorWrites.map((file) => String(file).replaceAll('\\', '/')));
   const repairTests = async (tests) => {
     if (!Number.isSafeInteger(tests?.exit_code) || tests.exit_code < 0) {
       throw new TypeError('run_test must return a nonnegative integer exit_code');
