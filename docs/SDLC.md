@@ -53,7 +53,10 @@ parked: Roster opens the missing drafts as GitHub issues labelled `wave:N`,
 each body naming `Parent: #N` and the PLAN markers, then runs the first `todo`
 child as an ordinary slice in its own worktree. Later waves stay blocked until
 earlier wave issues close. Rerunning the parent reuses its PLAN, so child
-issues are never duplicated, and continues with the next ready child. Use
+issues are never duplicated, and continues with the next ready child. A later-wave
+child's coder context and review evidence list the code modules that closed
+earlier-wave children of the same PLAN merged, with their exports, so the slice
+imports them instead of re-implementing a parallel module. Use
 `--confirm` to stop at the PLAN instead. Local Asks and initiatives still stop
 at PLAN.md; initiative drafts are features that are planned on their own runs.
 Neither `--publish` nor a review bypass can publish planning-only output.

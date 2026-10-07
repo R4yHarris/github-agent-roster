@@ -24,10 +24,18 @@ export async function readPublicSeams(worktree, files, { limit = 2400 } = {}) {
       modules.add(/\.[cm]?js$/.test(target) ? target : `${target}.mjs`);
     }
   }
-  const blocks = [];
   const stems = new Set(files.map((file) => path.posix.basename(file.replaceAll('\\', '/')).replace(/\.(test|spec)?\.?[cm]?js$/, '')));
   const stem = (module) => path.posix.basename(module).replace(/\.[cm]?js$/, '');
-  for (const module of [...modules].sort((a, b) => Number(stems.has(stem(b))) - Number(stems.has(stem(a))) || a.localeCompare(b))) {
+  return moduleExports(root, [...modules].sort((a, b) =>
+    Number(stems.has(stem(b))) - Number(stems.has(stem(a))) || a.localeCompare(b)), limit);
+}
+
+// Lists exported signatures of existing modules, for example the files an earlier plan wave merged.
+export async function moduleExports(worktree, modules, limit = 2400) {
+  const root = path.resolve(worktree);
+  const blocks = [];
+  for (const module of modules) {
+    if (isForbiddenRead(module)) continue;
     let text;
     try { text = await requiredFile(path.join(root, module), root); } catch { continue; }
     const lines = text.split('\n');
@@ -94,7 +102,7 @@ function boundedPack(sections, budget, minimum = false) {
 }
 
 export async function loadContext({ worktree, memoryPath, repoRoot, config, principal, env, priorFeedback = null, askKind,
-  continuation = null }) {
+  continuation = null, priorWaveFiles = [] }) {
   if (priorFeedback !== null && typeof priorFeedback !== 'string') throw new TypeError('Prior feedback must be text');
   if (continuation !== null && typeof continuation !== 'string') throw new TypeError('Continuation must be text');
   const budget = config?.seat?.context_chars ?? 8000;
@@ -143,6 +151,11 @@ export async function loadContext({ worktree, memoryPath, repoRoot, config, prin
   // A harness continuation (for example after a route recovery) is required in every pack mode.
   if (continuation) sections.splice(1, 0, { heading: 'Continuation',
     body: redactSecrets(continuation, { env, apiKeyEnv: config?.llm?.api_key_env }), required: true });
+  const delivered = priorWaveFiles.length ? await moduleExports(worktree, priorWaveFiles) : '';
+  if (delivered) sections.splice(continuation ? 2 : 1, 0, { heading: 'Earlier waves delivered',
+    body: 'Earlier slices of this plan already merged these modules. Import and extend them; do not ' +
+      're-implement their records, validation, storage, or redaction in a parallel module.\n\n' +
+      redactSecrets(delivered, { env, apiKeyEnv: config?.llm?.api_key_env }), required: true });
   const repoMap = policy.repoMap ? await readRepoMap(worktree, { env, apiKeyEnv: config?.llm?.api_key_env }) : null;
   if (repoMap) sections.push({ heading: 'Repo map (filenames only)', body: repoMap.trim(), required: false });
   const seams = await readPublicSeams(worktree, files);

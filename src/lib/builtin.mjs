@@ -38,7 +38,7 @@ import { loadCapabilities } from './capabilities.mjs';
 import { initializeWorktreeSubmodules } from './contracts.mjs';
 import { createDebugLog } from './debug-log.mjs';
 import { throwIfCancelled } from '../runtime/cancel.mjs';
-import { issueWave, readWavePlan, requireEarlierWavesClosed, waveBoard } from './waves.mjs';
+import { earlierWaveFiles, issueWave, readWavePlan, requireEarlierWavesClosed, waveBoard } from './waves.mjs';
 import { githubRepository } from './issue.mjs';
 import { routeFailure } from '../llm/openai.mjs';
 
@@ -925,7 +925,7 @@ async function runBuiltinAssignment(issueNumber, {
       try {
         review = await liveLog.seat('reviewer', sessions.reviewer, reviewConfig, (onEvent) => runReviewer({
           worktree: worktreePath, repoRoot, config: reviewConfig,
-          coderResult, fetchImpl, env, vault, onEvent, askKind, retryCommand, signal, previousFindings,
+          coderResult, fetchImpl, env, vault, onEvent, askKind, retryCommand, signal, previousFindings, priorWaveFiles,
         }));
       } catch (error) {
         const failure = independent ? routeFailure(error) : null;
@@ -971,6 +971,15 @@ async function runBuiltinAssignment(issueNumber, {
       return { review, reviewerRun };
     }
   };
+  let priorWaveFiles = [];
+  if (!prepared.local && (issueWave(prepared.issue) ?? 1) > 1) {
+    try {
+      const repository = githubRepository((await issueCommand('git', ['remote', 'get-url', 'origin'], prepared.repoRoot)).trim());
+      priorWaveFiles = await earlierWaveFiles({ issue: prepared.issue, repository, worktree: worktreePath,
+        cwd: prepared.repoRoot, runCommand: issueCommand });
+    } catch { priorWaveFiles = []; }
+    if (priorWaveFiles.length) log(`Earlier waves delivered: ${priorWaveFiles.join(', ')}; the coder is told to reuse them.`);
+  }
   const coderSeat = (priorFeedback = planner.feedback?.context, { initialBaseline, initialScopeFiles, initialRepairFiles, continuation } = {}) => {
     assertSeatCovers(recipeCoder, {
       ...(recipeCoder.max_difficulty === undefined ? {} : { difficulty: readTaskMetadata(planner.task).difficulty }),
@@ -979,7 +988,7 @@ async function runBuiltinAssignment(issueNumber, {
     return liveLog.seat('coder', sessions.coder, coderConfig, (onEvent) => runCoder({
       worktree: worktreePath, repoRoot, config: coderConfig, task: prepared.task, session: sessions.coder,
       fetchImpl, env, vault, runTestCommand, priorFeedback, onEvent, askKind, retryCommand, signal, steeringControl,
-      initialBaseline, initialScopeFiles, initialRepairFiles, continuation,
+      initialBaseline, initialScopeFiles, initialRepairFiles, continuation, priorWaveFiles,
     }));
   };
   let result;
