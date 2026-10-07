@@ -39,6 +39,18 @@ test('redactEvidence replaces private key blocks', () => {
   assert.ok(out.includes('preamble') && out.includes('postamble'));
 });
 
+test('redactEvidence keeps source around PEM headers that have no key body', () => {
+  const body = 'MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7'.padEnd(64, 'A');
+  const source = "const PEM_HEADER = '-----BEGIN TEST PRIVATE KEY-----';\n" +
+    "const PEM_FOOTER = '-----END TEST PRIVATE KEY-----';\n" +
+    "const prose = 'about -----BEGIN RSA PRIVATE KEY----- envelopes';\nconst tail = 1;";
+  assert.equal(redactEvidence(source, { env: EMPTY_ENV }), source);
+  const encrypted = `-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,ABCDEF\n\n${body}\nAB==\n` +
+    '-----END RSA PRIVATE KEY-----\nafter';
+  assert.equal(redactEvidence(encrypted, { env: EMPTY_ENV }), '[REDACTED:PRIVATE_KEY]\nafter');
+  assert.equal(redactEvidence(`-----BEGIN PRIVATE KEY-----\n${body}\nrest`, { env: EMPTY_ENV }), '[REDACTED:PRIVATE_KEY]\nrest');
+});
+
 test('redactEvidence replaces values from env-sourced secrets', () => {
   const env = Object.freeze({ ROSTER_API_KEY: 'env-sourced-secret-value' });
   const out = redactEvidence('token is env-sourced-secret-value here', { env });

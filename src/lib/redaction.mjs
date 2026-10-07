@@ -12,6 +12,13 @@ const apiKeyPattern = /(?<apiKeyKey>[A-Za-z0-9_-]*(?:api[_-]?key|x-api-key)[A-Za
 const secretPattern = /(?<secretKey>[A-Za-z0-9_-]*secret[A-Za-z0-9_-]*)\s*[:=]\s*(?<secretValue>"[^"]+"|'[^']+'|[^\s,;]+)\b/g;
 // Committed-file scan: a PEM header counts only when base64 key material follows it (raw or in a string literal).
 const pemKeyPattern = /-----BEGIN [^-\r\n]*PRIVATE KEY-----(?:\\[rn]|[\s'"`+,])*[A-Za-z0-9+/=]{40,}/g;
+// Evidence redaction: a PEM header with its key body (optional RFC 1421 headers, base64 lines) through the footer.
+// A header with no key body (prose, a fixture constant) stays, so it cannot erase the rest of a reviewed diff.
+const pemSeparator = String.raw`(?:\\[rn]|[\s'"` + '`' + String.raw`+,])*`;
+const pemBlockPattern = new RegExp(String.raw`-----BEGIN [^-\r\n]*PRIVATE KEY-----` +
+  String.raw`(?:${pemSeparator}[A-Za-z][A-Za-z-]*:[^\r\n\\'"` + '`' + String.raw`]*)*` +
+  String.raw`(?:${pemSeparator}[A-Za-z0-9+/=]{16,})+` +
+  String.raw`(?:${pemSeparator}[A-Za-z0-9+/=]*${pemSeparator}-----END [^-\r\n]*PRIVATE KEY-----)?`, 'g');
 
 function redactKeyValue(match, key, value) {
   const sentinel = /api[_-]?key|x-api-key/i.test(key) ? '[REDACTED:API_KEY]' : '[REDACTED:SECRET]';
@@ -36,8 +43,7 @@ export function redactEvidence(text, { env = process.env, apiKeyEnv = 'ROSTER_AP
   let safe = String(text);
   for (const value of secretValues(env, apiKeyEnv)) safe = safe.split(value).join('[redacted]');
   return safe
-    .replace(/-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-\r\n]*PRIVATE KEY-----|$)/g,
-      '[REDACTED:PRIVATE_KEY]')
+    .replace(pemBlockPattern, '[REDACTED:PRIVATE_KEY]')
     .replace(credentialPattern, '[REDACTED:API_KEY]')
     .replace(apiKeyPattern, (match, key, value) => redactKeyValue(match, key, value))
     .replace(secretPattern, (match, key, value) => redactKeyValue(match, key, value));
