@@ -28,7 +28,8 @@ export const testRepairCap = 12;
 export const repairContextShare = 0.5;
 const maxRepeatedDenials = 2;
 const sentinelGuidance = 'For secret-leak or redaction tests, feed an obvious non-credential sentinel such as ' +
-  "'test-only-private-api-key' into the app code under test and assert it is absent from that code's output; " +
+  "'test-only-private-api-key' into the app code under test through a realistic secret context (an env secret or " +
+  "an api_key assignment) and assert it is absent from that code's output; never special-case the sentinel in app code, and " +
   'never write sk-, ghp_, gho_, github_pat_ prefixed values or PEM private-key blocks.';
 
 function mentionsSecrets(task) {

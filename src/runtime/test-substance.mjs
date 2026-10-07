@@ -339,6 +339,24 @@ export function analyzeTestSubstance({ file, text, added }) {
   return reasons;
 }
 
+// Sentinel values a test seeds and asserts absent; app code must never special-case them.
+export function testSentinelValues(added) {
+  if (typeof added !== 'string' || !added.trim()) return [];
+  return [...seededSentinels(added, maskCode(added)).keys()].filter((value) => value.length >= 8 && /[A-Za-z]/.test(value));
+}
+
+// Reasons when non-test code embeds a sentinel seeded by a changed test (matching the test instead of the behavior).
+export function sentinelSpecialCases(appAdded, sentinels) {
+  const reasons = [];
+  for (const [file, text] of appAdded) {
+    const hit = sentinels.find((value) => text.includes(value));
+    if (hit) reasons.push(`Test substance: ${file} special-cases the test sentinel '${hit.slice(0, 40)}'; ` +
+      'app code must not match test values. Remove it and make the test feed the sentinel through a realistic input ' +
+      '(an env secret, an api_key assignment, or a credential-shaped context) that the general behavior handles.');
+  }
+  return reasons;
+}
+
 // Added lines per file from a `git diff --unified=0` patch.
 export function addedLinesByFile(diff) {
   const files = new Map();
