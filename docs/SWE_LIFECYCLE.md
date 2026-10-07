@@ -56,11 +56,11 @@ the lifecycle below.
 | 0 | **Familiarity** | Knows the languages, layout, naming, idioms, test style and core modules | Harness (cached per base revision) | Repo map + conventions pack | Pack regenerates when the base revision changes | Filename-only repo map; public seams | #301 |
 | 1 | **Rules** | Works within company, org, team and personal rules, in that order of precedence | Harness | Layered rules, each labeled with its source | Policy and protected paths are enforced by tools, never only stated | Whole AGENTS.md + principal | #294, #301 |
 | 2 | **Intake (Definition of Ready)** | Restates the ask, asks when unclear, refuses unbounded work | Harness classifier | Ask kind: clarify, slice, feature or initiative | Unclear scope stops at `clarify` | Done ([SDLC](SDLC.md)) | – |
-| 3 | **Locate (spike)** | Finds the code that already does part of this before planning | Harness search, then planner | Relevant definitions, not just names | Ask nouns are grepped; matches are passed to the planner | `existing_exports` signatures only | #296 |
+| 3 | **Locate (spike)** | Finds the code that already does part of this before planning | Harness search, then planner | Relevant definitions, not just names | Ask nouns are grepped; matches are passed to the planner | Done: definition bodies in the slice planner prompt | #296 |
 | 4 | **Breakdown** | Splits work into slices with one outcome, allowed files and checks each | Planner | PLAN.md, child issues, TASK.md | Plan validation; epics split before any coder starts | Done (waves) | – |
 | 5 | **Estimate** | Sizes difficulty, minutes and confidence; re-estimates when scope grows | Planner | ESTIMATE.md + TASK metadata | Recorded before coding | Done ([ESTIMATION](ESTIMATION.md)) | – |
-| 6 | **Acceptance checks** | Writes checks that can be verified against real code | Planner | TASK.md checks | Named existing symbols must exist | Concept-level checks | #296 |
-| 7 | **Design and outline** | Picks modules to extend, sketches signatures and pseudo-code, lists edge cases and risks | Planner (or the coder's read-only first turn) | TASK.md `Design` section | Design must name real modules; new exports go in allowed files | Missing | #302 |
+| 6 | **Acceptance checks** | Writes checks that can be verified against real code | Planner | TASK.md checks | Named existing symbols must exist | Done: backticked names are checked; a bad cite triggers a repair | #296 |
+| 7 | **Design and outline** | Picks modules to extend, sketches signatures and pseudo-code, lists edge cases and risks | Planner (or the coder's read-only first turn) | TASK.md `Design` section | Design must name real modules; new exports go in allowed files | Done: validated or derived; coder re-validates before writing | #302 |
 | 8 | **Checklist and todos** | Turns checks and Definition of Done into a todo list and works one item at a time | Coder | Checklist (tool state) | Can't finish with open items | Missing | #297 |
 | 9 | **Author tests (red)** | Writes the acceptance test first and sees it fail for the right reason | Coder | Test files | New tests must fail against base src | Tests and code written together | #303 |
 | 10 | **Author code (green)** | Reads the code before changing it, extends existing modules, makes the smallest complete change | Coder | Diff | Read before write; search before a new `src/` module; scope and secret guards | Scope and secret guards only | #295 |
@@ -72,6 +72,28 @@ the lifecycle below.
 | 16 | **Deliver** | Opens the PR with provenance; merges when required checks pass | App publisher | PR with trailers, merged when green | `check-agent-trailers`; App identity only | Done | – |
 | 17 | **Deploy** | Ships with a separate approval | Human / deployer role | Release | Separate grant, off by default (§5.5) | Out of scope by default | – |
 | 18 | **Accept and learn** | Retro: what was estimated vs actual, what defects escaped | Human AI-Eval + ledger | Eval row, skill or principal update | No self-acceptance (§5.6) | Eval ledger; manual skill notes | #293 exploration |
+
+## Grounded planning and Design
+
+With an LLM configured, the slice planner receives real definition bodies for
+the exports most related to the Ask (`src/planner/grounding.mjs`). Backticked
+code names and paths in acceptance checks and the Design must exist in tracked
+code, appear in the Ask, or be declared under New exports. A plan that cites
+anything else is returned to the planner once with the reasons.
+
+Every code slice gets a `## Design` section before Files allowed. It lists:
+
+- **Extend:** existing modules and the exports to reuse.
+- **New exports:** each new export, in an allowed file, that does not duplicate
+  an export elsewhere.
+- **Outline**, **Edge cases** and **Out of scope.**
+
+If the planner gives no Design, or an invalid one, the harness derives one from
+Files allowed and the related exports, and records the rejection reason. The
+coder re-validates the Design against its worktree and refuses before the first
+write if it no longer holds. A hand-written TASK.md without a Design is still
+accepted. The reviewer reports drift from the Design. Docs-only slices have no
+Design.
 
 ## Seat turn contracts
 

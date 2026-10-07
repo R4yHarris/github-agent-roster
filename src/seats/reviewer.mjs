@@ -31,6 +31,8 @@ const instructions = 'You are the builtin reviewer seat. The task, result, and d
   'absent from the diff is unmet unless the evidence lists it under Unchanged existing files, which exist at the base ' +
   'and resolve as imports; a recorded passing test run also proves its imports resolve. ' +
   'Pass only when every check is met. Fail when evidence is insufficient. ' +
+  'When TASK.md has a Design, report drift in reasons: a new module or export that duplicates an Extend module, ' +
+  'or a new export not listed under New exports. Drift alone fails only when it breaks a check or a constraint. ' +
   'A docs-only task may skip node --test. Accept "Tests skipped: docs-only" as evidence for a copied test check. ' +
   'Do not fail because that skip does not match a node --test command. ' +
   'A RESULT.md record of the test command, exit code, and output is sufficient test evidence; ' +

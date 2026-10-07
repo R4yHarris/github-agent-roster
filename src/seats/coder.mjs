@@ -1,4 +1,6 @@
 import { taskFilesAllowed } from '../planner/stub.mjs';
+import { designGateErrors } from '../planner/grounding.mjs';
+import { trackedRepositoryFiles } from './planner.mjs';
 import { withoutLlmKeys } from '../lib/config.mjs';
 import { buildRun, mergeUsage } from '../metrics/run.mjs';
 import { loadContext } from '../runtime/context.mjs';
@@ -60,6 +62,12 @@ export async function runCoder({
       throw new Error('run_test is disabled by tools.run_test; enable it or explicitly declare TASK.md tests: none');
     }
     const allowedFiles = taskFilesAllowed(context.task);
+    if (config.llm.base_url && /^#{2,6} +Design\s*$/im.test(context.task)) {
+      // Spec §4.5/§5.5: the Design is validated against this worktree before the first product write.
+      const errors = await designGateErrors({ worktree, task: context.task, filesAllowed: allowedFiles,
+        repositoryFiles: await trackedRepositoryFiles(worktree) });
+      if (errors.length) throw new Error(`Design gate refused TASK.md before coding: ${errors.slice(0, 4).join('; ')}`);
+    }
     metadata = estimateTask(readTaskMetadata(context.task), [], config.llm.model || env?.ROSTER_MODEL || '');
     // A harness reroute locks a new fleet model; TASK.md still names the planner's original route.
     if (config.llm.locked_model) metadata = { ...metadata, model: config.llm.locked_model };
