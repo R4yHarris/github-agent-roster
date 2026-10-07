@@ -12,6 +12,7 @@ import {
   resolveStateRoot as resolveStateRootViaPaths,
 } from './paths.mjs';
 import { resolveRepoIdentity } from './repo-identity.mjs';
+import { RepoLockError, acquireRepoLock } from './repo-locks.mjs';
 
 /**
  * Safe path resolution and state-scope validation for clean operations.
@@ -36,6 +37,10 @@ export class CleanOpsError extends Error {
 const ESCAPE_CODE = 'CLEAN_OPS_PATH_ESCAPE';
 const FORBIDDEN_CODE = 'CLEAN_OPS_FORBIDDEN_PATH';
 const SCOPE_CODE = 'CLEAN_OPS_SCOPE_MISMATCH';
+const CONFIRMATION_CODE = 'CLEAN_OPS_CONFIRMATION_REQUIRED';
+const LOCK_CODE = 'CLEAN_OPS_LOCK_HELD';
+const LOCK_PROBE_CODE = 'CLEAN_OPS_LOCK_PROBE_FAILED';
+const PARTIAL_CODE = 'CLEAN_OPS_PARTIAL_CLEAN';
 
 function isPlainObject(value) {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -432,4 +437,140 @@ export async function ensureStateDirectory(handle) {
   );
   await fsp.mkdir(safe, { recursive: true });
   return safe;
+}
+
+
+// Preview, confirmation and active-run lock guards (#277, part of #197).
+// Clean is dry-run by default; deletion needs execute plus explicit yes, and
+// refuses while any repo-locks.mjs lock under the state root has a live holder.
+// The locks/ directory is never part of a sweep.
+
+const LOCKS_DIR = 'locks';
+
+// The state root itself is never a deletion target, but sweeps and lock probes read it.
+async function canonicalStateRoot(handle) {
+  assertStateScope(handle);
+  const root = await normalizePath(rootOf(handle));
+  if (!root) throw new CleanOpsError('state root handle is missing a root', FORBIDDEN_CODE, { handle });
+  return assertNotForbidden(root, await forbiddenStateRoots({ repoRoot: handle.repoRoot, worktreeRoot: handle.worktreeRoot }));
+}
+
+function names(value, label) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((name) => typeof name !== 'string' || name.length === 0 ||
+      /[\\/]/.test(name) || name === '.' || name === '..')) {
+    throw new CleanOpsError(`${label} must be a list of entry names`, SCOPE_CODE);
+  }
+  return value;
+}
+
+async function enumerateRecords(handle, relativeDir, exclude) {
+  const root = await canonicalStateRoot(handle);
+  const dir = relativeDir && path.resolve(root, relativeDir) !== root ? await resolveStatePath(handle, relativeDir) : root;
+  const atRoot = dir === root;
+  let entries;
+  try {
+    entries = await fsp.readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return { root, dir, included: [], excluded: [] };
+    throw error;
+  }
+  const skip = new Set(exclude);
+  const included = [];
+  const excluded = [];
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (skip.has(entry.name) || (atRoot && entry.name === LOCKS_DIR)) excluded.push(entry.name);
+    else included.push({ name: entry.name, kind: entry.isDirectory() ? 'directory' : 'file' });
+  }
+  return { root, dir, included, excluded };
+}
+
+// Read-only listing of lock files that repo-locks.mjs keeps at <state root>/locks/<name>.lock.
+export async function listRunLocks(handle) {
+  const dir = path.join(await canonicalStateRoot(handle), LOCKS_DIR);
+  let entries;
+  try {
+    entries = await fsp.readdir(dir, { withFileTypes: true });
+  } catch (error) {
+    if (error.code === 'ENOENT' || error.code === 'ENOTDIR') return [];
+    throw error;
+  }
+  const locks = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.lock')) continue;
+    let holder = null;
+    try {
+      const record = JSON.parse(await fsp.readFile(path.join(dir, entry.name), 'utf8'));
+      if (typeof record?.holder === 'string') holder = record.holder;
+    } catch {
+      // An unreadable record still counts as a lock; the probe decides liveness.
+    }
+    locks.push({ name: entry.name.slice(0, -'.lock'.length), holder });
+  }
+  return locks.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// Probes each lock through acquireRepoLock: a live holder refuses the probe; a dead
+// holder's stale lock is taken over and released, exactly as repo-locks.mjs would.
+export async function checkActiveRunLock(handle, { isAlive } = {}) {
+  const lockRoot = await canonicalStateRoot(handle);
+  const held = [];
+  for (const { name } of await listRunLocks(handle)) {
+    try {
+      const lock = await acquireRepoLock(name, { lockRoot, waitMs: 0, holder: `clean-probe-${process.pid}`,
+        ...(isAlive ? { isAlive } : {}) });
+      await lock.release();
+    } catch (error) {
+      if (!(error instanceof RepoLockError) || error.code !== 'E_LOCK_HELD') throw error;
+      held.push({ name, holder: error.holder ?? null });
+    }
+  }
+  if (held.length) {
+    throw new CleanOpsError(`an active run holds ${held.map(({ name }) => `"${name}"`).join(', ')}; ` +
+      'refusing to clean until it finishes', LOCK_CODE, { locks: held });
+  }
+  return { locks: [] };
+}
+
+export async function runClean(handle, options = {}) {
+  if (!isPlainObject(options)) throw new CleanOpsError('options must be an object', SCOPE_CODE);
+  assertStateScope(handle);
+  const execute = options.execute === true;
+  const yes = options.yes === true;
+  const exclude = names(options.exclude, 'exclude');
+  if (execute && !yes) {
+    throw new CleanOpsError(options.interactive === true
+      ? 'destructive clean requires explicit confirmation (--yes)'
+      : 'non-interactive destructive clean requires explicit --yes confirmation', CONFIRMATION_CODE);
+  }
+  const relativeDir = typeof options.relativeDir === 'string' ? options.relativeDir : '';
+  const { root, dir, included, excluded } = await enumerateRecords(handle, relativeDir, exclude);
+  const report = {
+    dryRun: !execute, scope: scopeOf(handle), root,
+    included, excluded, recordCount: included.length, activeLocks: await listRunLocks(handle),
+  };
+  if (!execute) return { ...report, executed: false, removed: [] };
+  await checkActiveRunLock(handle, { isAlive: options.isAlive });
+  const removed = [];
+  for (const { name } of included) {
+    removed.push(await removeStatePath(handle, path.relative(root, path.join(dir, name))));
+  }
+  return { ...report, activeLocks: [], executed: true, removed };
+}
+
+export function formatCleanReport(report) {
+  if (!isPlainObject(report)) throw new CleanOpsError('formatCleanReport requires a runClean result object', SCOPE_CODE);
+  const lines = [
+    `mode: ${report.dryRun ? 'dry-run (nothing deleted; rerun with --execute --yes to delete)' : 'destructive'}`,
+    `scope: ${report.scope}`,
+    `state root: ${report.root}`,
+    `records: ${report.recordCount}`,
+    ...report.included.map(({ kind, name }) => `  - ${kind} ${name}`),
+  ];
+  if (report.excluded.length) lines.push(`excluded: ${report.excluded.join(', ')}`);
+  if (report.activeLocks.length) {
+    lines.push(`active locks: ${report.activeLocks.map(({ name, holder }) => holder ? `${name} (${holder})` : name).join(', ')}`);
+  }
+  if (report.executed) lines.push(`removed: ${report.removed.length}`);
+  return `${lines.join('\n')}\n`;
 }
