@@ -218,7 +218,7 @@ whatever the model says, when any of these happens:
 The output goes into the evidence as `## Harness end-to-end runs`, and the run
 log records `review-e2e <status> commands=N failures=M` and `review-reads count=N
 refused=M`. The verdict JSON keeps its exact keys (`verdict`, `reasons`,
-`security_notes`, `checks`) and is capped at 6000 characters. Extra keys, prose,
+`security_notes`, `checks`, and optional `defects`) and is capped at 6000 characters. Extra keys, prose,
 or a longer answer get one correction, then the review is incomplete and fails.
 
 ## Seat turn contracts
