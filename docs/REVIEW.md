@@ -69,7 +69,10 @@ eligible fleet profile other than the coder's current profile, and the run log n
 both profiles. If that endpoint fails, Roster records the failure as route evidence
 and tries the next non-coder profile without moving the coder's route. Only when no
 other profile is eligible does the reviewer fall back to the coder's model, and the
-log says so.
+log says so. If an independent reviewer returns an incomplete review (for example,
+malformed checks after its JSON repair turn), Roster removes that REVIEW.md and
+retries once on the next independent profile, excluding the coder's and the
+incomplete one; with none left, the incomplete failing review stands.
 For test tasks and changed test files, the reviewer is additionally instructed
 to verify that assertions fail when the requested behavior is absent, and to
 exercise the public operation when the Ask names one. Secret-leakage checks

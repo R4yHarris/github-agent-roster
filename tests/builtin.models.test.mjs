@@ -399,7 +399,7 @@ test('a fleet route records the routed model even when the gateway labels respon
   assert.equal(existsSync(path.join(options.target, '.roster', 'runs', 'route-quarantine.json')), false);
 });
 
-const twoProfileFleet = (target) => {
+const twoProfileFleet = (target, extraProfiles = []) => {
   mkdirSync(path.join(target, '.roster'));
   writeFileSync(path.join(target, '.roster', 'fleet.yml'), formatFleet({ profiles: [
     {
@@ -412,6 +412,7 @@ const twoProfileFleet = (target) => {
       provider: 'vllm', context_max: 65536, concurrency: 1,
       hardware: 'test-gpu', task_class: ['feat'], notes: '',
     },
+    ...extraProfiles,
   ] }));
 };
 const planReply = (model) => Response.json({ model, choices: [{ finish_reason: 'stop', message: {
@@ -532,6 +533,83 @@ test('auto-model reviewer uses a profile other than the coder when one is eligib
   assert.equal(result.runs.coder.env.AI_MODEL, 'first-model');
   assert.equal(result.runs.reviewer.env.AI_MODEL, 'alternate-model');
   assert.equal(result.review.verdict, 'pass');
+});
+
+test('auto-model reviewer retries once on another independent profile after an incomplete review', async (context) => {
+  const options = multiFileFixture(context);
+  options.issue.title = 'feat: Add status';
+  twoProfileFleet(options.target, [{
+    id: 'third', base_url: 'https://third.example.invalid/v1', model: 'third-model',
+    provider: 'vllm', context_max: 65536, concurrency: 1, hardware: 'test-gpu', task_class: ['feat'], notes: '',
+  }]);
+  const reviews = [];
+  const logs = [];
+  let seatCalls = 0;
+  const seatFetch = withResearchSummary(async () => {
+    seatCalls += 1;
+    if (seatCalls === 1) return planReply('first-model');
+    if (seatCalls === 2) return editReply('first-model');
+    return textReply('first-model', 'Added status; tests pass.');
+  });
+  const result = await runIssueWithSeats(42, {
+    ...options, config: llmConfig, autoModel: true, metricsLoader: () => [],
+    env: { ...options.env, ROSTER_API_KEY: 'test-only-key' },
+    log: (line) => logs.push(line),
+    fetchImpl: async (url, request) => {
+      const body = JSON.parse(request.body);
+      if (!body.messages[0].content.startsWith('You are the builtin reviewer seat.')) return seatFetch(url, request);
+      reviews.push({ url: String(url), model: body.model });
+      if (reviews.length <= 2) return textReply(body.model, JSON.stringify({ verdict: 'pass', reasons: [], security_notes: [] }));
+      return textReply(body.model, passingReview(body));
+    },
+    runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+  });
+  assert.equal(result.route.profile.id, 'first');
+  assert.equal(reviews.length, 3);
+  assert.equal(reviews[0].model, reviews[1].model, 'the first reviewer gets its own JSON repair turn');
+  assert.notEqual(reviews[2].model, reviews[0].model);
+  assert.ok(reviews.every(({ model }) => model !== 'first-model'), 'the reviewer is never the coder');
+  const [incomplete, retried] = [reviews[0].model, reviews[2].model].map((model) => model.replace(/-model$/, ''));
+  assert.ok(logs.includes(`Reviewer profile=${incomplete} returned an incomplete review; ` +
+    `retrying with profile=${retried} model=${retried}-model.`));
+  assert.deepEqual(result.routeAttempts, [], 'an incomplete review is not an endpoint route failure');
+  assert.equal(result.review.verdict, 'pass');
+  assert.equal(result.review.completed, true);
+  assert.equal(result.runs.reviewer.env.AI_MODEL, reviews[2].model);
+  assert.match(readFileSync(path.join(result.worktreePath, 'REVIEW.md'), 'utf8'), /^# Review\n\nVerdict: pass\n/);
+});
+
+test('auto-model returns the incomplete review when no other independent profile remains', async (context) => {
+  const options = multiFileFixture(context);
+  options.issue.title = 'feat: Add status';
+  twoProfileFleet(options.target);
+  const reviews = [];
+  const logs = [];
+  let seatCalls = 0;
+  const seatFetch = withResearchSummary(async () => {
+    seatCalls += 1;
+    if (seatCalls === 1) return planReply('first-model');
+    if (seatCalls === 2) return editReply('first-model');
+    return textReply('first-model', 'Added status; tests pass.');
+  });
+  const result = await runIssueWithSeats(42, {
+    ...options, config: llmConfig, autoModel: true, metricsLoader: () => [],
+    env: { ...options.env, ROSTER_API_KEY: 'test-only-key' },
+    log: (line) => logs.push(line),
+    fetchImpl: async (url, request) => {
+      const body = JSON.parse(request.body);
+      if (!body.messages[0].content.startsWith('You are the builtin reviewer seat.')) return seatFetch(url, request);
+      reviews.push(body.model);
+      return textReply(body.model, JSON.stringify({ verdict: 'pass', reasons: [], security_notes: [] }));
+    },
+    runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+  });
+  assert.deepEqual(reviews, ['alternate-model', 'alternate-model']);
+  assert.ok(logs.includes('Reviewer profile=alternate returned an incomplete review; no other independent profile remains.'));
+  assert.equal(result.review.verdict, 'fail');
+  assert.equal(result.review.completed, false);
+  assert.match(result.review.reasons[0], /^Reviewer could not complete: /);
+  assert.equal(result.runs.reviewer.env.AI_MODEL, 'alternate-model');
 });
 
 test('auto-model coder fails explicitly when no alternate fleet profile remains', async (context) => {
