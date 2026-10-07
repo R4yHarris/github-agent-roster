@@ -206,8 +206,15 @@ export async function createRunLog({
         if (!Number.isSafeInteger(event.elapsedSeconds) || event.elapsedSeconds < 0) {
           throw new TypeError('Invalid live waiting duration');
         }
-        return `waiting host=${safe(event.host)} elapsed=${event.elapsedSeconds}s` +
+        let text = `waiting host=${safe(event.host)} elapsed=${event.elapsedSeconds}s` +
           (event.local ? ' cold-start up to 15m' : '');
+        if (event.queued === true) {
+          if (!Number.isSafeInteger(event.depth) || event.depth < 0) {
+            throw new TypeError('Invalid live queued depth');
+          }
+          text += ` queued depth=${event.depth}`;
+        }
+        return text;
       }
       case 'model': {
         const model = typeof event.model === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:+/-]{0,239}$/.test(event.model)
@@ -369,7 +376,7 @@ export async function readLastRunLog({
     const lastLine = lines.at(-1);
     if (!lastLine) return null;
     const parsed = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z (?:start seat|seat) (planner|coder|reviewer) (.+)$/.exec(lastLine);
-    const metadata = /^(?:session=[A-Za-z0-9._[\]-]{1,128}|model="(?:[^"\\]|\\.)*" host="(?:[^"\\]|\\.)*"|mode (?:stub|llm)|waiting host=[A-Za-z0-9.:[\]-]{1,255} elapsed=\d+s(?: cold-start up to 15m)?|The LLM request timed out after \d+(?:\.\d+)?s at host=[A-Za-z0-9.:[\]-]{1,255}\. (?:Cold-start: the host may still be warming; Spark\/SGLang can take up to 15m\. )?This is an endpoint timeout, not a bad TASK\. (?:Retry: (?:roster run --issue [1-9]\d*(?: --auto-model)?|roster run --seat coder --runtime builtin|roster doctor --warm)|Retry the same request\.)|implementation (?:model|deterministic-readme)|http chat\.completions (?:start|ok status=2\d\d|error(?: status=[1-5]\d\d)? class=(?:authentication|network|timeout|http|response|abort))|tool (?:read_file|write_file|list_dir|run_test|search_text)(?: path="(?:[^"\\]|\\.)*")?|wrote (?:RECIPE\.yml|TASK\.md|PLAN\.md|ESTIMATE\.md|RESULT\.md|REVIEW\.md)|error class=(?:Error|TypeError|RangeError|AbortError|RunLogError)|elapsed_ms=\d+ mode=(?:stub|llm))$/;
+    const metadata = /^(?:session=[A-Za-z0-9._[\]-]{1,128}|model="(?:[^"\\]|\\.)*" host="(?:[^"\\]|\\.)*"|mode (?:stub|llm)|waiting host=[A-Za-z0-9.:[\]-]{1,255} elapsed=\d+s(?: cold-start up to 15m)?(?: queued depth=\d+)?|The LLM request timed out after \d+(?:\.\d+)?s at host=[A-Za-z0-9.:[\]-]{1,255}\. (?:Cold-start: the host may still be warming; Spark\/SGLang can take up to 15m\. )?This is an endpoint timeout, not a bad TASK\. (?:Retry: (?:roster run --issue [1-9]\d*(?: --auto-model)?|roster run --seat coder --runtime builtin|roster doctor --warm)|Retry the same request\.)|implementation (?:model|deterministic-readme)|http chat\.completions (?:start|ok status=2\d\d|error(?: status=[1-5]\d\d)? class=(?:authentication|network|timeout|http|response|abort))|tool (?:read_file|write_file|list_dir|run_test|search_text)(?: path="(?:[^"\\]|\\.)*")?|wrote (?:RECIPE\.yml|TASK\.md|PLAN\.md|ESTIMATE\.md|RESULT\.md|REVIEW\.md)|error class=(?:Error|TypeError|RangeError|AbortError|RunLogError)|elapsed_ms=\d+ mode=(?:stub|llm))$/;
     const validMetadata = (value) => metadata.test(value) || value === 'steering coder' || value === 'timeout retry 1/1' ||
       /^stall host=[A-Za-z0-9.:[\]-]{1,255} idle=\d+(?:\.\d+)?s retry=(?:true|false)$/.test(value) ||
       /^served-model host=[A-Za-z0-9.:[\]-]{1,255} requested=[A-Za-z0-9._:/@+-]{1,128} served=[A-Za-z0-9._:/@+-]{1,128}$/.test(value) ||

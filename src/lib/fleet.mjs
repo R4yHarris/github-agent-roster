@@ -115,6 +115,7 @@ export function withFleetProfile(config, profile) {
   return {
     ...config, llm: {
       ...llm, profile: 'vllm-local', base_url: selected.base_url, model: selected.model,
+      fleet_profile: selected.id, concurrency: selected.concurrency,
       provider: selected.provider, context_max: selected.context_max,
       api_key_env: selected.api_key_env ?? config.profiles['vllm-local'].api_key_env,
       api_key_optional: config.llm.api_key_optional ?? config.profiles['vllm-local'].api_key_optional,

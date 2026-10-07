@@ -3,6 +3,7 @@ import { docsCompletionCap, mappedEffort, usesDeepseekReasoning } from '../llm/r
 import { modelCapabilityPrior } from './capabilities.mjs';
 import { UnsupportedFinishReasonError } from '../llm/finish-reason.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
+import * as admission from '../runtime/admission.mjs';
 
 const maxLengthRetries = 3;
 const maxReasoningCap = 32_768;
@@ -76,13 +77,16 @@ export function createBuiltinChat(config, {
       outbound.thinking = usesDeepseekReasoning(config.llm)
         ? current.chat_template_kwargs?.thinking ?? (!docsSlice && config.llm.effort !== 'none')
         : (current.reasoning_effort ?? (docsSlice ? 'none' : mappedEffort(config.llm))) !== 'none';
+      const release = await admit(config, { onEvent, signal: requestSignal });
       try {
         const response = await transport(current, { signal: requestSignal });
+        release?.();
         await onEvent?.({ type: 'completion', reason: response.finish_reason ?? null });
         usages.push(response.usage);
         lastUsage = usages.length === 1 ? response.usage : mergeUsage(...usages);
         return { ...response, usage: lastUsage };
       } catch (error) {
+        release?.();
         if (!(error instanceof UnsupportedFinishReasonError)) {
           lastUsage = usages.length ? mergeUsage(...usages, null) : null;
           throw error;
@@ -133,6 +137,32 @@ export function createBuiltinChat(config, {
     lastUsage: { get: () => lastUsage },
   });
   return chat;
+}
+
+// Spec §5 fleet: a fleet profile's concurrency is an in-process admission limit; requests beyond it wait in FIFO order.
+const queuedHeartbeatMs = 30_000;
+
+async function admit(config, { onEvent, signal }) {
+  const profileId = config.llm?.fleet_profile;
+  // Without a fleet profile there is no declared concurrency to enforce; an aborted caller gets the transport's error.
+  if (!profileId || signal?.aborted) return undefined;
+  if (Number.isSafeInteger(config.llm.concurrency) && config.llm.concurrency > 0) {
+    admission.configure(profileId, config.llm.concurrency);
+  }
+  const pending = admission.acquire(profileId, { signal });
+  if (admission.depth(profileId) === 0) return pending;
+  const startedAt = Date.now();
+  const host = new URL(config.llm.base_url).host;
+  const waiting = () => onEvent?.({ type: 'waiting', host, local: false, queued: true,
+    elapsedSeconds: Math.floor((Date.now() - startedAt) / 1000), depth: admission.depth(profileId) });
+  waiting();
+  const heartbeat = setInterval(waiting, queuedHeartbeatMs);
+  heartbeat.unref?.();
+  try {
+    return await pending;
+  } finally {
+    clearInterval(heartbeat);
+  }
 }
 
 export async function chatCompletion({ config, messages, tools, env, fetchImpl, vault, onEvent, retryCommand, signal, stream = false }) {
