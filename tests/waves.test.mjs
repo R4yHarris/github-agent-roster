@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { renderPlan, validatePlan } from '../src/planner/plan.mjs';
 import { parsePlanDocument } from '../src/planner/plan-document.mjs';
-import { requireEarlierWavesClosed, waveBoard } from '../src/lib/waves.mjs';
+import { earlierWaveFiles, requireEarlierWavesClosed, waveBoard } from '../src/lib/waves.mjs';
 import { askRequirements, cleanAskText, renderAssignment } from '../src/planner/stub.mjs';
 import { classifyAsk } from '../src/planner/classify.mjs';
 import { formatHelp } from '../src/shell/commands.mjs';
@@ -98,4 +98,26 @@ test('a later wave refuses startup while an earlier label issue is open and fail
   await requireEarlierWavesClosed({ issue, repository: 'example/project', cwd: process.cwd(), runCommand: async () => '[]' });
   assert.match(renderAssignment({ number: 108, title: 'Wave task', body: 'Update README.md.',
     url: 'https://github.com/example/project/issues/108', labels: issue.labels }), /- Wave: 2/);
+});
+
+test('earlier-wave files come from closed same-plan slices and skip tests', async () => {
+  const key = 'a'.repeat(64);
+  const body = (wave) => `<!-- Roster-Plan: ${key} -->\n<!-- Roster-Wave: ${wave} -->`;
+  const issue = { number: 253, body: body(2), labels: [{ name: 'wave:2' }] };
+  const calls = [];
+  const files = await earlierWaveFiles({ issue, repository: 'example/project', worktree: 'wt', cwd: 'root',
+    runCommand: async (program, args, cwd) => {
+      calls.push([program, cwd, args.find((arg) => arg.startsWith('--grep=')) ?? args[args.indexOf('--search') + 1]]);
+      if (program === 'gh') return JSON.stringify([{ number: 251, body: body(1), labels: [] },
+        { number: 254, body: body(3), labels: [] }, { number: 253, body: body(2), labels: [] }]);
+      return 'src/lib/redaction.mjs\ntests/redaction.test.mjs\nsrc/lib/store.test.mjs\ndocs/X.md\n\nsrc/lib/schema.mjs\n';
+    } });
+  assert.deepEqual(files, ['src/lib/redaction.mjs', 'src/lib/schema.mjs']);
+  assert.deepEqual(calls.map(([program, cwd]) => `${program}@${cwd}`), ['gh@root', 'git@wt']);
+  assert.match(calls[0][2], new RegExp(`Roster-Plan: ${key}`));
+  assert.match(calls[1][2], /#251\(\[\^0-9\]\|\$\)$/);
+  assert.deepEqual(await earlierWaveFiles({ issue: { ...issue, body: body(1), labels: [] }, repository: 'x/y',
+    worktree: 'wt', cwd: 'root', runCommand: async () => { throw new Error('not called'); } }), []);
+  assert.deepEqual(await earlierWaveFiles({ issue, repository: 'x/y', worktree: 'wt', cwd: 'root',
+    runCommand: async () => { throw new Error('offline'); } }), []);
 });

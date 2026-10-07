@@ -10,6 +10,7 @@ import { taskFilesAllowed } from '../planner/stub.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
 import { readTaskMetadata } from '../runtime/estimate.mjs';
 import { taskContextPolicy } from '../runtime/context-policy.mjs';
+import { moduleExports } from '../runtime/context.mjs';
 import { redactEvidence } from '../runtime/excellence.mjs';
 import { isAllowedFile, isForbiddenRead, taskAndRepairFiles } from '../runtime/tools.mjs';
 import { loadPrincipal } from './principal.mjs';
@@ -229,6 +230,7 @@ export async function runReviewer({
   retryCommand,
   signal,
   previousFindings = [],
+  priorWaveFiles = [],
 } = {}) {
   if (typeof worktree !== 'string' || typeof repoRoot !== 'string' ||
       typeof coderResult?.resultPath !== 'string' || !config?.llm || !config.seat) {
@@ -316,9 +318,15 @@ export async function runReviewer({
       const unchangedNote = unchanged.length
         ? `## Unchanged existing files\n\nThese files exist at the base and are not in the diff: ${unchanged.join(', ')}.\n\n`
         : '';
+      const delivered = priorWaveFiles.length ? await moduleExports(worktree, priorWaveFiles, 1600) : '';
+      const wavesNote = delivered
+        ? `## Earlier waves delivered\n\nEarlier slices of this plan merged these modules. Fail the review when the ` +
+          'diff re-implements their records, validation, storage, or redaction in a parallel module instead of ' +
+          `importing them.\n\n${delivered}\n\n`
+        : '';
       const evidence = redactEvidence(
         `## TASK.md acceptance checks\n\n${docsEvidence}${checks}\n${scopeNote}## TASK.md\n\n${task}\n\n` +
-        `## RESULT.md\n\n${result}\n\n${previous}${unchangedNote}## Diff\n\n${diff}`, redaction,
+        `## RESULT.md\n\n${result}\n\n${previous}${unchangedNote}${wavesNote}## Diff\n\n${diff}`, redaction,
       );
       const testTask = readTaskMetadata(task).task_class === 'test' ||
         parsed.files_allowed.some((file) => /\.(?:test|spec)\.[A-Za-z0-9]+$/i.test(file));

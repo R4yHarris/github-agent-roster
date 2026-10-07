@@ -27,6 +27,7 @@ export async function runCoder({
   initialScopeFiles = [],
   initialRepairFiles = [],
   continuation = null,
+  priorWaveFiles = [],
 }) {
   const stages = [];
   const memoryPath = seatMemoryPath({
@@ -50,7 +51,8 @@ export async function runCoder({
   };
   try {
     throwIfCancelled(signal);
-    context = await loadContext({ worktree, memoryPath, repoRoot, config, env, priorFeedback, askKind, continuation });
+    context = await loadContext({ worktree, memoryPath, repoRoot, config, env, priorFeedback, askKind, continuation,
+      priorWaveFiles });
     if (!context.minimalDocs) stages.push('principal');
     stages.push('context');
     const skipsTests = taskSkipsTests(context.task);

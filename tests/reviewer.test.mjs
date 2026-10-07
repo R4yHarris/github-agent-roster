@@ -334,3 +334,20 @@ test('unchanged base modules imported by the diff are listed so the reviewer doe
   assert.deepEqual(await unchangedExistingFiles(worktree, ['src/lib/api.mjs', 'tests/api.test.mjs'],
     ['src/lib/api.mjs', 'src/lib/runs.mjs', 'tests/api.test.mjs']), ['src/lib/identity.mjs', 'src/lib/runs.mjs']);
 });
+
+test('reviewer evidence lists earlier-wave modules so a parallel re-implementation fails', async (context) => {
+  const options = fixture(context);
+  mkdirSync(path.join(options.worktree, 'src', 'lib'), { recursive: true });
+  writeFileSync(path.join(options.worktree, 'src', 'lib', 'store.mjs'), 'export function openStore(root) {}\n');
+  const seen = [];
+  const review = await runReviewer({ ...options, config, env: {}, priorWaveFiles: ['src/lib/store.mjs'],
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      seen.push(body.messages);
+      return { status: 200, json: async () => ({ choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant', content: passingReview(body) } }] }) };
+    } });
+  assert.equal(review.verdict, 'pass');
+  assert.match(seen[0][1].content,
+    /## Earlier waves delivered\n\nEarlier slices of this plan merged these modules\. Fail the review when the diff re-implements[\s\S]*- export function openStore\(root\)\n\n## Diff/);
+});

@@ -40,6 +40,35 @@ export async function requireEarlierWavesClosed({ issue, repository, cwd, runCom
   }
 }
 
+// Code files that closed earlier-wave slices of the same plan merged, so a later slice reuses them.
+export async function earlierWaveFiles({ issue, repository, worktree, cwd, runCommand, limit = 12 }) {
+  const wave = issueWave(issue);
+  const key = /<!-- Roster-Plan: ([a-f0-9]{64}) -->/.exec(issue.body ?? '')?.[1];
+  if (wave === null || wave === 1 || !key) return [];
+  let closed;
+  try {
+    closed = JSON.parse(await runCommand('gh', ['issue', 'list', '--repo', repository, '--state', 'closed',
+      '--search', `in:body "Roster-Plan: ${key}"`, '--limit', '100', '--json', 'number,body,labels'], cwd));
+  } catch { return []; }
+  if (!Array.isArray(closed)) return [];
+  const numbers = closed.filter((item) => Number.isSafeInteger(item?.number) && item.number !== issue.number &&
+    (issueWave(item) ?? wave) < wave).map(({ number }) => number).sort((a, b) => a - b);
+  const files = new Set();
+  for (const number of numbers) {
+    let output;
+    try {
+      output = await runCommand('git', ['log', 'HEAD', '-i', '-E',
+        `--grep=(close[sd]?|fix(e[sd])?|resolve[sd]?) #${number}([^0-9]|$)`,
+        '--diff-filter=AM', '--name-only', '--format='], worktree);
+    } catch { continue; }
+    for (const line of String(output).split('\n')) {
+      const file = line.trim().replaceAll('\\', '/');
+      if (/\.[cm]?js$/.test(file) && !/(^|\/)tests?\//.test(file) && !/\.(test|spec)\.[cm]?js$/.test(file)) files.add(file);
+    }
+  }
+  return [...files].sort().slice(0, limit);
+}
+
 export async function readWavePlan(worktree) {
   const file = path.join(worktree, 'PLAN.md');
   await ensureLocalPath(file, worktree);
