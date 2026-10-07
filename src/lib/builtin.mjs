@@ -414,7 +414,7 @@ export async function runBuiltinIssue(issueNumber, options = {}) {
   return { ...child, parent: { issue: issueNumber, planPath: result.planPath, waves: result.waves } };
 }
 
-function runOutcomeStatus(result, { published }) {
+export function runOutcomeStatus(result, { published }) {
   const pause = (reason) => ['blocked', [`Waiting on a human: ${reason}`]];
   if (result.clarification) return ['blocked', ['The Ask needs clarification before planning.',
     String(result.clarification).split('\n')[0]]];
@@ -422,6 +422,10 @@ function runOutcomeStatus(result, { published }) {
     : 'The run reported a failure; see the run log.']];
   if (result.confirmedPause) return pause('the TASK was paused by --confirm.');
   if (result.planMode) return pause('plan mode wrote PLAN.md only.');
+  if (result.planningOnly && result.waves?.length && result.waves.every((row) => row.state === 'done')) {
+    return ['review', [`Every child issue is closed: ${result.waves.map((row) => `#${row.issue}`).join(', ')}.`,
+      'Close this parent after human AI-Eval of the delivered slices.']];
+  }
   if (result.planningOnly) return pause('review the PLAN and child issue drafts, then run each slice.');
   const verdict = result.review?.verdict;
   if (published) return ['review', ['Published and merged; awaiting human AI-Eval.',
@@ -866,7 +870,8 @@ async function runBuiltinAssignment(issueNumber, {
       'then run each bounded slice separately. No coder, reviewer, tests, or publisher ran.');
     return { ...prepared, askKind, classification, planner, planPath: planner.planPath, sessions,
       runs: { planner: plannerRun, coder: null, reviewer: null }, run: null, command: null,
-      planningOnly: true, failed: Boolean(delivery?.error), archivePath, logPath: liveLog.path, logSession: liveLog.session };
+      planningOnly: true, failed: Boolean(delivery?.error), archivePath, logPath: liveLog.path, logSession: liveLog.session,
+      ...(delivery?.rows ? { waves: delivery.rows } : {}) };
   }
   const recipeCoder = parseRecipe(planner.recipe).seats.find(({ id }) => id === 'coder');
   let scopeBudget;

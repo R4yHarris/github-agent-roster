@@ -11,7 +11,7 @@ import { writeAsk } from '../src/lib/ask.mjs';
 import {
   coderStuckReason, maxPerspectiveEscalations, perspectiveContinuation, maxRescopes, rescopeBudget, rescopeContinuation,
   maxReviewRepairs, previousReviewContinuation, reviewRepairContinuation,
-  prepareBuiltinPublication, runBuiltinAsk, runBuiltinIssue as runIssueWithSeats, stageReviewedFiles,
+  prepareBuiltinPublication, runBuiltinAsk, runBuiltinIssue as runIssueWithSeats, runOutcomeStatus, stageReviewedFiles,
 } from '../src/lib/builtin.mjs';
 import { ToolAccessError } from '../src/runtime/tools.mjs';
 import { loadLearning } from '../src/lib/learn.mjs';
@@ -302,4 +302,14 @@ test('a claimed issue warns of another agent on a fresh worktree and reports a r
   logs.length = 0;
   await run();
   assert.ok(logs.some((line) => /Resuming #42: its roster:in-progress claim and worktree are from an earlier run/.test(line)), logs.join('\n'));
+});
+
+test('a feature whose child slices are all closed reports review, while open children still wait on a human', () => {
+  const rows = [{ wave: 1, issue: 251, state: 'done' }, { wave: 2, issue: 253, state: 'done' }];
+  const [status, detail] = runOutcomeStatus({ planningOnly: true, waves: rows }, { published: false });
+  assert.equal(status, 'review');
+  assert.match(detail.join('\n'), /Every child issue is closed: #251, #253\.\nClose this parent after human AI-Eval/);
+  const open = runOutcomeStatus({ planningOnly: true, waves: [rows[0], { ...rows[1], state: 'review' }] }, { published: false });
+  assert.equal(open[0], 'blocked');
+  assert.equal(runOutcomeStatus({ planningOnly: true, waves: [] }, { published: false })[0], 'blocked');
 });
