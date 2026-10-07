@@ -599,19 +599,22 @@ async function runBuiltinAssignment(issueNumber, {
   let route = null;
   const routeAttempts = [];
   const routingTaskClass = prepared.metadata?.task_class ?? inferTaskClass(prepared.issue.title) ?? 'feat';
+  const chooseFleetRoute = (excludedProfileIds = []) => routeTask({
+    cwd: prepared.repoRoot, installationRoot: repoRoot, fleet,
+    taskClass: routingTaskClass, difficulty: prepared.metadata?.difficulty ?? 2,
+    records: metricsLoader({ contractsPath, cwd: prepared.repoRoot }),
+    excludedProfileIds: [...new Set(excludedProfileIds.filter(Boolean))],
+  });
+  const routeLlm = (selectedRoute) => ({
+    ...withFleetProfile(config, selectedRoute.profile).llm,
+    effort: selectedRoute.recommendation?.effort ?? config.llm.effort,
+    locked_model: selectedRoute.profile.model,
+  });
   const selectAutoRoute = async (excludedProfileIds = []) => {
-    const selectedRoute = await routeTask({
-      cwd: prepared.repoRoot, installationRoot: repoRoot, fleet,
-      taskClass: routingTaskClass, difficulty: prepared.metadata?.difficulty ?? 2,
-      records: metricsLoader({ contractsPath, cwd: prepared.repoRoot }),
-      excludedProfileIds,
-    });
+    const selectedRoute = await chooseFleetRoute(excludedProfileIds);
     if (!selectedRoute) return null;
     const selected = withFleetProfile(config, selectedRoute.profile);
-    activeConfig = { ...selected, llm: Object.freeze({
-      ...selected.llm, effort: selectedRoute.recommendation?.effort ?? config.llm.effort,
-      locked_model: selectedRoute.profile.model,
-    }) };
+    activeConfig = { ...selected, llm: Object.freeze(routeLlm(selectedRoute)) };
     autoRecommendation = selectedRoute.recommendation;
     route = selectedRoute;
     return selectedRoute;
@@ -807,10 +810,24 @@ async function runBuiltinAssignment(issueNumber, {
         logPath: liveLog.path, logSession: liveLog.session };
     }
   }
+  // Spec 4.8 "Reviewer is not the coder": with auto routing, the reviewer takes the best eligible fleet
+  // profile other than the coder's, so a model never grades its own work. Only when no other profile is
+  // eligible does it fall back to the coder's model, and the log says so.
+  const independentReviewerRoute = () => (autoModel && route ? chooseFleetRoute([
+    route.profile.id, ...routeAttempts.map((attempt) => attempt.profile),
+  ]) : null);
   const reviewSeat = async (coderResult, previousFindings = []) => {
     let reviewerRoute = null;
+    const coderProfile = route?.profile.id;
+    let independent = await independentReviewerRoute();
+    if (autoModel && route) {
+      log(independent
+        ? `Reviewer route: profile=${independent.profile.id} model=${independent.profile.model} (independent of coder profile=${coderProfile}).`
+        : `Reviewer route: no eligible fleet profile other than coder profile=${coderProfile}; reviewing with the coder's model.`);
+    }
     for (;;) {
-      const reviewConfig = reviewerRoute ? { ...coderConfig, llm: { ...coderConfig.llm, ...activeConfig.llm } }
+      const reviewConfig = independent ? { ...coderConfig, llm: { ...coderConfig.llm, ...routeLlm(independent) } }
+        : reviewerRoute ? { ...coderConfig, llm: { ...coderConfig.llm, ...activeConfig.llm } }
         : { ...coderConfig, llm: {
           ...coderConfig.llm, model: coderResult.mode === 'llm' ? coderResult.model : coderConfig.llm.model,
         } };
@@ -821,6 +838,18 @@ async function runBuiltinAssignment(issueNumber, {
           coderResult, fetchImpl, env, vault, onEvent, askKind, retryCommand, signal, previousFindings,
         }));
       } catch (error) {
+        const failure = independent ? routeFailure(error) : null;
+        if (failure) {
+          // The independent reviewer's endpoint failed: record it as route evidence and try the next
+          // non-coder profile without touching the coder's route.
+          routeAttempts.push({ seat: 'reviewer', profile: independent.profile.id, ...failure });
+          const failedProfile = independent.profile.id;
+          independent = await independentReviewerRoute();
+          log(`Route recovery: seat=reviewer profile=${failedProfile} endpoint failed; ` + (independent
+            ? `continuing with profile=${independent.profile.id} model=${independent.profile.model}.`
+            : `no other independent profile remains; reviewing with the coder's model.`));
+          continue;
+        }
         if (!await recoverRoute('reviewer', error)) throw error;
         reviewerRoute = route;
         continue;

@@ -361,10 +361,11 @@ test('fleet priors change endpoint/model only for explicit auto-model and never 
       assert.equal(result.route.source, 'prior');
       assert.equal(result.route.profile.id, 'burst');
       assert.match(logs[0], /profile=burst source=prior/);
-      for (const seat of ['planner', 'coder', 'reviewer']) {
+      for (const seat of ['planner', 'coder']) {
         assert.equal(result.runs[seat].metrics.context_max, 32768);
         assert.equal(result.runs[seat].env.AI_CONTEXT_MAX, '32768');
       }
+      assert.equal(result.runs.reviewer.env.AI_MODEL, 'local-model', 'the reviewer routes away from the coder profile');
     } else assert.equal(result.route, null);
   }
 });
@@ -391,7 +392,9 @@ test('a fleet route records the routed model even when the gateway labels respon
     model === 'first-model'));
   assert.deepEqual(result.routeAttempts, []);
   assert.equal(result.route.profile.id, 'first');
-  for (const seat of ['planner', 'coder', 'reviewer']) assert.equal(result.runs[seat].env.AI_MODEL, 'first-model');
+  for (const seat of ['planner', 'coder']) assert.equal(result.runs[seat].env.AI_MODEL, 'first-model');
+  assert.equal(result.runs.reviewer.env.AI_MODEL, 'alternate-model', 'the reviewer is not the coder (spec 4.8)');
+  assert.ok(logs.some((line) => line === 'Reviewer route: profile=alternate model=alternate-model (independent of coder profile=first).'));
   assert.equal(logs.some((line) => /substituted-model|quarantine/i.test(line)), false);
   assert.equal(existsSync(path.join(options.target, '.roster', 'runs', 'route-quarantine.json')), false);
 });
@@ -461,16 +464,55 @@ for (const failure of ['timeout']) {
   });
 }
 
-test('auto-model continues the reviewer seat on an alternate profile instead of failing the review', async (context) => {
+test('auto-model reviews on an independent profile and falls back to the coder model when it fails', async (context) => {
   const options = multiFileFixture(context);
   options.issue.title = 'feat: Add status';
   twoProfileFleet(options.target);
   const requests = [];
   const reviews = [];
+  const logs = [];
   const seatFetch = withResearchSummary(async (url, request) => {
     requests.push({ url: String(url), model: JSON.parse(request.body).model });
     if (requests.length === 1) return planReply('first-model');
     if (requests.length === 2) return editReply('first-model');
+    return textReply('first-model', 'Added status; tests pass.');
+  });
+  const result = await runIssueWithSeats(42, {
+    ...options, config: llmConfig, autoModel: true, metricsLoader: () => [],
+    env: { ...options.env, ROSTER_API_KEY: 'test-only-key' },
+    log: (line) => logs.push(line),
+    fetchImpl: async (url, request) => {
+      const body = JSON.parse(request.body);
+      if (!body.messages[0].content.startsWith('You are the builtin reviewer seat.')) return seatFetch(url, request);
+      reviews.push({ url: String(url), model: body.model });
+      if (reviews.length === 1) throw new LlmTimeoutError({ host: 'alternate.example.invalid', timeoutMs: 1000, local: false });
+      return textReply('first-model', passingReview(body));
+    },
+    runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
+  });
+  assert.deepEqual(reviews, [
+    { url: 'https://alternate.example.invalid/v1/chat/completions', model: 'alternate-model' },
+    { url: 'https://first.example.invalid/v1/chat/completions', model: 'first-model' },
+  ]);
+  assert.deepEqual(result.routeAttempts.map(({ seat, profile }) => ({ seat, profile })),
+    [{ seat: 'reviewer', profile: 'alternate' }]);
+  assert.equal(result.route.profile.id, 'first', 'a reviewer endpoint failure never moves the coder route');
+  assert.equal(result.runs.coder.env.AI_MODEL, 'first-model');
+  assert.equal(result.runs.reviewer.env.AI_MODEL, 'first-model');
+  assert.equal(result.review.verdict, 'pass');
+  assert.ok(logs.some((line) => /Route recovery: seat=reviewer profile=alternate endpoint failed; no other independent profile/.test(line)));
+});
+
+test('auto-model reviewer uses a profile other than the coder when one is eligible', async (context) => {
+  const options = multiFileFixture(context);
+  options.issue.title = 'feat: Add status';
+  twoProfileFleet(options.target);
+  const reviews = [];
+  let seatCalls = 0;
+  const seatFetch = withResearchSummary(async () => {
+    seatCalls += 1;
+    if (seatCalls === 1) return planReply('first-model');
+    if (seatCalls === 2) return editReply('first-model');
     return textReply('first-model', 'Added status; tests pass.');
   });
   const result = await runIssueWithSeats(42, {
@@ -481,17 +523,12 @@ test('auto-model continues the reviewer seat on an alternate profile instead of 
       const body = JSON.parse(request.body);
       if (!body.messages[0].content.startsWith('You are the builtin reviewer seat.')) return seatFetch(url, request);
       reviews.push({ url: String(url), model: body.model });
-      if (reviews.length === 1) throw new LlmTimeoutError({ host: 'first.example.invalid', timeoutMs: 1000, local: false });
       return textReply('alternate-model', passingReview(body));
     },
     runTestCommand: async () => ({ stdout: 'pass', stderr: '' }),
   });
-  assert.deepEqual(reviews, [
-    { url: 'https://first.example.invalid/v1/chat/completions', model: 'first-model' },
-    { url: 'https://alternate.example.invalid/v1/chat/completions', model: 'alternate-model' },
-  ]);
-  assert.deepEqual(result.routeAttempts.map(({ seat, profile }) => ({ seat, profile })),
-    [{ seat: 'reviewer', profile: 'first' }]);
+  assert.deepEqual(reviews, [{ url: 'https://alternate.example.invalid/v1/chat/completions', model: 'alternate-model' }]);
+  assert.deepEqual(result.routeAttempts, []);
   assert.equal(result.runs.coder.env.AI_MODEL, 'first-model');
   assert.equal(result.runs.reviewer.env.AI_MODEL, 'alternate-model');
   assert.equal(result.review.verdict, 'pass');
