@@ -693,15 +693,18 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     const substanceReasons = reasons.filter((reason) => reason.startsWith('Test substance:'));
     const notRedReasons = reasons.filter((reason) => reason.startsWith('Not red:'));
     const selfReviewReasons = reasons.filter((reason) => reason.startsWith('Self-review:'));
+    const shadowReasons = reasons.filter((reason) => reason.startsWith('Shadow module:'));
     const repairable = secretReasons.length + substanceReasons.length + notRedReasons.length +
-      selfReviewReasons.length === reasons.length;
+      selfReviewReasons.length + shadowReasons.length === reasons.length;
     if (repairable && reasons.length && ((secretReasons.length && !progress.secretRepairUsed) ||
         (substanceReasons.length && !progress.substanceRepairUsed) || (notRedReasons.length && !progress.redRepairUsed) ||
-        (selfReviewReasons.length && !progress.selfReviewRepairUsed))) {
+        (selfReviewReasons.length && !progress.selfReviewRepairUsed) ||
+        (shadowReasons.length && !progress.shadowRepairUsed))) {
       if (secretReasons.length) progress.secretRepairUsed = true;
       if (substanceReasons.length) progress.substanceRepairUsed = true;
       if (notRedReasons.length) progress.redRepairUsed = true;
       if (selfReviewReasons.length) progress.selfReviewRepairUsed = true;
+      if (shadowReasons.length) progress.shadowRepairUsed = true;
       attemptTurns = 0;
       finalSummaryOnly = false;
       checksPassedAfterWrite = false;
@@ -719,6 +722,10 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         ...(notRedReasons.length ? ['One red/green correction is allowed. Each new test must fail against the base code and pass with your change: ' +
           'assert the new behavior through the public function the Ask changes, not behavior that already existed. ' +
           'If the task is a pure refactor or test-only, say so in your summary; the reviewer judges it.'] : []),
+        ...shadowReasons,
+        ...(shadowReasons.length ? ['One shadow-module correction is allowed. Import or extend the existing module named above ' +
+          'instead of a parallel implementation, and delete a new file that only duplicates it. If the new export is genuinely ' +
+          'different, say why in your summary; the reviewer sees this finding.'] : []),
         ...selfReviewReasons,
         ...(selfReviewReasons.length ? ['One self-review correction is allowed. Fix each unmet check and finding above in Allowed Files, ' +
           'or, if a finding is wrong, say why in your summary; the independent reviewer judges it.'] : []),

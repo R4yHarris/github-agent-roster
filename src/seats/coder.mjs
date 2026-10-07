@@ -9,6 +9,7 @@ import { checkExcellence, redactEvidence, snapshotWorktree, taskSkipsTests, task
 import { runLoop } from '../runtime/loop.mjs';
 import { checkRedGreen, notRedReason } from '../runtime/red-green.mjs';
 import { needsSelfReview, runSelfReview, selfReviewReasons } from '../runtime/self-review.mjs';
+import { checkShadowModules } from '../runtime/shadow-modules.mjs';
 import { appendMemory, coderMemoryRecord, seatMemoryPath } from '../runtime/memory.mjs';
 import { runResearch } from '../runtime/research.mjs';
 import { loadSkills, previewSkills } from '../runtime/skills.mjs';
@@ -49,6 +50,8 @@ export async function runCoder({
   let redGreen;
   let redGreenRepairUsed = false;
   let selfReview;
+  let shadow;
+  let shadowRepairUsed = false;
   let metadata;
   let tests;
   let result = {
@@ -197,6 +200,16 @@ export async function runCoder({
             evidence.reasons.push(notRedReason(redGreen.notRed));
           }
         }
+        // Deterministic: new exports that duplicate an existing module get one repair, then are shown to the reviewer.
+        if (evidence.pass && config.llm.base_url) {
+          shadow = await checkShadowModules({ worktree, files: evidence.files, priorWaveFiles });
+          await onEvent?.({ type: 'shadow-modules', status: shadow.status, findings: shadow.findings.length });
+          if (shadow.findings.length && !shadowRepairUsed) {
+            shadowRepairUsed = true;
+            evidence.pass = false;
+            evidence.reasons.push(...shadow.findings.map(({ reason }) => reason));
+          }
+        }
         // The author reads its own diff once before the independent reviewer; findings get one repair.
         if (evidence.pass && !selfReview && needsSelfReview(evidence.files)) {
           selfReview = await runSelfReview({ worktree, task: context.task, files: evidence.files,
@@ -224,7 +237,7 @@ export async function runCoder({
     result = { ...result, error };
   }
   const timedOut = isLlmTimeout(result.error);
-  result = { ...result, research, stages, ...(redGreen ? { redGreen } : {}), ...(selfReview ? { selfReview } : {}), scopeFiles: [...scopeFiles].sort(), repairFiles: withRepairs(result.repairFiles),
+  result = { ...result, research, stages, ...(redGreen ? { redGreen } : {}), ...(selfReview ? { selfReview } : {}), ...(shadow ? { shadow } : {}), scopeFiles: [...scopeFiles].sort(), repairFiles: withRepairs(result.repairFiles),
     scopeBlocked: [...scopeBlocked].sort(), ...(timedOut ? {
     timedOut: true,
     summary: 'Coder HTTP request timed out. No change was verified; this run did not complete.',

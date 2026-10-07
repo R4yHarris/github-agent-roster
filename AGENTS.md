@@ -64,7 +64,7 @@ Fail if no candidate contains the `scripts/agent-pr.mjs` file. See
 1. Human states an ask (`roster ask` creates a GitHub issue when `gh` is available, otherwise an offline draft).
 2. Stub or configured LLM planner reads its own recent memory and writes a three-seat RECIPE and one TASK in the issue worktree, without app-code tools.
 3. Builtin coder loads AGENTS.md, TASK.md, skills, and its own recent memory into a separate bounded loop in that worktree.
-4. Builtin reviewer reads the task checks, coder RESULT.md, and diff without app-code tools, then writes REVIEW.md in the same process. It cannot merge or publish.
+4. Builtin reviewer reads the task checks, coder RESULT.md, and diff with read-only requests only, plus a harness run of the read-only CLI paths the checks name, then writes REVIEW.md in the same process. It cannot write, merge, or publish.
 5. Configured coder runs `node --test`; Roster-managed publication requires a passing REVIEW.md unless `--skip-review` is explicit. It uses `agent-pr.mjs` only on explicit request and comments with the verified PR URL, real model ID, and coder AI-Run. It does not close the issue.
 6. Human posts `AI-Eval:` on the PR, then closes the issue.
 

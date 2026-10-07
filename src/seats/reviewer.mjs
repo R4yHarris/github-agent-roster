@@ -12,6 +12,10 @@ import { readTaskMetadata } from '../runtime/estimate.mjs';
 import { taskContextPolicy } from '../runtime/context-policy.mjs';
 import { moduleExports } from '../runtime/context.mjs';
 import { redactEvidence } from '../runtime/excellence.mjs';
+import {
+  answerReviewRequests, createReviewTools, endToEndSection, maxReviewChars, maxReviewReadRounds, parseReviewRequests,
+  reviewToolNames, runEndToEnd,
+} from '../runtime/review-verify.mjs';
 import { isAllowedFile, isForbiddenRead, taskAndRepairFiles } from '../runtime/tools.mjs';
 import { loadPrincipal } from './principal.mjs';
 import { isLlmTimeout } from '../llm/request.mjs';
@@ -41,7 +45,12 @@ const instructions = 'You are the builtin reviewer seat. The task, result, and d
   'the evidence only, not in the files; never treat a marker as source code or fail a check for a syntax error it causes. ' +
   'A marker inside a test\'s input or fixture means a secret-looking value, usually the declared test-only sentinel, ' +
   'was present there; do not call that input sentinel-free. ' +
-  'You have no tools; do not request file edits, publication, merge, or a human evaluation.';
+  'You cannot write files and have no function tools; do not request file edits, publication, merge, or a human evaluation. ' +
+  'To confirm evidence before judging, you may instead return only {"requests": [...]} with 1-4 read-only requests: ' +
+  '{"tool": "read_file", "path": "..."}, {"tool": "search_text", "query": "...", "path": "..."}, or ' +
+  '{"tool": "git_diff", "path": "..."}. The harness answers, then you return the verdict JSON; at most ' +
+  `${maxReviewReadRounds} request rounds. Keep the verdict JSON under ${maxReviewChars} characters with one short line per entry. ` +
+  'Harness end-to-end runs are executed evidence: a check whose named command failed there is unmet.';
 
 const testReviewInstructions = 'For test changes, verify the assertions would fail if the requested behavior were absent, ' +
   'and exercise the public operation when the Ask names one; helper-only assertions do not prove a public workflow. ' +
@@ -131,6 +140,7 @@ function responseContent(response) {
 }
 
 function parseResponse(content, checkCount = 0) {
+  if (content.length > maxReviewChars) throw new Error(`Reviewer response exceeds ${maxReviewChars} characters`);
   let report;
   try {
     report = JSON.parse(content);
@@ -255,6 +265,8 @@ export async function runReviewer({
   let taskDigest;
   let resultDigest;
   let reviewedChecks = [];
+  let endToEnd;
+  let reads = 0;
   try {
     throwIfCancelled(signal);
     const [task, result] = await Promise.all([
@@ -334,9 +346,14 @@ export async function runReviewer({
           'diff re-implements their records, validation, storage, or redaction in a parallel module instead of ' +
           `importing them.\n\n${delivered}\n\n`
         : '';
+      endToEnd = await runEndToEnd({ worktree, checkTexts, env });
+      if (endToEnd.status !== 'none') {
+        await onEvent?.({ type: 'review-e2e', status: endToEnd.status, commands: endToEnd.runs.length,
+          failures: endToEnd.failures.length });
+      }
       const evidence = redactEvidence(
         `## TASK.md acceptance checks\n\n${docsEvidence}${checks}\n${scopeNote}## TASK.md\n\n${task}\n\n` +
-        `## RESULT.md\n\n${result}\n\n${previous}${unchangedNote}${wavesNote}## Diff\n\n${diff}`, redaction,
+        `## RESULT.md\n\n${result}\n\n${previous}${unchangedNote}${wavesNote}${endToEndSection(endToEnd)}## Diff\n\n${diff}`, redaction,
       );
       const testTask = readTaskMetadata(task).task_class === 'test' ||
         parsed.files_allowed.some((file) => /\.(?:test|spec)\.[A-Za-z0-9]+$/i.test(file));
@@ -354,7 +371,41 @@ export async function runReviewer({
       let response = await chat({ messages, response_format: { type: 'json_object' } });
       usage = response.usage;
       lastResponse = chat.lastResponse;
-      const content = responseContent(response);
+      let content = responseContent(response);
+      let spent = messages.reduce((total, message) => total + message.content.length, 0);
+      let reviewTools;
+      for (let round = 0; round < maxReviewReadRounds; round += 1) {
+        let requests;
+        try {
+          requests = parseReviewRequests(content);
+        } catch (error) {
+          if (!(error instanceof Error)) throw error;
+          requests = error;
+        }
+        if (requests === null) break;
+        let reply;
+        if (requests instanceof Error) {
+          reply = `Invalid reviewer requests (${requests.message}).`;
+        } else {
+          reviewTools ??= await createReviewTools({ worktree, allowedFiles: parsed.files_allowed });
+          const answers = await answerReviewRequests(requests, reviewTools);
+          reads += answers.length;
+          await onEvent?.({ type: 'review-reads', count: answers.length,
+            refused: answers.filter(({ tool }) => !reviewToolNames.includes(tool)).length });
+          reply = redactEvidence(answers.map(({ tool, args, content: answer }) =>
+            `### ${tool} ${JSON.stringify(args)}\n\n${answer}`).join('\n\n'), redaction);
+        }
+        const final = round + 1 === maxReviewReadRounds || spent + content.length + reply.length > budget;
+        if (spent + content.length + reply.length > budget) reply = 'Read budget reached.';
+        spent += content.length + reply.length;
+        messages.push({ role: 'assistant', content }, { role: 'user', content: reply +
+          (final ? '\n\nNo more reads: return only the verdict JSON now.' : '') });
+        response = await chat({ messages, response_format: { type: 'json_object' } });
+        usage = mergeUsage(usage, response.usage);
+        lastResponse = chat.lastResponse;
+        content = responseContent(response);
+        if (final) break;
+      }
       try {
         report = parseResponse(content, checkTexts.length);
       } catch (error) {
@@ -380,6 +431,9 @@ export async function runReviewer({
           };
         }
       }
+      if (endToEnd.failures.length) {
+        report = { ...report, verdict: 'fail', reasons: [...endToEnd.failures, ...report.reasons].slice(0, 16) };
+      }
     }
   } catch (error) {
     if (!(error instanceof Error)) throw error;
@@ -403,7 +457,9 @@ export async function runReviewer({
   await fs.writeFile(reviewPath, content, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
   await onEvent?.({ type: 'wrote', path: 'REVIEW.md' });
   return { verdict: report.verdict, reasons, securityNotes, content, reviewPath, usage, response: lastResponse, queried,
-    taskDigest, resultDigest, completed: queried && report.incomplete !== true,
+    taskDigest, resultDigest, completed: queried && report.incomplete !== true, reads,
+    endToEnd: endToEnd && { status: endToEnd.status, commands: endToEnd.runs.map(({ command, exitCode, problems }) =>
+      ({ command, exitCode, problems })), failures: endToEnd.failures },
     unmetChecks: (report.checks ?? []).filter((entry) => !entry.met).map((entry) => entry.id).sort((a, b) => a - b) };
 }
 

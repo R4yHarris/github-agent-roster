@@ -66,8 +66,8 @@ the lifecycle below.
 | 10 | **Author code (green)** | Reads the code before changing it, extends existing modules, makes the smallest complete change | Coder | Diff | Read before write; search before a new `src/` module; scope and secret guards | Scope and secret guards only | #295 |
 | 11 | **Remediate and repeat** | Uses each failure as evidence, changes approach, stops at a budget | Coder loop | Green targeted tests | Bounded repairs; perspective escalation | Done ([LOOP](LOOP.md)) | – |
 | 12 | **Self-review** | Reads own diff against the checklist before asking anyone else | Coder's model, fresh context, no write tools | Per-check self-review | One bounded repair on findings | Done | #304 |
-| 13 | **Automatic gates** | Lint, CI, "is this a duplicate of something we have?" | Harness | Gate findings | Shadow-module gate; red/green proof; scoped tests | Red/green done; shadow gate missing | #299, #303 |
-| 14 | **Independent review** | A peer reads the code, runs it, and reports only verified findings | Reviewer seat (another model), read-only tools + harness-run end-to-end command | REVIEW.md (strict schema) | Fail if the end-to-end run fails; capped output | Prose judge, no tools | #298 |
+| 13 | **Automatic gates** | Lint, CI, "is this a duplicate of something we have?" | Harness | Gate findings | Shadow-module gate; red/green proof; scoped tests | Done | #299, #303 |
+| 14 | **Independent review** | A peer reads the code, runs it, and reports only verified findings | Reviewer seat (another model), read-only tools + harness-run end-to-end command | REVIEW.md (strict schema) | Fail if the end-to-end run fails; capped output | Done | #298 |
 | 15 | **Review again** | Repairs findings and gets the second look | Coder, then reviewer | Updated diff + REVIEW.md | At most two review repairs; checks are never weakened (§5.5) | Done | – |
 | 16 | **Deliver** | Opens the PR with provenance; merges when required checks pass | App publisher | PR with trailers, merged when green | `check-agent-trailers`; App identity only | Done | – |
 | 17 | **Deploy** | Ships with a separate approval | Human / deployer role | Release | Separate grant, off by default (§5.5) | Out of scope by default | – |
@@ -121,9 +121,27 @@ not-red=M`. A TASK.md with `tests: characterization` (a pure refactor or
 test-only task) is exempt, and `tests: none` skips it. A change that touches
 only test files is also exempt, since no product code is there to make a test red.
 
+## Shadow modules
+
+After red/green, `src/runtime/shadow-modules.mjs` compares the exports the
+candidate adds to changed product files (compared with `git show HEAD:file`)
+against every other tracked `src/`, `bin/` and `scripts/` module. It is
+deterministic and costs no model call. An export with the same name as one in
+another module is always flagged. For a new file, an export is also flagged
+when its role verb (read, write, validate, digest, parse, format, redact)
+matches a peer export with the same nouns, or when the existing module's file
+name already covers those nouns. For example, `readRecords` in a new module
+next to a store that exports `readRecords` gets flagged. Re-exports
+(`export { x } from`) are not new definitions. Findings return to the coder
+once as `Shadow module:` reasons (import or extend the existing module, or say
+why a new one is needed), and the reviewer then sees the evidence.
+Exports from earlier waves of the same epic are labelled. RESULT.md gets a
+`## Shadow modules` section, and the run log records `shadow-modules <status>
+findings=N`.
+
 ## Self-review
 
-After red/green, when the diff changes product code, `src/runtime/self-review.mjs`
+After the shadow-module gate, when the diff changes product code, `src/runtime/self-review.mjs`
 runs one fresh-context turn on the coder's model with no tools. Its input is
 the numbered TASK checks, the Design (if any), the red/green table, and the
 diff. It must return JSON with one `{id, met, evidence}` entry per check and at
@@ -137,6 +155,35 @@ RESULT.md gets a `## Self-review` section. The run log records `self-review
 coder's usage. The coder memory record keeps a `self_review` summary so
 repeated misses can become skills (§5.6). Docs-only and test-only diffs go
 straight to review.
+
+## Verifying reviewer
+
+The reviewer still has no function tools and can't write. Every turn is a strict
+`json_object` response. To confirm evidence it may answer with
+`{"requests": [...]}`: one to four `read_file`, `search_text`, or `git_diff`
+requests, for up to three rounds. The harness answers them through the coder's
+read guards, which refuse secrets, logs, and paths outside the worktree, and
+refuses any other tool, such as `write_file`. Then the reviewer returns its verdict.
+
+Before the reviewer turn, `src/runtime/review-verify.mjs` runs up to three
+read-only `roster` commands that the checks name in backticks. Only
+`history list|show`, `status --offline`, `recipe validate`, `stats`,
+`recommend`, `doctor`, and `fleet list` qualify; `ask`, `run`, publishing,
+probes, and the vault never do. Each command runs on the worktree's own data
+under a temporary HOME with no GitHub credentials. Each one also runs once with
+an unknown option, which is the error case. The review fails deterministically,
+whatever the model says, when any of these happens:
+- a command exits non-zero, unless its check expects an error;
+- a command crashes with a stack trace or times out;
+- a command prints invalid JSON when its check or flags ask for JSON (the #285
+  warning-before-JSON flaw);
+- a command accepts the unknown option.
+
+The output goes into the evidence as `## Harness end-to-end runs`, and the run
+log records `review-e2e <status> commands=N failures=M` and `review-reads count=N
+refused=M`. The verdict JSON keeps its exact keys (`verdict`, `reasons`,
+`security_notes`, `checks`) and is capped at 6000 characters. Extra keys, prose,
+or a longer answer get one correction, then the review is incomplete and fails.
 
 ## Seat turn contracts
 
