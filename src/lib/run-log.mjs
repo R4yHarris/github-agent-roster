@@ -99,6 +99,7 @@ export async function createRunLog({
     if (event.type === 'tool-refused') return 'Refused: outside the worktree.';
     if (event.type === 'test-repair') return `Tests failed. Repair ${event.attempt} of ${event.budget}.`;
     if (event.type === 'checklist' && event.open) return `Coder tried to finish with ${event.total - event.done} open checklist items.`;
+    if (event.type === 'self-review' && event.status === 'findings') return `Self-review found ${event.unmet} unmet checks and ${event.findings} findings; one repair before review.`;
     if (event.type === 'red-green' && event.notRed) return `${event.notRed} new tests already pass on the base revision (not red).`;
     if (event.type === 'timeout') return 'The model did not answer in time. It may still be waking.';
     if (event.type === 'timeout-retry') return 'Retrying the same planner request once after the endpoint timeout.';
@@ -166,6 +167,12 @@ export async function createRunLog({
           throw new TypeError('Invalid live red-green event');
         }
         return `red-green ${event.status} tests=${event.tests} not-red=${event.notRed}`;
+      case 'self-review':
+        if (!['clean', 'findings', 'unavailable'].includes(event.status) ||
+            ![event.unmet, event.findings, event.ms, event.input, event.output].every((value) => Number.isSafeInteger(value) && value >= 0)) {
+          throw new TypeError('Invalid live self-review event');
+        }
+        return `self-review ${event.status} unmet=${event.unmet} findings=${event.findings} ms=${event.ms} in=${event.input} out=${event.output}`;
       case 'waiting':
       case 'timeout': {
         if (typeof event.host !== 'string' || !/^[A-Za-z0-9.:[\]-]{1,255}$/.test(event.host) ||
@@ -349,7 +356,8 @@ export async function readLastRunLog({
       new RegExp(`^toolset (?:-|(?:${tools.join('|')})(?:,(?:${tools.join('|')}))*)$`).test(value) ||
       /^completion finish_reason=(?:null|"stop"|"tool_calls")$/.test(value) ||
       /^checklist \d+\/\d+(?: open-at-finish)?$/.test(value) ||
-      /^red-green (?:checked|none|exempt|skipped|unavailable) tests=\d+ not-red=\d+$/.test(value);
+      /^red-green (?:checked|none|exempt|skipped|unavailable) tests=\d+ not-red=\d+$/.test(value) ||
+      /^self-review (?:clean|findings|unavailable) unmet=\d+ findings=\d+ ms=\d+ in=\d+ out=\d+$/.test(value);
     if (!parsed || !validMetadata(parsed[2]) || /[\x00-\x1f\x7f]/.test(lastLine) ||
         Buffer.byteLength(lastLine) > maximumLineBytes) {
       throw new RunLogError('Last live run log line has invalid metadata');

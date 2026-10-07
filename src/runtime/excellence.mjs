@@ -1,4 +1,5 @@
 import { redGreenTable } from './red-green.mjs';
+import { selfReviewSection } from './self-review.mjs';
 import { checklistTable } from './checklist.mjs';
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -247,6 +248,7 @@ export async function writeResult({ worktree, result, excellence, env, apiKeyEnv
       : excellence.reasons.map((reason, index) => `- ${index === 0 ? 'First failure: ' : ''}${reason}`).join('\n') + '\n') +
     `- ${tests}\n\n` + (result.checklist?.length ? `## Checklist\n\n${checklistTable({ items: result.checklist })}\n` : '') +
     (result.redGreen ? `## Red/green\n\n${redGreenTable(result.redGreen)}\n` : '') +
+    (result.selfReview ? `## Self-review\n\n${selfReviewSection(result.selfReview)}\n` : '') +
     `## Run\n\nModel: ${run?.metrics?.model ?? result.model}\nTool-loop turns: ${result.turns}\n` +
     `Research turns: ${result.research?.turns ?? 0}\n` +
     (result.testRepairs === undefined ? '' : `Test repairs: ${result.testRepairs} of ${result.testRepairBudget ?? 4}\n` +

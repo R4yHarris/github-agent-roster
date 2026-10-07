@@ -65,7 +65,7 @@ the lifecycle below.
 | 9 | **Author tests (red)** | Writes the acceptance test first and sees it fail for the right reason | Coder | Test files | New tests must fail against base src | Done | #303 |
 | 10 | **Author code (green)** | Reads the code before changing it, extends existing modules, makes the smallest complete change | Coder | Diff | Read before write; search before a new `src/` module; scope and secret guards | Scope and secret guards only | #295 |
 | 11 | **Remediate and repeat** | Uses each failure as evidence, changes approach, stops at a budget | Coder loop | Green targeted tests | Bounded repairs; perspective escalation | Done ([LOOP](LOOP.md)) | – |
-| 12 | **Self-review** | Reads own diff against the checklist before asking anyone else | Coder's model, fresh context, no write tools | Per-check self-review | One bounded repair on findings | Missing | #304 |
+| 12 | **Self-review** | Reads own diff against the checklist before asking anyone else | Coder's model, fresh context, no write tools | Per-check self-review | One bounded repair on findings | Done | #304 |
 | 13 | **Automatic gates** | Lint, CI, "is this a duplicate of something we have?" | Harness | Gate findings | Shadow-module gate; red/green proof; scoped tests | Red/green done; shadow gate missing | #299, #303 |
 | 14 | **Independent review** | A peer reads the code, runs it, and reports only verified findings | Reviewer seat (another model), read-only tools + harness-run end-to-end command | REVIEW.md (strict schema) | Fail if the end-to-end run fails; capped output | Prose judge, no tools | #298 |
 | 15 | **Review again** | Repairs findings and gets the second look | Coder, then reviewer | Updated diff + REVIEW.md | At most two review repairs; checks are never weakened (§5.5) | Done | – |
@@ -118,7 +118,25 @@ candidate. A new test that passes at base is "not red": the coder gets one
 correction, then the evidence is recorded either way. RESULT.md gets a
 `## Red/green` table and the run log records `red-green <status> tests=N
 not-red=M`. A TASK.md with `tests: characterization` (a pure refactor or
-test-only task) is exempt, and `tests: none` skips it.
+test-only task) is exempt, and `tests: none` skips it. A change that touches
+only test files is also exempt, since no product code is there to make a test red.
+
+## Self-review
+
+After red/green, when the diff changes product code, `src/runtime/self-review.mjs`
+runs one fresh-context turn on the coder's model with no tools. Its input is
+the numbered TASK checks, the Design (if any), the red/green table, and the
+diff. It must return JSON with one `{id, met, evidence}` entry per check and at
+most eight one-line findings (debug leftovers, missing error paths, naming
+drift, changes outside the Ask). Unmet checks or findings return to the coder
+once as `Self-review:` reasons. It runs only once per coder seat, and the
+independent reviewer judges the repair. A tool request, invalid JSON, or an
+endpoint error is recorded as `unavailable`, and the reviewer still runs.
+RESULT.md gets a `## Self-review` section. The run log records `self-review
+<status> unmet=N findings=M ms=T in=I out=O`, and its tokens count toward the
+coder's usage. The coder memory record keeps a `self_review` summary so
+repeated misses can become skills (§5.6). Docs-only and test-only diffs go
+straight to review.
 
 ## Seat turn contracts
 

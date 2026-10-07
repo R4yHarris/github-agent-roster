@@ -107,8 +107,11 @@ test('the coder gets one not-red correction, and RESULT.md records the red/green
   let correction;
   const events = [];
   const fetchImpl = async (_url, request) => {
-    calls += 1;
     const body = JSON.parse(request.body);
+    if (body.messages[0].content.startsWith('You are the coder seat reading your own diff')) {
+      return reply({ content: JSON.stringify({ checks: [{ id: 1, met: true, evidence: 'src/math.mjs sub' }], findings: [] }) });
+    }
+    calls += 1;
     if (calls === 1) {
       return reply({ tool_calls: [
         { id: 'r1', type: 'function', function: { name: 'read_file', arguments: JSON.stringify({ path: 'src/math.mjs' }) } },
