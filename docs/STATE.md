@@ -296,6 +296,27 @@ On read, if `schema_version` is older than current:
    path, from-version, to-version, and timestamp.
 5. Keep `.pre-migrate` files. Retention policy (§8.5) may prune them later; code must not.
 
+#### Legacy layout to split layout
+
+`migrate(root)` in `src/lib/repo-migrate.mjs` moves the pre-split `.roster` layout toward
+the split `.roster-state` layout. It is **copy-only**. It copies only the declared
+per-worktree state subtrees (`checkpoints/`, `runs/`) into
+`.roster-state/worktrees/<key>/` and never deletes, renames, or rewrites a legacy file.
+Private config, fleet and capability declarations, memory, history, and locks stay in
+`.roster` (default-deny), so no credential-bearing file moves.
+
+- **Dry-run.** `{ dryRun: true }` reports counts, layout names, active-run state, and the
+  retained entries without writing anything.
+- **Active runs.** A live lock under `locks/` refuses the migration before any write.
+- **Backup and record.** The migration writes a backup manifest and an in-progress record
+  under `.roster-state/migration/` before its first copy.
+- **Rollback.** A failed copy rolls back every file the migration created or refreshed.
+- **Interrupted runs.** The next run detects an interrupted migration and completes it.
+- **Errors.** A corrupt record or a destination edited by someone else fails closed, with
+  recovery steps.
+- **Reruns.** A second run plans zero changes. Legacy state that grew since the last run
+  refreshes only the copies the migration itself wrote.
+
 ### 8.3 Locking and atomic writes
 
 - **Locks.** Every writer takes `<machine-root>/locks/<repo-identity>.lock` before touching
