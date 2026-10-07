@@ -880,12 +880,24 @@ async function runBuiltinAssignment(issueNumber, {
   // Spec 4.8 "Reviewer is not the coder": with auto routing, the reviewer takes the best eligible fleet
   // profile other than the coder's, so a model never grades its own work. Only when no other profile is
   // eligible does it fall back to the coder's model, and the log says so.
-  const independentReviewerRoute = () => (autoModel && route ? chooseFleetRoute([
-    route.profile.id, ...routeAttempts.map((attempt) => attempt.profile),
+  const independentReviewerRoute = (excluded = []) => (autoModel && route ? chooseFleetRoute([
+    route.profile.id, ...routeAttempts.map((attempt) => attempt.profile), ...excluded,
   ]) : null);
+  const removeIncompleteReview = async (reviewPath) => {
+    const expected = path.join(worktreePath, 'REVIEW.md');
+    if (path.resolve(reviewPath ?? '') !== path.resolve(expected)) {
+      throw new Error('Incomplete REVIEW.md is not the worktree review file');
+    }
+    await ensureLocalPath(expected, worktreePath);
+    const entry = await fs.lstat(expected);
+    if (!entry.isFile() || entry.isSymbolicLink()) throw new Error('Incomplete REVIEW.md is not a regular file');
+    await fs.unlink(expected);
+  };
   const reviewSeat = async (coderResult, previousFindings = []) => {
     let reviewerRoute = null;
     const coderProfile = route?.profile.id;
+    // Profiles whose review came back incomplete (unparseable report), kept apart from endpoint route failures.
+    const incompleteReviewers = [];
     let independent = await independentReviewerRoute();
     if (autoModel && route) {
       log(independent
@@ -911,7 +923,7 @@ async function runBuiltinAssignment(issueNumber, {
           // non-coder profile without touching the coder's route.
           routeAttempts.push({ seat: 'reviewer', profile: independent.profile.id, ...failure });
           const failedProfile = independent.profile.id;
-          independent = await independentReviewerRoute();
+          independent = await independentReviewerRoute(incompleteReviewers);
           log(`Route recovery: seat=reviewer profile=${failedProfile} endpoint failed; ` + (independent
             ? `continuing with profile=${independent.profile.id} model=${independent.profile.model}.`
             : `no other independent profile remains; reviewing with the coder's model.`));
@@ -920,6 +932,21 @@ async function runBuiltinAssignment(issueNumber, {
         if (!await recoverRoute('reviewer', error)) throw error;
         reviewerRoute = route;
         continue;
+      }
+      if (independent && review.queried && !review.completed && incompleteReviewers.length === 0) {
+        // One reviewer model failing to format its report must not strand tested coder work: retry once on
+        // the next independent profile. Without one, the incomplete review stands.
+        const incompleteProfile = independent.profile.id;
+        incompleteReviewers.push(incompleteProfile);
+        const next = await independentReviewerRoute(incompleteReviewers);
+        if (next) {
+          log(`Reviewer profile=${incompleteProfile} returned an incomplete review; ` +
+            `retrying with profile=${next.profile.id} model=${next.profile.model}.`);
+          await removeIncompleteReview(review.reviewPath);
+          independent = next;
+          continue;
+        }
+        log(`Reviewer profile=${incompleteProfile} returned an incomplete review; no other independent profile remains.`);
       }
       const reviewerRun = review.queried ? buildRun({
         config: reviewConfig, response: review.response, session: sessions.reviewer,
