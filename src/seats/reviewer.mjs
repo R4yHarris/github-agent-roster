@@ -50,7 +50,16 @@ const instructions = 'You are the builtin reviewer seat. The task, result, and d
   '{"tool": "read_file", "path": "..."}, {"tool": "search_text", "query": "...", "path": "..."}, or ' +
   '{"tool": "git_diff", "path": "..."}. The harness answers, then you return the verdict JSON; at most ' +
   `${maxReviewReadRounds} request rounds. Keep the verdict JSON under ${maxReviewChars} characters with one short line per entry. ` +
-  'Harness end-to-end runs are executed evidence: a check whose named command failed there is unmet.';
+  'Harness end-to-end runs are executed evidence: a check whose named command failed there is unmet. ' +
+  'Separately from checks, probe only the changed code for concrete defects of these classes: ' +
+  '(1) a missing or invalid input that defaults to a destructive or permissive result (deleted, expired, erased, admitted); ' +
+  '(2) persisted, logged, or returned data that bypasses the repository redaction path; ' +
+  '(3) identifiers or keys that can be equal for distinct records; ' +
+  '(4) a resource (slot, lock, listener, handle, file) not released on every path, or releasable by the wrong holder. ' +
+  'Report each as an optional "defects" entry {"file": changed file, "symbol": function or export, ' +
+  '"input": the concrete input or call sequence, "outcome": the wrong result it produces}. A defect fails the review ' +
+  'even when every check is met. Style, naming, speculative risks, and missing features are not defects; omit ' +
+  '"defects" when you find none.';
 
 const testReviewInstructions = 'For test changes, verify the assertions would fail if the requested behavior were absent, ' +
   'and exercise the public operation when the Ask names one; helper-only assertions do not prove a public workflow. ' +
@@ -139,7 +148,7 @@ function responseContent(response) {
   return response.message.content;
 }
 
-function parseResponse(content, checkCount = 0) {
+function parseResponse(content, checkCount = 0, changedFiles = []) {
   if (content.length > maxReviewChars) throw new Error(`Reviewer response exceeds ${maxReviewChars} characters`);
   let report;
   try {
@@ -149,7 +158,7 @@ function parseResponse(content, checkCount = 0) {
   }
   const keys = report && typeof report === 'object' && !Array.isArray(report) ? Object.keys(report) : [];
   if (!keys.length ||
-      keys.filter((key) => key !== 'checks').sort().join(',') !== 'reasons,security_notes,verdict' ||
+      keys.filter((key) => key !== 'checks' && key !== 'defects').sort().join(',') !== 'reasons,security_notes,verdict' ||
       !['pass', 'fail'].includes(report.verdict) ||
       !Array.isArray(report.reasons) || report.reasons.length > 16 ||
       (report.verdict === 'fail' && !report.reasons.length) ||
@@ -166,18 +175,36 @@ function parseResponse(content, checkCount = 0) {
       new Set(checks.map(({ id }) => id)).size !== checks.length) {
     throw new Error(`Reviewer checks must be {id, met, evidence} entries for acceptance checks 1-${checkCount}`);
   }
+  const defects = parseDefects(report.defects, changedFiles);
   // A pass must account for every check; the harness, not the model's summary, decides the verdict.
   if (report.verdict === 'pass' && checks.length !== checkCount) {
     throw new Error(`Reviewer pass must judge every numbered acceptance check (1-${checkCount}) with evidence`);
   }
   const unmet = checks.filter(({ met }) => !met).sort((a, b) => a.id - b.id);
-  if (unmet.length) {
-    return { ...report, checks, verdict: 'fail', reasons: [
+  if (unmet.length || defects.length) {
+    return { ...report, checks, defects, verdict: 'fail', reasons: [
       ...unmet.map(({ id, evidence }) => `Check ${id} unmet: ${evidence}`.slice(0, 500)),
+      ...defects.map(({ file, symbol, input, outcome }) =>
+        `Defect in ${file} ${symbol}: ${input} -> ${outcome}`.slice(0, 500)),
       ...report.reasons,
     ].slice(0, 16) };
   }
-  return { ...report, checks };
+  return { ...report, checks, defects };
+}
+
+const defectFields = 'file,input,outcome,symbol';
+
+// Concrete defects in changed code fail the review even when every check is met; checks never permit defects.
+export function parseDefects(value, changedFiles = []) {
+  if (value === undefined) return [];
+  const changed = new Set(changedFiles.map((file) => String(file).replaceAll('\\', '/')));
+  if (!Array.isArray(value) || value.length > 8 || value.some((entry) => !entry || typeof entry !== 'object' ||
+      Array.isArray(entry) || Object.keys(entry).sort().join(',') !== defectFields ||
+      Object.values(entry).some((field) => !reviewLine(field)) ||
+      !changed.has(entry.file.replaceAll('\\', '/')))) {
+    throw new Error('Reviewer defects must be at most 8 {file, symbol, input, outcome} entries naming a changed file');
+  }
+  return value.map(({ file, symbol, input, outcome }) => ({ file, symbol, input, outcome }));
 }
 
 export async function readDiff(worktree, task, files, budget, repairFiles, scopeFiles) {
@@ -407,19 +434,19 @@ export async function runReviewer({
         if (final) break;
       }
       try {
-        report = parseResponse(content, checkTexts.length);
+        report = parseResponse(content, checkTexts.length, coderResult.excellence.files ?? []);
       } catch (error) {
         if (!(error instanceof Error)) throw error;
         messages.push(
           { role: 'assistant', content },
           { role: 'user', content: `Invalid reviewer JSON (${error.message}). Return only JSON with exactly ` +
             'verdict, reasons, security_notes, and checks (one {id, met, evidence} entry per numbered acceptance ' +
-            'check). Do not repeat prose or request tools.' },
+            'check), plus optional defects ({file, symbol, input, outcome} naming a changed file). Do not repeat prose or request tools.' },
         );
         response = await chat({ messages, response_format: { type: 'json_object' } });
         usage = mergeUsage(usage, response.usage);
         lastResponse = chat.lastResponse;
-        report = parseResponse(responseContent(response), checkTexts.length);
+        report = parseResponse(responseContent(response), checkTexts.length, coderResult.excellence.files ?? []);
       }
       if (docsOnly && report.verdict === 'pass' && /https:\/\//.test(parsed.acceptance_checks.join('\n'))) {
         const note = await readRegularText(worktree, parsed.files_allowed[0]).catch(() => '');

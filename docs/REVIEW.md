@@ -17,6 +17,15 @@ RESULT.md output. A `pass` that omits any check gets one corrective retry,
 then fails. Any `met: false` turns the verdict to `fail` with
 `Check N unmet: …` reasons, whatever the model's summary says. REVIEW.md lists
 each judged check under `## Acceptance checks`.
+Separately from checks, the reviewer probes the changed code for four defect
+classes: destructive or permissive defaults for missing input, data that
+bypasses redaction, identifiers that collide for distinct records, and
+resources not released on every path or releasable by the wrong holder. It
+reports each as an optional `defects` entry `{file, symbol, input, outcome}`
+naming a changed file. Any defect turns the verdict to `fail` with a
+`Defect in <file> <symbol>: <input> -> <outcome>` reason, even when every check
+is met, so review repair sends it back to the coder. Checks never permit
+defects; style and missing features are not defects.
 The evidence also lists `## Unchanged existing files`: allowed files and
 relative imports of changed files that exist at the base but are not in the
 diff, so an unchanged module is not judged missing.
