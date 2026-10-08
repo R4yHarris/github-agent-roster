@@ -50,6 +50,14 @@ export function hookEnvironment(env = process.env) {
 
 async function readHookFile(worktree, file, optional = false) {
   const target = path.join(worktree, file);
+  if (optional) {
+    const parent = await fs.lstat(path.dirname(target)).catch((error) => {
+      if (error.code === 'ENOENT') return null;
+      throw error;
+    });
+    // Legacy standalone worktrees may have a regular state marker, which cannot contain a hook manifest.
+    if (parent?.isFile()) return null;
+  }
   await ensureLocalPath(target, worktree);
   let handle;
   try {

@@ -85,3 +85,5 @@ only reviewed, read-only scripts and external OS isolation when required.
 With no manifest (or an empty hook list), no hook process or Git trust check
 runs and the previous seat/gate behavior is unchanged. No live fleet endpoint
 is required to test hooks; use temporary Git repositories and local scripts.
+Legacy standalone worktrees whose `.roster` is a regular file cannot contain
+a manifest and retain the same no-hooks behavior.

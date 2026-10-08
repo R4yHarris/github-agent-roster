@@ -52,6 +52,9 @@ test('no hooks changes nothing; successful hooks contribute no findings', async 
   assert.deepEqual((await runLifecycleHooks('pre-plan', { worktree: cwd })).entries, []);
   rmSync(path.join(cwd, '.roster', 'hooks.yml'));
   assert.deepEqual(await runLifecycleHooks('pre-plan', { worktree: cwd }), { pass: true, reasons: [], entries: [] });
+  rmSync(path.join(cwd, '.roster'), { recursive: true });
+  writeFileSync(path.join(cwd, '.roster'), 'legacy-regular-state-marker\n');
+  assert.deepEqual(await runLifecycleHooks('post-coder', { worktree: cwd }), { pass: true, reasons: [], entries: [] });
 });
 
 test('nonzero exit returns last output as a gate finding and pre-publish cannot bypass it', async (t) => {
