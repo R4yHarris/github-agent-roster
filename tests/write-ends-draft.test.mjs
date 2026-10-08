@@ -114,7 +114,8 @@ Add a route summary regression test.
           role: 'assistant', content: 'Updated the route summary regression test.',
         } }] });
     },
-    runTestCommand: async () => {
+    runTestCommand: async (_program, args) => {
+      if (args[0] === '--check') return { stdout: '', stderr: '' };
       testRuns += 1;
       return { stdout: 'pass', stderr: '', exit_code: 0 };
     },

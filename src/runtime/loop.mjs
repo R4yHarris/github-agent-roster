@@ -560,6 +560,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
             sessionWrites.add(String(result?.path ?? call.args.path).replaceAll('\\', '/'));
           }
         } catch (error) {
+          if (call.function.name === 'run_test' && !(error instanceof ToolUsageError)) throw error;
           // "Repeated" means the same call failing the same way, not unrelated misses separated by progress.
           const denialKey = `${call.function.name}\0${error instanceof Error ? error.message : ''}\0${JSON.stringify(call.args)}`;
           const repeated = error instanceof ToolUsageError &&

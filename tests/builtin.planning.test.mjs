@@ -406,8 +406,11 @@ test('an issue-176-shaped planner response reaches coder, real tests, and review
       }] });
     },
     runTestCommand: async (program, args, commandOptions) => {
-      testCalls += 1;
       assert.equal(program, process.execPath);
+      if (args[0] === '--check') {
+        return { stdout: execFileSync(program, args, { ...commandOptions, encoding: 'utf8' }), stderr: '' };
+      }
+      testCalls += 1;
       assert.equal(args[0], '--test');
       // Final verification runs the whole suite of the fixture worktree.
       assert.equal(args.at(-1), '--test-timeout=120000');
