@@ -44,7 +44,7 @@ test("help lists every prompt's command", () => {
   assert.match(result.stdout, /roster\s+eval/);
   assert.match(result.stdout, /roster\s+recommend\s+--task-class/);
   assert.match(result.stdout, /roster\s+ask/);
-  assert.match(result.stdout, /^  roster run --issue N \[--runtime builtin\] \[--auto-model\] \[--seats planner,coder,reviewer\] \[--saved\] \[--publish\] \[--skip-review\] \[--confirm\] \[--plan\]$/m);
+  assert.match(result.stdout, /^  roster run --issue N \[--runtime builtin\] \[--auto-model\] \[--seats planner,coder,reviewer\] \[--parallel K\] \[--saved\] \[--publish\] \[--skip-review\] \[--confirm\] \[--plan\]$/m);
   assert.match(result.stdout, /--auto-model/);
   assert.match(result.stdout, /^  roster prepare --issue N$/m);
 });
@@ -139,6 +139,15 @@ test("builtin CLI defaults to paired seats, rejects unsupported selections, and 
   assert.match(bareRun.stderr, /Issue number must be a positive safe integer/);
   const legacySeat = run(["run", "--issue", "n/a", "--seat", "coder", "--runtime", "builtin"]);
   assert.match(legacySeat.stderr, /Issue number must be a positive safe integer/);
+  const parallel = run(["run", "--issue", "n/a", "--parallel", "2"]);
+  assert.match(parallel.stderr, /Issue number must be a positive safe integer/);
+  for (const value of ["0", "-1", "1.5", "9007199254740992"]) {
+    const invalidParallel = run(["run", "--issue", "42", "--parallel", value]);
+    assert.notEqual(invalidParallel.status, 0);
+    assert.match(invalidParallel.stderr, /--parallel K/);
+  }
+  const parallelConfirm = run(["run", "--issue", "42", "--parallel", "2", "--confirm"]);
+  assert.match(parallelConfirm.stderr, /--parallel K/);
   const noModel = mkdtempSync(join(tmpdir(), "roster-no-model-"));
   try {
     cpSync(join(root, "src"), join(noModel, "src"), { recursive: true });

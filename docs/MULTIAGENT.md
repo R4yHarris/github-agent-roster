@@ -15,13 +15,58 @@ that sequence. Without an issue, `roster run --seat coder --runtime builtin`
 runs the [single coder stack](SEAT.md) on an existing TASK.md instead.
 `--runtime builtin` remains available for CI and GHCP. Use
 `roster prepare --issue N` for a handoff without executing the seats.
-This is not a concurrent swarm, two Copilot chats, or a Hermes Kanban loop.
+The default is not a concurrent swarm, two Copilot chats, or a Hermes Kanban loop.
 GitHub Issues and PRs are the board; no additional task database or issue
 is created.
 `--auto-model` explicitly selects a registered fleet profile for that one
 run, using qualifying human evaluations before starting priors. It changes
 neither the saved default nor the sequential seat/worktree topology.
 See [opt-in routing](ROUTING.md) for the source and context constraints.
+
+## Opt-in parallel child waves
+
+```sh
+roster run --issue 42 --parallel 2 --auto-model
+```
+
+`--parallel K` (also `/run N --parallel K`) applies to executable feature
+children, not to seats within one child. Every child still runs
+planner -> coder -> reviewer sequentially in its own `.worktrees/issue-N`
+and existing `issue-N` branch. `K` must be a positive safe integer; default
+`1` preserves the existing single-child order and return shape.
+The task bound is the smaller of K and the sum of registered fleet profile
+concurrency when routing is enabled. Saved/default runs use their configured
+concurrency, or 1 when undeclared. Per-profile HTTP admission still governs
+requests independently; summed capacity does not promise balanced routing.
+
+New child issues contain `Depends on: none` or comma-separated GitHub issue
+links (`Depends on: #100, #101`). Same-wave drafts are independent; later
+waves link to earlier-wave children. Explicit links govern readiness.
+Older issues without that declaration retain their earlier-wave barrier.
+Dependencies must be closed on GitHub: passing local review or merging a PR
+does not silently close an issue or approve its human evaluation.
+After each bounded group completes, the board is refreshed and newly ready
+children may run. Each child is attempted at most once in an invocation.
+Cycles, open dependencies, claims and review labels remain blocked/not ready;
+lookup errors fail closed. There is no persistent scheduler or task database.
+
+Each child has prefixed live output, its own log and shell status-rail row.
+An exclusive repository-common claim lock prevents another local invocation
+writing that issue, including ordinary single-issue runs. Locks are released
+on success/error/cancellation; existing dead-owner recovery applies after a
+process crash. GitHub status uses the existing App labels/comments.
+One child failure preserves sibling results and later independent children;
+the aggregate returns `children`, refreshed `waves`, the effective `parallel`
+limit and a failing outcome. Board-refresh failures retain completed evidence.
+Cancellation drains in-flight children before returning and starts no new ones.
+
+Confirmation, plan mode and shared coder steering cannot combine with K > 1.
+Parallel publication requires explicit `--publish` and retains every child's
+test/review/App gates; there is no parent commit or parent PR. Without it,
+use each child's printed reviewed App SDK handoff from that child's root.
+The shell refuses `/publish` on an aggregate rather than picking a child or
+publishing the planning worktree. Merge remains the contracts publisher's
+role; this scheduler never merges sibling branches or closes issues.
 
 1. The issue lookup creates `.worktrees/issue-N` once, with `ASSIGNMENT.md`
    and an ignored `.env` holding `AI_TASK=issue-N` and

@@ -42,6 +42,8 @@ import { throwIfCancelled } from '../runtime/cancel.mjs';
 import { earlierWaveFiles, issueWave, readWavePlan, requireEarlierWavesClosed, waveBoard } from './waves.mjs';
 import { githubRepository } from './issue.mjs';
 import { routeFailure } from '../llm/openai.mjs';
+import { acquireRepoLock } from './repo-locks.mjs';
+import { parallelLimit, runReadyWaves } from './wave-scheduler.mjs';
 
 const execFileAsync = promisify(execFile);
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -49,6 +51,7 @@ export const maxPerspectiveEscalations = 2;
 export const maxRescopes = 2;
 export const maxReviewRepairs = 2;
 const maxScopeExpansion = 16;
+const claimHook = Symbol('issue claim after validation');
 
 // A semantic reviewer fail is actionable feedback, not a terminal verdict: hand the findings back to the coder.
 export function reviewRepairContinuation({ round, reasons, unmetChecks = [], stalled = false, changedFiles = [],
@@ -405,13 +408,84 @@ export async function runBuiltinTask({
     reviewerRun: reviewRun, askKind, classification, logPath: liveLog.path, logSession: liveLog.session };
 }
 
+async function claimIssue(issueNumber, cwd, command) {
+  const common = await command('git', ['rev-parse', '--git-common-dir'], cwd);
+  if (typeof common !== 'string' || !common.trim()) throw new Error('Issue claim requires a valid Git common directory');
+  return acquireRepoLock(`issue-${issueNumber}`, {
+    lockRoot: path.join(path.resolve(cwd, common.trim()), 'roster', 'wave-runs'),
+  });
+}
+
+async function runClaimedAssignment(issueNumber, options) {
+  let claim;
+  try {
+    return await runTrackedAssignment(issueNumber, { ...options,
+      [claimHook]: async (cwd, command) => { claim = await claimIssue(issueNumber, cwd, command); },
+    });
+  } finally {
+    await claim?.release();
+  }
+}
+
 export async function runBuiltinIssue(issueNumber, options = {}) {
   validateIssueNumber(issueNumber);
-  const result = await runTrackedAssignment(issueNumber, options);
+  const parallel = parallelLimit(options.parallel);
+  if (parallel > 1 && (options.confirm || options.planMode || options.steeringControl)) {
+    throw new TypeError('Parallel waves cannot combine with confirmation, plan mode, or shared coder steering');
+  }
+  const result = await runClaimedAssignment(issueNumber, options);
+  if (parallel > 1 && result?.waves?.length && !result.failed && !result.planMode) {
+    const { env = process.env, log = console.log } = options;
+    const config = options.config ?? loadConfig({ repoRoot: options.repoRoot ?? rosterRoot, cwd: result.repoRoot });
+    const fleet = options.autoModel ? await loadFleet({ cwd: result.repoRoot }) : null;
+    const capacity = fleet ? fleet.profiles.reduce((total, profile) => total + profile.concurrency, 0)
+      : config.llm.concurrency ?? 1;
+    const command = options.runCommand ?? (async (program, args, cwd) =>
+      (await execFileAsync(program, args, { cwd, env: withoutLlmKeys(env, config), encoding: 'utf8', signal: options.signal })).stdout);
+    const { preparedRun, onPrepared, planMode, acceptPlan, parallel: _parallel, ...childOptions } = options;
+    const scheduled = await runReadyWaves({ parallel, capacity, signal: options.signal,
+      readBoard: () => waveBoard({ worktree: result.worktreePath, cwd: result.repoRoot, env,
+        apiKeyEnv: config.llm.api_key_env, runCommand: command }),
+      onState: options.onRunEvent,
+      runChild: async (row) => {
+        const prefix = `[issue-${row.issue}] `;
+        try {
+          return await runClaimedAssignment(row.issue, { ...childOptions,
+            cwd: result.repoRoot,
+            log: (message) => log(String(message).split('\n').map((line) => prefix + line).join('\n')),
+            errorOutput: { write: (text) => (options.errorOutput ?? process.stderr).write(
+              String(text).replace(/^/gm, prefix)) },
+            onRunEvent: (event) => options.onRunEvent?.({ ...event, issue: row.issue, wave: row.wave }),
+          });
+        } catch (error) {
+          log(prefix + 'Run failed: ' + redactEvidence(String(error?.message ?? error), { env, apiKeyEnv: config.llm.api_key_env }));
+          throw error;
+        }
+      },
+    });
+    log(`Parallel waves: ${scheduled.children.length} attempted, limit ${scheduled.parallel}; ` +
+      `${scheduled.children.filter((child) => child.status === 'rejected').length} rejected.`);
+    if (scheduled.boardError) log('Wave board refresh failed: ' +
+      redactEvidence(scheduled.boardError.message, { env, apiKeyEnv: config.llm.api_key_env }));
+    const completed = { ...result, ...scheduled, parallelRun: true, planningOnly: scheduled.children.length === 0,
+      continueWith: undefined, command: null };
+    const updateStatus = options.issueStatus === undefined ? setIssueRunStatus : options.issueStatus;
+    if (env.GITHUB_APP_ID && env.GITHUB_APP_PRIVATE_KEY_PATH && result.issue?.url && typeof updateStatus === 'function') {
+      const [status, detail] = runOutcomeStatus(completed, { published: options.publish });
+      try {
+        await updateStatus({ issue: result.issue, status, detail,
+          repoRoot: result.repoRoot, cwd: options.cwd ?? process.cwd(), env });
+      } catch (error) {
+        log('Parent issue status not updated: ' + redactEvidence(String(error?.message ?? error),
+          { env, apiKeyEnv: config.llm.api_key_env }));
+      }
+    }
+    return completed;
+  }
   if (!result?.continueWith) return result;
   // A split feature is delivered, not parked: its next open wave slice runs in its own issue worktree.
   const { preparedRun, onPrepared, planMode, acceptPlan, ...childOptions } = options;
-  const child = await runTrackedAssignment(result.continueWith, childOptions);
+  const child = await runClaimedAssignment(result.continueWith, childOptions);
   return { ...child, parent: { issue: issueNumber, planPath: result.planPath, waves: result.waves } };
 }
 
@@ -423,6 +497,8 @@ export function runOutcomeStatus(result, { published }) {
     : 'The run reported a failure; see the run log.']];
   if (result.confirmedPause) return pause('the TASK was paused by --confirm.');
   if (result.planMode) return pause('plan mode wrote PLAN.md only.');
+  if (result.parallelRun) return [result.failed ? 'blocked' : 'review',
+    [`Parallel child runs: ${result.children.length}. Child issues retain their own review/publication status.`]];
   if (result.planningOnly && result.waves?.length && result.waves.every((row) => row.state === 'done')) {
     return ['review', [`Every child issue is closed: ${result.waves.map((row) => `#${row.issue}`).join(', ')}.`,
       'Close this parent after human AI-Eval of the delivered slices.']];
@@ -612,6 +688,7 @@ async function runBuiltinAssignment(issueNumber, {
   planMode = false,
   acceptPlan = false,
   steeringControl,
+  [claimHook]: beforePreparation,
 } = {}) {
   throwIfCancelled(signal);
   config = { ...config, capabilities: config.capabilities ?? await loadCapabilities({ cwd }) };
@@ -657,6 +734,7 @@ async function runBuiltinAssignment(issueNumber, {
       throw error;
     }
   };
+  await beforePreparation?.(cwd, issueCommand);
   const prepared = preparedRun ? await reusePreparedAssignment(preparedRun, {
     cwd, config, runCommand: issueCommand, ask, issueNumber,
   }) : issueNumber === null ? await prepareLocalAsk(ask, { cwd, config, runCommand: issueCommand })
@@ -668,7 +746,7 @@ async function runBuiltinAssignment(issueNumber, {
     },
     sessionId: `roster-${issueNumber}-coder`, recordPreparation: false,
   });
-  if (preparedRun && !prepared.local && issueWave(prepared.issue) > 1) {
+  if (preparedRun && !prepared.local) {
     const repository = githubRepository((await issueCommand('git', ['remote', 'get-url', 'origin'], prepared.repoRoot)).trim());
     await requireEarlierWavesClosed({ issue: prepared.issue, repository, cwd: prepared.repoRoot, runCommand: issueCommand });
   }

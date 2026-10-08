@@ -47,6 +47,19 @@ test('the pinned rail shows issue, the configured model, context counts and elap
   assert.match(formatTray(display, { debug: true, now: 446000 }).rail, /7m26s\x1b\[0m\x1b\[96m\*/);
 });
 
+test('parallel children each get a row above the prompt in the pinned tray', () => {
+  const terminal = fakeTerminal();
+  const state = { display: { ...display, waves: [
+    { issue: 100, wave: 1, seat: 'coder', state: 'drafting', model: 'fixture-a' },
+    { issue: 101, wave: 1, seat: 'reviewer', state: 'reviewing', model: 'fixture-b' },
+  ] }, askQueue: [], statusbar: true, debug: { enabled: false }, pendingSecret: null };
+  const tray = createTray({ output: terminal.output, shell: terminal.shell, state });
+  tray.render();
+  assert.match(terminal.plain, /#100 wave:1 coder drafting fixture-a/);
+  assert.match(terminal.plain, /#101 wave:1 reviewer reviewing fixture-b/);
+  tray.close();
+});
+
 test('a failed rail ends in the finish reason and drops fields from the right when narrow', () => {
   const failed = { ...display, state: 'failed', lastFinishReason: 'length' };
   const rail = formatTray(failed, { columns: 80, color: false, now: 446000 }).rail;

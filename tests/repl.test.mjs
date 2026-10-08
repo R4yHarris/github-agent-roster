@@ -341,6 +341,32 @@ test('/run accepts either flag order, auto-continues by default, and rejects dup
   }
 });
 
+test('/run --parallel keeps separate child statuses and refuses aggregate publication', async () => {
+  const shell = dispatcher({ services: {
+    runBuiltinIssue: async (_issue, options) => {
+      assert.equal(options.parallel, 2);
+      assert.equal(options.steeringControl, null);
+      for (const issue of [100, 101]) {
+        options.onRunEvent({ type: 'wave-start', wave: 1, issue });
+        options.onRunEvent({ type: 'seat-start', seat: 'coder', wave: 1, issue, model: `fixture-${issue}` });
+      }
+      options.onRunEvent({ type: 'wave-end', wave: 1, issue: 100, state: 'review' });
+      options.onRunEvent({ type: 'wave-end', wave: 1, issue: 101, state: 'failed' });
+      return { issue: { number: 42 }, askKind: 'feature', parallelRun: true, failed: true,
+        children: [], planPath: 'PLAN.md' };
+    },
+  } });
+  await shell.dispatch('/run 42 --parallel 2 --saved');
+  await shell.dispatch('/status');
+  assert.match(shell.output.text, /#100 wave:1 coder review fixture-100/);
+  assert.match(shell.output.text, /#101 wave:1 coder failed fixture-101/);
+  await assert.rejects(shell.dispatch('/publish'), /separate child worktrees/);
+  for (const args of ['42 --parallel 0', '42 --parallel 2 --parallel 3',
+    '42 --parallel', '42 --parallel 2 --confirm', '42 --parallel 2 --plan']) {
+    await assert.rejects(shell.dispatch(`/run ${args}`), /Use \/run N/);
+  }
+});
+
 test('a local ask publishes from its worktree and does not comment on an issue', async () => {
   const worktreePath = join(cwd, '.worktrees', 'local-test');
   const shell = dispatcher({

@@ -145,9 +145,11 @@ export function createTray({ output, state, shell, env = process.env, cwd = proc
   function redraw() {
     const { rule, rail, detail, prompt } = frame();
     const queued = queueLines(state.askQueue, output.columns ?? 80, output.isTTY === true);
+    const children = state.statusbar ? (state.display.waves ?? []).map((row) =>
+      clean(`#${row.issue} wave:${row.wave} ${row.seat ?? '-'} ${row.state} ${row.model ?? '-'}`).slice(0, (output.columns ?? 80) - 1)) : [];
     const queueBlock = queued.length ? `${queued.join('\n')}\n` : '';
-    barLines = state.statusbar ? (detail === null ? 3 : 4) + queued.length : queued.length;
-    if (barLines) output.write(`${queueBlock}${state.statusbar ? `${rule}\n${rail}\n${rule}\n${detail === null ? '' : `${detail}\n`}` : ''}`);
+    barLines = state.statusbar ? (detail === null ? 3 : 4) + queued.length + children.length : queued.length;
+    if (barLines) output.write(`${queueBlock}${state.statusbar ? `${rule}\n${rail}\n${children.map((row) => row + '\n').join('')}${rule}\n${detail === null ? '' : `${detail}\n`}` : ''}`);
     cursorTo(output, 0);
     clearLine(output, 0);
     flush();
