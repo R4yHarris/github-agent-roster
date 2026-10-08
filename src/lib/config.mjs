@@ -19,7 +19,7 @@ const defaultProfiles = {
 };
 const fields = {
   llm: ['base_url', 'model', 'api_key_env', 'effort', 'effort_override', 'context_max', 'profile', 'api_key_optional', 'provider', 'request_timeout_ms', 'served_model_label'],
-  planner: ['turn_budget'],
+  planner: ['turn_budget', 'critic_profile'],
   seat: ['id', 'principal', 'turn_budget', 'tools', 'context_chars', 'scope_expansion'],
   paths: ['memory', 'skills', 'asks', 'worktrees'],
   publish: ['enabled'],
@@ -275,6 +275,9 @@ export function parseConfig(source) {
     ? integerValue(planner.turn_budget, 'planner.turn_budget') : 1;
   if (planner.turn_budget < 1 || planner.turn_budget > 10000) {
     invalid('planner.turn_budget must be between 1 and 10000');
+  }
+  if (planner.critic_profile !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(planner.critic_profile)) {
+    invalid('planner.critic_profile must name a fleet profile');
   }
   if (roots.has('loop')) {
     config.loop.turns = integerValue(config.loop.turns, 'loop.turns');

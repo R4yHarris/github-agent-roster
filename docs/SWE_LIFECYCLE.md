@@ -95,6 +95,39 @@ write if it no longer holds. A hand-written TASK.md without a Design is still
 accepted. The reviewer reports drift from the Design. Docs-only slices have no
 Design.
 
+### Plan critic
+
+Before a slice enters the coder, the harness critiques TASK.md, including reused
+and explicitly accepted handoffs (FEATURE_SPEC
+sections 5.3 and 5.5). The cheap deterministic pass reuses the tracked symbol
+index and checks for ungrounded citations, duplicate Design exports, undeclared
+missing allow-list files, and explicit assertions that an existing named test
+already exists/passes. A test name is not proof that the requested behavior is
+already implemented: ordinary instructions to extend an existing test are not
+flagged. New paths must be declared in Design's New exports or a `## New files`
+list before Files allowed/Ask. Wildcard scope retains its existing semantics.
+
+If defects exist and an LLM planner is configured, it receives exactly one
+critic revision, without app-code or artifact-write tools. The harness validates
+that the Ask is unchanged and scope has not widened before writing planning
+artifacts. Remaining defects are placed in `## Critic notes` for coder/reviewer
+visibility; they are advisory, not an unbounded replanning loop. Structural plan
+validation and protected-surface gates remain authoritative. Stub runs annotate
+defects without contacting a model.
+
+An optional `planner.critic_profile` names a fleet profile for a second,
+read-only model pass. It must differ from the planner's profile and endpoint/model
+pair; missing or non-independent profiles fail explicitly. No profile is chosen
+silently. The critic receives the unchanged Ask/checks/Design and bounded real
+definitions, has an empty tool list, and returns only
+`{"defects":[{"check":1,"problem":"...","fix":"..."}]}` (null for plan-wide defects).
+At most eight model findings, 240 characters per problem/fix, a 600-token
+completion cap, and no length-expansion retry. Malformed output or endpoint
+failure stops explicitly, never masquerading as an empty successful critique.
+Response-backed critic passes and the planner revision are journaled separately;
+they never replace the original planner's measured model or usage. Standalone
+coder tasks without a planner retain their existing Git-independent path.
+
 ### Field contracts
 
 The coder's context also gets a `## Field contracts` section

@@ -531,8 +531,14 @@ export async function createTools({
   initialScopeFiles = [],
   initialRepairFiles = [],
   requiredReads = [],
+  initialPlannerArtifacts = {},
 } = {}) {
   if (!['planner', 'coder'].includes(seat)) throw new TypeError('Only planner and coder seats have file tools');
+  if (initialPlannerArtifacts === null || typeof initialPlannerArtifacts !== 'object' ||
+      Array.isArray(initialPlannerArtifacts) || Object.entries(initialPlannerArtifacts).some(([name, content]) =>
+        seat !== 'planner' || !plannerArtifacts.includes(name) || typeof content !== 'string')) {
+    throw new TypeError('Initial planner artifacts require scoped text snapshots');
+  }
   if (initialRepairFiles.length && seat !== 'coder') throw new TypeError('Repair scope requires a coder seat');
   if (!Array.isArray(requiredReads) || requiredReads.some((file) => typeof file !== 'string')) {
     throw new TypeError('Required reads must be a list of worktree paths');
@@ -774,6 +780,21 @@ export async function createTools({
   }
 
   const plannerWrites = new Map();
+  for (const [name, content] of Object.entries(initialPlannerArtifacts)) {
+    const { file, relative, normalized } = locate(name, { write: true });
+    await checkComponents(relative);
+    const handle = await fs.open(file, constants.O_RDWR | (constants.O_NOFOLLOW ?? 0));
+    try {
+      const current = await handle.stat();
+      if (!current.isFile() || current.nlink !== 1 || current.size !== Buffer.byteLength(content) ||
+          !Buffer.from(content).equals(await handle.readFile())) {
+        throw new Error('Planning artifact changed after validation');
+      }
+      plannerWrites.set(normalized, { dev: current.dev, ino: current.ino, content: Buffer.from(content) });
+    } finally {
+      await handle.close();
+    }
+  }
   const searchedUrls = new Set();
   // Enforced, not prompted: coders overwrote modules unread and created parallel ones without searching (#284-#286).
   const seenKey = (file) => process.platform === 'win32' ? file.toLowerCase() : file;
