@@ -367,6 +367,24 @@ test('/run --parallel keeps separate child statuses and refuses aggregate public
   }
 });
 
+test('/run --attempts forwards the opt-in and disables shared steering', async () => {
+  let runs = 0;
+  const shell = dispatcher({ services: {
+    runBuiltinIssue: async (_issue, options) => {
+      runs += 1;
+      assert.equal(options.attempts, 2);
+      assert.equal(options.steeringControl, null);
+      return { issue: { number: 42 }, askKind: 'slice' };
+    },
+  } });
+  await shell.dispatch('/run 42 --attempts 2 --saved');
+  assert.equal(runs, 1);
+  for (const args of ['42 --attempts 0', '42 --attempts', '42 --attempts 2 --attempts 3',
+    '42 --attempts 2 --parallel 2', '42 --attempts 2 --confirm', '42 --attempts 2 --plan']) {
+    await assert.rejects(shell.dispatch(`/run ${args}`), /Use \/run N/);
+  }
+});
+
 test('a local ask publishes from its worktree and does not comment on an issue', async () => {
   const worktreePath = join(cwd, '.worktrees', 'local-test');
   const shell = dispatcher({

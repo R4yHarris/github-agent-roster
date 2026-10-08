@@ -37,6 +37,7 @@ test('loads the tracked example when private config is absent', (context) => {
     planner: { turn_budget: 32 },
     seat: {
       id: 'coder', principal: 'coder', turn_budget: 1000, context_chars: 200000, scope_expansion: 3,
+      max_attempts: 3,
       tools: ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text'],
     },
     paths: {

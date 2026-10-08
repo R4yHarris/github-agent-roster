@@ -104,10 +104,11 @@ async function artifact(worktree, name) {
 export async function readLocalRun({ number, cwd = process.cwd(), config, env = process.env, root = repositoryRoot(cwd) }) {
   number = validateIssueNumber(number);
   const task = `issue-${number}`;
-  const worktreePath = path.join(root, config.paths.worktrees, task);
+  const local = await readStatus({ issue: number, offline: true, repoRoot: root, cwd: root, config, env });
+  const { worktreePath } = local;
   await ensureLocalPath(worktreePath, root);
   const registered = (await registeredWorktrees(root)).find((entry) => entry.path && samePath(entry.path, worktreePath));
-  if (!registered || registered.branch !== task) throw new Error('The requested issue worktree is not registered on its isolated branch');
+  if (!registered || registered.branch !== local.branch) throw new Error('The requested issue worktree is not registered on its isolated branch');
   const assignment = await artifact(worktreePath, 'ASSIGNMENT.md');
   const match = assignment && /^# Assignment\n\n- Issue URL: (https:\/\/github\.com\/[^\s]+\/issues\/([1-9]\d*))\n- Issue number: ([1-9]\d*)\n- Title: ([^\n]+)\n\n(?:- Wave: ([1-8])\n\n)?## Ask\n\n([\s\S]+)$/.exec(assignment);
   if (!match || Number(match[2]) !== number || Number(match[3]) !== number) throw new Error('Local assignment does not match the requested issue');
@@ -115,7 +116,6 @@ export async function readLocalRun({ number, cwd = process.cwd(), config, env = 
   const { ask, metadata } = parseIssueBody(body);
   const issue = { number, title: match[4], body, url: match[1], state: 'UNKNOWN',
     ...(match[5] ? { labels: [{ name: `wave:${match[5]}` }] } : {}) };
-  const local = await readStatus({ issue: number, offline: true, repoRoot: root, cwd: root, config, env });
   const review = await readPreviousReview(worktreePath);
   const result = await artifact(worktreePath, 'RESULT.md');
   const verdict = /^Verdict: (pass|fail)$/m.exec(review ?? '')?.[1] ?? null;
@@ -125,7 +125,8 @@ export async function readLocalRun({ number, cwd = process.cwd(), config, env = 
   const planMode = askKind === 'slice' && local.artifacts['PLAN.md'] && !local.artifacts['TASK.md'] &&
     !local.artifacts['RECIPE.yml'];
   if (planMode) validatedPlanTask(await artifact(worktreePath, 'PLAN.md'), ask, issue.title);
-  return { ...local, issue, ask, metadata, repoRoot: root, worktreePath, task, session: `roster-${number}-coder`,
+  return { ...local, issue, ask, metadata, repoRoot: root, worktreePath, task,
+    session: local.attempt ? local.lastRun.session : `roster-${number}-coder`,
     assignmentPath: path.join(worktreePath, 'ASSIGNMENT.md'), envPath: path.join(worktreePath, '.env'),
     reused: true, seat: local.runLog?.lastSeat ?? 'coder', state: planMode ? 'planning' : state, reviewVerdict: verdict,
     askKind, ...(planMode ? { planMode: true, planningOnly: true, planPath: path.join(worktreePath, 'PLAN.md') } : {}) };

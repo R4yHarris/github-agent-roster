@@ -16,7 +16,7 @@ export const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 export const IDENTIFIER = /^(?!-$)[A-Za-z0-9._-]{1,64}$/;
 const RUN_FIELDS = [
   'sha', 'session', 'task', 'seat', 'task_class', 'provider', 'model', 'effort',
-  'prompt_tokens', 'completion_tokens', 'context_used', 'context_max', 'context_out', 'excellence', 'defects',
+  'prompt_tokens', 'completion_tokens', 'context_used', 'context_max', 'context_out', 'excellence', 'defects', 'attempt',
 ];
 
 export function isObject(value) {
@@ -58,6 +58,26 @@ export function parseJsonl(text, source, validate, uniqueSha = false) {
     }
     return record;
   });
+}
+
+export function validateAttemptEvidence(value) {
+  const keys = ['batch', 'count', 'index', 'profile', 'hardware', 'gates', 'review', 'changed_lines', 'duration_ms', 'winner'];
+  if (!isObject(value) || Object.keys(value).some((key) => !keys.includes(key)) ||
+      !Number.isSafeInteger(value.count) || value.count < 2 || value.count > 16 ||
+      typeof value.batch !== 'string' || !/^[a-f0-9]{16}$/.test(value.batch) ||
+      !Number.isSafeInteger(value.index) || value.index < 1 || value.index > value.count ||
+      typeof value.profile !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value.profile) ||
+      typeof value.hardware !== 'string' || !value.hardware || value.hardware.length > 120 ||
+      /[\x00-\x1f\x7f]/.test(value.hardware) ||
+      !isObject(value.gates) || Object.keys(value.gates).sort().join(',') !== 'excellence,red_green,shadow,tests' ||
+      Object.values(value.gates).some((gate) => !['pass', 'fail', 'skipped'].includes(gate)) ||
+      !['pass', 'fail', 'escalate', 'unavailable'].includes(value.review) ||
+      !Number.isSafeInteger(value.changed_lines) || value.changed_lines < 0 ||
+      !Number.isSafeInteger(value.duration_ms) || value.duration_ms < 0 ||
+      !Number.isSafeInteger(value.winner) || value.winner < 0 || value.winner > value.count) {
+    throw new TypeError('Invalid bounded attempt evidence');
+  }
+  return value;
 }
 
 function validateLocalRun(record, source) {
@@ -107,6 +127,7 @@ function validateLocalRun(record, source) {
       (!isObject(record.excellence) || typeof record.excellence.pass !== 'boolean')) {
     throw new Error(`${source}: excellence must be pass, fail, or a report with boolean pass`);
   }
+  if (record.attempt !== undefined) validateAttemptEvidence(record.attempt);
   if (record.defects != null && (!Array.isArray(record.defects) ||
       record.defects.some((reason) => typeof reason !== 'string' || !reason.trim() ||
         /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(reason)))) {
@@ -291,6 +312,16 @@ export function loadLearning({ cwd = process.cwd(), readFile = readFileSync } = 
   const status = statSync(evalsFile, { throwIfNoEntry: false });
   if (status && !status.isFile()) throw new Error(`${evalsFile} must be a JSONL file`);
   return { runs, evaluations: status ? read(evalsFile, validateLocalEvaluation) : [] };
+}
+
+export function selectedAttemptRecord(runs, task) {
+  const latest = runs.findLast((record) => record.task === task);
+  const decision = latest?.attempt ?? runs.findLast((record) =>
+    record.task === task && record.session === latest?.session && record.attempt)?.attempt;
+  if (!decision) return null;
+  return runs.findLast((record) => record.task === task && record.attempt?.batch === decision.batch &&
+    record.attempt.index === (decision.winner || decision.index) &&
+    record.attempt.winner === decision.winner) ?? null;
 }
 
 function knownFields(record) {

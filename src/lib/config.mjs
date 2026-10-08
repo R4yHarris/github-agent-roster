@@ -20,7 +20,7 @@ const defaultProfiles = {
 const fields = {
   llm: ['base_url', 'model', 'api_key_env', 'effort', 'effort_override', 'context_max', 'profile', 'api_key_optional', 'provider', 'request_timeout_ms', 'served_model_label'],
   planner: ['turn_budget', 'critic_profile'],
-  seat: ['id', 'principal', 'turn_budget', 'tools', 'context_chars', 'scope_expansion'],
+  seat: ['id', 'principal', 'turn_budget', 'tools', 'context_chars', 'scope_expansion', 'max_attempts'],
   paths: ['memory', 'skills', 'asks', 'worktrees'],
   publish: ['enabled'],
   tools: ['internet', 'run_test'],
@@ -170,7 +170,7 @@ export function parseConfig(source) {
       ['llm', 'seat', 'paths'].some((name) =>
         !roots.has(name) || fields[name].some((field) =>
           !(name === 'llm' && ['profile', 'api_key_optional', 'provider', 'request_timeout_ms', 'effort_override', 'served_model_label'].includes(field)) &&
-          !(name === 'seat' && ['context_chars', 'scope_expansion'].includes(field)) && !Object.hasOwn(config[name], field))) ||
+          !(name === 'seat' && ['context_chars', 'scope_expansion', 'max_attempts'].includes(field)) && !Object.hasOwn(config[name], field))) ||
       (roots.has('planner') && !Object.hasOwn(config.planner, 'turn_budget'))) {
     invalid('schema, llm, seat, paths, and optional planner must contain every documented field');
   }
@@ -284,6 +284,8 @@ export function parseConfig(source) {
     if (config.loop.turns < 1 || config.loop.turns > 10000) invalid('loop.turns must be between 1 and 10000');
     seat.turn_budget = config.loop.turns;
   }
+  seat.max_attempts = seat.max_attempts === undefined ? 3 : integerValue(seat.max_attempts, 'seat.max_attempts');
+  if (seat.max_attempts < 1 || seat.max_attempts > 16) invalid('seat.max_attempts must be between 1 and 16');
   if (roots.has('context')) {
     config.context.budget = integerValue(config.context.budget, 'context.budget');
     if (config.context.budget < 1) invalid('context.budget must be positive');
