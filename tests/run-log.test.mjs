@@ -15,6 +15,29 @@ function fixture(t) {
 
 const config = { llm: { base_url: '', model: '' } };
 
+test('explicit re-review continues its pipeline without carrying old gates or hardware', async (t) => {
+  const options = fixture(t);
+  const logger = await createRunLog({ ...options, previousDelivery: {
+    coder: { id: 'original', attempt: 2, hardware: 'coder GPU', duration_ms: 1000 },
+    reviewer: { id: 'original', attempt: 1, review_verdict: 'fail',
+      gates: { 'verifying-reviewer': { checks: 1, failures: 1 } } },
+  } });
+  await logger.seat('reviewer', 'roster-42-reviewer', config, async () => ({
+    completed: true, verdict: 'pass',
+  }));
+  const review = logger.delivery('reviewer');
+  assert.equal(review.id, 'original');
+  assert.equal(review.attempt, 2);
+  assert.equal(review.review_verdict, 'pass');
+  assert.deepEqual(review.gates, {});
+  assert.equal(review.hardware, undefined);
+  for (const previousDelivery of [[], { invalid: { id: 'original', attempt: 1 } },
+    { reviewer: { id: 'original', attempt: 0 } },
+    { coder: { id: 'one', attempt: 1 }, reviewer: { id: 'two', attempt: 1 } }]) {
+    await assert.rejects(createRunLog({ ...options, previousDelivery }), /delivery|seat|pipeline/);
+  }
+});
+
 test('delivery snapshots retain monotonic seat timing and gate failures across successful repairs', async (t) => {
   const options = fixture(t);
   let ticks = 0;

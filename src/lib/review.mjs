@@ -44,7 +44,8 @@ export async function runOnlyReview(run, {
   const coderResult = { ...run.result, excellence };
   const session = run.sessions?.reviewer ?? `roster-${randomBytes(8).toString('hex')}-reviewer`;
   const logger = await createRunLog({ repoRoot: run.repoRoot ?? worktree, session, env, debug,
-    issue: run.issue?.number ?? null, errorOutput, observe: onRunEvent });
+    issue: run.issue?.number ?? null, errorOutput, observe: onRunEvent,
+    previousDelivery: run.delivery });
   const review = await logger.seat('reviewer', session, config, async (onEvent) => (await import('../seats/reviewer.mjs')).runReviewer({
     worktree, repoRoot, config, coderResult, env, fetchImpl, vault, signal, onEvent, askKind: run.askKind ?? 'slice',
   }));

@@ -198,6 +198,10 @@ wins). Rerunning an issue is a new pipeline, not a fabricated continuation of
 an older timeline. Hardware is the selected profile's declaration at execution
 time, redacted before storage, never inferred from model names or today's fleet.
 Standalone and historical runs without that binding report `unknown`.
+An explicit `/review --again` on an in-memory completed run retains that pipeline's
+ID and increments the reviewer attempt. It cannot turn a repaired review into a
+new first-pass success; new gate observations do not reuse the earlier attempt's
+counts. A resumed legacy run without pipeline evidence still has unknown history.
 
 | Output | Source and calculation |
 | --- | --- |

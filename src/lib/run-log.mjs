@@ -54,13 +54,24 @@ export async function createRunLog({
   repoRoot, session, env = process.env, apiKeyEnv = 'ROSTER_API_KEY',
   errorOutput = process.stderr, now = () => new Date(), clock = () => performance.now(),
   debug = createDebugLog({ env }), issue = null,
-  observe,
+  observe, previousDelivery = {},
 }) {
   if (typeof repoRoot !== 'string' || typeof errorOutput?.write !== 'function' ||
       typeof now !== 'function' || typeof clock !== 'function') {
     throw new TypeError('Run log requires a repository root, stderr writer, and clocks');
   }
   if (observe !== undefined && typeof observe !== 'function') throw new TypeError('Seat observer must be a function');
+  if (!previousDelivery || typeof previousDelivery !== 'object' || Array.isArray(previousDelivery)) {
+    throw new TypeError('Previous delivery must be a seat evidence map');
+  }
+  for (const [seat, evidence] of Object.entries(previousDelivery)) {
+    if (!seats.includes(seat)) throw new TypeError('Previous delivery names an invalid seat');
+    if (evidence != null) validateDelivery(evidence);
+  }
+  const previous = Object.entries(previousDelivery).filter(([, evidence]) => evidence != null);
+  if (new Set(previous.map(([, evidence]) => evidence.id)).size > 1) {
+    throw new TypeError('Previous delivery seats must belong to one pipeline');
+  }
   const safe = (value) => redactSecrets(value, { env, apiKeyEnv }).replace(/[\x00-\x1f\x7f]/g, '?');
   if (safe(session) !== session) throw new TypeError('Run log session must not contain credentials');
   const file = await logPath(repoRoot, session);
@@ -68,8 +79,8 @@ export async function createRunLog({
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   await ensureLocalPath(file, repoRoot);
   let pending = Promise.resolve();
-  const deliveryId = randomUUID();
-  const deliveries = new Map();
+  const deliveryId = previous[0]?.[1].id ?? randomUUID();
+  const deliveries = new Map(previous.map(([seat, evidence]) => [seat, structuredClone(evidence)]));
 
   function delivery(name, fields = {}) {
     const evidence = deliveries.get(name);
