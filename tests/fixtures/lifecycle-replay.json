@@ -1,0 +1,73 @@
+{
+  "plan": {
+    "title": "Add Status",
+    "acceptance_checks": ["node --test exits 0", "README has a Status section"],
+    "files_allowed": ["README.md", "smoke.test.mjs"]
+  },
+  "responses": {
+    "plan": {"role": "assistant", "content": "$plan"},
+    "write": {
+      "role": "assistant",
+      "tool_calls": [{
+        "id": "save-status",
+        "type": "function",
+        "function": {
+          "name": "write_file",
+          "arguments": "{\"path\":\"README.md\",\"content\":\"# Example\\n\\n## Status\\nActive.\\n\"}"
+        }
+      }]
+    },
+    "done": {"role": "assistant", "content": "Added Status."},
+    "review-fail": {
+      "role": "assistant",
+      "content": "{\"verdict\":\"fail\",\"reasons\":[\"Add a second sentence to Status.\"],\"security_notes\":[],\"checks\":[{\"id\":1,\"met\":true,\"evidence\":\"The harness checks passed.\"},{\"id\":2,\"met\":false,\"evidence\":\"Status needs more detail.\"}]}"
+    },
+    "revise": {
+      "role": "assistant",
+      "tool_calls": [{
+        "id": "revise-status",
+        "type": "function",
+        "function": {
+          "name": "write_file",
+          "arguments": "{\"path\":\"README.md\",\"content\":\"# Example\\n\\n## Status\\nActive. Ready.\\n\"}"
+        }
+      }]
+    },
+    "review": {
+      "role": "assistant",
+      "content": "{\"verdict\":\"pass\",\"reasons\":[],\"security_notes\":[],\"checks\":[{\"id\":1,\"met\":true,\"evidence\":\"The harness checks passed.\"},{\"id\":2,\"met\":true,\"evidence\":\"README contains Status.\"}]}"
+    }
+  },
+  "scenarios": [
+    {
+      "name": "accepted",
+      "steps": [["planner", "plan"], ["coder", "write"], ["coder", "done"], ["reviewer", "review"]],
+      "tests": ["pass"],
+      "expected": {"requests": 4, "tools": 1, "tests": 1, "repairs": 0, "verdict": "pass"}
+    },
+    {
+      "name": "recovered",
+      "steps": [["planner", "plan"], ["coder", "write"], ["coder", "done"], ["coder", "done"], ["reviewer", "review"]],
+      "tests": ["fail", "pass"],
+      "expected": {"requests": 5, "tools": 1, "tests": 2, "repairs": 1, "verdict": "pass"}
+    },
+    {
+      "name": "review-recovered",
+      "steps": [["planner", "plan"], ["coder", "write"], ["coder", "done"], ["reviewer", "review-fail"], ["coder", "revise"], ["coder", "done"], ["reviewer", "review"]],
+      "tests": ["pass", "pass"],
+      "expected": {"requests": 7, "tools": 2, "tests": 2, "repairs": 0, "reviewRepairs": 1, "verdict": "pass", "readme": "# Example\n\n## Status\nActive. Ready.\n"}
+    },
+    {
+      "name": "all-fail",
+      "steps": [["planner", "plan"], ["coder", "done"], ["coder", "done"], ["coder", "done"], ["coder", "done"], ["coder", "done"], ["coder", "done"], ["coder", "done"], ["coder", "done"], ["coder", "done"]],
+      "tests": ["fail", "fail", "fail", "fail", "fail", "fail", "fail", "fail", "fail"],
+      "expected": {"requests": 10, "tools": 0, "tests": 9, "error": "Test repair stalled"}
+    },
+    {
+      "name": "cancelled",
+      "steps": [["planner", "plan"], ["coder", "cancel"]],
+      "tests": [],
+      "expected": {"requests": 2, "tools": 0, "tests": 0, "error": "cancel"}
+    }
+  ]
+}
