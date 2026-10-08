@@ -57,6 +57,22 @@ route selector as an opted-in run and print the chosen model, profile,
 history only and never fetch leaderboard scores or PR evaluations.
 Without a requested difficulty, the routing baseline is 2.
 
+Each selected route also explains local human evidence by model, seat, task
+class, and effort: distinct sample count, accepted/derived-rejected counts,
+acceptance rate, latest known evaluation timestamp, and age in whole days.
+The `origin` is `local-human-evaluations` or `none`; `source` still tells whether
+the decision used evaluations or a capability prior/fleet hint. A recorded
+defect still derives a reject without rewriting the human verdict.
+
+No samples means an **unknown** acceptance rate, not measured zero. Fewer
+than three samples or insufficient median rated difficulty emits an
+`insufficient-qualifying-evidence` warning; effort groups and seats never pool
+to meet the threshold. Missing/invalid/future timestamps leave recency unknown.
+Recency is descriptive only: this change adds no stale-sample cutoff or ranking
+weight. It does not infer hardware, token usage, throughput, or quality scores,
+probe endpoints, or change saved configuration. This implements FEATURE_SPEC
+sections 5.2 and 5.6 while respecting sections 3 and 7.
+
 When no profile qualifies, output reports insufficient data and the saved
 configuration default as information, **not** an automatic fleet choice.
 Stats and the internal learning helper still expose evidence for other

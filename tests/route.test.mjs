@@ -137,6 +137,8 @@ test('CLI recommend prints the same read-only choice as route.mjs without changi
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, formatRoute(choice, 'fix', parseConfig(example)));
+  assert.match(result.stdout, /origin=local-human-evaluations n=3 accepted=3 rejected=0/);
+  assert.match(result.stdout, /latest=unknown age-days=unknown warning=none/);
   assert.equal(readFileSync(join(cwd, '.roster', 'config.yml'), 'utf8'), example);
 });
 
