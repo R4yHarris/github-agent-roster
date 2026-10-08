@@ -173,6 +173,25 @@ async function git(worktree, args, env = process.env) {
   return stdout;
 }
 
+// A worktree whose Git registration was removed resolves to the parent checkout and lists no files,
+// so seats would plan or edit without repository grounding; fail before any seat runs.
+export async function requireWorktreeCheckout(worktree, env = process.env) {
+  let top;
+  try {
+    top = (await git(worktree, ['rev-parse', '--show-toplevel'], env)).trim();
+  } catch (error) {
+    throw new Error(`Worktree ${worktree} is not a Git checkout; remove it and rerun.`, { cause: error });
+  }
+  const normalize = async (value) => {
+    const real = await fs.realpath(value).catch(() => path.resolve(value));
+    return process.platform === 'win32' ? real.toLowerCase() : real;
+  };
+  if (!top || await normalize(top) !== await normalize(worktree)) {
+    throw new Error(`Worktree ${worktree} is not a registered Git worktree (Git resolves it to ${top || 'nothing'}); ` +
+      'remove the directory and rerun so Roster can recreate it.');
+  }
+}
+
 // Diff summary of reviewed files; `git diff HEAD` omits untracked files, so new files are listed too.
 export async function reviewedDiffStat(worktree, files, env = process.env) {
   if (!files.length) return '';
@@ -793,6 +812,7 @@ async function runBuiltinAssignment(issueNumber, {
   const reference = prepared.local ? `local:${prepared.task}` : `issue:${prepared.issue.number}`;
   const sessionPrefix = prepared.local ? `roster-${prepared.task}` : `roster-${prepared.issue.number}`;
   const { worktreePath } = prepared;
+  await requireWorktreeCheckout(worktreePath, env);
   let classification = classifyAsk(prepared.ask, { title: prepared.issue.title });
   let activeConfig = config;
   let autoRecommendation = null;
