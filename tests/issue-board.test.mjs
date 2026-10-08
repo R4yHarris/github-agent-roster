@@ -96,25 +96,6 @@ test('App comments with PR URL, model, and AI-Run without closing the open issue
     ...fixture(t), issue, pullNumber: 7, model, runLine, fetchImpl,
   });
 
-  test('confirmed publication returns only real GitHub delivery timestamps for local caching', async (t) => {
-    const { fetchImpl } = githubResponses({
-      createdAt: '2026-01-01T00:00:00Z', mergedAt: '2026-01-01T00:30:00Z',
-    });
-    const result = await commentMergedIssue({
-      ...fixture(t), issue, pullNumber: 7, model, runLine, fetchImpl,
-    });
-    assert.deepEqual(result.deliveryTimestamps, {
-      ask_created_at: '2026-01-01T00:00:00.000Z', pr_merged_at: '2026-01-01T00:30:00.000Z',
-    });
-    for (const fields of [{ createdAt: 'yesterday', mergedAt: 'not-a-date' },
-      { createdAt: '2026-01-01T01:00:00Z', mergedAt: '2026-01-01T00:00:00Z' }]) {
-      const response = githubResponses(fields);
-      await assert.rejects(commentMergedIssue({
-        ...fixture(t), issue, pullNumber: 7, model, runLine, fetchImpl: response.fetchImpl,
-      }), /timestamp|merge before/);
-      assert.ok(!response.calls.some(({ route }) => route.endsWith('/comments')));
-    }
-  });
   assert.deepEqual(result, { issueNumber: 42, pullNumber: 7, commentId: 55, issueState: 'open' });
   assert.deepEqual(calls.map(({ route, method }) => `${method} ${route}`), [
     'GET /repos/example/project/installation',
@@ -124,6 +105,26 @@ test('App comments with PR URL, model, and AI-Run without closing the open issue
     'POST /repos/example/project/issues/42/comments',
     'DELETE /installation/token',
   ]);
+});
+
+test('confirmed publication returns only real GitHub delivery timestamps for local caching', async (t) => {
+  const { fetchImpl } = githubResponses({
+    createdAt: '2026-01-01T00:00:00Z', mergedAt: '2026-01-01T00:30:00Z',
+  });
+  const result = await commentMergedIssue({
+    ...fixture(t), issue, pullNumber: 7, model, runLine, fetchImpl,
+  });
+  assert.deepEqual(result.deliveryTimestamps, {
+    ask_created_at: '2026-01-01T00:00:00.000Z', pr_merged_at: '2026-01-01T00:30:00.000Z',
+  });
+  for (const fields of [{ createdAt: 'yesterday', mergedAt: 'not-a-date' },
+    { createdAt: '2026-01-01T01:00:00Z', mergedAt: '2026-01-01T00:00:00Z' }]) {
+    const response = githubResponses(fields);
+    await assert.rejects(commentMergedIssue({
+      ...fixture(t), issue, pullNumber: 7, model, runLine, fetchImpl: response.fetchImpl,
+    }), /timestamp|merge before/);
+    assert.ok(!response.calls.some(({ route }) => route.endsWith('/comments')));
+  }
 });
 
 test('merged issue comments use the complete measured object and omit unknown counts and capacity', async (t) => {
