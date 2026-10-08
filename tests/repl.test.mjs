@@ -122,6 +122,7 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
       },
       summarizeMetrics: (records) => records,
       formatMetrics: () => 'No AI-Run records found.\n',
+      listFailureProposals: async () => [],
       loadAvailableMetrics: () => {
         calls.push(['recommend-metrics']);
         return [];

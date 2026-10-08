@@ -95,6 +95,40 @@ a secret-path or policy touch remains a reject for recommendations even if a
 human later records `accept`. The human evaluation itself is not rewritten.
 Passing the gate still requires a human `roster eval` to establish acceptance.
 
+## Recurring failure proposals
+
+Run `roster learn --recurring` (or `/learn --recurring`) to inspect local run
+and human-evaluation history without contacting a model or GitHub. The pure
+`failureSignatures(records)` helper groups defects by gate name and normalized
+reason: quoted identifiers, named exports, camel/snake-case symbols, file paths, and numeric
+values become placeholders. Different gate names and materially different
+reason text remain separate. Three distinct slice/seat identities are required;
+repeated snapshots, repairs, or multiple candidates for one slice do not inflate
+the threshold. Rejected/reworked human comments can supply a review signature;
+latest human corrections retain their existing precedence.
+
+The command writes `.roster/proposals/<gate>-<signature-hash>.md` containing
+the normalized failure, cited issue/task/session/model/seat occurrences, a
+proposed evidence-check rule, and a skill or principal target. Policy/scope/
+secret/permission failures target a principal; other failures target a skill.
+These are **drafts for human review**, not active instructions. History text is
+redacted and escaped, and never executed. Unknown model or issue values remain
+unknown. This traces to FEATURE_SPEC section 5.6 and lifecycle step 12.
+
+Existing drafts, including human edits, are preserved on reruns rather than
+overwritten. Their evidence is a snapshot at creation, not a live report.
+Malformed history, unsafe paths, symlinks, and hard-linked drafts fail explicitly.
+No proposals directory is created when no signature meets the threshold.
+`roster stats` and `/stats` list pending draft filenames; an empty proposal list
+does not change their existing output.
+
+Review the cited failures, refine the proposed rule, then **manually** promote
+it into the appropriate skill packet or principal note using the repository's
+customization format. Move promoted or rejected drafts out of the proposals
+directory. The command never edits `skills/`, `principals/`, routing, policy,
+workflows, or the fleet, and cannot grant permissions. A gate failure or
+proposal is never fabricated into a human acceptance/rejection evaluation.
+
 ## Human evaluation
 
 After reviewing the result, a **human** runs:

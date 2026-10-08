@@ -8,6 +8,7 @@ import { isReviewRequired, loadConfig, requirePublicationEnabled, setConfigValue
 import { recordEvaluation } from './lib/eval.mjs';
 import { inferTaskClass, parseRecommendationArgs, repositoryRoot } from './lib/learn.mjs';
 import { formatMetrics, loadAvailableMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
+import { formatFailureProposals, listFailureProposals, proposeRecurringFailures } from './lib/failure-proposals.mjs';
 import { resolveContractsPath, resolveProjectRoot } from './lib/paths.mjs';
 import { formatRoute, routeTask } from './lib/route.mjs';
 import {
@@ -103,6 +104,7 @@ const defaultServices = {
   prepareBuiltinPublication: lazy('./lib/builtin.mjs', 'prepareBuiltinPublication'),
   recordEvaluation, repositoryRoot, loadMetrics,
   summarizeMetrics, formatMetrics, loadAvailableMetrics, routeTask, formatRoute,
+  formatFailureProposals, listFailureProposals, proposeRecurringFailures,
   resolveContractsPath, createFileVault,
   validateSecretName, readStatus, formatStatus, setConfigValue,
   publicationTask,
@@ -1012,6 +1014,15 @@ export function createDispatcher({
       case 'stats': {
         if (args && /\s/.test(args)) throw new TypeError('Use /stats [REF].');
         output.write(api.formatMetrics(api.summarizeMetrics(metrics(args))));
+        output.write(api.formatFailureProposals(await api.listFailureProposals({ cwd: currentRoot() })));
+        return true;
+      }
+      case 'learn': {
+        if (args !== '--recurring') throw new TypeError('Use /learn --recurring.');
+        const result = await api.proposeRecurringFailures({ cwd: currentRoot(), env,
+          apiKeyEnv: state.config.llm.api_key_env });
+        output.write(`Recurring failures: ${result.created.length} draft proposals created; ` +
+          `${result.existing.length} existing drafts preserved. Human review required.\n`);
         return true;
       }
       case 'recommend': {
