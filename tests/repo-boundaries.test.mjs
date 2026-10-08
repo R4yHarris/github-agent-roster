@@ -65,12 +65,16 @@ test('.gitignore covers all runtime state paths while tracked templates/docs sta
   await git(root, 'add', '.github', 'docs');
   await git(root, 'commit', '-m', 'templates');
 
-  // Every runtime path that must stay untracked (a subset of the guard list).
+  // Every runtime path that must stay untracked (a subset of the guard list),
+  // plus private setup files that are ignored by default until a contributor
+  // deliberately tracks shared setup.
   const runtimePaths = [
     `${LEGACY_STATE_DIRNAME}/runs/`,
     `${LEGACY_STATE_DIRNAME}/logs/`,
     `${LEGACY_STATE_DIRNAME}/history`,
     `${LEGACY_STATE_DIRNAME}/checkpoints/`,
+    `${LEGACY_STATE_DIRNAME}/locks/`,
+    `${LEGACY_STATE_DIRNAME}/locks/issue-7.lock`,
     `${LEGACY_STATE_DIRNAME}/map.md`,
     `${LEGACY_STATE_DIRNAME}/config.yml`,
     `${LEGACY_STATE_DIRNAME}/fleet.yml`,
@@ -109,6 +113,8 @@ test('.gitignore covers all runtime state paths while tracked templates/docs sta
   // Plant runtime state and confirm git sees nothing new to add.
   mkdirSync(join(root, LEGACY_STATE_DIRNAME, 'runs'), { recursive: true });
   writeFileSync(join(root, LEGACY_STATE_DIRNAME, 'runs', 'run.log'), 'log\n');
+  mkdirSync(join(root, LEGACY_STATE_DIRNAME, 'locks'), { recursive: true });
+  writeFileSync(join(root, LEGACY_STATE_DIRNAME, 'locks', 'issue-7.lock'), '{"holder":"seat"}\n');
   writeFileSync(join(root, LEGACY_STATE_DIRNAME, 'history'), 'history\n');
   writeFileSync(join(root, LEGACY_STATE_DIRNAME, 'config.yml'), 'llm: {}\n');
   const { stdout: staged } = await git(root, 'add', '-A', '--dry-run');
@@ -122,17 +128,67 @@ test('a staged runtime state file fails the commit-scope check', async (t) => {
   const shippedIgnore = await fs.readFile(new URL('../.gitignore', import.meta.url), 'utf8');
   await fs.writeFile(join(root, '.gitignore'), shippedIgnore, 'utf8');
 
-  // A runtime state file sneaks into the index (simulating a forced add).
-  mkdirSync(join(root, LEGACY_STATE_DIRNAME), { recursive: true });
-  writeFileSync(join(root, LEGACY_STATE_DIRNAME, 'config.yml'), 'llm: {}\n');
-  execFileSync('git', ['add', '--force', join(LEGACY_STATE_DIRNAME, 'config.yml')], { cwd: root });
+  // A runtime lock sneaks into the index (simulating a forced add).
+  const lockFile = `${LEGACY_STATE_DIRNAME}/locks/issue-7.lock`;
+  mkdirSync(join(root, LEGACY_STATE_DIRNAME, 'locks'), { recursive: true });
+  writeFileSync(join(root, lockFile), '{"holder":"seat","pid":1}\n');
+  execFileSync('git', ['add', '--force', lockFile], { cwd: root });
   const { stdout: staged } = await git(root, 'ls-files', '--', `${LEGACY_STATE_DIRNAME}/`);
-  assert.ok(staged.includes('config.yml'), 'precondition: runtime file is staged');
+  assert.ok(staged.includes('issue-7.lock'), 'precondition: runtime lock is staged');
 
-  // The guard must fail on staged runtime state, and pass once it is untracked.
-  await assert.rejects(checkStagedRuntimeState({ repoRoot: root }), /runtime state/i);
-  await git(root, 'rm', '--cached', '--', `${LEGACY_STATE_DIRNAME}/config.yml`);
+  // The guard must fail on the staged lock, and pass once it is untracked.
+  await assert.rejects(checkStagedRuntimeState({ repoRoot: root }), (error) => {
+    assert.match(error.message, /runtime state/i);
+    assert.deepEqual(error.paths, [lockFile]);
+    return true;
+  });
+  await git(root, 'rm', '--cached', '--', lockFile);
   await assert.doesNotReject(checkStagedRuntimeState({ repoRoot: root }));
+});
+
+test('tracked contributor setup under .roster passes the commit-scope guard', async (t) => {
+  const root = tmp('roster-setup-');
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  await initRepo(root, { remote: 'https://example.invalid/owner/setup.git' });
+  const shippedIgnore = await fs.readFile(new URL('../.gitignore', import.meta.url), 'utf8');
+  await fs.writeFile(join(root, '.gitignore'), shippedIgnore, 'utf8');
+
+  // Shared contributor setup a repository chooses to commit. Config and fleet
+  // are ignored by default for private local copies, so tracking them is a
+  // deliberate forced add; once tracked they must never be denied.
+  const setup = {
+    [`${LEGACY_STATE_DIRNAME}/config.yml`]: 'llm:\n  api_key_env: ROSTER_TEST_SECRET\n',
+    [`${LEGACY_STATE_DIRNAME}/fleet.yml`]: 'profiles: {}\n',
+    [`${LEGACY_STATE_DIRNAME}/capabilities.yml`]: 'seats: {}\n',
+    [`${LEGACY_STATE_DIRNAME}/skills/review/SKILL.md`]: '# review\n',
+    [`${LEGACY_STATE_DIRNAME}/recipes/default.yml`]: 'seats: [planner, coder, reviewer]\n',
+    [`${LEGACY_STATE_DIRNAME}/docs/SETUP.md`]: '# setup\n',
+  };
+  for (const [file, source] of Object.entries(setup)) {
+    mkdirSync(join(root, file, '..'), { recursive: true });
+    writeFileSync(join(root, file), source);
+  }
+  await git(root, 'add', '--force', '--', ...Object.keys(setup));
+  await git(root, 'add', '.gitignore');
+  await git(root, 'commit', '-m', 'shared roster setup');
+
+  const result = await checkRosterScope({ repoRoot: root });
+  assert.equal(result.ok, true, 'tracked shared setup is not runtime state');
+  const { stdout: tracked } = await git(root, 'ls-files', '--', `${LEGACY_STATE_DIRNAME}/`);
+  assert.deepEqual(tracked.trim().split('\n').sort(), Object.keys(setup).sort(),
+    'every shared setup file stays tracked');
+
+  // Runtime state beside that setup is still refused once staged.
+  const lockFile = `${LEGACY_STATE_DIRNAME}/locks/issue-7.lock`;
+  mkdirSync(join(root, LEGACY_STATE_DIRNAME, 'locks'), { recursive: true });
+  writeFileSync(join(root, lockFile), '{"holder":"seat"}\n');
+  const { stdout: wouldAdd } = await git(root, 'add', '-A', '--dry-run');
+  assert.equal(wouldAdd, '', 'a runtime lock is ignored next to tracked setup');
+  await git(root, 'add', '--force', lockFile);
+  await assert.rejects(checkRosterScope({ repoRoot: root }), (error) => {
+    assert.deepEqual(error.paths, [lockFile]);
+    return true;
+  });
 });
 
 test('the shipped .gitignore passes the ignore-coverage guard', async () => {

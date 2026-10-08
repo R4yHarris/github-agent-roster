@@ -303,6 +303,36 @@ test('validateProvenanceRecord accepts valid and rejects malformed/incompatible 
   assert.equal(validateProvenanceRecord({ id: 'bad\nid', version: RECORD_VERSION }).ok, false);
 });
 
+test('schema-major incompatibility and body snapshots are rejected and quarantined without losing neighbors', async (t) => {
+  const root = await makeStoreRoot();
+  t.after(() => cleanup(root));
+  const store = openProvenanceStore(root);
+  const compatible = record('compatible', { schemaVersion: '1.8.2', extra: { future: true } });
+  await store.appendRecord(compatible);
+  const invalid = [
+    record('future-major', { schemaVersion: '99.0.0' }),
+    record('old-major', { schemaVersion: '0.1.0' }),
+    record('bad-version', { schemaVersion: 'not-semver' }),
+    record('missing-version', { recordType: 'provenance' }),
+    record('source-body', { payload: { evidence: { source: 'PROTECTED_BODY_FIXTURE_195' } } }),
+    record('prompt-body', { payload: { prompt: 'PROTECTED_BODY_FIXTURE_195' } }),
+  ];
+  for (const value of invalid) {
+    await assert.rejects(() => store.appendRecord(value), { code: 'E_INVALID_RECORD' });
+    await fs.writeFile(join(root, LOG_DIRNAME, `${value.id}.json`), JSON.stringify(value));
+  }
+  const before = await store.readAll();
+  assert.equal(before.skipped.length, invalid.length);
+  assert.deepEqual(before.records, [compatible]);
+  const repaired = await store.repair();
+  assert.equal(repaired.quarantined.length, invalid.length);
+  assert.deepEqual(await store.readAll(), { records: [compatible], skipped: [] });
+  for (const entry of repaired.quarantined) {
+    const original = invalid.find((value) => value.id === entry.recordId);
+    assert.deepEqual(JSON.parse(await fs.readFile(entry.to, 'utf8')), original);
+  }
+});
+
 test('withLock releases the store lock on failure, so the store stays usable', async (t) => {
   const root = await makeStoreRoot();
   t.after(() => cleanup(root));
