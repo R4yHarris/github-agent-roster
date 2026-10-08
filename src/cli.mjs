@@ -21,7 +21,7 @@ const help = `Usage:
   roster fleet default ID
   roster fleet remove ID
   roster ask "..."
-  roster run --issue N [--runtime builtin] [--auto-model] [--seats planner,coder,reviewer] [--parallel K] [--saved] [--publish] [--skip-review] [--confirm] [--plan]
+  roster run --issue N [--runtime builtin] [--auto-model] [--seats planner,coder,reviewer] [--parallel K] [--attempts K] [--saved] [--publish] [--skip-review] [--confirm] [--plan]
   roster run --seat coder --runtime builtin
   roster prepare --issue N
   roster run --ask-file PATH --runtime builtin
@@ -32,6 +32,7 @@ const help = `Usage:
   roster status [--issue N] [--offline]
   roster recipe validate PATH
   roster stats [--delivery [--json]] [--ref REVISION_OR_RANGE] [--evals PATH]
+  roster learn --recurring
   roster vault set NAME
   roster vault list
   roster vault get NAME
@@ -146,6 +147,7 @@ async function main(args) {
     if (options.issue === undefined) await runBuiltinTask({ repoRoot: rosterRoot, debug });
     else {
       const result = await runBuiltinIssue(options.issue, { publish: options.publish, seats: options.seats,
+        attempts: options.attempts, parallel: options.parallel,
         skipReview: options.skipReview,
         confirm: options.confirm,
         planMode: options.plan,
@@ -186,21 +188,33 @@ async function main(args) {
     if (names.length) process.stdout.write(`${names.join('\n')}\n`);
   } else if (args.length === 3 && args[0] === 'vault' && args[1] === 'get') {
     await getVaultSecret(args[2]);
+  } else if (args[0] === 'learn') {
+    if (args.length !== 2 || args[1] !== '--recurring') throw new TypeError('Use roster learn --recurring.');
+    const { proposeRecurringFailures } = await import('./lib/failure-proposals.mjs');
+    const { repositoryRoot } = await import('./lib/learn.mjs');
+    const result = await proposeRecurringFailures({ cwd: repositoryRoot() });
+    process.stdout.write(`Recurring failures: ${result.created.length} draft proposals created; ` +
+      `${result.existing.length} existing drafts preserved. Human review required.\n`);
   } else if (args[0] === 'stats') {
     const { formatMetrics, loadMetrics, summarizeMetrics } = await import('./lib/metrics.mjs');
     const { deliveryMetrics, formatDeliveryMetrics, parseStatsOptions } = await import('./lib/delivery-metrics.mjs');
     const { resolveContractsPath } = await import('./lib/paths.mjs');
     const { repositoryRoot } = await import('./lib/learn.mjs');
     const options = parseStatsOptions(args.slice(1));
+    const cwd = repositoryRoot();
     const records = loadMetrics({
       ...options,
       evalsPath: options.evalsPath === undefined ? undefined : resolve(options.evalsPath),
       contractsPath: resolveContractsPath(),
-      cwd: repositoryRoot(),
+      cwd,
     });
     const groups = options.delivery ? deliveryMetrics(records) : summarizeMetrics(records);
     process.stdout.write(options.json ? `${JSON.stringify(groups, null, 2)}\n`
       : options.delivery ? formatDeliveryMetrics(groups) : formatMetrics(groups));
+    if (!options.delivery) {
+      const { listFailureProposals, formatFailureProposals } = await import('./lib/failure-proposals.mjs');
+      process.stdout.write(formatFailureProposals(await listFailureProposals({ cwd })));
+    }
   } else if (args[0] === 'eval') {
     const { parseEvaluationArgs, recordEvaluation } = await import('./lib/eval.mjs');
     const { values, options } = parseEvaluationArgs(args.slice(1));
@@ -295,11 +309,11 @@ async function main(args) {
     const options = {};
     const seen = new Set();
     const usage = 'Use roster run --issue N [--runtime builtin] [--seats planner,coder,reviewer] ' +
-      '[--parallel K] [--saved] [--publish] [--skip-review] [--confirm] [--plan], ' +
+      '[--parallel K] [--attempts K] [--saved] [--publish] [--skip-review] [--confirm] [--plan], ' +
       'or roster run --seat coder --runtime builtin for an existing TASK.md.';
     for (let index = 0; index < args.length; index += 1) {
       const flag = args[index];
-      if (!['--issue', '--seat', '--seats', '--runtime', '--parallel', '--auto-model', '--saved', '--publish', '--skip-review', '--confirm', '--plan'].includes(flag) ||
+      if (!['--issue', '--seat', '--seats', '--runtime', '--parallel', '--attempts', '--auto-model', '--saved', '--publish', '--skip-review', '--confirm', '--plan'].includes(flag) ||
           seen.has(flag)) {
         throw new TypeError(usage);
       }
@@ -313,20 +327,21 @@ async function main(args) {
       else {
         const value = args[++index];
         if (!value || value.startsWith('--')) throw new TypeError(usage);
-        if (flag === '--parallel') {
+        if (flag === '--parallel' || flag === '--attempts') {
           if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) throw new TypeError(usage);
-          options.parallel = Number(value);
+          options[flag.slice(2)] = Number(value);
         } else options[flag.slice(2)] = value;
       }
     }
     if (options.issue === undefined && options.seat === 'coder' && options.runtime === 'builtin' &&
-        options.seats === undefined && options.parallel === undefined && !options.autoModel && !options.publish && !options.skipReview && !options.confirm && !options.plan) return options;
+        options.seats === undefined && options.parallel === undefined && options.attempts === undefined && !options.autoModel && !options.publish && !options.skipReview && !options.confirm && !options.plan) return options;
     if (!options.issue || (options.runtime !== undefined && options.runtime !== 'builtin') ||
         (options.seat !== undefined && options.seat !== 'coder') ||
         (options.seats !== undefined &&
           !['planner,coder', 'planner,coder,reviewer'].includes(options.seats)) ||
         (options.seat !== undefined && options.seats !== undefined) ||
-        options.parallel > 1 && (options.confirm || options.plan)) {
+        options.parallel > 1 && (options.confirm || options.plan) ||
+        options.attempts > 1 && (options.parallel > 1 || options.confirm || options.plan || options.skipReview)) {
       throw new TypeError(usage);
     }
     return { ...options, autoModel: options.saved ? false : options.autoModel !== false, seats: 'planner,coder,reviewer' };

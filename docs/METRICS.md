@@ -22,6 +22,15 @@ or `llm.context_max`; an absent or zero capacity stays unknown. Missing counts
 are omitted, not estimated as zero or 1,000,000. An explicitly reported zero
 is retained. Unknown slots are `-` in the compact line.
 
+Opt-in [best-of-N attempts](MULTIAGENT.md#opt-in-best-of-n-slice-attempts) retain
+each candidate's measured coder model/usage in an eval-ready JSONL record with a
+bounded `attempt` object: batch ID, count/index, declared redacted profile/hardware,
+tests/excellence/red-green/shadow gate outcomes, review verdict, changed lines,
+monotonic duration, and selected winner (`0` means none). Human `roster eval`
+targets the distinct candidate session. Losing gate outcomes never become
+invented human rejection evaluations. Only the winner's actual coder AI-Run is
+published; losing evidence persists after its worktree is removed.
+
 The separate live `.roster/runs/<session>.log` is append-only operational
 activity; plain-language actions (including chosen coder effort) are printed
 to stderr separately. For an issue, one

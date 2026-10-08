@@ -197,7 +197,9 @@ were not run.
 All file tools deny `.env`, `.env.*`, and `*.env` anywhere, `*.pem`, vault
 storage under `.roster/vault`, Git metadata,
 `agent-policy.yml`, `.github/workflows`, or the pinned
-`vendor/github-agent-contracts` dependency. Root `ASSIGNMENT.md`,
+`vendor/github-agent-contracts` dependency. The human-owned
+`.roster/hooks.yml` manifest and `.roster/hooks/` scripts are also denied;
+see [lifecycle hooks](HOOKS.md). Root `ASSIGNMENT.md`,
 `RECIPE.yml`, `TASK.md`, `PLAN.md`, `CONTEXT.md`, `RESEARCH.md`, `ESTIMATE.md`,
 `RESULT.md`, and `REVIEW.md` are managed files that the coder
 cannot rewrite. `list_dir` refuses protected paths and hides their names

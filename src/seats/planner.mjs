@@ -21,6 +21,88 @@ import { selectReasoning } from '../llm/reasoning.mjs';
 import { throwIfCancelled } from '../runtime/cancel.mjs';
 import { planSlice, validatedPlanTask } from '../planner/plan-mode.mjs';
 import { runtimeRecipe } from '../planner/stub.mjs';
+import { critiquePlan } from '../planner/critic.mjs';
+import { requireLifecycleHooks } from '../runtime/hooks.mjs';
+
+export async function critiquePlannerHandoff(plan, {
+  worktree, ask, title, reference, learningRoot, config, env, fetchImpl, vault, onEvent,
+  retryCommand, signal, lockedModel, session, task,
+}) {
+  if (plan.error) return plan;
+  const initialPlannerArtifacts = {};
+  for (const name of ['TASK.md', 'ESTIMATE.md']) {
+    const content = await readArtifact(worktree, name);
+    if (content !== null) initialPlannerArtifacts[name] = content;
+  }
+  if (initialPlannerArtifacts['TASK.md'] !== undefined && initialPlannerArtifacts['TASK.md'] !== plan.task) {
+    throw new Error('TASK changed before plan critique');
+  }
+  const files = await trackedRepositoryFiles(worktree);
+  if (!files) throw new Error('Plan critic could not inspect tracked repository files');
+  const index = await symbolIndex(worktree, files);
+  const testNames = [];
+  for (const file of files.filter((file) => /(?:^tests\/|\.test\.|\.spec\.)/.test(file)).slice(0, 1500)) {
+    const target = path.join(worktree, file);
+    await ensureLocalPath(target, worktree);
+    const entry = await fs.lstat(target);
+    if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1 || entry.size > 256 * 1024) continue;
+    const text = await fs.readFile(target, 'utf8');
+    for (const match of text.matchAll(/\b(?:test|it)\s*\(\s*(['"])([^'"\n]+)\1/g)) testNames.push(match[2]);
+  }
+  const grounding = { index };
+  let chat;
+  const criticResponses = [];
+  let criticConfig;
+  if (config.planner?.critic_profile) {
+    const { loadFleet, withFleetProfile } = await import('../lib/fleet.mjs');
+    const { createBuiltinChat } = await import('../lib/llm.mjs');
+    const fleet = await loadFleet({ cwd: learningRoot });
+    const profile = fleet.profiles.find((entry) => entry.id === config.planner.critic_profile);
+    if (!profile) throw new Error('Plan critic profile is not present in the fleet');
+    if (profile.id === config.llm.fleet_profile ||
+        profile.model === config.llm.model && profile.base_url === config.llm.base_url) {
+      throw new Error('Plan critic requires a different fleet profile and endpoint/model pair from the planner');
+    }
+    const selected = withFleetProfile(config, profile);
+    criticConfig = { ...selected, llm: { ...selected.llm, task_kind: undefined,
+      task_class: undefined, max_tokens: 600, effort: 'none' } };
+    const transport = createBuiltinChat(criticConfig, {
+      fetchImpl, env, vault, signal, onEvent, retryCommand, retryLength: false,
+    });
+    chat = async (request) => {
+      const result = await transport(request);
+      criticResponses.push(transport.lastResponse);
+      return result;
+    };
+  }
+  let revision;
+  const definitions = chat ? (await groundingDefinitions(worktree, files, `${title ?? ''}\n${ask}`)).text : undefined;
+  const critic = await critiquePlan(plan.task, { index, testNames, signal, chat, definitions,
+    revise: config.llm.base_url ? async ({ task, defects }) => {
+      revision = await planAsk(ask, { config, reference, title, learningRoot, env, fetchImpl, vault,
+        onEvent, retryCommand, signal, lockedModel, grounding,
+        metadata: plan.metadata, criticFeedback: { task, defects },
+      });
+      if (revision.error) throw new Error(`Plan critic revision failed: ${revision.error}`);
+      return ensureDesign(revision.task, grounding, `${title ?? ''}\n${ask}`);
+    } : undefined,
+  });
+  critic.runs = criticResponses.map((response, index) => buildRun({ config: criticConfig, response, env: {},
+    task, ...(session ? { session: `${session}-critic-${index + 1}` } : {}) }));
+  if (revision?.response) critic.revisionRun = buildRun({ config, response: revision.response,
+    task, ...(session ? { session: `${session}-revision` } : {}), env });
+  if (!critic.defects.length && !critic.revised) return { ...plan, critic };
+  const tools = await createTools({ worktree, seat: 'planner', env, apiKeyEnv: config.llm.api_key_env, signal,
+    initialPlannerArtifacts });
+  const estimated = await writeEstimate(critic.task, {
+    worktree, learningRoot, config, env, writeArtifact: tools.write_file,
+  });
+  await tools.write_file({ path: 'TASK.md', content: estimated.task });
+  await onEvent?.({ type: 'plan-critic', defects: critic.defects.length, revised: critic.revised });
+  return { ...plan, ...estimated, critic, ...(revision ? {
+    turns: (plan.turns ?? 0) + (revision.turns ?? 0), response: revision.response,
+  } : {}) };
+}
 
 const execFileAsync = promisify(execFile);
 const repositoryFileLimit = 1500;
@@ -174,6 +256,7 @@ export async function runPlanner({
   const kind = askKind ?? classifyAsk(ask, { title }).kind;
   if (!askKinds.includes(kind)) throw new TypeError('Unknown Ask kind');
   if (kind === 'clarify') throw new TypeError(clarificationHint);
+  await requireLifecycleHooks('pre-plan', { worktree, env, apiKeyEnv: config.llm.api_key_env, signal, onEvent });
   config = selectReasoning(config, { kind, taskClass: metadata?.task_class, difficulty: metadata?.difficulty });
   const memoryPath = seatMemoryPath({
     repoRoot, memoryPath: config.paths.memory, seat: 'planner',

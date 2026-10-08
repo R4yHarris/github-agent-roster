@@ -9,6 +9,8 @@ import { recordEvaluation } from './lib/eval.mjs';
 import { inferTaskClass, parseRecommendationArgs, recordDeliveryPublication, repositoryRoot } from './lib/learn.mjs';
 import { formatMetrics, loadAvailableMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
 import { deliveryMetrics, formatDeliveryMetrics, parseStatsOptions } from './lib/delivery-metrics.mjs';
+import { formatFailureProposals, listFailureProposals, proposeRecurringFailures } from './lib/failure-proposals.mjs';
+import { requireLifecycleHooks } from './runtime/hooks.mjs';
 import { resolveContractsPath, resolveProjectRoot } from './lib/paths.mjs';
 import { formatRoute, routeTask } from './lib/route.mjs';
 import {
@@ -104,6 +106,8 @@ const defaultServices = {
   prepareBuiltinPublication: lazy('./lib/builtin.mjs', 'prepareBuiltinPublication'),
   recordEvaluation, repositoryRoot, loadMetrics, recordDeliveryPublication,
   summarizeMetrics, formatMetrics, deliveryMetrics, formatDeliveryMetrics, loadAvailableMetrics, routeTask, formatRoute,
+  formatFailureProposals, listFailureProposals, proposeRecurringFailures,
+  requireLifecycleHooks,
   resolveContractsPath, createFileVault,
   validateSecretName, readStatus, formatStatus, setConfigValue,
   publicationTask,
@@ -341,7 +345,8 @@ export function createDispatcher({
     if (state.controller !== null) throw new Error('A seat is already running; cancel it before starting another.');
     const controller = new AbortController();
     state.controller = controller;
-    state.steeringControl = options.parallel > 1 ? null : createSteeringControl({ signal: controller.signal });
+    state.steeringControl = options.parallel > 1 || options.attempts > 1
+      ? null : createSteeringControl({ signal: controller.signal });
     state.display.waves = [];
     state.queuedInput = [];
     state.pendingConfirm = null;
@@ -800,6 +805,12 @@ export function createDispatcher({
         const issue = /^(?:--issue\s+)?([1-9]\d*)((?:\s+--[a-z-]+(?:\s+[1-9]\d*)?)*)$/.exec(args);
         const flags = issue?.[2].trim().split(/\s+/).filter(Boolean) ?? [];
         let parallel;
+        let attempts;
+        const attemptPosition = flags.indexOf('--attempts');
+        if (attemptPosition !== -1 && /^[1-9]\d*$/.test(flags[attemptPosition + 1] ?? '')) {
+          attempts = Number(flags[attemptPosition + 1]);
+          flags.splice(attemptPosition, 2);
+        }
         const position = flags.indexOf('--parallel');
         if (position !== -1 && /^[1-9]\d*$/.test(flags[position + 1] ?? '')) {
           parallel = Number(flags[position + 1]);
@@ -808,13 +819,16 @@ export function createDispatcher({
         if (!issue || flags.some((flag) => !['--auto-model', '--saved', '--confirm', '--plan'].includes(flag)) ||
             parallel !== undefined && (!Number.isSafeInteger(parallel) ||
               parallel > 1 && (flags.includes('--confirm') || flags.includes('--plan'))) ||
+            attempts !== undefined && (!Number.isSafeInteger(attempts) ||
+              attempts > 1 && (parallel > 1 || flags.includes('--confirm') || flags.includes('--plan'))) ||
             new Set(flags).size !== flags.length) {
-          throw new TypeError('Use /run N [--parallel K] [--saved] [--confirm|--plan].');
+          throw new TypeError('Use /run N [--parallel K] [--attempts K] [--saved] [--confirm|--plan].');
         }
         return runRequest({ kind: 'run', issue: issue[1], options: {
           autoModel: !flags.includes('--saved'), confirm: flags.includes('--confirm'),
           planMode: flags.includes('--plan'),
           ...(parallel === undefined ? {} : { parallel }),
+          ...(attempts === undefined ? {} : { attempts }),
         } });
       }
       case 'status': {
@@ -879,6 +893,11 @@ export function createDispatcher({
       }
       case 'publish': {
         if (state.lastRun?.parallelRun) throw new Error('Parallel runs have separate child worktrees; publish each child through its reviewed App SDK handoff.');
+        if (state.lastRun?.attempt && state.lastRun.attempt.winner !== state.lastRun.attempt.index) {
+          throw new Error('Only the recorded winning attempt may be published; review bypass cannot select a loser');
+        }
+        const attemptEvidence = state.lastRun?.attemptResults
+          ? (await import('./lib/attempts.mjs')).attemptSummary(state.lastRun) : '';
         requirePublicationEnabled(state.config);
         if (state.lastRun?.askKind && state.lastRun.askKind !== 'slice') {
           throw new Error('Planning-only PLAN or clarification is not code to publish; create and run a bounded slice first.');
@@ -920,7 +939,7 @@ export function createDispatcher({
               ? `planner, coder, reviewer (${reviewLabel})`
               : undefined,
             ghcp,
-          });
+          }) + attemptEvidence;
           api.resolveContractsPath({ repoRoot, cwd, env });
           output.write(`From ${state.lastRun?.worktreePath ?? currentRoot()}, publish reviewed changes:\n` +
             `Set these metadata values (empty values clear inherited fields):\n${formatPublishEnvironment(publishEnv)}` +
@@ -939,6 +958,8 @@ export function createDispatcher({
         } else {
           resolvePublishModel({ env, model: requestedModel, ghcp: true });
           publishRoot = currentRoot();
+          await api.requireLifecycleHooks('pre-publish', { worktree: publishRoot, env,
+            apiKeyEnv: state.config.llm.api_key_env });
           contractsPath = api.resolveContractsPath({ repoRoot: publishRoot, cwd, env });
           publishEnv = buildPublishEnv({ config: state.config, env, model: requestedModel,
             task: api.publicationTask({ cwd: publishRoot, env }) });
@@ -957,7 +978,7 @@ export function createDispatcher({
             ? `planner, coder, reviewer (${reviewLabel})`
             : undefined,
           ghcp: !state.lastRun,
-        });
+        }) + attemptEvidence;
         const commentOnIssue = async (pullNumber) => {
           state.published = true;
           if (state.lastRun.local) {
@@ -1004,10 +1025,22 @@ export function createDispatcher({
           const groups = options.delivery ? api.deliveryMetrics(records) : api.summarizeMetrics(records);
           output.write(options.json ? `${JSON.stringify(groups, null, 2)}\n`
             : options.delivery ? api.formatDeliveryMetrics(groups) : api.formatMetrics(groups));
+          if (!options.delivery) {
+            output.write(api.formatFailureProposals(await api.listFailureProposals({ cwd: currentRoot() })));
+          }
           return true;
         }
         if (args && /\s/.test(args)) throw new TypeError('Use /stats [REF].');
         output.write(api.formatMetrics(api.summarizeMetrics(metrics(args))));
+        output.write(api.formatFailureProposals(await api.listFailureProposals({ cwd: currentRoot() })));
+        return true;
+      }
+      case 'learn': {
+        if (args !== '--recurring') throw new TypeError('Use /learn --recurring.');
+        const result = await api.proposeRecurringFailures({ cwd: currentRoot(), env,
+          apiKeyEnv: state.config.llm.api_key_env });
+        output.write(`Recurring failures: ${result.created.length} draft proposals created; ` +
+          `${result.existing.length} existing drafts preserved. Human review required.\n`);
         return true;
       }
       case 'recommend': {

@@ -4,6 +4,7 @@ const page = (name, group, usage, description, example, flags = [], aliases = []
 
 export const commands = Object.freeze([
   page('help', 'Session', '/help [GROUP|COMMAND]', 'Show command groups or a complete command page.', '/help run'),
+  page('learn', 'Human', '/learn --recurring', 'Draft improvement proposals from three recurring slice failures; never installs skills, principals or routing changes.', '/learn --recurring'),
   page('status', 'Session', '/status [N] [--offline]', 'Show cached session fields without a model or GitHub request.', '/status',
     ['--offline: use local cached evidence only']),
   page('history', 'Session', '/history', 'Show the last 20 stored safe commands.', '/history'),
@@ -28,11 +29,12 @@ export const commands = Object.freeze([
     '/ask Add a Status section to README.md.'),
   page('plan', 'Ask', '/plan TEXT', 'Explore read-only and write PLAN.md only; Enter accepts a slice and /stop keeps it without coding.',
     '/plan Add a Status section to README.md.', ['--plan: use /run N --plan for the same gate on an issue']),
-  page('run', 'Ask', '/run N [--parallel K] [--confirm|--plan] [--auto-model]', 'Run an existing issue in builtin seats.', '/run 108 --confirm',
+  page('run', 'Ask', '/run N [--parallel K] [--attempts K] [--confirm|--plan] [--auto-model]', 'Run an existing issue in builtin seats.', '/run 108 --confirm',
     ['--confirm: pause after the task summary; Enter continues and /stop cancels',
       '--plan: explore and write PLAN.md only before human acceptance',
       '--auto-model: route from fleet priors and human evaluations',
-      '--parallel K: isolated ready child waves, bounded by declared capacity']),
+      '--parallel K: isolated ready child waves, bounded by declared capacity',
+      '--attempts K: isolated slice candidates on distinct fleet profiles; publish only the best passing attempt']),
   page('retry', 'Ask', '/retry', 'Repeat the last Ask or issue run in the same worktree without worktree add.', '/retry'),
   page('stop', 'Ask', '/stop', 'Cancel the active seat or confirmed task, like one Ctrl+C.', '/stop'),
   page('steer', 'Ask', '/steer TEXT', 'Interrupt the drafting coder model call and send queued text plus this instruction next. It cannot widen Allowed Files or edit TASK.md; Ctrl+C cancels without steering. A bare line during a drafting coder seat is the same action.',

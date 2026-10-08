@@ -362,6 +362,12 @@ test('default planner/coder run stops after a denied managed-file write', async 
       }) } }] }) };
     }
     if (completion === 2) {
+      assert.deepEqual(body.tools ?? [], []);
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { role: 'assistant',
+        content: JSON.stringify({ title: 'Implement the app', acceptance_checks: ['node --test exits 0'],
+          files_allowed: ['src/app.mjs'] }) } }] }) };
+    }
+    if (completion === 3) {
       handoff = ['RECIPE.yml', 'TASK.md'].map((name) => readFileSync(path.join(worktreePath, name), 'utf8'));
       assert.match(body.messages[0].content, /## Files allowed\n- `src\/app\.mjs`/);
       const write = (id, file, content) => ({
@@ -384,7 +390,7 @@ test('default planner/coder run stops after a denied managed-file write', async 
     vault: { get: async () => undefined },
     runTestCommand: () => assert.fail('Denied writes must stop before tests'),
   }), /Writing RECIPE\.yml is not allowed by TASK\.md or worktree policy/);
-  assert.equal(completion, 2);
+  assert.equal(completion, 3);
   assert.deepEqual(parseRecipe(readFileSync(path.join(worktreePath, 'RECIPE.yml'), 'utf8')).seats.map(({ id }) => id),
     ['planner', 'coder', 'reviewer']);
   assert.deepEqual(['RECIPE.yml', 'TASK.md'].map((name) => readFileSync(path.join(worktreePath, name), 'utf8')), handoff);

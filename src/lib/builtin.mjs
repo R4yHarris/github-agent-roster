@@ -15,13 +15,14 @@ import {
   isAllowedFile, isForbiddenWrite, isManagedFile, isRepairTestFile, isScopeExpansionFile, taskAndRepairFiles, ToolAccessError,
 } from '../runtime/tools.mjs';
 import { checkExcellence, redactEvidence } from '../runtime/excellence.mjs';
+import { requireLifecycleHooks } from '../runtime/hooks.mjs';
 import { isReviewRequired, loadConfig, requirePublicationEnabled, withoutLlmKeys } from './config.mjs';
 import { loadFleet, withFleetProfile } from './fleet.mjs';
 import { runIssue, validateIssueNumber } from './issue.mjs';
 import {
   commentMergedIssue, mergedPullNumber, mergedPullNumberFromFailure, setIssueRunStatus,
 } from './issue-board.mjs';
-import { IDENTIFIER, inferTaskClass, loadLearning, recordDeliveryPublication, recordRun } from './learn.mjs';
+import { IDENTIFIER, inferTaskClass, loadLearning, recordDeliveryPublication, recordRun, selectedAttemptRecord } from './learn.mjs';
 import { captureLifecycleEvent, provenanceOptOut, provenanceStoreForRun } from './local-runs.mjs';
 import { loadMetrics } from './metrics.mjs';
 import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
@@ -44,6 +45,7 @@ import { githubRepository } from './issue.mjs';
 import { routeFailure } from '../llm/openai.mjs';
 import { acquireRepoLock } from './repo-locks.mjs';
 import { parallelLimit, runReadyWaves } from './wave-scheduler.mjs';
+import { attemptLimit, attemptSummary, runPlanAttempts } from './attempts.mjs';
 
 const execFileAsync = promisify(execFile);
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -226,8 +228,14 @@ export async function prepareBuiltinPublication(run, {
   config = loadConfig({ repoRoot: rosterRoot, cwd }),
   env = process.env,
   skipReview = false,
+  signal,
 } = {}) {
+  throwIfCancelled(signal);
   requirePublicationEnabled(config);
+  if (run?.attempt && (run.attempt.winner !== run.attempt.index ||
+      selectedAttemptRecord(loadLearning({ cwd: run.repoRoot ?? run.worktreePath }).runs, run.task)?.session !== run.session)) {
+    throw new Error('Only the recorded winning attempt may be published; review bypass cannot select a loser');
+  }
   if (run?.planningOnly || run?.askKind && run.askKind !== 'slice') {
     throw new Error('Planning-only output is not code to publish; create and run a bounded slice first');
   }
@@ -249,6 +257,8 @@ export async function prepareBuiltinPublication(run, {
   await ensureUnchanged(run.recipePath, run.planner.recipe);
   await ensureUnchanged(run.taskPath, run.planner.task);
   await ensureUnchanged(run.planner.estimatePath, run.planner.estimate);
+  await requireLifecycleHooks('pre-publish', { worktree: run.worktreePath, env,
+    apiKeyEnv: config.llm.api_key_env, memoryPath: run.result.memoryPath, signal });
   const excellence = await checkExcellence({
     worktree: run.worktreePath, task: run.planner.task, result: run.result, baseline: run.result.baseline,
     verifiedSnapshot: run.result.excellence.snapshot,
@@ -434,6 +444,11 @@ async function runClaimedAssignment(issueNumber, options) {
 }
 
 export async function runBuiltinIssue(issueNumber, options = {}) {
+  const attempts = attemptLimit(options.attempts, options.config?.seat?.max_attempts ?? 16);
+  if (attempts > 1 && (options.confirm || options.planMode || options.acceptPlan ||
+      options.skipReview || options.parallel > 1 || options.steeringControl)) {
+    throw new TypeError('Multiple attempts require a reviewed slice without plan, confirm, steering or parallel waves');
+  }
   validateIssueNumber(issueNumber);
   const parallel = parallelLimit(options.parallel);
   if (parallel > 1 && (options.confirm || options.planMode || options.steeringControl)) {
@@ -603,7 +618,13 @@ async function reusePreparedAssignment(run, { cwd, config, runCommand, ask, issu
         : run.local || run.issue.number !== Number(issueNumber))) {
     throw new Error('Retry requires the unchanged prepared Ask and task worktree');
   }
-  const expectedPath = path.resolve(root, config.paths.worktrees, run.task);
+  const selected = run.attempt ? selectedAttemptRecord(loadLearning({ cwd: root }).runs, run.task) : null;
+  if (run.attempt && (!selected || selected.session !== run.session ||
+      selected.attempt.index !== run.attempt.index)) {
+    throw new Error('Retry must use the recorded selected attempt, not a losing worktree');
+  }
+  const branch = selected ? `${run.task}-a${selected.attempt.index}` : run.task;
+  const expectedPath = path.resolve(root, config.paths.worktrees, branch);
   const same = (left, right) => process.platform === 'win32'
     ? path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase()
     : path.resolve(left) === path.resolve(right);
@@ -615,7 +636,7 @@ async function reusePreparedAssignment(run, { cwd, config, runCommand, ask, issu
   const registered = inventory.split('\0\0').some((record) => {
     const fields = record.split('\0');
     const worktree = fields.find((field) => field.startsWith('worktree '))?.slice(9);
-    return worktree && same(worktree, expectedPath) && fields.includes(`branch refs/heads/${run.task}`);
+    return worktree && same(worktree, expectedPath) && fields.includes(`branch refs/heads/${branch}`);
   });
   if (!registered) throw new Error('Retry worktree registration or branch changed; refusing a second worktree');
   const file = path.join(expectedPath, 'ASSIGNMENT.md');
@@ -631,7 +652,7 @@ async function reusePreparedAssignment(run, { cwd, config, runCommand, ask, issu
   await initializeWorktreeSubmodules(expectedPath, runCommand);
   return { repoRoot: root, worktreePath: expectedPath, task: run.task, ask: run.ask, issue: run.issue,
     session: run.session, assignmentPath: file, envPath: run.envPath, metadata: run.metadata,
-    local: run.local, reused: true };
+    local: run.local, reused: true, ...(run.attempt ? { attempt: run.attempt } : {}) };
 }
 
 function taskSummary(planner, effort) {
@@ -694,10 +715,16 @@ async function runBuiltinAssignment(issueNumber, {
   planMode = false,
   acceptPlan = false,
   steeringControl,
+  attempts = 1,
   [claimHook]: beforePreparation,
 } = {}) {
   throwIfCancelled(signal);
   config = { ...config, capabilities: config.capabilities ?? await loadCapabilities({ cwd }) };
+  attempts = attemptLimit(attempts, config.seat.max_attempts ?? 3);
+  if (attempts > 1 && (issueNumber === null || confirm || planMode || acceptPlan || skipReview ||
+      steeringControl || !['planner,coder', 'planner,coder,reviewer'].includes(seats))) {
+    throw new TypeError('Multiple attempts require reviewed GitHub slices without interactive or planning modes');
+  }
   const retryCommand = issueNumber === null ? retryCommandForTask(null) :
     `${retryCommandForTask(`issue-${issueNumber}`)}${autoModel ? ' --auto-model' : ''}`;
   if (!autoModel && !config.llm.model && (env.AI_MODEL || env.ROSTER_MODEL)) {
@@ -714,7 +741,7 @@ async function runBuiltinAssignment(issueNumber, {
   if (confirm && publish) throw new TypeError('--confirm cannot be combined with --publish');
   if (publish) requirePublicationEnabled(config);
   const reviewBypass = skipReview || !isReviewRequired(config);
-  const fleet = autoModel ? await loadFleet({ cwd }) : null;
+  const fleet = autoModel || attempts > 1 ? await loadFleet({ cwd }) : null;
   if (autoModel && !fleet.profiles.length) {
     throw new Error('--auto-model requires at least one registered fleet profile; run roster onboard or fleet add');
   }
@@ -854,6 +881,7 @@ async function runBuiltinAssignment(issueNumber, {
   };
   log(`Ask kind: ${askKind} (${classification.reason})`);
   if (askKind === 'clarify') {
+    if (attempts > 1) throw new TypeError('Multiple attempts require a bounded slice');
     log(clarificationHint);
     return { ...prepared, askKind, classification, clarification: clarificationHint, sessions,
       runs: { planner: null, coder: null, reviewer: null }, run: null, command: null,
@@ -910,6 +938,15 @@ async function runBuiltinAssignment(issueNumber, {
       });
     }
   }
+  if (askKind === 'slice' && !planMode && !planner.error) {
+    const { critiquePlannerHandoff } = await import('../seats/planner.mjs');
+    planner = await critiquePlannerHandoff(planner, {
+      worktree: worktreePath, ask: prepared.ask, title: prepared.issue.title, reference,
+      learningRoot: prepared.repoRoot, config: activeConfig, env, fetchImpl, vault, signal,
+      session: sessions.planner, task: prepared.task,
+      retryCommand, lockedModel: route?.profile.model, onEvent: onRunEvent,
+    });
+  }
   const taskClass = askKind === 'slice' && !planMode ? planner.metadata.task_class
     : prepared.metadata?.task_class ?? inferTaskClass(prepared.issue.title) ?? 'feat';
   const provenanceRunId = `run-${randomBytes(8).toString('hex')}`;
@@ -933,13 +970,16 @@ async function runBuiltinAssignment(issueNumber, {
     // Durable machine history for `roster history`; best-effort so provenance can never fail a run.
     await captureLifecycleEvent(provenance, { event: 'session', runId: provenanceRunId, sessionId: session, payload: {
       issue: prepared.issue.number ?? null, task: prepared.task, task_class: taskClass,
-      seat: Object.keys(sessions).find((name) => sessions[name] === session) ?? null,
+      seat: Object.keys(sessions).find((name) => sessions[name] === session) ??
+        (session.endsWith('-coder') ? 'coder' : session.endsWith('-reviewer') ? 'reviewer' : null),
       model: run?.env?.AI_MODEL ?? null, provider: run?.provider ?? null,
       ...(excellence ? { outcome: excellence.pass ? 'pass' : 'fail' } : {}),
     } });
   };
   const plannerRun = planner.run;
   if (!planner.reused) await recordSeat(sessions.planner, plannerRun);
+  for (const run of planner.critic?.runs ?? []) await recordSeat(run.metrics.session, run);
+  if (planner.critic?.revisionRun) await recordSeat(`${sessions.planner}-revision`, planner.critic.revisionRun);
   if (planner.error) {
     log(`Planning failed: ${planner.error}\nRECIPE/TASK stubs are unverified; coder, reviewer, tests, and publication did not run.`);
     return {
@@ -956,6 +996,7 @@ async function runBuiltinAssignment(issueNumber, {
       run: null, command: null, logPath: liveLog.path, logSession: liveLog.session };
   }
   if (askKind !== 'slice') {
+    if (attempts > 1) throw new TypeError('Multiple attempts require a bounded slice, not child waves');
     if (existingWavePlan) log(`Reusing executable ${askKind} PLAN with GitHub-linked child issues.`);
     // Features deliver through their slices; initiative drafts are features that are re-planned on their own runs.
     const delivery = askKind === 'feature' && !prepared.local && !confirm &&
@@ -981,6 +1022,29 @@ async function runBuiltinAssignment(issueNumber, {
       planningOnly: true, failed: Boolean(delivery?.error), archivePath, logPath: liveLog.path, logSession: liveLog.session,
       ...(delivery?.rows ? { waves: delivery.rows } : {}) };
   }
+  const executePlanned = async ({
+    prepared: executionPrepared = prepared, planner: executionPlanner = planner,
+    activeConfig: executionConfig = activeConfig, route: executionRoute = route,
+    sessions: executionSessions = sessions, liveLog: executionLog = liveLog, isolated = false,
+  } = {}) => {
+  const prepared = executionPrepared;
+  const planner = executionPlanner;
+  let activeConfig = executionConfig;
+  let route = executionRoute;
+  const sessions = executionSessions;
+  const liveLog = executionLog;
+  const { worktreePath } = prepared;
+  const routeAttempts = isolated ? [] : routeAttemptsForRun;
+  const recoverRoute = isolated ? async () => false : async (...args) => {
+    const recovered = await recoverRunRoute(...args);
+    ({ activeConfig, route } = currentRunRoute());
+    return recovered;
+  };
+  const selectAutoRoute = isolated ? async () => null : async (...args) => {
+    const selected = await selectRunRoute(...args);
+    ({ activeConfig, route } = currentRunRoute());
+    return selected;
+  };
   const recipeCoder = parseRecipe(planner.recipe).seats.find(({ id }) => id === 'coder');
   let scopeBudget;
   const buildCoderConfig = (model) => selectReasoning({ ...activeConfig,
@@ -990,7 +1054,7 @@ async function runBuiltinAssignment(issueNumber, {
     ...activeConfig.llm, model,
     effort: planner.feedback?.effort ?? activeConfig.llm.effort,
   } }, { kind: askKind, taskClass: planner.metadata.task_class, difficulty: planner.metadata.difficulty });
-  let coderConfig = buildCoderConfig(planner.metadata.model || activeConfig.llm.model);
+  let coderConfig = buildCoderConfig(isolated ? activeConfig.llm.model : planner.metadata.model || activeConfig.llm.model);
   if (!planner.error) {
     log(taskSummary(planner, coderConfig.llm.effort));
     if (confirm) {
@@ -1004,7 +1068,7 @@ async function runBuiltinAssignment(issueNumber, {
   // Spec 4.8 "Reviewer is not the coder": with auto routing, the reviewer takes the best eligible fleet
   // profile other than the coder's, so a model never grades its own work. Only when no other profile is
   // eligible does it fall back to the coder's model, and the log says so.
-  const independentReviewerRoute = (excluded = []) => (autoModel && route ? chooseFleetRoute([
+  const independentReviewerRoute = (excluded = []) => ((autoModel || isolated) && route ? chooseFleetRoute([
     route.profile.id, ...routeAttempts.map((attempt) => attempt.profile), ...excluded,
   ]) : null);
   const removeIncompleteReview = async (reviewPath) => {
@@ -1296,9 +1360,45 @@ async function runBuiltinAssignment(issueNumber, {
     failed: false,
     logPath: liveLog.path, logSession: liveLog.session,
   };
-  if (publish) {
+  if (publish && !isolated) {
+    await publishCompleted(completed, coderConfig, publishMessage);
+  }
+  return completed;
+  };
+  const routeAttemptsForRun = routeAttempts;
+  const recoverRunRoute = recoverRoute;
+  const selectRunRoute = selectAutoRoute;
+  const currentRunRoute = () => ({ activeConfig, route });
+  if (attempts === 1) return executePlanned();
+  return runPlanAttempts({
+    count: attempts, prepared, planner, config, env, signal,
+    command: issueCommand,
+    cleanupCommand: (program, args, root) => runCommand ? runCommand(program, args, root) : git(root, args, commandEnv),
+    choose: (excludedProfileIds) => chooseFleetRoute(excludedProfileIds),
+    execute: async (attemptPrepared, attemptPlanner, selected) => {
+      const attemptSessions = { planner: sessions.planner, coder: attemptPrepared.session,
+        reviewer: `${attemptPrepared.session.replace(/-coder$/, '')}-reviewer` };
+      const selectedConfig = { ...withFleetProfile(config, selected.profile),
+        llm: Object.freeze(routeLlm(selected)) };
+      const attemptLog = await createRunLog({ repoRoot: prepared.repoRoot,
+        session: attemptPrepared.session, env, apiKeyEnv: selectedConfig.llm.api_key_env,
+        errorOutput, now, debug, issue: prepared.issue.number, observe: onRunEvent });
+      return executePlanned({ prepared: attemptPrepared, planner: attemptPlanner,
+        activeConfig: selectedConfig, route: selected, sessions: attemptSessions, liveLog: attemptLog, isolated: true });
+    },
+    publish: publish ? async (winner, selected) => publishCompleted(winner, withFleetProfile(config, selected.profile),
+      buildPublishMessage({ subject: `feat: issue ${prepared.issue.number}`, model: winner.run.metrics.model,
+        issueNumber: prepared.issue.number,
+        summary: redactEvidence(winner.result.summary, { env, apiKeyEnv: config.llm.api_key_env }),
+        testsSkipped: winner.result.testsSkipped, scopeFiles: winner.result.scopeFiles ?? [],
+        seats: 'planner, coder, reviewer (pass)' }) + attemptSummary(winner)) : undefined,
+    log,
+  });
+
+  async function publishCompleted(completed, coderConfig, publishMessage) {
+    const { worktreePath, runs: { coder: coderRun } } = completed;
     const { contractsPath, publishEnv, model: publishModel } = await prepareBuiltinPublication(completed, {
-      cwd, config: coderConfig, env, skipReview,
+      cwd, config: coderConfig, env, skipReview, signal,
     });
     let stdout;
     try {
@@ -1337,5 +1437,4 @@ async function runBuiltinAssignment(issueNumber, {
     });
     await recordDeliveryPublication(completed, publication);
   }
-  return completed;
 }

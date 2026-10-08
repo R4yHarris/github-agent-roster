@@ -18,9 +18,9 @@ const defaultProfiles = {
   openai: { base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY' },
 };
 const fields = {
-  llm: ['base_url', 'model', 'api_key_env', 'effort', 'effort_override', 'context_max', 'profile', 'api_key_optional', 'provider', 'request_timeout_ms', 'served_model_label'],
-  planner: ['turn_budget'],
-  seat: ['id', 'principal', 'turn_budget', 'tools', 'context_chars', 'scope_expansion'],
+  llm: ['base_url', 'model', 'api_key_env', 'effort', 'effort_override', 'context_max', 'profile', 'api_key_optional', 'provider', 'request_timeout_ms', 'served_model_label', 'max_requests'],
+  planner: ['turn_budget', 'critic_profile'],
+  seat: ['id', 'principal', 'turn_budget', 'tools', 'context_chars', 'scope_expansion', 'max_attempts'],
   paths: ['memory', 'skills', 'asks', 'worktrees'],
   publish: ['enabled'],
   tools: ['internet', 'run_test'],
@@ -169,8 +169,8 @@ export function parseConfig(source) {
   if (!roots.has('schema') ||
       ['llm', 'seat', 'paths'].some((name) =>
         !roots.has(name) || fields[name].some((field) =>
-          !(name === 'llm' && ['profile', 'api_key_optional', 'provider', 'request_timeout_ms', 'effort_override', 'served_model_label'].includes(field)) &&
-          !(name === 'seat' && ['context_chars', 'scope_expansion'].includes(field)) && !Object.hasOwn(config[name], field))) ||
+          !(name === 'llm' && ['profile', 'api_key_optional', 'provider', 'request_timeout_ms', 'effort_override', 'served_model_label', 'max_requests'].includes(field)) &&
+          !(name === 'seat' && ['context_chars', 'scope_expansion', 'max_attempts'].includes(field)) && !Object.hasOwn(config[name], field))) ||
       (roots.has('planner') && !Object.hasOwn(config.planner, 'turn_budget'))) {
     invalid('schema, llm, seat, paths, and optional planner must contain every documented field');
   }
@@ -185,6 +185,10 @@ export function parseConfig(source) {
     if (!['l', 'm', 'h', 'x', 'none'].includes(llm.effort_override)) invalid('llm.effort_override must be l, m, h, x, or none');
   }
   llm.context_max = integerValue(llm.context_max, 'llm.context_max');
+  if (Object.hasOwn(llm, 'max_requests')) {
+    llm.max_requests = integerValue(llm.max_requests, 'llm.max_requests');
+    if (llm.max_requests < 1 || llm.max_requests > 10000) invalid('llm.max_requests must be an integer from 1 to 10000');
+  }
   if (Object.hasOwn(llm, 'request_timeout_ms')) {
     llm.request_timeout_ms = integerValue(llm.request_timeout_ms, 'llm.request_timeout_ms');
     try {
@@ -276,11 +280,16 @@ export function parseConfig(source) {
   if (planner.turn_budget < 1 || planner.turn_budget > 10000) {
     invalid('planner.turn_budget must be between 1 and 10000');
   }
+  if (planner.critic_profile !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(planner.critic_profile)) {
+    invalid('planner.critic_profile must name a fleet profile');
+  }
   if (roots.has('loop')) {
     config.loop.turns = integerValue(config.loop.turns, 'loop.turns');
     if (config.loop.turns < 1 || config.loop.turns > 10000) invalid('loop.turns must be between 1 and 10000');
     seat.turn_budget = config.loop.turns;
   }
+  seat.max_attempts = seat.max_attempts === undefined ? 3 : integerValue(seat.max_attempts, 'seat.max_attempts');
+  if (seat.max_attempts < 1 || seat.max_attempts > 16) invalid('seat.max_attempts must be between 1 and 16');
   if (roots.has('context')) {
     config.context.budget = integerValue(config.context.budget, 'context.budget');
     if (config.context.budget < 1) invalid('context.budget must be positive');

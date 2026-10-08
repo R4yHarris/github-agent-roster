@@ -1,7 +1,7 @@
 import { loadCapabilities, validateCapabilities } from './capabilities.mjs';
 import { getFleetProfile, loadFleet, validateFleet } from './fleet.mjs';
 import {
-  deriveDifficultyCeilings, EFFORTS, formatRecommendation, IDENTIFIER, learningSeat, summarizeLearning, TASK_CLASSES,
+  deriveDifficultyCeilings, EFFORTS, formatRecommendation, IDENTIFIER, inferTaskClass, learningSeat, summarizeLearning, TASK_CLASSES,
 } from './learn.mjs';
 import { hardwareCost } from './hardware.mjs';
 import { resolveProjectRoot } from './paths.mjs';
@@ -15,9 +15,43 @@ function contextFit(profile) {
   return profile.context_max > 0 ? profile.context_max : Number.MAX_SAFE_INTEGER;
 }
 
+export function explainRouteEvidence(records, { model, taskClass, seat = 'coder', difficulty = 2,
+  effort, now = Date.now() }) {
+  if (!Number.isFinite(now)) throw new TypeError('Routing evidence clock must be finite milliseconds');
+  if (!Array.isArray(records) || records.some((record) => !record || typeof record !== 'object' ||
+      Array.isArray(record))) throw new TypeError('Routing evidence requires joined records');
+  if (!TASK_CLASSES.includes(taskClass) || typeof model !== 'string' || !model ||
+      typeof seat !== 'string' || !IDENTIFIER.test(seat) ||
+      !Number.isInteger(difficulty) || difficulty < 1 || difficulty > 5 ||
+      effort !== undefined && effort !== null && !EFFORTS.includes(effort)) {
+    throw new TypeError('Invalid routing evidence scope');
+  }
+  const human = records.filter((record) => record.model === model &&
+    record.evaluation != null && learningSeat(record) === seat);
+  const groups = summarizeLearning(human).filter((group) => group.task_class === taskClass &&
+    (effort === undefined || group.effort === effort));
+  if (!groups.length) groups.push({ effort: effort ?? null, n: 0, accepted: 0,
+    acceptRate: null, medianDifficulty: null });
+  return groups.map((group) => {
+    const times = human.filter((record) => (record.task_class ?? inferTaskClass(record.task)) === taskClass &&
+      (record.effort ?? null) === group.effort &&
+      ['accept', 'reject'].includes(record.evaluation.verdict))
+      .map((record) => Date.parse(record.evaluation.at)).filter((time) => Number.isFinite(time) && time <= now);
+    const latest = times.reduce((value, time) => value === null ? time : Math.max(value, time), null);
+    return {
+      model, seat, task_class: taskClass, effort: group.effort,
+      samples: group.n, accepted: group.accepted, rejected: group.n - group.accepted,
+      acceptRate: group.acceptRate, medianDifficulty: group.medianDifficulty,
+      latestEvaluation: latest === null ? null : new Date(latest).toISOString(),
+      ageDays: latest === null ? null : Math.floor((now - latest) / 86400000),
+      sufficient: group.n >= 3 && group.medianDifficulty !== null && group.medianDifficulty >= difficulty,
+    };
+  });
+}
+
 export function chooseRoute({
   fleet, capabilities, records = [], taskClass, difficulty = 2, contextRequired = 0, profileId, seat = 'coder',
-  excludedProfileIds = [], queueDepth = admissionDepth,
+  excludedProfileIds = [], queueDepth = admissionDepth, now = Date.now(),
 }) {
   if (!TASK_CLASSES.includes(taskClass)) throw new TypeError('Routing task class must be feat, fix, docs, or test');
   if (!Number.isInteger(difficulty) || difficulty < 1 || difficulty > 5) {
@@ -65,7 +99,11 @@ export function chooseRoute({
   evaluated.sort((left, right) => right.recommendation.acceptRate - left.recommendation.acceptRate ||
     right.recommendation.n - left.recommendation.n || byDepth(left, right) || left.profile.id.localeCompare(right.profile.id) ||
     [...EFFORTS, null].indexOf(left.recommendation.effort) - [...EFFORTS, null].indexOf(right.recommendation.effort));
-  if (evaluated.length) return evaluated[0];
+  const explain = (choice) => ({ ...choice, evidence: explainRouteEvidence(records, {
+    model: choice.profile.model, seat, taskClass, difficulty,
+    effort: choice.recommendation?.effort, now,
+  }) });
+  if (evaluated.length) return explain(evaluated[0]);
 
   const candidates = profiles.flatMap((profile) => {
     if (contextRequired > 0 && profile.context_max < contextRequired) return [];
@@ -85,7 +123,7 @@ export function chooseRoute({
     right.profile.concurrency - left.profile.concurrency || left.profile.id.localeCompare(right.profile.id));
   if (!candidates.length) return null;
   const { hinted, ...choice } = candidates[0];
-  return choice;
+  return explain(choice);
 }
 
 export async function routeTask({
@@ -105,5 +143,12 @@ export function formatRoute(choice, taskClass, config, env = process.env) {
   const prefix = recommendation ? formatRecommendation(recommendation, taskClass).trimEnd()
     : `${taskClass}: ${profile.model}`;
   return `${prefix} profile=${profile.id} source=${source} context_max=${profile.context_max || 'unknown'}` +
-    ` concurrency=${profile.concurrency} reason=${reason}\n`;
+    ` concurrency=${profile.concurrency} reason=${reason}\n` +
+    (choice.evidence ?? []).map((entry) =>
+      `evidence model=${entry.model} seat=${entry.seat} task-class=${entry.task_class} effort=${entry.effort ?? '-'} ` +
+      `origin=${entry.samples ? 'local-human-evaluations' : 'none'} n=${entry.samples} ` +
+      `accepted=${entry.accepted} rejected=${entry.rejected} ` +
+      `accept-rate=${entry.acceptRate === null ? 'unknown' : `${(entry.acceptRate * 100).toFixed(1)}%`} ` +
+      `latest=${entry.latestEvaluation ?? 'unknown'} age-days=${entry.ageDays ?? 'unknown'} ` +
+      `warning=${entry.sufficient ? 'none' : entry.samples ? 'insufficient-qualifying-evidence' : 'no-human-evidence'}\n`).join('');
 }

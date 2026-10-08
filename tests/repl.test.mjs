@@ -28,6 +28,7 @@ function dispatcher({ env = {}, services = {}, config: activeConfig = config } =
   const commands = createDispatcher({
     cwd, repoRoot: root, config: activeConfig, env, output, errorOutput,
     services: { repositoryRoot: () => cwd,
+      requireLifecycleHooks: async () => ({ pass: true, reasons: [], entries: [] }),
       publicationTask: ({ task, env }) => task || env.AI_TASK || 'feat-ghcp-metadata', ...services },
   });
   return { ...commands, output, errorOutput };
@@ -45,6 +46,17 @@ test('/stats --delivery --json exposes pure delivery groups without executing se
   assert.equal(groups[0].coderMinutes, 1);
   assert.equal(groups[0].hardware, 'fake GPU');
   await assert.rejects(shell.dispatch('/stats --json'), /Use roster stats/);
+});
+
+test('/stats --ref keeps recurring proposals beside ordinary metrics', async () => {
+  const shell = dispatcher({ services: {
+    loadMetrics(options) { assert.equal(options.ref, 'HEAD'); return []; },
+    resolveContractsPath: () => root,
+    listFailureProposals: async () => ['fixture proposal'],
+    formatFailureProposals: (proposals) => `${proposals.join('\n')}\n`,
+  } });
+  await shell.dispatch('/stats --ref HEAD');
+  assert.match(shell.output.text, /fixture proposal/);
 });
 
 test('/debug toggles process logging without config changes and /log debug tails its file', async (t) => {
@@ -136,6 +148,7 @@ test('slash dispatcher calls existing services and keeps one run in the shell', 
       },
       summarizeMetrics: (records) => records,
       formatMetrics: () => 'No AI-Run records found.\n',
+      listFailureProposals: async () => [],
       loadAvailableMetrics: () => {
         calls.push(['recommend-metrics']);
         return [];
@@ -377,6 +390,24 @@ test('/run --parallel keeps separate child statuses and refuses aggregate public
   await assert.rejects(shell.dispatch('/publish'), /separate child worktrees/);
   for (const args of ['42 --parallel 0', '42 --parallel 2 --parallel 3',
     '42 --parallel', '42 --parallel 2 --confirm', '42 --parallel 2 --plan']) {
+    await assert.rejects(shell.dispatch(`/run ${args}`), /Use \/run N/);
+  }
+});
+
+test('/run --attempts forwards the opt-in and disables shared steering', async () => {
+  let runs = 0;
+  const shell = dispatcher({ services: {
+    runBuiltinIssue: async (_issue, options) => {
+      runs += 1;
+      assert.equal(options.attempts, 2);
+      assert.equal(options.steeringControl, null);
+      return { issue: { number: 42 }, askKind: 'slice' };
+    },
+  } });
+  await shell.dispatch('/run 42 --attempts 2 --saved');
+  assert.equal(runs, 1);
+  for (const args of ['42 --attempts 0', '42 --attempts', '42 --attempts 2 --attempts 3',
+    '42 --attempts 2 --parallel 2', '42 --attempts 2 --confirm', '42 --attempts 2 --plan']) {
     await assert.rejects(shell.dispatch(`/run ${args}`), /Use \/run N/);
   }
 });
