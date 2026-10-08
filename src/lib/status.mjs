@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { loadConfig } from './config.mjs';
 import { githubRepository } from './github-repository.mjs';
-import { loadLearning, repositoryRoot } from './learn.mjs';
+import { loadLearning, repositoryRoot, selectedAttemptRecord } from './learn.mjs';
 import { ensureLocalPath } from './paths.mjs';
 import { readIssueLogs } from './run-log.mjs';
 import { classifyStrandedWork, defaultStaleThresholdMs } from './stranded.mjs';
@@ -66,7 +66,7 @@ export async function readStatus({
   let number;
   if (requestedIssue === undefined) {
     const branch = (await runCommand('git', ['branch', '--show-current'], root)).trim();
-    const match = /^issue-([1-9]\d*)$/.exec(branch);
+    const match = /^issue-([1-9]\d*)(?:-a(?:[1-9]|1[0-6]))?$/.exec(branch);
     if (match) number = issueNumber(match[1]);
     else {
       let entries;
@@ -85,7 +85,18 @@ export async function readStatus({
   } else {
     number = issueNumber(requestedIssue);
   }
-  const worktreePath = path.join(root, config.paths.worktrees, `issue-${number}`);
+  const runs = loadLearning({ cwd: root }).runs;
+  let selected = selectedAttemptRecord(runs, `issue-${number}`);
+  let branch = selected ? `issue-${number}-a${selected.attempt.index}` : `issue-${number}`;
+  let worktreePath = path.join(root, config.paths.worktrees, branch);
+  if (selected && !await fs.lstat(worktreePath).catch((error) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  })) {
+    selected = null;
+    branch = `issue-${number}`;
+    worktreePath = path.join(root, config.paths.worktrees, branch);
+  }
   await ensureLocalPath(worktreePath, root);
   let worktreeExists = false;
   try {
@@ -111,12 +122,12 @@ export async function readStatus({
     if (entry && (!entry.isFile() || entry.isSymbolicLink())) throw new Error('Status artifacts must be regular files');
     artifacts[name] = Boolean(entry);
   }
-  const record = loadLearning({ cwd: root }).runs.findLast((record) =>
+  const record = selected ?? runs.findLast((record) =>
     record.task === `issue-${number}` || record.session?.startsWith(`roster-${number}-`));
   const lastRun = record ? Object.fromEntries(['session', 'model', 'prompt_tokens', 'completion_tokens',
     'context_used', 'context_out', 'context_max'].filter((field) => record[field] !== undefined).map((field) =>
     [field, typeof record[field] === 'string' ? redactSecrets(record[field], { env, apiKeyEnv: config.llm.api_key_env }) : record[field]])) : null;
-  const local = { branch: `issue-${number}`, artifacts, lastRun };
+  const local = { branch, artifacts, lastRun, ...(selected ? { attempt: selected.attempt } : {}) };
   if (offline) {
     return {
       issue: localIssue ?? { number, title: null, url: null, state: 'UNKNOWN' },
@@ -192,6 +203,8 @@ export function formatStatus(status) {
   return `Issue: ${issue}\nOpen PR: ${pr}\n` +
     `Branch: ${status.branch ?? `issue-${status.issue.number}`}\n` +
     `Worktree: ${status.worktreePath} (${status.worktreeExists ? 'present' : 'missing'})\n` +
+    (status.attempt ? `Attempt: ${status.attempt.index}/${status.attempt.count} winner=${status.attempt.winner || 'none'} ` +
+      `profile=${status.attempt.profile} hardware=${status.attempt.hardware}\n` : '') +
     (status.workHealth ? `Work health: ${status.workHealth.status} (read-only; heartbeat threshold ${status.workHealth.thresholdMs / 60000}m)\n` : '') +
     `Last seat: ${status.runLog?.lastSeat ?? 'unknown (no run log)'}\n` +
     `Last log line: ${status.runLog?.lastLine ?? 'none'}\n` +

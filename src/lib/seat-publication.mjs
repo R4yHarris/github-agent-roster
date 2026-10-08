@@ -14,7 +14,7 @@ export function recordedCoderRun({ repoRoot, run }) {
 }
 
 export function humanEvalHint(session) {
-  if (typeof session !== 'string' || !/^roster-(?:[1-9]\d*|local-[a-f0-9]{16})-coder$/.test(session)) {
+  if (typeof session !== 'string' || !/^roster-(?:[1-9]\d*(?:-a(?:[1-9]|1[0-6])-[a-f0-9]{8})?|local-[a-f0-9]{16})-coder$/.test(session)) {
     throw new TypeError('Human eval hint requires an issue coder session or a local ask coder session');
   }
   return `roster eval ${session} accept 1 n --minutes M`;

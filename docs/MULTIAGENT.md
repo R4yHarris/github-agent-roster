@@ -68,6 +68,57 @@ The shell refuses `/publish` on an aggregate rather than picking a child or
 publishing the planning worktree. Merge remains the contracts publisher's
 role; this scheduler never merges sibling branches or closes issues.
 
+## Opt-in best-of-N slice attempts
+
+```sh
+roster run --issue 42 --attempts 2 --auto-model
+```
+
+`--attempts K` (also `/run N --attempts K`) is opt-in for a bounded issue slice.
+Default `1` preserves the existing path and return shape. `seat.max_attempts`
+defaults to `3` and can be configured from 1 to 16. The harness plans and
+critiques once, then copies the unchanged TASK, recipe, and estimate into
+`.worktrees/issue-N-aI` on distinct `issue-N-aI` branches from the same base
+commit. Existing application edits, attempt directories, or attempt branches
+are never adopted or overwritten.
+
+Each candidate runs coder -> gates -> reviewer on a different eligible fleet
+profile, using the existing evaluation/prior routing and per-profile HTTP
+admission. Candidates are sequential in this first opt-in implementation;
+they share neither edits nor coder continuation. The candidate's coder profile
+stays locked, including repairs. Review can use another eligible profile under
+the existing independent-review rules. Saved planner settings do not silently
+become candidate staffing: even `--saved --attempts K` requires K eligible fleet
+profiles. Missing profiles fail before any candidate coder starts.
+
+Only a configured candidate with passing deterministic gates and a passing
+review is eligible. Unavailable red/green or shadow inspection does not count
+as passing; documented exempt/skipped gates retain their normal semantics.
+Selection is fewest changed lines, then measured monotonic elapsed milliseconds,
+then attempt index for a stable tie. The winner stays in its reviewed sibling
+worktree; its measured model/usage is the publication attribution. Explicit
+`--publish` invokes the App SDK only once for that winner and includes candidate
+gate/selection evidence in the PR body. Review bypass cannot publish a loser.
+
+Every candidate has a distinct coder/reviewer session and an eval-ready local
+journal entry, including failures. These are gate outcomes, not fabricated human
+accepts/rejects. The returned run has `attempts`, `winner`, and `attemptResults`;
+the winning run object also lists losers. Losing worktrees and branches created
+by this invocation are removed only after evidence is durable. If all fail,
+no publisher runs: the last failed result/error and its tree remain for diagnosis
+and all other candidate trees are removed. Cancellation/unexpected errors stop
+new attempts, record completed candidates, and preserve the last created tree.
+Cleanup failures surface explicitly.
+
+`status`, `/resume N`, and worktree inventory identify the recorded selected
+candidate while it remains registered. With no winner, status/resume identifies
+the last diagnostic candidate; it still cannot publish as a winner. Missing
+candidate trees fall back to the original planning worktree. Existing attempts
+must be inspected/cleaned before another best-of-N invocation. Confirmation,
+plan mode, shared steering, review bypass, and parallel child waves cannot combine
+with K > 1. GitHub remains the board; no runtime or task database is added.
+Spec trace: FEATURE_SPEC sections 5.2, 5.4, 5.5, and 5.6.
+
 1. The issue lookup creates `.worktrees/issue-N` once, with `ASSIGNMENT.md`
    and an ignored `.env` holding `AI_TASK=issue-N` and
    `AI_SESSION=roster-N-coder`. All three seats use that worktree.

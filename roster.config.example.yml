@@ -30,6 +30,7 @@ planner:
 seat:
   id: coder
   principal: coder      # contracts role; no merge, no deploy
+  max_attempts: 3        # opt-in --attempts cap; normal runs still use one
   turn_budget: 1000
   context_chars: 200000  # context-pack budget in characters, not tokens
   tools: [read_file, write_file, list_dir, run_test, search_text]
