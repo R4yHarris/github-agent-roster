@@ -29,6 +29,8 @@ export function fixture(context) {
   const repoRoot = path.join(base, 'roster');
   const target = path.join(base, 'project');
   const contracts = path.join(base, 'contracts');
+  const machineRoot = path.join(base, 'machine');
+  mkdirSync(machineRoot);
   mkdirSync(repoRoot);
   mkdirSync(path.join(repoRoot, 'principals'));
   writeFileSync(path.join(repoRoot, 'principals', 'coder.md'),
@@ -57,6 +59,7 @@ export function fixture(context) {
   mkdirSync(cwd);
   // The fixture is a human CLI: a suite run inside a coder seat must not leak ROSTER_SEAT into it.
   const env = { ...process.env, ROSTER_MODEL: '', AI_MODEL: '', AI_MODEL_VERSION: '', ROSTER_SEAT: undefined,
+    PATHS_OVERRIDE: undefined, ROSTER_STATE_ROOT: machineRoot,
     GITHUB_APP_ID: undefined, GITHUB_APP_PRIVATE_KEY_PATH: undefined,
     GITHUB_AGENT_CONTRACTS: contracts };
   const issue = {
