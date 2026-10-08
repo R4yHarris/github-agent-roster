@@ -66,6 +66,34 @@ standalone TASK execution. Empty endpoints remain deterministic stubs.
 Prior generated PLAN/task/run files are archived when reusing an issue
 worktree; application edits and assignment/environment are preserved.
 
+## Deterministic lifecycle regression fixtures
+
+[Lifecycle replay tests](../tests/builtin.replay.test.mjs) run the public
+`runBuiltinIssue` entry point against disposable Git repositories and strict
+fake HTTP responses from [the fixture](../tests/fixtures/lifecycle-replay.json).
+They cover acceptance, one repaired test failure, review-driven correction, repeated failures across
+the two fresh-context escalations, and operator cancellation. No model endpoint,
+fleet probe, publication, or extra runtime dependency is involved.
+
+Run with Node 20: `node --test tests/builtin.replay.test.mjs`.
+The fixture pins seat order, actual HTTP attempt counts, offered tool calls,
+successful tool results, test invocation counts, gates, and public
+TASK/RESULT/REVIEW artifacts. Responses omit provider usage deliberately;
+unknown counts must not become measured tokens or quality scores.
+Tool-result counts include the planner's three managed artifact writes and
+the harness's `run_test` calls, not just model-requested edits. A `run_test`
+tool result can be `ok` while its test verdict fails; gate assertions check
+the verdict separately.
+
+There is no live-transcript recorder or automatic snapshot regeneration.
+To change a fixture, hand-author the minimal response/test sequence, run the
+selector, and review both the expected counts and resulting gate/artifact
+assertions against the intended behavior. Never simply bless new counts after
+a failure. Do not copy private prompts, source, URLs, credentials, or live
+transcripts into fixtures. Keep timestamps, temp paths, and elapsed durations
+out of comparisons. These fixtures implement FEATURE_SPEC sections 5.4, 5.5,
+and 5.6 while honoring sections 3 and 7.
+
 ## Configuration
 
 Copy [`roster.config.example.yml`](../roster.config.example.yml) to
