@@ -55,6 +55,7 @@ server to an untrusted network.
 | `llm.api_key_name` | `OPENAI_API_KEY` | Environment variable and vault entry name |
 | `llm.request_timeout_ms` | 20 minutes for loopback/private-IP hosts; 120 seconds otherwise | Total HTTP deadline, including response parsing and any HTTP retry delay; a fleet profile can override it for cold-inference gateways |
 | `llm.served_model_label` | `trust` | `ignore` treats the requested model as the served model for a gateway whose response `model` label is known to be wrong |
+| `llm.max_requests` | unset (no additional cap) | Integer 1–10000: maximum actual HTTP completion attempts per transport context, including retries |
 | `llm.timeout_ms` | same host-based default | Low-level client compatibility alias; `request_timeout_ms` takes precedence |
 
 A streamed call to a remote (non-loopback, non-private-IP) host whose response
@@ -194,6 +195,22 @@ responses, network errors and
 timeouts fail explicitly. Errors contain fixed descriptions or HTTP status
 numbers, never upstream bodies, URLs, keys or underlying error causes. The
 client does not log requests, responses or credentials.
+
+An optional `llm.max_requests` cap bounds actual HTTP attempts across calls
+sharing one transport, including transient HTTP, stream-stall, and completion
+length retries. Concurrent calls share the same counter; validation failures,
+cancelled requests before sending, and admission waits do not consume it.
+The request beyond the ceiling fails explicitly with `ROSTER_MODEL_REQUEST_LIMIT`
+before HTTP is sent. This is not an endpoint failure and does not quarantine
+a fleet profile. Low-level and builtin chats expose read-only `requestCount`
+and `requestLimit` getters; unset limits are `null`, never a fabricated count.
+
+The ceiling is **per transport context**, not per issue, fleet, or process.
+New research/reviewer/planner transports and fresh repair contexts have their
+own counters. It does not replace turn budgets, estimate tokens, imply a
+dollar budget, or authorize route switching. Missing provider usage stays
+unknown. Default behavior is unchanged. This implements FEATURE_SPEC sections
+5.4 and 5.8 efficiency controls while honoring section 7's honest-metrics rule.
 
 The slice planner additionally retries the same request once after a timeout
 when its configured deadline is shorter than the 20-minute cold-start allowance.
