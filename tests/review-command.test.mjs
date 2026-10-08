@@ -48,6 +48,7 @@ test('explicit reviewer receives no tools and product writes are refused', async
     } });
   assert.equal(calls, 1);
   assert.equal(reviewed.review.verdict, 'fail');
+  assert.equal(reviewed.delivery.reviewer.attempt, 1);
   assert.equal(readFileSync(path.join(run.worktreePath, 'README.md'), 'utf8'), '# After\n');
   await assert.rejects(requirePassingReview(reviewed), /passing REVIEW/);
   await assert.rejects(runOnlyReview(reviewed, { repoRoot: run.repoRoot, config, env: {} }), /use \/review --again/);
@@ -56,6 +57,8 @@ test('explicit reviewer receives no tools and product writes are refused', async
       message: { role: 'assistant', content: passingReview(JSON.parse(request.body), { reasons: ['Current diff meets checks.'],
         security_notes: ['No protected products changed.'] }) } }] }) });
   assert.equal(second.review.verdict, 'pass');
+  assert.equal(second.delivery.reviewer.id, reviewed.delivery.reviewer.id);
+  assert.equal(second.delivery.reviewer.attempt, 2);
   await requirePassingReview(second);
   assert.match(formatHelp('review'), /--again/);
 });

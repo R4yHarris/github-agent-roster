@@ -563,12 +563,15 @@ test('builtin seats record runs automatically without an AI-Eval', async (contex
     env: { ...options.env, GITHUB_AGENT_CONTRACTS: resolveContractsPath() },
     fetchImpl: () => { throw new Error('stub must not contact an LLM'); },
   });
-  assert.deepEqual(loadLearning({ cwd: options.target }).runs, [
+  const records = loadLearning({ cwd: options.target }).runs;
+  assert.deepEqual(records.map(({ seat, delivery, ...record }) => record), [
     { session: result.sessions.planner, task: 'issue-42', task_class: 'feat' },
     { session: result.sessions.coder, task: 'issue-42', task_class: 'feat', excellence: 'fail',
       defects: result.result.excellence.reasons },
     { session: result.sessions.reviewer, task: 'issue-42', task_class: 'feat' },
   ]);
+  assert.deepEqual(records.map(({ seat }) => seat), ['planner', 'coder', 'reviewer']);
+  assert.equal(new Set(records.map(({ delivery }) => delivery.id)).size, 1);
   assert.equal(existsSync(path.join(options.target, '.roster', 'evals.jsonl')), false);
 });
 

@@ -31,7 +31,7 @@ const help = `Usage:
   roster clean [--target issue|repo|machine-history|curated-memory] [--issue N] [--store DIR] [--scope SCOPE] [--state-root PATH] [--exclude NAME]... [--execute --yes]
   roster status [--issue N] [--offline]
   roster recipe validate PATH
-  roster stats [--ref REVISION_OR_RANGE] [--evals PATH]
+  roster stats [--delivery [--json]] [--ref REVISION_OR_RANGE] [--evals PATH]
   roster learn --recurring
   roster vault set NAME
   roster vault list
@@ -76,21 +76,6 @@ async function getVaultSecret(name) {
   const value = await createFileVault().get(name);
   if (value === undefined) throw new Error(`No secret stored for ${name}.`);
   process.stdout.write(value);
-}
-
-function statsOptions(args) {
-  const options = {};
-  const seen = new Set();
-  for (let index = 0; index < args.length; index += 2) {
-    const flag = args[index];
-    const value = args[index + 1];
-    if (!['--ref', '--evals'].includes(flag) || !value || value.startsWith('--') || seen.has(flag)) {
-      throw new TypeError('Use roster stats [--ref REVISION_OR_RANGE] [--evals PATH].');
-    }
-    seen.add(flag);
-    options[flag === '--ref' ? 'ref' : 'evalsPath'] = value;
-  }
-  return options;
 }
 
 async function main(args) {
@@ -212,9 +197,10 @@ async function main(args) {
       `${result.existing.length} existing drafts preserved. Human review required.\n`);
   } else if (args[0] === 'stats') {
     const { formatMetrics, loadMetrics, summarizeMetrics } = await import('./lib/metrics.mjs');
+    const { deliveryMetrics, formatDeliveryMetrics, parseStatsOptions } = await import('./lib/delivery-metrics.mjs');
     const { resolveContractsPath } = await import('./lib/paths.mjs');
     const { repositoryRoot } = await import('./lib/learn.mjs');
-    const options = statsOptions(args.slice(1));
+    const options = parseStatsOptions(args.slice(1));
     const cwd = repositoryRoot();
     const records = loadMetrics({
       ...options,
@@ -222,9 +208,13 @@ async function main(args) {
       contractsPath: resolveContractsPath(),
       cwd,
     });
-    process.stdout.write(formatMetrics(summarizeMetrics(records)));
-    const { listFailureProposals, formatFailureProposals } = await import('./lib/failure-proposals.mjs');
-    process.stdout.write(formatFailureProposals(await listFailureProposals({ cwd })));
+    const groups = options.delivery ? deliveryMetrics(records) : summarizeMetrics(records);
+    process.stdout.write(options.json ? `${JSON.stringify(groups, null, 2)}\n`
+      : options.delivery ? formatDeliveryMetrics(groups) : formatMetrics(groups));
+    if (!options.delivery) {
+      const { listFailureProposals, formatFailureProposals } = await import('./lib/failure-proposals.mjs');
+      process.stdout.write(formatFailureProposals(await listFailureProposals({ cwd })));
+    }
   } else if (args[0] === 'eval') {
     const { parseEvaluationArgs, recordEvaluation } = await import('./lib/eval.mjs');
     const { values, options } = parseEvaluationArgs(args.slice(1));

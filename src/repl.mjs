@@ -6,8 +6,9 @@ import { Writable } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isReviewRequired, loadConfig, requirePublicationEnabled, setConfigValue } from './lib/config.mjs';
 import { recordEvaluation } from './lib/eval.mjs';
-import { inferTaskClass, parseRecommendationArgs, repositoryRoot } from './lib/learn.mjs';
+import { inferTaskClass, parseRecommendationArgs, recordDeliveryPublication, repositoryRoot } from './lib/learn.mjs';
 import { formatMetrics, loadAvailableMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
+import { deliveryMetrics, formatDeliveryMetrics, parseStatsOptions } from './lib/delivery-metrics.mjs';
 import { formatFailureProposals, listFailureProposals, proposeRecurringFailures } from './lib/failure-proposals.mjs';
 import { requireLifecycleHooks } from './runtime/hooks.mjs';
 import { resolveContractsPath, resolveProjectRoot } from './lib/paths.mjs';
@@ -103,8 +104,8 @@ const defaultServices = {
   runBuiltinAsk: lazy('./lib/builtin.mjs', 'runBuiltinAsk'),
   runBuiltinIssue: lazy('./lib/builtin.mjs', 'runBuiltinIssue'),
   prepareBuiltinPublication: lazy('./lib/builtin.mjs', 'prepareBuiltinPublication'),
-  recordEvaluation, repositoryRoot, loadMetrics,
-  summarizeMetrics, formatMetrics, loadAvailableMetrics, routeTask, formatRoute,
+  recordEvaluation, repositoryRoot, loadMetrics, recordDeliveryPublication,
+  summarizeMetrics, formatMetrics, deliveryMetrics, formatDeliveryMetrics, loadAvailableMetrics, routeTask, formatRoute,
   formatFailureProposals, listFailureProposals, proposeRecurringFailures,
   requireLifecycleHooks,
   resolveContractsPath, createFileVault,
@@ -259,10 +260,11 @@ export function createDispatcher({
     notify();
   };
   const currentRoot = () => state.lastRun?.repoRoot ?? api.repositoryRoot(cwd);
-  const metrics = (ref) => api.loadMetrics({
+  const metrics = (ref, options = {}) => api.loadMetrics({
     contractsPath: api.resolveContractsPath({ repoRoot, cwd, env }),
     cwd: currentRoot(),
     ...(ref ? { ref } : {}),
+    ...options,
   });
   const host = (active = state.config) => active.llm.base_url ? new URL(active.llm.base_url).host : '-';
   const safeWrite = (value) => output.write(redactEvidence(value, { env, apiKeyEnv: state.config.llm.api_key_env }));
@@ -984,11 +986,12 @@ export function createDispatcher({
               `${humanEvalHint(state.lastRun.sessions.coder)}\n`);
             return;
           }
-          await api.issueCommenter({
+          const publication = await api.issueCommenter({
             issue: state.lastRun.issue, pullNumber, model,
             runLine: state.lastRun.runs?.coder?.line, run: state.lastRun.runs?.coder,
             repoRoot: state.lastRun.repoRoot, cwd, env,
           });
+          await api.recordDeliveryPublication(state.lastRun, publication);
           output.write(`Commented on issue #${state.lastRun.issue.number}; left it open for human AI-Eval.\n`);
           output.write(`Human AI-Eval after merge (replace M with actual minutes):\n` +
             `${humanEvalHint(state.lastRun.runs?.coder?.metrics?.session ??
@@ -1016,6 +1019,17 @@ export function createDispatcher({
         return true;
       }
       case 'stats': {
+        if (args?.startsWith('-')) {
+          const options = parseStatsOptions(args.split(/\s+/));
+          const records = metrics(options.ref, options);
+          const groups = options.delivery ? api.deliveryMetrics(records) : api.summarizeMetrics(records);
+          output.write(options.json ? `${JSON.stringify(groups, null, 2)}\n`
+            : options.delivery ? api.formatDeliveryMetrics(groups) : api.formatMetrics(groups));
+          if (!options.delivery) {
+            output.write(api.formatFailureProposals(await api.listFailureProposals({ cwd: currentRoot() })));
+          }
+          return true;
+        }
         if (args && /\s/.test(args)) throw new TypeError('Use /stats [REF].');
         output.write(api.formatMetrics(api.summarizeMetrics(metrics(args))));
         output.write(api.formatFailureProposals(await api.listFailureProposals({ cwd: currentRoot() })));

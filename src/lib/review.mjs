@@ -44,15 +44,18 @@ export async function runOnlyReview(run, {
   const coderResult = { ...run.result, excellence };
   const session = run.sessions?.reviewer ?? `roster-${randomBytes(8).toString('hex')}-reviewer`;
   const logger = await createRunLog({ repoRoot: run.repoRoot ?? worktree, session, env, debug,
-    issue: run.issue?.number ?? null, errorOutput, observe: onRunEvent });
+    issue: run.issue?.number ?? null, errorOutput, observe: onRunEvent,
+    previousDelivery: run.delivery });
   const review = await logger.seat('reviewer', session, config, async (onEvent) => (await import('../seats/reviewer.mjs')).runReviewer({
     worktree, repoRoot, config, coderResult, env, fetchImpl, vault, signal, onEvent, askKind: run.askKind ?? 'slice',
   }));
   const measured = review.response ? buildRun({ config, response: review.response, task: run.task, session, env: {} }) : null;
   if (path.relative(path.resolve(run.repoRoot ?? worktree), path.resolve(worktree))) {
     await recordRun({ task: run.task, session, task_class: run.planner?.metadata?.task_class,
+      seat: 'reviewer', delivery: logger.delivery('reviewer'),
       provider: measured?.provider }, { cwd: run.repoRoot, env: measured?.env ?? {}, run: measured, createDirectory: true });
   }
   return { ...run, result: coderResult, review, sessions: { ...run.sessions, reviewer: session },
+    delivery: { ...run.delivery, reviewer: logger.delivery('reviewer') },
     runs: { ...run.runs, reviewer: measured } };
 }

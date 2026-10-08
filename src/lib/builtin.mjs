@@ -22,7 +22,7 @@ import { runIssue, validateIssueNumber } from './issue.mjs';
 import {
   commentMergedIssue, mergedPullNumber, mergedPullNumberFromFailure, setIssueRunStatus,
 } from './issue-board.mjs';
-import { IDENTIFIER, inferTaskClass, loadLearning, recordRun, selectedAttemptRecord } from './learn.mjs';
+import { IDENTIFIER, inferTaskClass, loadLearning, recordDeliveryPublication, recordRun, selectedAttemptRecord } from './learn.mjs';
 import { captureLifecycleEvent, provenanceOptOut, provenanceStoreForRun } from './local-runs.mjs';
 import { loadMetrics } from './metrics.mjs';
 import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
@@ -348,7 +348,8 @@ export async function runBuiltinTask({
       worktree: worktreePath, repoRoot, ask: document.ask, title: document.title, reference: `local:${task}`,
       task, session: plannerSession, config, env, fetchImpl, vault, onEvent, askKind, retryCommand, signal,
     }));
-    if (journalEnabled) await recordRun({ task, session: plannerSession, provider: planner.run?.provider }, {
+    if (journalEnabled) await recordRun({ task, session: plannerSession, provider: planner.run?.provider,
+      seat: 'planner', delivery: liveLog.delivery('planner') }, {
       cwd: worktreePath, env: { ...metricEnv, ...planner.run?.env }, run: planner.run,
     });
     log(`PLAN: ${planner.planPath}\nReview child issue drafts on GitHub and run each slice separately. No coder or publisher ran.`);
@@ -359,6 +360,10 @@ export async function runBuiltinTask({
     if (!journalEnabled) return;
     await recordRun({
       task, session, task_class: result.taskMetadata?.task_class,
+      seat: 'coder', delivery: liveLog.delivery('coder', {
+        ...(result.taskMetadata?.estimate_min != null ? { estimate_min: result.taskMetadata.estimate_min } : {}),
+        review_repairs: liveLog.delivery('coder')?.attempt > 1 ? 1 : 0,
+      }),
       provider: result.run?.provider,
       ...excellenceFields(result.excellence, { config, env }),
     }, { cwd: worktreePath, env: { ...metricEnv, ...result.run?.env }, run: result.run });
@@ -373,7 +378,8 @@ export async function runBuiltinTask({
     const reviewRun = review.queried ? buildRun({
       config: reviewConfig, response: review.response, task, session: reviewerSession, env,
     }) : null;
-    if (journalEnabled) await recordRun({ task, session: reviewerSession, provider: reviewRun?.provider }, {
+    if (journalEnabled) await recordRun({ task, session: reviewerSession, provider: reviewRun?.provider,
+      seat: 'reviewer', delivery: liveLog.delivery('reviewer') }, {
       cwd: worktreePath, env: { ...metricEnv, ...reviewRun?.env }, run: reviewRun,
     });
     return { review, reviewRun };
@@ -920,6 +926,7 @@ async function runBuiltinAssignment(issueNumber, {
     } catch (error) {
       if (error instanceof Error && error.run) {
         await recordRun({ session: sessions.planner, task: prepared.task,
+          seat: 'planner', delivery: liveLog.delivery('planner'),
           task_class: prepared.metadata?.task_class ?? inferTaskClass(prepared.issue.title) }, {
           cwd: prepared.repoRoot, env: { ...metricEnv, ...error.run.env }, createDirectory: true, run: error.run,
         });
@@ -944,11 +951,22 @@ async function runBuiltinAssignment(issueNumber, {
     : prepared.metadata?.task_class ?? inferTaskClass(prepared.issue.title) ?? 'feat';
   const provenanceRunId = `run-${randomBytes(8).toString('hex')}`;
   const provenance = provenanceOptOut(env) ? null : provenanceStoreForRun({ repoRoot: prepared.repoRoot });
+  const reviewRepairs = [];
+  let recordedReviewRepairs = 0;
+  const delivery = {};
   const recordSeat = async (session, run, excellence) => {
+    const seat = Object.keys(sessions).find((name) => sessions[name] === session);
+    const evidence = liveLog.delivery(seat, {
+      ...(planner.metadata?.estimate_min != null ? { estimate_min: planner.metadata.estimate_min } : {}),
+      ...(seat === 'coder' ? { review_repairs: reviewRepairs.length - recordedReviewRepairs } : {}),
+    });
     await recordRun({
       session, task: prepared.task, task_class: taskClass, provider: run?.provider,
+      seat, delivery: evidence,
       ...(excellence ? excellenceFields(excellence, { config, env }) : {}),
     }, { cwd: prepared.repoRoot, env: { ...metricEnv, ...run?.env }, createDirectory: true, run });
+    if (seat === 'coder') recordedReviewRepairs = reviewRepairs.length;
+    delivery[seat] = evidence;
     // Durable machine history for `roster history`; best-effort so provenance can never fail a run.
     await captureLifecycleEvent(provenance, { event: 'session', runId: provenanceRunId, sessionId: session, payload: {
       issue: prepared.issue.number ?? null, task: prepared.task, task_class: taskClass,
@@ -1182,7 +1200,6 @@ async function runBuiltinAssignment(issueNumber, {
   if (continuation) log('Carrying the previous failed review findings into the coder context.');
   const perspectiveAttempts = [];
   const rescopes = [];
-  const reviewRepairs = [];
   let coderRun;
   let review;
   let reviewerRun;
@@ -1339,7 +1356,7 @@ async function runBuiltinAssignment(issueNumber, {
   const completed = {
     ...prepared, askKind, classification, recipePath: planner.recipePath, taskPath: planner.taskPath,
     planner, result, review, sessions, runs, run: coderRun, command, autoRecommendation, route, routeAttempts,
-    perspectiveAttempts, rescopes, reviewRepairs, archivePath,
+    perspectiveAttempts, rescopes, reviewRepairs, archivePath, delivery,
     failed: false,
     logPath: liveLog.path, logSession: liveLog.session,
   };
@@ -1396,11 +1413,12 @@ async function runBuiltinAssignment(issueNumber, {
       const merged = mergedPullNumberFromFailure(error.stderr ?? error.message);
       if (merged === null) throw error;
       try {
-        await issueCommenter({
+        const publication = await issueCommenter({
           issue: prepared.issue, pullNumber: merged, model: coderRun.env.AI_MODEL,
           runLine: coderRun.line, run: coderRun,
           repoRoot: prepared.repoRoot, cwd, env,
         });
+        await recordDeliveryPublication(completed, publication);
       } catch (commentError) {
         throw new Error(`PR #${merged} merged, but issue comment and local cleanup failed: ${commentError.message}`, {
           cause: commentError,
@@ -1412,10 +1430,11 @@ async function runBuiltinAssignment(issueNumber, {
     }
     if (stdout?.trim()) log(stdout.trim());
     const pullNumber = mergedPullNumber(stdout);
-    await issueCommenter({
+    const publication = await issueCommenter({
       issue: prepared.issue, pullNumber, model: coderRun.env.AI_MODEL,
       runLine: coderRun.line, run: coderRun,
       repoRoot: prepared.repoRoot, cwd, env,
     });
+    await recordDeliveryPublication(completed, publication);
   }
 }

@@ -119,12 +119,18 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
     task: 'issue-42', session: 'roster-42-planner', status: 'stub',
     summary: 'Prepared RECIPE.yml and TASK.md',
   });
-  assert.deepEqual(loadLearning({ cwd: options.target }).runs, [
+  const journal = loadLearning({ cwd: options.target }).runs;
+  assert.deepEqual(journal.map(({ seat, delivery, ...record }) => record), [
     { session: result.sessions.planner, task: 'issue-42', task_class: 'feat' },
     { session: result.sessions.coder, task: 'issue-42', task_class: 'feat', excellence: 'fail',
       defects: result.result.excellence.reasons },
     { session: result.sessions.reviewer, task: 'issue-42', task_class: 'feat' },
   ]);
+  assert.deepEqual(journal.map(({ seat }) => seat), ['planner', 'coder', 'reviewer']);
+  assert.equal(new Set(journal.map(({ delivery }) => delivery.id)).size, 1);
+  assert.ok(journal.every(({ delivery }) => delivery.attempt === 1 &&
+    Number.isFinite(delivery.duration_ms) && delivery.duration_ms >= 0));
+  assert.equal(journal[1].delivery.review_repairs, 0);
   assert.equal(existsSync(path.join(options.target, '.roster', 'evals.jsonl')), false);
   const { records: provenance } = await openProvenanceStore(path.join(options.target, '.git', 'roster', 'provenance')).readAll();
   const seatEvents = provenance.filter((record) => record.event === 'session')

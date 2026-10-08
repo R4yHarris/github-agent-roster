@@ -39,6 +39,7 @@ export function loadMetrics({
   cwd = process.cwd(),
   ref,
   evalsPath,
+  delivery = false,
   run = execFileSync,
   readFile = readFileSync,
 } = {}) {
@@ -79,7 +80,22 @@ export function loadMetrics({
   }
   const exported = parseJsonl(output, EXPORT_SOURCE, validateRun, true);
   const local = loadLearning({ cwd, readFile });
-  return joinLearning(exported, local.runs, [...local.evaluations, ...evaluations], ref === undefined);
+  const evalRows = [...local.evaluations, ...evaluations];
+  if (!delivery) return joinLearning(exported, local.runs, evalRows, ref === undefined);
+  const matches = (record, run) => run.sha && record.sha
+    ? run.sha.toLowerCase() === record.sha.toLowerCase()
+    : run.session && run.session === record.session && (!run.task || !record.task || run.task === record.task);
+  const evidence = local.runs.filter((record) => record.delivery &&
+    (ref === undefined || exported.some((git) => matches(git, record))));
+  const represented = new Set();
+  const attempts = evidence.map((record) => {
+    const git = exported.find((entry) => matches(entry, record));
+    if (git) represented.add(git.sha);
+    // A commit represents the final coder, not the model/usage of earlier attempts.
+    return joinLearning([], [{ ...record, ...(git ? { sha: git.sha } : {}) }], evalRows)[0];
+  });
+  return [...joinLearning(exported.filter((record) => !represented.has(record.sha)),
+    local.runs.filter((record) => !record.delivery), evalRows, ref === undefined), ...attempts];
 }
 
 export function loadAvailableMetrics({ cwd = process.cwd(), run = execFileSync } = {}) {

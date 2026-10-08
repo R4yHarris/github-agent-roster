@@ -57,7 +57,7 @@ export const commands = Object.freeze([
     'List or use session profiles, read-only probe models, or add with the existing fleet flags.',
     '/fleet use spark-4', ['--set-model [MODEL]: explicitly save a listed model to private config',
       '--id, --base-url, --model, --context, --concurrency, --hardware, --task-class: existing fleet add flags']),
-  page('stats', 'Model', '/stats [REF]', 'Read model run metrics without selecting a model.', '/stats HEAD'),
+  page('stats', 'Model', '/stats [REF] | /stats --delivery [--json]', 'Read model or delivery metrics without selecting a model.', '/stats --delivery'),
   page('issues', 'Board', '/issues', 'List up to 100 open issue numbers and titles only; never bodies.', '/issues'),
   page('waves', 'Board', '/waves [open]', 'Read PLAN.md child drafts and GitHub states. Only explicit open creates those drafts; earlier open waves block later starts. No second board is stored.',
     '/waves', ['open: explicitly create only missing drafts already validated in PLAN.md']),

@@ -91,6 +91,18 @@ export async function commentMergedIssue({
     if (current?.number !== number || current.state !== 'open') {
       throw new Error('Issue must remain open for human AI-Eval; no comment was posted');
     }
+    const deliveryTimestamps = {};
+    for (const [field, value] of [['ask_created_at', current.created_at], ['pr_merged_at', pr.merged_at]]) {
+      if (value == null) continue;
+      if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) {
+        throw new Error(`GitHub returned invalid delivery timestamp ${field}`);
+      }
+      deliveryTimestamps[field] = new Date(value).toISOString();
+    }
+    if (deliveryTimestamps.ask_created_at && deliveryTimestamps.pr_merged_at &&
+        deliveryTimestamps.pr_merged_at < deliveryTimestamps.ask_created_at) {
+      throw new Error('GitHub returned a PR merge before issue creation');
+    }
     const body = `Merged ${pr.html_url} for issue #${number}.\n\nModel: ${actualModel}` +
       (completed ? `\nProvider: ${completed.metrics.provider}` +
         (completed.metrics.prompt_tokens === undefined ? '' : `\nPrompt tokens: ${completed.metrics.prompt_tokens}`) +
@@ -106,7 +118,8 @@ export async function commentMergedIssue({
     if (!Number.isSafeInteger(comment?.id) || comment.id <= 0) {
       throw new Error('GitHub did not confirm the issue comment');
     }
-    return { issueNumber: number, pullNumber: pull, commentId: comment.id, issueState: 'open' };
+    return { issueNumber: number, pullNumber: pull, commentId: comment.id, issueState: 'open',
+      ...(Object.keys(deliveryTimestamps).length ? { deliveryTimestamps } : {}) };
   });
 }
 

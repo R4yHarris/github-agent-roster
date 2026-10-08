@@ -180,3 +180,56 @@ missing-data handling; there is no hidden score.
 
 Run the focused tests with
 `node --test tests/openai.test.mjs tests/run-metrics.test.mjs tests/builtin.*.test.mjs tests/issue-board.test.mjs tests/metrics.test.mjs tests/learn.test.mjs tests/eval.test.mjs`.
+
+## Delivery evidence
+
+`roster stats --delivery` (or `/stats --delivery`) groups evidence by actual
+response model, declared fleet hardware, and seat. Add `--json` for stable,
+diffable JSON. CLI history/evaluation selectors still work:
+
+```sh
+roster stats --delivery --json --ref HEAD --evals evals.jsonl
+```
+
+The pure `deliveryMetrics(records)` and `formatDeliveryMetrics(groups)` helpers
+live in `src/lib/delivery-metrics.mjs`. `loadMetrics({ delivery: true })` preserves
+individual local seat attempts when enriching published commits; ordinary stats
+retains its existing commit/model/effort semantics. Explicit `--ref` still excludes
+unpublished local attempts. Neither stats nor the aggregation contacts an endpoint
+or GitHub, starts seats, or changes staffing decisions.
+Published SHA links enrich evaluations, but a final commit's model or usage never
+overwrites the response-backed metadata of an earlier attempt.
+
+New local journal rows include `seat` and a bounded `delivery` snapshot. Its
+opaque `id` identifies one invocation's pipeline; `attempt` is the seat attempt
+within it. Repeated snapshots of an attempt count once (the latest journal row
+wins). Rerunning an issue is a new pipeline, not a fabricated continuation of
+an older timeline. Hardware is the selected profile's declaration at execution
+time, redacted before storage, never inferred from model names or today's fleet.
+Standalone and historical runs without that binding report `unknown`.
+An explicit `/review --again` on an in-memory completed run retains that pipeline's
+ID and increments the reviewer attempt. It cannot turn a repaired review into a
+new first-pass success; new gate observations do not reuse the earlier attempt's
+counts. A resumed legacy run without pipeline evidence still has unknown history.
+
+| Output | Source and calculation |
+| --- | --- |
+| `leadMinutes` | Median `(delivery.pr_merged_at - delivery.ask_created_at) / 60000`, once per pipeline. The existing App-authenticated merge/comment check reads the PR's `merged_at` and issue's `created_at`; verified timestamps are cached on the completed seat snapshots. No commit date or local publish-end time substitutes for a GitHub merge timestamp. |
+| `coderMinutes` | Median summed `delivery.duration_ms / 60000` for coder attempts in each pipeline/dimension group. Timing uses the existing monotonic seat clock and includes in-seat tools/tests, but not planner, reviewer, publication, or time waiting between invocations. |
+| `firstPassYield` | Completed reviewer pipelines passing on reviewer attempt 1 / pipelines with a completed review. `delivery.review_verdict` comes from the harness review result, not prose. Missing/incomplete reviews are not passes; passing only on a later attempt is not first-pass. This metric belongs to the reviewer seat/model, not an inferred coder verdict. |
+| `rework` | Sum of observed `delivery.review_repairs` plus unique linked human evaluations whose latest `evaluation.verdict` is `rework`. Review repairs are counted once when the repair starts producing journal evidence; endpoint retries and scope expansions are not review repairs. Human evaluation correction semantics remain unchanged. |
+| `gateFailures` | Observed failures by `red-green`, `shadow`, `self-review`, and `verifying-reviewer`, from `delivery.gates[gate].failures`. Live gate events increment `checks`/`failures`; a later green result does not erase an earlier failure. Skipped, unavailable, exempt, or unexecuted gates contribute no observation, not a passing zero. |
+| `estimateErrorMinutes` | Median signed `evaluation.minutes - delivery.estimate_min`, once per linked evaluation in a group. Estimate is the pre-coder TASK estimate; actual minutes must be the human's recorded value, not the seat timer. |
+
+`samples` lists the observed denominators; `gateChecks` lists observed checks.
+Counts describe available evidence, not a complete history when coverage is
+partial. Missing metric values are the literal string `unknown` in both table
+and JSON; a measured zero remains `0`. Missing usage is still omitted from the
+underlying AI-Run; delivery timing never manufactures token counts. Old journals
+are not retroactively assigned hardware, timestamps, repair counts, or verdicts.
+Local-only/manual publications without verified cached GitHub timestamps keep
+lead time unknown. A cache-write failure is reported even if the PR already merged;
+it must not trigger a second publication.
+
+This implements FEATURE_SPEC sections 5.6 (per-seat/model feedback), 5.7 (stats),
+and 5.8 (hardware evidence), respecting section 7's prohibition on fake metrics.

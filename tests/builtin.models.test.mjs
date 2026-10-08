@@ -170,7 +170,11 @@ test('a failed planner journals its last measured response rather than aggregate
   assert.equal(result.runs.reviewer, null);
   assert.equal(requests, 2);
   const records = loadLearning({ cwd: options.target }).runs;
-  assert.deepEqual(records[0], {
+  const { delivery, seat, ...metadata } = records[0];
+  assert.equal(seat, 'planner');
+  assert.equal(delivery.attempt, 1);
+  assert.ok(delivery.duration_ms >= 0);
+  assert.deepEqual(metadata, {
     session: 'roster-42-planner', task: 'issue-42', provider: 'local', task_class: 'feat',
     model: 'actual-planner-2', effort: 'm', prompt_tokens: 100, completion_tokens: 40,
     context_used: 100, context_out: 40,

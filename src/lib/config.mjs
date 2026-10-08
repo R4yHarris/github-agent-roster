@@ -356,7 +356,7 @@ export function formatConfig(config) {
       ? `${indent}${name}:\n${mapping(value, `${indent}  `)}`
       : `${indent}${name}: ${scalar(value)}\n`).join('');
   // Fleet admission fields are per-run routing state from withFleetProfile, never private settings.
-  const { fleet_profile: _fleet, concurrency: _concurrency, ...llm } = config.llm ?? {};
+  const { fleet_profile: _fleet, concurrency: _concurrency, hardware: _hardware, ...llm } = config.llm ?? {};
   const source = '# Private settings. No credentials belong in this file.\n' +
     mapping(config.llm ? { ...config, llm } : config);
   parseConfig(source);

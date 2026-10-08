@@ -326,6 +326,41 @@ test("stats prints grouped model and effort counts with optional local evals", (
     assert.match(result.stdout, /model-a\s+l\s+2\s+2/);
     assert.match(result.stdout, /model-a\s+h\s+1\s+0/);
     assert.match(result.stdout, /model-b\s+-\s+1\s+0/);
+    const delivery = run(['stats', '--delivery', '--json'], {
+      ...process.env, GITHUB_AGENT_CONTRACTS: directory,
+    }, join(fixtureSource, 'cli.mjs'));
+    assert.equal(delivery.status, 0, delivery.stderr);
+    const groups = JSON.parse(delivery.stdout);
+    assert.ok(groups.length > 0);
+    assert.ok(groups.every((group) => group.leadMinutes === 'unknown'));
+    const table = run(['stats', '--delivery'], {
+      ...process.env, GITHUB_AGENT_CONTRACTS: directory,
+    }, join(fixtureSource, 'cli.mjs'));
+    assert.equal(table.status, 0, table.stderr);
+    assert.match(table.stdout, /HARDWARE\s+SEAT/);
+    assert.match(table.stdout, /unknown/);
+    const consumer = join(directory, 'consumer');
+    mkdirSync(consumer);
+    const init = spawnSync('git', ['init', consumer], { encoding: 'utf8' });
+    assert.equal(init.status, 0, init.stderr);
+    const ledger = join(consumer, '.roster', 'runs');
+    mkdirSync(ledger, { recursive: true });
+    const sample = JSON.parse(output.split('\n')[0]);
+    writeFileSync(join(ledger, 'delivery.jsonl'), `${JSON.stringify({
+      sha: sample.sha, model: sample.model, seat: 'coder', session: 'cli-evidence',
+      delivery: { id: 'cli', attempt: 1, hardware: 'fixture GPU', duration_ms: 120000,
+        review_repairs: 0, ask_created_at: '2026-01-01T00:00:00.000Z',
+        pr_merged_at: '2026-01-01T00:10:00.000Z' },
+    })}\n`);
+    const args = ['stats', '--delivery', '--json'];
+    const env = { ...process.env, GITHUB_AGENT_CONTRACTS: directory };
+    const known = run(args, env, join(fixtureSource, 'cli.mjs'), undefined, consumer);
+    assert.equal(known.status, 0, known.stderr);
+    const coder = JSON.parse(known.stdout).find(({ seat }) => seat === 'coder');
+    assert.equal(coder.coderMinutes, 2);
+    assert.equal(coder.leadMinutes, 10);
+    assert.equal(coder.rework, 0);
+    assert.equal(known.stdout, run(args, env, join(fixtureSource, 'cli.mjs'), undefined, consumer).stdout);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
