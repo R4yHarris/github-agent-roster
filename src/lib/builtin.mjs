@@ -903,6 +903,15 @@ async function runBuiltinAssignment(issueNumber, {
       });
     }
   }
+  if (askKind === 'slice' && !planMode && !planner.error) {
+    const { critiquePlannerHandoff } = await import('../seats/planner.mjs');
+    planner = await critiquePlannerHandoff(planner, {
+      worktree: worktreePath, ask: prepared.ask, title: prepared.issue.title, reference,
+      learningRoot: prepared.repoRoot, config: activeConfig, env, fetchImpl, vault, signal,
+      session: sessions.planner, task: prepared.task,
+      retryCommand, lockedModel: route?.profile.model, onEvent: onRunEvent,
+    });
+  }
   const taskClass = askKind === 'slice' && !planMode ? planner.metadata.task_class
     : prepared.metadata?.task_class ?? inferTaskClass(prepared.issue.title) ?? 'feat';
   const provenanceRunId = `run-${randomBytes(8).toString('hex')}`;
@@ -922,6 +931,8 @@ async function runBuiltinAssignment(issueNumber, {
   };
   const plannerRun = planner.run;
   if (!planner.reused) await recordSeat(sessions.planner, plannerRun);
+  for (const run of planner.critic?.runs ?? []) await recordSeat(run.metrics.session, run);
+  if (planner.critic?.revisionRun) await recordSeat(`${sessions.planner}-revision`, planner.critic.revisionRun);
   if (planner.error) {
     log(`Planning failed: ${planner.error}\nRECIPE/TASK stubs are unverified; coder, reviewer, tests, and publication did not run.`);
     return {

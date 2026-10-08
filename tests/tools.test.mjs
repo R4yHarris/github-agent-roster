@@ -20,6 +20,24 @@ function docsCheck(worktree) {
   writeFileSync(path.join(worktree, 'tests', 'repl.test.mjs'), '');
 }
 
+test('trusted planner snapshots permit only unchanged scoped artifacts to be revised', async (context) => {
+  const worktree = fixture(context);
+  const source = '# Original task\n';
+  writeFileSync(path.join(worktree, 'TASK.md'), source);
+  await assert.rejects(createTools({ worktree, seat: 'planner',
+    initialPlannerArtifacts: { 'TASK.md': '# Wrong task\n' } }), /changed after validation/);
+  await assert.rejects(createTools({ worktree, seat: 'coder',
+    initialPlannerArtifacts: { 'TASK.md': source } }), /scoped text snapshots/);
+  await assert.rejects(createTools({ worktree, seat: 'planner',
+    initialPlannerArtifacts: { 'README.md': '# Example\n' } }), /scoped text snapshots/);
+  const tools = await createTools({ worktree, seat: 'planner', initialPlannerArtifacts: { 'TASK.md': source } });
+  await tools.write_file({ path: 'TASK.md', content: '# Critiqued task\n' });
+  assert.equal(readFileSync(path.join(worktree, 'TASK.md'), 'utf8'), '# Critiqued task\n');
+  writeFileSync(path.join(worktree, 'TASK.md'), '# Externally changed\n');
+  await assert.rejects(tools.write_file({ path: 'TASK.md', content: '# Replacement\n' }), /changed outside/);
+  assert.equal(readFileSync(path.join(worktree, 'TASK.md'), 'utf8'), '# Externally changed\n');
+});
+
 test('read_file on a missing path names real similar siblings without leaking the host path', async (context) => {
   const worktree = fixture(context);
   mkdirSync(path.join(worktree, 'src', 'lib'), { recursive: true });
