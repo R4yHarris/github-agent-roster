@@ -52,6 +52,10 @@ export async function resolveRepoIdentity({ repoRoot, run = execute } = {}) {
       'Run inside a git repository or initialize one with `git init`.',
       { code: 'E_GIT_METADATA', cause: error });
   }
+  if (commonDir === '') {
+    throw new RepoIdentityError('git returned an empty common directory; refusing ambiguous repository identity.',
+      { code: 'E_IDENTITY_INPUT' });
+  }
 
   let remoteUrl;
   try {

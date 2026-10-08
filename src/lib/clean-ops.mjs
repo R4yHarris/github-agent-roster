@@ -7,6 +7,7 @@ import { redactRecord } from './redaction.mjs';
 import {
   STATE_SCOPES,
   ContainmentError,
+  assertNoSymlinkComponents,
   canonicalPath,
   ensureContainedPath,
   isContainedIn,
@@ -54,23 +55,14 @@ function isPlainObject(value) {
 
 /**
  * Normalize to a plain absolute string path via paths.mjs `canonicalPath`.
- * `canonicalPath` is asynchronous, so this helper awaits it and falls back to
- * `path.resolve` when the canonical form cannot be computed (for example for
- * paths that do not exist on disk yet).
+ * `canonicalPath` also validates parents when the path does not exist yet.
+ * Inspection failures propagate rather than degrading to lexical containment.
  */
 async function normalizePath(value) {
   if (typeof value !== 'string' || value.length === 0) {
     return null;
   }
-  try {
-    const canonical = await canonicalPath(value);
-    if (typeof canonical === 'string' && canonical.length > 0) {
-      return canonical;
-    }
-  } catch {
-    // fall through to a plain resolve
-  }
-  return path.resolve(value);
+  return canonicalPath(value);
 }
 
 function samePath(a, b) {
@@ -118,6 +110,10 @@ async function assertNotForbidden(root, forbidden) {
   if (!target) {
     throw new CleanOpsError('a non-empty path is required', FORBIDDEN_CODE, { path: root });
   }
+  if (samePath(target, path.parse(target).root)) {
+    throw new CleanOpsError('refusing to use a filesystem root as a state root',
+      FORBIDDEN_CODE, { path: target });
+  }
   for (const entry of forbidden) {
     if (samePath(entry.path, target)) {
       throw new CleanOpsError(
@@ -125,6 +121,22 @@ async function assertNotForbidden(root, forbidden) {
         FORBIDDEN_CODE,
         { label: entry.label, path: entry.path }
       );
+    }
+  }
+  return target;
+}
+
+async function directoryStateRoot(root, { repoRoot, worktreeRoot } = {}) {
+  if (typeof root !== 'string' || root.length === 0) {
+    throw new CleanOpsError('state root handle is missing a root', FORBIDDEN_CODE);
+  }
+  assertNoSymlinkComponents(root, { scope: 'clean' });
+  const forbidden = await forbiddenStateRoots({ repoRoot, worktreeRoot });
+  const target = await assertNotForbidden(root, forbidden);
+  for (const entry of forbidden.filter(({ label }) => label === 'repo' || label === 'worktree')) {
+    if (isContainedIn(target, entry.path) || isContainedIn(entry.path, target)) {
+      throw new CleanOpsError('directory cleanup state must not overlap a repository or worktree',
+        FORBIDDEN_CODE, { path: target, label: entry.label });
     }
   }
   return target;
@@ -221,7 +233,7 @@ export async function resolveStateRoot(repoRoot, options = {}) {
       : null;
 
   if (options.stateRoot !== undefined) {
-    const override = await assertNotForbidden(options.stateRoot, forbidden);
+    const override = await directoryStateRoot(options.stateRoot, { repoRoot, worktreeRoot: options.worktreeRoot });
     await fsp.mkdir(override, { recursive: true });
     return {
       scope,
@@ -233,6 +245,8 @@ export async function resolveStateRoot(repoRoot, options = {}) {
       home: os.homedir(),
       writable: true,
       resolvedRepoId: repoId,
+      repoRoot,
+      worktreeRoot: options.worktreeRoot,
     };
   }
 
@@ -256,7 +270,8 @@ export async function resolveStateRoot(repoRoot, options = {}) {
   }
   await assertNotForbidden(root, forbidden);
   assertStateScope(handle, scope);
-  return { ...handle, repoId: handle.repoId ?? repoId, resolvedRepoId: repoId };
+  return { ...handle, repoId: handle.repoId ?? repoId, resolvedRepoId: repoId,
+    repoRoot, worktreeRoot: options.worktreeRoot };
 }
 
 /**
@@ -272,6 +287,7 @@ export async function resolveStatePath(handle, relativePath = '.') {
   if (typeof relativePath !== 'string') {
     throw new CleanOpsError('relativePath must be a string', ESCAPE_CODE);
   }
+  assertNoSymlinkComponents(root, { scope: scopeOf(handle) });
 
   const canonicalRoot = await normalizePath(root);
   if (!canonicalRoot) {
@@ -361,6 +377,7 @@ export async function assertSafeStatePath(handle, targetPath) {
   if (typeof targetPath !== 'string') {
     throw new CleanOpsError('relativePath must be a string', ESCAPE_CODE, { handle });
   }
+  assertNoSymlinkComponents(root, { scope: scopeOf(handle) });
 
   const canonicalRoot = await normalizePath(root);
   const candidate = path.resolve(canonicalRoot ?? root, targetPath);
@@ -437,10 +454,7 @@ export async function ensureStateDirectory(handle) {
   if (!root) {
     throw new CleanOpsError('state root handle is missing a root', FORBIDDEN_CODE, { handle });
   }
-  const safe = await assertNotForbidden(
-    root,
-    await forbiddenStateRoots({ repoRoot: handle.repoRoot, worktreeRoot: handle.worktreeRoot })
-  );
+  const safe = await directoryStateRoot(root, handle);
   await fsp.mkdir(safe, { recursive: true });
   return safe;
 }
@@ -456,9 +470,7 @@ const LOCKS_DIR = 'locks';
 // The state root itself is never a deletion target, but sweeps and lock probes read it.
 async function canonicalStateRoot(handle) {
   assertStateScope(handle);
-  const root = await normalizePath(rootOf(handle));
-  if (!root) throw new CleanOpsError('state root handle is missing a root', FORBIDDEN_CODE, { handle });
-  return assertNotForbidden(root, await forbiddenStateRoots({ repoRoot: handle.repoRoot, worktreeRoot: handle.worktreeRoot }));
+  return directoryStateRoot(rootOf(handle), handle);
 }
 
 function names(value, label) {
@@ -762,6 +774,7 @@ export async function pruneProvenance(storeRoot, options = {}) {
   if (typeof storeRoot !== 'string' || !path.isAbsolute(storeRoot)) {
     throw new CleanOpsError('the provenance store root must be an absolute path', FORBIDDEN_CODE, { storeRoot });
   }
+  assertNoSymlinkComponents(storeRoot, { scope: 'machine' });
   const root = await assertNotForbidden(storeRoot,
     await forbiddenStateRoots({ repoRoot: options.repoRoot, worktreeRoot: options.worktreeRoot }));
   const matches = provenanceMatcher(target, options);

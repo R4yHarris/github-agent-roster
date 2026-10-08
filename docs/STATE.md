@@ -363,7 +363,14 @@ anything else. `evaluateRetention(policy, { nowMs, windowMs, optOut, createdAtMs
 and throws on a missing or invalid record age rather than treating it as expired.
 
 `roster clean --target <target>` is the shipped cleanup surface (#278). It is a dry-run preview
-unless `--execute --yes` is given, and each target resolves only its own root:
+unless `--execute --yes` is given, and each target resolves only its own root.
+
+Directory state roots cannot overlap a repository/worktree in either direction,
+including source, Git metadata and tracked configuration. All native filesystem
+roots and linked root components are refused before creation or deletion.
+An unreadable or empty Git common directory/origin cannot initialize cleanup
+state. Provenance remains a separate, selectively pruned store rather than a
+directory sweep.
 
 | Target | Deletes | Never touches |
 | --- | --- | --- |
