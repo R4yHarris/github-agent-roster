@@ -65,8 +65,9 @@ for (const scenario of recording.scenarios) {
           throw error;
         }
       },
-      runTestCommand: async () => {
+      runTestCommand: async (_program, args) => {
         assert.equal(controller.signal.aborted, false, 'No tests after cancellation');
+        if (args[0] === '--check') return { stdout: '', stderr: '' };
         const outcome = scenario.tests[tests++];
         assert.ok(outcome, `Unexpected test invocation ${tests}`);
         if (outcome === 'fail') throw Object.assign(new Error('tests failed'), {

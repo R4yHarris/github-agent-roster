@@ -208,9 +208,10 @@ test('LLM coder uses only offered tools within the turn budget, then verifies te
   const result = await runCoder({
     ...options, env: { ROSTER_API_KEY: 'private-value', GH_TOKEN: 'git-secret' },
     fetchImpl, runTestCommand: async (_program, _args, { env }) => {
-      tests += 1;
       assert.equal(env.ROSTER_API_KEY, undefined);
       assert.equal(env.GH_TOKEN, undefined);
+      if (_args[0] === '--check') return { stdout: '', stderr: '' };
+      tests += 1;
       return { stdout: 'all tests pass', stderr: '' };
     },
   });
@@ -311,7 +312,8 @@ test('named vLLM profile performs one worktree tool call then stops on a passing
         usage: { prompt_tokens: 5, completion_tokens: 3 },
       }) };
     },
-    runTestCommand: async () => {
+    runTestCommand: async (_program, args) => {
+      if (args[0] === '--check') return { stdout: '', stderr: '' };
       tests += 1;
       return { stdout: 'pass', stderr: '' };
     },
@@ -539,7 +541,8 @@ test('failed final tests receive another turn before acceptance while usage and 
         usage: { prompt_tokens: 1, completion_tokens: 1 },
       }) };
     },
-    runTestCommand: async () => {
+    runTestCommand: async (_program, args) => {
+      if (args[0] === '--check') return { stdout: '', stderr: '' };
       tests += 1;
       if (tests === 1) throw Object.assign(new Error('tests failed'), {
         code: 1, stdout: 'not ok private-value', stderr: 'warning: test output also captured',
@@ -839,6 +842,7 @@ test('a nonzero run_test returns captured output for the coder to fix in the nex
   const result = await runCoder({
     ...options, env: { ROSTER_API_KEY: 'test-only-key' }, fetchImpl,
     runTestCommand: async (_program, _args, { timeout }) => {
+      if (_args[0] === '--check') return { stdout: '', stderr: '' };
       testRuns += 1;
       // The coder's own run is targeted; final verification runs the full suite with its longer cap.
       assert.equal(timeout, testRuns === 1 ? 60_000 : 900_000);

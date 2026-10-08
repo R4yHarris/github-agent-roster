@@ -109,7 +109,7 @@ test('an identical rewrite with green tests gets one no-progress correction and 
   const result = await runCoder(coderOptions(options, {
     askKind: 'slice',
     runTestCommand: async (program, args, commandOptions) => {
-      tests += 1;
+      if (args[0] === '--test') tests += 1;
       return { stdout: execFileSync(program, args, { ...commandOptions, encoding: 'utf8' }), stderr: '' };
     },
     fetchImpl: async (_url, request) => {
