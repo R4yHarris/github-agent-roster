@@ -43,7 +43,7 @@ persisted record can never be mutated in place.
 | `tools.name` | `string` | yes | Primary tool name used by the run. |
 | `tools.version` | `string` | yes | Tool version. |
 | `metrics` | `object` | yes | Metric map, frozen. Known metrics are numeric; every other value is the `"unknown"` sentinel (see below). |
-| `evidence` | `object` | yes | Free-form tool evidence, frozen. All string leaves must pass redaction before persistence. |
+| `evidence` | `object` | yes | Diagnostic summaries/references and tool outcomes, frozen. Body snapshots are rejected; string leaves must pass redaction before persistence. |
 
 ### Metrics and the `unknown` sentinel
 
@@ -156,6 +156,51 @@ Compatibility guarantees:
 - Migrations are forward-only: a migration reads records of version N and
   emits records of version N+1; it never mutates original records, consistent
   with the append-safe convention.
+
+The durable store validates `schemaVersion` when present and requires it for
+`recordType: "provenance"`. Only the current schema major is readable; other
+majors require migration. Same-major minor/patch versions (including valid
+semver prerelease/build suffixes) retain extra metadata unchanged. Legacy
+generic and curated records without a schema discriminator remain supported
+under the independent store `version: 1` envelope.
+
+Invalid append attempts fail with `E_INVALID_RECORD` before any write.
+`readAll()` reports incompatible or malformed entries in `skipped`, and
+`repair()` quarantines their original bytes while preserving valid neighbors.
+Typed queries fail explicitly when skipped entries exist, rather than
+silently returning incomplete history. Quarantine is explicit, not an
+automatic destructive migration.
+
+## Bounded diagnostic metadata
+
+Per spec sections 5.6 and 5.8, provenance is diagnostic metadata, not an
+unrestricted prompt or source archive (section 3). Callers must supply
+summaries and references, such as `summary`, `sourceRef`, `promptRef`,
+check/review/eval references, tool outcomes, and measured usage.
+
+The typed API and durable store reject body-bearing fields recursively,
+including inside nested objects and arrays: `prompt`, `prompts`,
+`promptBody`, `promptBodies`, `promptSnapshot`, `promptSnapshots`,
+`rawPrompt`, `systemPrompt`, `userPrompt`, `source`, `sources`, `sourceBody`,
+`sourceBodies`, `sourceSnapshot`, `sourceSnapshots`, `rawSource`,
+`sourceCode`, `fileContents`, `messages`, `transcript`, and `transcripts`.
+Field matching ignores case, underscores, and hyphens. Rejection reports the
+field path; bodies are never silently dropped or replaced with fabricated
+metadata. Already-stored invalid records follow the same explicit quarantine
+path as incompatible versions.
+
+Optional envelope fields set to `undefined` remain absent during serialization,
+preserving existing in-memory history/export records. Nested payloads do not
+receive that exception, and body-bearing field names remain rejected.
+Payloads must be plain JSON objects with finite numbers and dense arrays:
+cycles, undefined values, non-JSON objects, and non-finite numbers are errors,
+not success-shaped empty payloads. Other diagnostic metadata and future
+schema keys remain supported. Producers must not disguise snapshots as
+summaries or tool outcomes; field validation is not a content classifier.
+There is no raw-snapshot opt-in on this provenance API. Existing diagnostic
+output and curated memory text remain available and use the shared redactor.
+Measured usage values and explicit unknown values are preserved unchanged;
+this boundary does not invent missing measurements.
 
 ## Redaction policies
 

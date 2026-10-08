@@ -17,28 +17,37 @@ const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
  * cannot accidentally ship secrets or local state.
  */
 
-// Every runtime state subtree the repo gitignore must cover. Tracked
-// templates and docs are deliberately NOT listed here: only runtime state
-// is protected from commits.
+// Every runtime state subtree the repo gitignore must cover and the index must
+// never contain. Tracked templates, docs, and shared contributor setup are
+// deliberately NOT listed here: only runtime state is protected from commits.
 export const RUNTIME_STATE_PATTERNS = Object.freeze([
   '.roster/runs/',
   '.roster/logs/',
   '.roster/history',
   '.roster/history.*',
   '.roster/checkpoints/',
+  '.roster/locks/',
   '.roster/map.md',
   '.roster/evals.jsonl',
+  '.roster/memory/',
+  '.roster/asks/',
+  '.roster-state/',
+  '/evals.jsonl',
+]);
+
+// Private setup is ignored by default so a local onboard never stages it, but a
+// repository may deliberately track shared config/fleet/capabilities. These
+// must stay ignored for untracked copies and are never rejected once tracked.
+export const PRIVATE_SETUP_PATTERNS = Object.freeze([
   '.roster/config.yml',
   '.roster/config.yml.*',
   '.roster/fleet.yml',
   '.roster/fleet.yml.*',
   '.roster/capabilities.yml',
   '.roster/capabilities.yml.*',
-  '.roster/memory/',
-  '.roster/asks/',
-  '.roster-state/',
-  '/evals.jsonl',
 ]);
+
+const IGNORE_PATTERNS = Object.freeze([...RUNTIME_STATE_PATTERNS, ...PRIVATE_SETUP_PATTERNS]);
 
 export class RosterScopeError extends Error {
   constructor(message, { paths = [] } = {}) {
@@ -56,7 +65,7 @@ function git(repoRoot, ...args) {
 }
 
 /**
- * Verify that `.gitignore` covers every runtime state pattern.
+ * Verify that `.gitignore` covers every runtime state and private setup pattern.
  * Fails when a pattern is missing from the tracked `.gitignore`.
  */
 export async function checkGitignoreCoverage({ repoRoot = rosterRoot } = {}) {
@@ -70,7 +79,7 @@ export async function checkGitignoreCoverage({ repoRoot = rosterRoot } = {}) {
     );
   }
   const lines = new Set(source.replace(/\r\n/g, '\n').split('\n'));
-  const missing = RUNTIME_STATE_PATTERNS.filter((pattern) => {
+  const missing = IGNORE_PATTERNS.filter((pattern) => {
     if (lines.has(pattern)) return false;
     // A blanket parent-directory rule also covers the pattern
     // (e.g. `.roster/` covers `.roster/config.yml`).
@@ -84,7 +93,7 @@ export async function checkGitignoreCoverage({ repoRoot = rosterRoot } = {}) {
       { paths: missing },
     );
   }
-  return { ok: true, patterns: RUNTIME_STATE_PATTERNS };
+  return { ok: true, patterns: IGNORE_PATTERNS };
 }
 
 /**

@@ -8,6 +8,7 @@ node_modules/
 .roster/history
 .roster/history.*
 .roster/checkpoints/
+.roster/locks/
 .roster/map.md
 .roster/evals.jsonl
 .roster/config.yml

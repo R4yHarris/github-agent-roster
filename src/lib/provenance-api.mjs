@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { compareIdentity, resolveRepoIdentity } from './repo-identity.mjs';
 import { SCHEMA_VERSION, createRecord } from './provenance-schema.mjs';
-import { openProvenanceStore, validateProvenanceRecord as earlierValidate } from './provenance-store.mjs';
+import { openProvenanceStore, ProvenanceStoreError, validateProvenanceData,
+  validateProvenanceRecord as earlierValidate } from './provenance-store.mjs';
 import { redactRecord } from './redaction.mjs';
 
 // Re-exports keep the earlier-wave names on this module's public surface.
@@ -18,6 +19,14 @@ const COMPACTION_SECTION = 'compaction';
 const COMPACTION_EVENT = 'compacted';
 
 const isNonEmptyString = (value) => typeof value === 'string' && value.trim() !== '';
+
+function validatePayload(payload) {
+  if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new TypeError('provenance payload must be a plain JSON object');
+  }
+  validateProvenanceData(payload, 'payload');
+  return payload;
+}
 
 /**
  * Typed provenance record validation. A record must carry a run id, session
@@ -47,7 +56,7 @@ export function validateProvenanceRecord(record, source = 'provenance record') {
   if (repoIdentity !== undefined && !/^[a-z0-9]+-[a-f0-9]{64}$/.test(repoIdentity)) {
     throw new TypeError(`${source} repoIdentity must be a derived identity hash (algorithm-hex)`);
   }
-  const payload = record.payload ?? {};
+  const payload = validatePayload(record.payload === undefined ? {} : record.payload);
   if (typeof earlierValidate === 'function') {
     const result = earlierValidate(
       { id: record.id ?? `${runId}/${sessionId}`, version: record.version ?? 1, ...record },
@@ -69,7 +78,7 @@ export function validateProvenanceRecord(record, source = 'provenance record') {
  * repository identity and redacts any secret-looking material.
  */
 export function buildProvenanceRecord({ runId, sessionId, event, payload } = {}, { repoIdentity, now = Date.now(), redact = true } = {}) {
-  const payloadObject = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : undefined;
+  const payloadObject = validatePayload(payload === undefined ? {} : payload);
   const record = createRecord({
     ...Object.fromEntries([
       'repository', 'issue', 'seat', 'route', 'requestedModel', 'servedModel',
@@ -254,7 +263,12 @@ export class ProvenanceStore {
   }
 
   async #load(identity, section) {
-    const { records } = await this.underlying.readAll();
+    const { records, skipped = [] } = await this.underlying.readAll();
+    if (skipped.length) {
+      throw new ProvenanceStoreError(
+        `Provenance contains ${skipped.length} malformed or incompatible record(s); run store.repair() to quarantine them before querying.`,
+        { code: 'E_INVALID_RECORD', path: this.root });
+    }
     return records
       .filter((record) => {
         if (!record || typeof record !== 'object') return false;
@@ -294,13 +308,14 @@ export class ProvenanceStore {
     if (typeof memory !== 'string' || memory.trim() === '') {
       throw new TypeError('curated memory requires a non-empty memory string');
     }
+    if (payload !== undefined) validatePayload(payload);
     const record = redactRecord({
       repoIdentity: identity,
       runId,
       sessionId,
       event: 'memory',
       memory,
-      ...(payload ? { payload } : {}),
+      ...(payload !== undefined ? { payload } : {}),
     });
     validateMemoryRecord(record, 'curated memory record');
     record.id = storeRecordId(identity, runId, sessionId, 'memory', CURATED_SECTION);

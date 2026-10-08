@@ -2,6 +2,7 @@ import { promises as fs } from 'node:fs';
 import { join, dirname, basename } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { acquireRepoLock, RepoLockError } from './repo-locks.mjs';
+import { SCHEMA_VERSION } from './provenance-schema.mjs';
 
 /**
  * Atomic provenance persistence with crash recovery (parent #195).
@@ -34,6 +35,46 @@ export const SEGMENT_NAME = 'provenance.log';
 export const SEGMENT_SUFFIX = '.tmp';
 
 export const RECORD_VERSION = 1;
+
+const BODY_FIELDS = new Set([
+  'prompt', 'prompts', 'promptbody', 'promptbodies', 'promptsnapshot', 'promptsnapshots',
+  'rawprompt', 'systemprompt', 'userprompt',
+  'source', 'sources', 'sourcebody', 'sourcebodies', 'sourcesnapshot', 'sourcesnapshots',
+  'rawsource', 'sourcecode', 'filecontents',
+  'messages', 'transcript', 'transcripts',
+]);
+
+/**
+ * Validate JSON diagnostic metadata without serializing or dropping values.
+ * Body snapshots are not provenance; callers must supply summaries/references.
+ */
+export function validateProvenanceData(value, source = 'record', ancestors = new Set(), allowAbsentFields = false) {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
+  if (typeof value === 'number' && Number.isFinite(value)) return;
+  if (typeof value !== 'object' || (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype)) {
+    throw new TypeError(`${source} must contain only JSON data (finite numbers, strings, booleans, null, arrays, and plain objects)`);
+  }
+  if (ancestors.has(value)) throw new TypeError(`${source} must not contain circular data`);
+  if (Array.isArray(value)) {
+    const keys = Object.keys(value);
+    if (keys.length !== value.length || keys.some((key, index) => key !== String(index))) {
+      throw new TypeError(`${source} must be a dense JSON array without extra properties`);
+    }
+  }
+  ancestors.add(value);
+  try {
+    for (const [key, nested] of Object.entries(value)) {
+      const field = `${source}.${key}`;
+      if (BODY_FIELDS.has(key.replace(/[_-]/g, '').toLowerCase())) {
+        throw new TypeError(`${field} is a prompt/source body snapshot; use a summary or reference instead`);
+      }
+      if (allowAbsentFields && nested === undefined) continue;
+      validateProvenanceData(nested, field, ancestors);
+    }
+  } finally {
+    ancestors.delete(value);
+  }
+}
 
 export class ProvenanceStoreError extends Error {
   constructor(message, { code, path, recordId, cause } = {}) {
@@ -106,8 +147,8 @@ async function fsyncDirectory(fileSystem, dirPath) {
 
 /**
  * Validate a provenance record: it must be a plain JSON object with a
- * non-empty string `id` and the current `version`. Anything else is
- * malformed or incompatible and belongs in quarantine, never the log.
+ * non-empty string `id`, the current envelope `version`, and compatible
+ * schema metadata without body snapshots. Invalid data belongs in quarantine.
  */
 export function validateProvenanceRecord(value) {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -122,6 +163,22 @@ export function validateProvenanceRecord(value) {
   }
   if (version !== RECORD_VERSION) {
     return { ok: false, reason: `incompatible record version ${JSON.stringify(version)} (expected ${RECORD_VERSION})` };
+  }
+  if (Object.hasOwn(value, 'schemaVersion') || value.recordType === 'provenance') {
+    const schemaVersion = value.schemaVersion;
+    const semver = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+    if (typeof schemaVersion !== 'string' || !semver.test(schemaVersion)) {
+      return { ok: false, reason: 'record.schemaVersion must be a semver string' };
+    }
+    if (schemaVersion.split('.')[0] !== SCHEMA_VERSION.split('.')[0]) {
+      return { ok: false, reason: `incompatible record.schemaVersion ${schemaVersion} (expected major ${SCHEMA_VERSION.split('.')[0]}); migration required` };
+    }
+  }
+  try {
+    validateProvenanceData(value, 'record', new Set(), true);
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    return { ok: false, reason: error.message };
   }
   return { ok: true, record: value, body };
 }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -89,6 +89,86 @@ test('validateProvenanceRecord enforces the five lifecycle events', () => {
   assert.throws(() => validateProvenanceRecord({ ...ok, event: 'bogus' }), TypeError);
   assert.throws(() => validateProvenanceRecord({ ...ok, runId: '' }), TypeError);
   assert.throws(() => validateProvenanceRecord({ ...ok, repoIdentity: 'no-hash' }), TypeError);
+});
+
+test('typed validation rejects incompatible or malformed schema versions', () => {
+  const record = { runId: 'schema-run', sessionId: 'schema-session', event: 'completed' };
+  for (const schemaVersion of ['99.0.0', '0.1.0', 'invalid', '1.0.0-01', null]) {
+    assert.throws(() => validateProvenanceRecord({ ...record, schemaVersion }), /schemaVersion/);
+  }
+  for (const schemaVersion of ['1.9.0', '1.0.1', '1.2.0-rc.1+fixture']) {
+    assert.doesNotThrow(() => validateProvenanceRecord({ ...record, schemaVersion }));
+  }
+});
+
+test('typed persistence refuses nested prompt/source snapshots before writing', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'prov-snapshots-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const { dir, store } = await makeStore({ root, ...REPO_A });
+  for (const key of ['prompt', 'source', 'promptBody', 'source_body', 'rawPrompt',
+    'system_prompt', 'sourceCode', 'file_contents', 'messages', 'transcript']) {
+    const payload = { evidence: [{ [key]: 'PROTECTED_BODY_FIXTURE_195' }] };
+    assert.throws(() => buildProvenanceRecord({
+      runId: 'snapshot-run', sessionId: 'snapshot-session', event: 'failure', payload,
+    }), /snapshot|body/i);
+    await assert.rejects(() => store.recordEvent({
+      runId: 'snapshot-run', sessionId: 'snapshot-session', event: 'failure', payload,
+    }), /snapshot|body/i);
+    await assert.rejects(() => store.recordMemory({
+      runId: 'snapshot-run', sessionId: 'snapshot-session', memory: 'curated note', payload,
+    }), /snapshot|body/i);
+  }
+  assert.deepEqual(await store.underlying.readAll(), { records: [], skipped: [] });
+  assert.deepEqual(await readdir(dir), []);
+});
+
+test('typed payload validation rejects malformed data and preserves diagnostic metadata and usage', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'prov-metadata-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const { store } = await makeStore({ root, ...REPO_A });
+  const circular = {};
+  circular.self = circular;
+  for (const payload of [null, 'body', [], { duration: NaN }, { output: undefined },
+    { values: new Array(1) }, circular, { timestamp: new Date(0) }]) {
+    await assert.rejects(() => store.recordEvent({
+      runId: 'metadata-run', sessionId: 'metadata-session', event: 'completed', payload,
+    }), TypeError);
+  }
+  const payload = {
+    summary: 'Tool failed; source is referenced, not captured',
+    sourceRef: 'fixture.mjs:12', promptRef: 'prompt-195',
+    requestedModel: 'requested-fixture', servedModel: 'served-fixture',
+    metrics: { tokens_prompt: 123, tokens_completion: 'unknown', cost_usd: null },
+    evidence: { output: 'api_key = "test-only-private-api-key"', exitCode: 1 },
+  };
+  await store.recordEvent({
+    runId: 'metadata-run', sessionId: 'metadata-session', event: 'completed', payload,
+  });
+  const [persisted] = await store.query({});
+  assert.deepEqual(persisted.payload.metrics, payload.metrics);
+  assert.equal(persisted.payload.sourceRef, payload.sourceRef);
+  assert.equal(persisted.payload.promptRef, payload.promptRef);
+  assert.equal(persisted.payload.summary, payload.summary);
+  assert.equal(persisted.payload.requestedModel, payload.requestedModel);
+  assert.equal(persisted.payload.servedModel, payload.servedModel);
+  assert.match(persisted.payload.evidence.output, /REDACTED/);
+});
+
+test('typed queries surface incompatible persisted records instead of silently omitting them', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'prov-query-schema-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const { dir, store } = await makeStore({ root, ...REPO_A });
+  await mkdir(path.join(dir, 'log'), { recursive: true });
+  await writeFile(path.join(dir, 'log', 'incompatible.json'), JSON.stringify({
+    id: 'incompatible', version: 1, schemaVersion: '99.0.0',
+    repoIdentity: await store.identity(), section: 'raw-history',
+    runId: 'schema-run', sessionId: 'schema-session', event: 'completed',
+  }));
+  assert.equal((await store.underlying.readAll()).skipped.length, 1);
+  await assert.rejects(() => store.query({}), /quarantine|repair/i);
+  const repaired = await store.underlying.repair();
+  assert.equal(repaired.quarantined.length, 1);
+  assert.deepEqual(await store.query({}), []);
 });
 
 // --- lifecycle: five required cases ----------------------------------------
