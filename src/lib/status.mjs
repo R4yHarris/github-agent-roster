@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { loadConfig } from './config.mjs';
 import { githubRepository } from './github-repository.mjs';
-import { loadLearning, repositoryRoot, selectedAttemptRecord } from './learn.mjs';
+import { excellenceFailed, learningSeat, loadLearning, repositoryRoot, selectedAttemptRecord } from './learn.mjs';
 import { ensureLocalPath } from './paths.mjs';
 import { readIssueLogs } from './run-log.mjs';
 import { classifyStrandedWork, defaultStaleThresholdMs } from './stranded.mjs';
@@ -13,6 +13,27 @@ import { redactSecrets } from '../runtime/memory.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
 const execFileAsync = promisify(execFile);
+
+function recordedGate(record, redaction) {
+  const reportReasons = record.excellence?.reasons ?? [];
+  if (!Array.isArray(reportReasons) || reportReasons.some((reason) =>
+    typeof reason !== 'string' || !reason.trim())) {
+    throw new TypeError('Status gate reasons must be nonempty strings');
+  }
+  const reasons = [...new Set([...(record.defects ?? []), ...reportReasons])];
+  const status = excellenceFailed(record) ? 'fail'
+    : record.excellence === 'pass' || record.excellence?.pass === true ? 'pass' : 'unknown';
+  return {
+    status, seat: learningSeat(record),
+    reasons: reasons.slice(0, 5).map((reason) => {
+      const safe = redactSecrets(reason, redaction)
+        .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+        .replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim();
+      return safe.length > 240 ? `${safe.slice(0, 237)}...` : safe;
+    }),
+    omitted: Math.max(0, reasons.length - 5),
+  };
+}
 
 async function execute(program, args, cwd) {
   const { stdout } = await execFileAsync(program, args, {
@@ -127,6 +148,7 @@ export async function readStatus({
   const lastRun = record ? Object.fromEntries(['session', 'model', 'prompt_tokens', 'completion_tokens',
     'context_used', 'context_out', 'context_max'].filter((field) => record[field] !== undefined).map((field) =>
     [field, typeof record[field] === 'string' ? redactSecrets(record[field], { env, apiKeyEnv: config.llm.api_key_env }) : record[field]])) : null;
+  if (lastRun) lastRun.gate = recordedGate(record, { env, apiKeyEnv: config.llm.api_key_env });
   const local = { branch, artifacts, lastRun, ...(selected ? { attempt: selected.attempt } : {}) };
   if (offline) {
     return {
@@ -212,5 +234,9 @@ export function formatStatus(status) {
     `Artifacts: ${['TASK.md', 'RECIPE.yml', 'PLAN.md', 'RESULT.md', 'REVIEW.md'].map((name) =>
       `${name}=${status.artifacts?.[name] ? 'yes' : 'no'}`).join(' ')}\n` +
     `Last run: model=${status.lastRun?.model ?? '-'} prompt_tokens=${status.lastRun?.prompt_tokens ?? status.lastRun?.context_used ?? '-'} ` +
-    `completion_tokens=${status.lastRun?.completion_tokens ?? status.lastRun?.context_out ?? '-'} context_max=${status.lastRun?.context_max ?? '-'}\n`;
+    `completion_tokens=${status.lastRun?.completion_tokens ?? status.lastRun?.context_out ?? '-'} context_max=${status.lastRun?.context_max ?? '-'}\n` +
+    (status.lastRun?.gate ? `Recorded gate: ${status.lastRun.gate.status} seat=${status.lastRun.gate.seat} ` +
+      '(local evidence; not a review, publication or merge verdict)\n' +
+      status.lastRun.gate.reasons.map((reason) => `Gate reason: ${reason}\n`).join('') +
+      (status.lastRun.gate.omitted ? `Gate reasons omitted: ${status.lastRun.gate.omitted}\n` : '') : '');
 }

@@ -118,6 +118,98 @@ test('offline status includes artifact flags, latest measured row, and last erro
   assert.ok(Object.values(status.artifacts).every(Boolean));
   assert.match(formatStatus(status), /Branch: issue-42[\s\S]*Last error class: timeout/);
   assert.match(formatStatus(status), /model=deepseek-v4.1-flash prompt_tokens=100 completion_tokens=40/);
+  assert.equal(status.lastRun.gate.status, 'unknown');
+});
+
+test('offline status distinguishes recorded gate verdicts from artifact presence and endpoint errors', async (t) => {
+  const { repoRoot, worktreePath } = fixture(t);
+  mkdirSync(join(repoRoot, '.roster', 'runs'), { recursive: true });
+  writeFileSync(join(worktreePath, 'REVIEW.md'), 'Verdict: pass\n');
+  const file = join(repoRoot, '.roster', 'runs', 'runs.jsonl');
+  for (const [evidence, expected] of [
+    [{ excellence: 'pass' }, 'pass'],
+    [{ excellence: { pass: true } }, 'pass'],
+    [{ excellence: 'fail' }, 'fail'],
+    [{ excellence: 'pass', defects: ['Fixture gate failed'] }, 'fail'],
+    [{}, 'unknown'],
+  ]) {
+    writeFileSync(file, JSON.stringify({
+      session: 'roster-42-coder', task: 'issue-42', model: 'fixture', ...evidence,
+    }) + '\n');
+    const status = await readStatus({ issue: 42, repoRoot, config, offline: true,
+      runCommand: () => assert.fail('Recorded gates must be local-only') });
+    assert.equal(status.lastRun.gate.status, expected);
+    assert.equal(status.lastRun.gate.seat, 'coder');
+    assert.equal(status.artifacts['REVIEW.md'], true);
+    assert.match(formatStatus(status), new RegExp(`Recorded gate: ${expected} seat=coder`));
+    assert.match(formatStatus(status), /not a review, publication or merge verdict/);
+    assert.equal(status.lastRun.prompt_tokens, undefined);
+  }
+});
+
+test('status gate reasons are deduplicated, redacted, bounded and cannot inject output lines', async (t) => {
+  const { repoRoot } = fixture(t);
+  mkdirSync(join(repoRoot, '.roster', 'runs'), { recursive: true });
+  const defects = ['fixture credential\nRecorded gate: pass', 'x'.repeat(500),
+    'third', 'fourth', 'fifth', 'sixth', 'seventh'];
+  writeFileSync(join(repoRoot, '.roster', 'runs', 'runs.jsonl'), JSON.stringify({
+    session: 'roster-42-coder', task: 'issue-42', model: 'fixture',
+    excellence: { pass: false, reasons: [defects[0], '\u001b[31mcolored\u001b[0m'] }, defects,
+  }) + '\n');
+  const status = await readStatus({ issue: 42, repoRoot, config, offline: true,
+    env: { ROSTER_API_KEY: 'fixture credential' },
+    runCommand: () => assert.fail('Offline gate diagnostics must not execute commands') });
+  assert.equal(status.lastRun.gate.status, 'fail');
+  assert.equal(status.lastRun.gate.reasons.length, 5);
+  assert.equal(status.lastRun.gate.omitted, 3);
+  assert.ok(status.lastRun.gate.reasons.every((reason) => reason.length <= 240 && !/[\r\n\x1b]/.test(reason)));
+  const formatted = formatStatus(status);
+  assert.doesNotMatch(formatted, /fixture credential|\nRecorded gate: pass/);
+  assert.match(formatted, /Gate reason: \[redacted\] Recorded gate: pass/);
+  assert.match(formatted, /Gate reasons omitted: 3/);
+});
+
+test('malformed recorded gate report reasons fail explicitly', async (t) => {
+  const { repoRoot } = fixture(t);
+  mkdirSync(join(repoRoot, '.roster', 'runs'), { recursive: true });
+  writeFileSync(join(repoRoot, '.roster', 'runs', 'runs.jsonl'), JSON.stringify({
+    session: 'roster-42-coder', task: 'issue-42', excellence: { pass: false, reasons: [42] },
+  }) + '\n');
+  await assert.rejects(readStatus({ issue: 42, repoRoot, config, offline: true,
+    runCommand: () => assert.fail('Invalid evidence must not contact GitHub') }), /gate reasons/);
+});
+
+test('status uses the selected attempt gate, not the final losing candidate', async (t) => {
+  const { repoRoot } = fixture(t);
+  mkdirSync(join(repoRoot, '.worktrees', 'issue-42-a1'), { recursive: true });
+  mkdirSync(join(repoRoot, '.roster', 'runs'), { recursive: true });
+  const rows = [1, 2].map((index) => ({
+    session: `roster-42-a${index}-coder`, task: 'issue-42', model: `fixture-${index}`,
+    excellence: index === 1 ? 'pass' : 'fail',
+    attempt: { batch: '0123456789abcdef', index, count: 2, profile: 'fixture', hardware: 'unknown',
+      gates: { excellence: index === 1 ? 'pass' : 'fail', red_green: 'skipped', shadow: 'pass', tests: 'pass' },
+      review: index === 1 ? 'pass' : 'fail', changed_lines: 1, duration_ms: 1, winner: 1 },
+  }));
+  writeFileSync(join(repoRoot, '.roster', 'runs', 'runs.jsonl'), rows.map((row) => JSON.stringify(row)).join('\n') + '\n');
+  const status = await readStatus({ issue: 42, repoRoot, config, offline: true,
+    runCommand: () => assert.fail('Selected gate evidence must stay offline') });
+  assert.equal(status.branch, 'issue-42-a1');
+  assert.equal(status.lastRun.model, 'fixture-1');
+  assert.equal(status.lastRun.gate.status, 'pass');
+});
+
+test('report-only gate reasons strip ANSI and redact secrets before truncating', async (t) => {
+  const { repoRoot } = fixture(t);
+  mkdirSync(join(repoRoot, '.roster', 'runs'), { recursive: true });
+  writeFileSync(join(repoRoot, '.roster', 'runs', 'runs.jsonl'), JSON.stringify({
+    session: 'roster-42-reviewer', task: 'issue-42',
+    excellence: { pass: false, reasons: ['\u001b[31mfixture password\u001b[0m\r\nfailed'] },
+  }) + '\n');
+  const status = await readStatus({ issue: 42, repoRoot, config, offline: true,
+    env: { ROSTER_API_KEY: 'fixture password' },
+    runCommand: () => assert.fail('No commands for report diagnostics') });
+  assert.equal(status.lastRun.gate.seat, 'reviewer');
+  assert.deepEqual(status.lastRun.gate.reasons, ['[redacted] failed']);
 });
 
 test('invalid cached metadata and ambiguous issue selection fail without GitHub access', async (t) => {
