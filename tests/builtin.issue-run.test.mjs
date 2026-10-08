@@ -134,7 +134,8 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
     Number.isFinite(delivery.duration_ms) && delivery.duration_ms >= 0));
   assert.equal(journal[1].delivery.review_repairs, 0);
   assert.equal(existsSync(path.join(options.target, '.roster', 'evals.jsonl')), false);
-  const { records: provenance } = await openProvenanceStore(path.join(options.target, '.git', 'roster', 'provenance')).readAll();
+  assert.equal(existsSync(path.join(options.target, '.git', 'roster', 'provenance')), false);
+  const { records: provenance } = await openProvenanceStore(path.join(options.env.ROSTER_STATE_ROOT, 'provenance')).readAll();
   const seatEvents = provenance.filter((record) => record.event === 'session')
     .map(({ sessionId, runId, payload }) => ({ sessionId, runId, seat: payload.seat, issue: payload.issue, outcome: payload.outcome }));
   assert.deepEqual(seatEvents.map(({ seat }) => seat).sort(), ['coder', 'planner', 'reviewer']);

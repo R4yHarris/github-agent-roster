@@ -956,7 +956,7 @@ async function runBuiltinAssignment(issueNumber, {
   const taskClass = askKind === 'slice' && !planMode ? planner.metadata.task_class
     : prepared.metadata?.task_class ?? inferTaskClass(prepared.issue.title) ?? 'feat';
   const provenanceRunId = `run-${randomBytes(8).toString('hex')}`;
-  const provenance = provenanceOptOut(env) ? null : provenanceStoreForRun({ repoRoot: prepared.repoRoot });
+  const provenance = provenanceOptOut(env) ? null : provenanceStoreForRun({ repoRoot: prepared.repoRoot, env });
   const reviewRepairs = [];
   let recordedReviewRepairs = 0;
   const delivery = {};

@@ -113,6 +113,15 @@ Rules:
   absolute machine paths by hand.
 - Nothing under the machine root is checked into a repository.
 
+Runtime seat capture uses `resolveMachineRoot({ env }).root/provenance`,
+including `ROSTER_STATE_ROOT`, rather than a directory inside the checkout's
+`.git`. Records therefore survive deleting a checkout and linked worktrees
+with a `.git` file can write to the same durable store. Repository identity
+filtering is unchanged: surviving storage does not by itself authorize
+querying an old clone's records from a newly cloned repository. Invalid
+machine-root configuration fails explicitly. This implements FEATURE_SPEC
+sections 5.6 and 5.8, without changing identity or lifecycle policy.
+
 ## Schema versioning and migration compatibility
 
 `SCHEMA_VERSION` follows semver (`MAJOR.MINOR.PATCH`):

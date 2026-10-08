@@ -4,7 +4,7 @@ import path from 'node:path';
 import { promisify, stripVTControlCharacters } from 'node:util';
 import { parseIssueBody, validateIssueNumber } from './issue.mjs';
 import { repositoryRoot } from './learn.mjs';
-import { ensureLocalPath } from './paths.mjs';
+import { ensureLocalPath, resolveMachineRoot } from './paths.mjs';
 import { createProvenanceStore, instrumentLifecycle } from './provenance-api.mjs';
 import { readStatus } from './status.mjs';
 import { readPlannerTask, readPreviousReview } from '../seats/planner.mjs';
@@ -32,20 +32,16 @@ export function provenanceOptOut(env = process.env) {
  * Build the typed provenance store for a local run. Identity comes from
  * repo-identity.mjs (git common dir + origin remote hash), never from a raw
  * path, so two repositories cannot collide and records cannot leak across
- * repositories. Returns null when identity cannot be derived; provenance is
- * best-effort and must never break the run lifecycle.
+ * repositories. Durable storage belongs to the machine, not the checkout.
+ * Invalid machine-root configuration fails explicitly.
  */
 export function provenanceStoreForRun({ repoRoot, env = process.env, run } = {}) {
   if (!repoRoot) return null;
-  try {
-    return createProvenanceStore({
-      root: path.join(repoRoot, '.git', 'roster', 'provenance'),
-      repoRoot,
-      run,
-    });
-  } catch {
-    return null;
-  }
+  return createProvenanceStore({
+    root: path.join(resolveMachineRoot({ env }).root, 'provenance'),
+    repoRoot,
+    run,
+  });
 }
 
 /**
