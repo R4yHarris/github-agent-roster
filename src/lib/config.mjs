@@ -18,7 +18,7 @@ const defaultProfiles = {
   openai: { base_url: 'https://api.openai.com/v1', api_key_env: 'OPENAI_API_KEY' },
 };
 const fields = {
-  llm: ['base_url', 'model', 'api_key_env', 'effort', 'effort_override', 'context_max', 'profile', 'api_key_optional', 'provider', 'request_timeout_ms', 'served_model_label'],
+  llm: ['base_url', 'model', 'api_key_env', 'effort', 'effort_override', 'context_max', 'profile', 'api_key_optional', 'provider', 'request_timeout_ms', 'served_model_label', 'max_requests'],
   planner: ['turn_budget', 'critic_profile'],
   seat: ['id', 'principal', 'turn_budget', 'tools', 'context_chars', 'scope_expansion', 'max_attempts'],
   paths: ['memory', 'skills', 'asks', 'worktrees'],
@@ -169,7 +169,7 @@ export function parseConfig(source) {
   if (!roots.has('schema') ||
       ['llm', 'seat', 'paths'].some((name) =>
         !roots.has(name) || fields[name].some((field) =>
-          !(name === 'llm' && ['profile', 'api_key_optional', 'provider', 'request_timeout_ms', 'effort_override', 'served_model_label'].includes(field)) &&
+          !(name === 'llm' && ['profile', 'api_key_optional', 'provider', 'request_timeout_ms', 'effort_override', 'served_model_label', 'max_requests'].includes(field)) &&
           !(name === 'seat' && ['context_chars', 'scope_expansion', 'max_attempts'].includes(field)) && !Object.hasOwn(config[name], field))) ||
       (roots.has('planner') && !Object.hasOwn(config.planner, 'turn_budget'))) {
     invalid('schema, llm, seat, paths, and optional planner must contain every documented field');
@@ -185,6 +185,10 @@ export function parseConfig(source) {
     if (!['l', 'm', 'h', 'x', 'none'].includes(llm.effort_override)) invalid('llm.effort_override must be l, m, h, x, or none');
   }
   llm.context_max = integerValue(llm.context_max, 'llm.context_max');
+  if (Object.hasOwn(llm, 'max_requests')) {
+    llm.max_requests = integerValue(llm.max_requests, 'llm.max_requests');
+    if (llm.max_requests < 1 || llm.max_requests > 10000) invalid('llm.max_requests must be an integer from 1 to 10000');
+  }
   if (Object.hasOwn(llm, 'request_timeout_ms')) {
     llm.request_timeout_ms = integerValue(llm.request_timeout_ms, 'llm.request_timeout_ms');
     try {

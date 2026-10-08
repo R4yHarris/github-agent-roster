@@ -32,6 +32,7 @@ export function createBuiltinChat(config, {
     api_key_name: config.llm.api_key_env,
     api_key_optional: config.llm.api_key_optional ?? true,
     request_timeout_ms: config.llm.request_timeout_ms,
+    max_requests: config.llm.max_requests,
     stream_idle_timeout_ms: config.llm.stream_idle_timeout_ms,
     // A fleet route measures the profile the router chose; a gateway's response label cannot override it.
     served_model_label: config.llm.locked_model ? 'ignore' : config.llm.served_model_label,
@@ -135,6 +136,8 @@ export function createBuiltinChat(config, {
     lastResponse: { get: () => transport.lastResponse },
     lastAttempts: { get: () => lastAttempts },
     lastUsage: { get: () => lastUsage },
+    requestCount: { get: () => transport.requestCount },
+    requestLimit: { get: () => transport.requestLimit },
   });
   return chat;
 }

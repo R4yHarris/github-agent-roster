@@ -9,6 +9,16 @@ import { ChatError, isLlmTimeout, isLocalLlmHost, LlmStallError, LlmTimeoutError
   resolveStreamIdleTimeout, validateRetryCommand, withRequestTimeout } from './request.mjs';
 const isObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
 
+export class ModelRequestLimitError extends Error {
+  code = 'ROSTER_MODEL_REQUEST_LIMIT';
+
+  constructor(limit) {
+    super(`Model HTTP request budget (${limit}) exhausted for this transport context.`);
+    this.name = 'ModelRequestLimitError';
+    this.limit = limit;
+  }
+}
+
 function endpointFor(baseUrl) {
   let url;
   try {
@@ -109,6 +119,11 @@ export function createChat(config = {}, {
     throw new TypeError('LLM configuration must be an object with an optional llm object.');
   }
   const llm = config.llm ?? {};
+  const requestLimit = llm.max_requests;
+  if (llm.max_requests !== undefined &&
+      (!Number.isSafeInteger(llm.max_requests) || llm.max_requests < 1 || llm.max_requests > 10000)) {
+    throw new TypeError('llm.max_requests must be an integer from 1 to 10000.');
+  }
   if (llm.base_url === undefined || (typeof llm.base_url === 'string' && !llm.base_url.trim())) {
     return null;
   }
@@ -132,6 +147,7 @@ export function createChat(config = {}, {
   const local = isLocalLlmHost(url.hostname);
 
   let lastResponse = null;
+  let requestCount = 0;
   let servedMismatchReported = false;
   const chat = async function chat(request, { signal: requestSignal = signal } = {}) {
     throwIfCancelled(signal);
@@ -186,11 +202,18 @@ export function createChat(config = {}, {
     async function sendOnce(signal, arm) {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         signal.throwIfAborted();
+        if (requestLimit !== undefined && requestCount >= requestLimit) {
+          throw new ModelRequestLimitError(requestLimit);
+        }
         await onEvent?.({ type: 'model', model: key ? model.split(key).join('[redacted]') : model, host });
         await onEvent?.({ type: 'http', phase: 'start',
           ...((request.reasoning_effort ?? llm.reasoning_effort) === undefined ? {}
             : { effort: request.reasoning_effort ?? llm.reasoning_effort }) });
         signal.throwIfAborted();
+        if (requestLimit !== undefined && requestCount >= requestLimit) {
+          throw new ModelRequestLimitError(requestLimit);
+        }
+        requestCount += 1;
         const response = await fetchImpl(endpoint, {
           method: 'POST',
           headers,
@@ -310,6 +333,7 @@ export function createChat(config = {}, {
       }
       return response;
     } catch (error) {
+      if (error instanceof ModelRequestLimitError) throw error;
       if (error?.code === 'ROSTER_RUN_LOG') throw error;
       if (isRunCancelled(error)) throw error;
       throwIfCancelled(signal);
@@ -323,6 +347,10 @@ export function createChat(config = {}, {
       throw new ChatError('The LLM request failed. Check the endpoint and connection.', 'network');
     }
   };
-  Object.defineProperty(chat, 'lastResponse', { get: () => lastResponse });
+  Object.defineProperties(chat, {
+    lastResponse: { get: () => lastResponse },
+    requestCount: { get: () => requestCount },
+    requestLimit: { get: () => requestLimit ?? null },
+  });
   return chat;
 }
