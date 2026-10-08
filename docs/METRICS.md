@@ -40,6 +40,16 @@ prompts, responses, file bodies, or credentials. Offline status shows its last
 seat and complete line. JSONL metrics/stats ignore `.log` files; a log is not
 an AI-Run token report or a human evaluation.
 
+Builtin assignments record machine-local `started` provenance as soon as the
+worktree is prepared, before routing and planning. Seat records and the terminal
+`completed`, `failure`, or `cancellation` share one run ID. A returned planning
+failure is not completion; a planning-only pause records a session with a paused
+outcome. Failures before a repository assignment exists cannot produce a
+repository-scoped record. An unsuccessful best-effort write is explicitly
+reported as incomplete durable history; opt-out is intentional, not an error.
+`completed` means execution ended, not human acceptance; a deterministic stub
+retains an `unverified` outcome.
+
 Effort records the orchestrator-selected compact tier, not a hardcoded
 medium or a model's private reasoning. Local DeepSeek-V4.1 medium is
 normalized to high. `none` is encoded as `-` in the existing contracts schema
