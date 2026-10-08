@@ -50,6 +50,22 @@ from GitHub and reports the local worktree path. `--offline` reads only the
 cached assignment and filesystem: it reports PR state as **unknown**, not
 `none`. The interactive shell offers the same behavior via `/status`.
 
+When a local run row exists, status also shows its **recorded gate**
+(`pass`, `fail`, or `unknown`) and seat. It uses the latest row or the existing
+selected-attempt row, not artifact presence. Recorded defects override a
+recorded pass using the same failure semantics as the learning ledger.
+Missing gate evidence stays unknown; this is not a review verdict, App
+publication, GitHub check result, or merge confirmation. The separate last
+endpoint-error class is unchanged.
+
+At most five distinct recorded defect/report reasons are displayed, each
+redacted before truncation to 240 characters, with excess reasons counted.
+Terminal controls are removed and whitespace is collapsed into one line.
+Malformed report reasons fail explicitly. No file/body inference, fleet probe,
+command, state write, or recovery attempt is added to offline status. These
+diagnostics implement FEATURE_SPEC sections 5.5, 5.7, and 5.8 while honoring
+sections 3 and 7.
+
 For an open assigned issue, online status also reports **work health**
 (FEATURE_SPEC.md section 5.8): **stranded** means no local `issue-N` branch
 or worktree, **stale** means a claim exists but no run-log heartbeat has been
