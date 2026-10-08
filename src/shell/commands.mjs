@@ -4,6 +4,7 @@ const page = (name, group, usage, description, example, flags = [], aliases = []
 
 export const commands = Object.freeze([
   page('help', 'Session', '/help [GROUP|COMMAND]', 'Show command groups or a complete command page.', '/help run'),
+  page('learn', 'Human', '/learn --recurring', 'Draft improvement proposals from three recurring slice failures; never installs skills, principals or routing changes.', '/learn --recurring'),
   page('status', 'Session', '/status [N] [--offline]', 'Show cached session fields without a model or GitHub request.', '/status',
     ['--offline: use local cached evidence only']),
   page('history', 'Session', '/history', 'Show the last 20 stored safe commands.', '/history'),

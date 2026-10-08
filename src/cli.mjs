@@ -32,6 +32,7 @@ const help = `Usage:
   roster status [--issue N] [--offline]
   roster recipe validate PATH
   roster stats [--ref REVISION_OR_RANGE] [--evals PATH]
+  roster learn --recurring
   roster vault set NAME
   roster vault list
   roster vault get NAME
@@ -202,18 +203,28 @@ async function main(args) {
     if (names.length) process.stdout.write(`${names.join('\n')}\n`);
   } else if (args.length === 3 && args[0] === 'vault' && args[1] === 'get') {
     await getVaultSecret(args[2]);
+  } else if (args[0] === 'learn') {
+    if (args.length !== 2 || args[1] !== '--recurring') throw new TypeError('Use roster learn --recurring.');
+    const { proposeRecurringFailures } = await import('./lib/failure-proposals.mjs');
+    const { repositoryRoot } = await import('./lib/learn.mjs');
+    const result = await proposeRecurringFailures({ cwd: repositoryRoot() });
+    process.stdout.write(`Recurring failures: ${result.created.length} draft proposals created; ` +
+      `${result.existing.length} existing drafts preserved. Human review required.\n`);
   } else if (args[0] === 'stats') {
     const { formatMetrics, loadMetrics, summarizeMetrics } = await import('./lib/metrics.mjs');
     const { resolveContractsPath } = await import('./lib/paths.mjs');
     const { repositoryRoot } = await import('./lib/learn.mjs');
     const options = statsOptions(args.slice(1));
+    const cwd = repositoryRoot();
     const records = loadMetrics({
       ...options,
       evalsPath: options.evalsPath === undefined ? undefined : resolve(options.evalsPath),
       contractsPath: resolveContractsPath(),
-      cwd: repositoryRoot(),
+      cwd,
     });
     process.stdout.write(formatMetrics(summarizeMetrics(records)));
+    const { listFailureProposals, formatFailureProposals } = await import('./lib/failure-proposals.mjs');
+    process.stdout.write(formatFailureProposals(await listFailureProposals({ cwd })));
   } else if (args[0] === 'eval') {
     const { parseEvaluationArgs, recordEvaluation } = await import('./lib/eval.mjs');
     const { values, options } = parseEvaluationArgs(args.slice(1));
