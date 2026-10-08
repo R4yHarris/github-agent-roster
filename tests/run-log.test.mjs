@@ -15,6 +15,22 @@ function fixture(t) {
 
 const config = { llm: { base_url: '', model: '' } };
 
+test('lifecycle hook status and measured duration are safe readable metadata; passing hooks are silent', async (t) => {
+  const options = fixture(t);
+  const logger = await createRunLog(options);
+  await logger.seat('coder', options.session, config, async (onEvent) => {
+    await onEvent({ type: 'lifecycle-hook', event: 'post-coder', script: '.roster/hooks/check.mjs',
+      status: 'pass', ms: 12, output: 'PRIVATE_HOOK_OUTPUT' });
+    assert.equal(options.text, '');
+    assert.match((await readLastRunLog(options)).lastLine, /lifecycle-hook post-coder \.roster\/hooks\/check.mjs pass ms=12$/);
+    await onEvent({ type: 'lifecycle-hook', event: 'post-coder', script: '.roster/hooks/check.mjs',
+      status: 'timeout', ms: 100, output: 'PRIVATE_HOOK_OUTPUT' });
+    assert.match((await readLastRunLog(options)).lastLine, /timeout ms=100$/);
+  });
+  assert.match(options.text, /Lifecycle hook post-coder .*: timeout/);
+  assert.doesNotMatch(readFileSync(logger.path, 'utf8'), /PRIVATE_HOOK_OUTPUT/);
+});
+
 test('timeout retry is visible to the human and readable as safe log metadata', async (t) => {
   const options = fixture(t);
   const logger = await createRunLog(options);

@@ -22,6 +22,7 @@ import { throwIfCancelled } from '../runtime/cancel.mjs';
 import { planSlice, validatedPlanTask } from '../planner/plan-mode.mjs';
 import { runtimeRecipe } from '../planner/stub.mjs';
 import { critiquePlan } from '../planner/critic.mjs';
+import { requireLifecycleHooks } from '../runtime/hooks.mjs';
 
 export async function critiquePlannerHandoff(plan, {
   worktree, ask, title, reference, learningRoot, config, env, fetchImpl, vault, onEvent,
@@ -255,6 +256,7 @@ export async function runPlanner({
   const kind = askKind ?? classifyAsk(ask, { title }).kind;
   if (!askKinds.includes(kind)) throw new TypeError('Unknown Ask kind');
   if (kind === 'clarify') throw new TypeError(clarificationHint);
+  await requireLifecycleHooks('pre-plan', { worktree, env, apiKeyEnv: config.llm.api_key_env, signal, onEvent });
   config = selectReasoning(config, { kind, taskClass: metadata?.task_class, difficulty: metadata?.difficulty });
   const memoryPath = seatMemoryPath({
     repoRoot, memoryPath: config.paths.memory, seat: 'planner',

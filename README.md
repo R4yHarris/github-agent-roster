@@ -212,6 +212,7 @@ evaluations from GitHub.
 See [the one-task loop](docs/ONE_TASK_LOOP.md), [same-session seats](docs/MULTIAGENT.md),
 [the human shell](docs/REPL.md), [recipes](docs/SEATS.md), and
 [metrics](docs/METRICS.md), [learning](docs/LEARNING.md),
+[human-owned lifecycle hooks](docs/HOOKS.md),
 [model routing](docs/ROUTING.md),
 [LLM configuration and the vault](docs/LLM.md), [builtin tools](docs/TOOLS.md),
 [the GitHub board](docs/BOARD.md),

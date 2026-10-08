@@ -23,6 +23,7 @@ import path from 'node:path';
 import { captureCheckpoint } from '../lib/checkpoints.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
 import { isTestPath, triageChecks, triageText } from '../runtime/check-triage.mjs';
+import { runLifecycleHooks } from '../runtime/hooks.mjs';
 
 export async function runCoder({
   worktree, repoRoot, config, task, session, fetchImpl, env = process.env, vault, runTestCommand,
@@ -56,6 +57,7 @@ export async function runCoder({
   let selfReview;
   let shadow;
   let shadowRepairUsed = false;
+  let hooks;
   let metadata;
   let tests;
   let result = {
@@ -236,6 +238,14 @@ export async function runCoder({
             evidence.reasons.push(...shadow.findings.map(({ reason }) => reason));
           }
         }
+        if (evidence.pass && candidate.mode === 'llm') {
+          hooks = await runLifecycleHooks('post-coder', { worktree, env, apiKeyEnv: config.llm.api_key_env,
+            signal, memoryPath, onEvent });
+          if (!hooks.pass) {
+            evidence.pass = false;
+            evidence.reasons.push(...hooks.reasons);
+          }
+        }
         // The author reads its own diff once before the independent reviewer; findings get one repair.
         if (evidence.pass && !selfReview && needsSelfReview(evidence.files)) {
           selfReview = await runSelfReview({ worktree, task: context.task, files: evidence.files,
@@ -295,6 +305,11 @@ export async function runCoder({
       files: [], model: result.model, turns: result.turns };
   }
   if (memoryFailure && result.error !== memoryFailure) excellence.reasons.push(memoryFailure.message);
+  if (hooks && !hooks.pass) {
+    excellence.pass = false;
+    excellence.reasons.push(...hooks.reasons);
+  }
+  if (hooks) result = { ...result, hooks };
   stages.push('excellence');
   let run = null;
   try {

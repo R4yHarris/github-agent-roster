@@ -28,6 +28,7 @@ function dispatcher({ env = {}, services = {}, config: activeConfig = config } =
   const commands = createDispatcher({
     cwd, repoRoot: root, config: activeConfig, env, output, errorOutput,
     services: { repositoryRoot: () => cwd,
+      requireLifecycleHooks: async () => ({ pass: true, reasons: [], entries: [] }),
       publicationTask: ({ task, env }) => task || env.AI_TASK || 'feat-ghcp-metadata', ...services },
   });
   return { ...commands, output, errorOutput };

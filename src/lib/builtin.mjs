@@ -15,6 +15,7 @@ import {
   isAllowedFile, isForbiddenWrite, isManagedFile, isRepairTestFile, isScopeExpansionFile, taskAndRepairFiles, ToolAccessError,
 } from '../runtime/tools.mjs';
 import { checkExcellence, redactEvidence } from '../runtime/excellence.mjs';
+import { requireLifecycleHooks } from '../runtime/hooks.mjs';
 import { isReviewRequired, loadConfig, requirePublicationEnabled, withoutLlmKeys } from './config.mjs';
 import { loadFleet, withFleetProfile } from './fleet.mjs';
 import { runIssue, validateIssueNumber } from './issue.mjs';
@@ -227,7 +228,9 @@ export async function prepareBuiltinPublication(run, {
   config = loadConfig({ repoRoot: rosterRoot, cwd }),
   env = process.env,
   skipReview = false,
+  signal,
 } = {}) {
+  throwIfCancelled(signal);
   requirePublicationEnabled(config);
   if (run?.attempt && (run.attempt.winner !== run.attempt.index ||
       selectedAttemptRecord(loadLearning({ cwd: run.repoRoot ?? run.worktreePath }).runs, run.task)?.session !== run.session)) {
@@ -254,6 +257,8 @@ export async function prepareBuiltinPublication(run, {
   await ensureUnchanged(run.recipePath, run.planner.recipe);
   await ensureUnchanged(run.taskPath, run.planner.task);
   await ensureUnchanged(run.planner.estimatePath, run.planner.estimate);
+  await requireLifecycleHooks('pre-publish', { worktree: run.worktreePath, env,
+    apiKeyEnv: config.llm.api_key_env, memoryPath: run.result.memoryPath, signal });
   const excellence = await checkExcellence({
     worktree: run.worktreePath, task: run.planner.task, result: run.result, baseline: run.result.baseline,
     verifiedSnapshot: run.result.excellence.snapshot,
@@ -1376,7 +1381,7 @@ async function runBuiltinAssignment(issueNumber, {
   async function publishCompleted(completed, coderConfig, publishMessage) {
     const { worktreePath, runs: { coder: coderRun } } = completed;
     const { contractsPath, publishEnv, model: publishModel } = await prepareBuiltinPublication(completed, {
-      cwd, config: coderConfig, env, skipReview,
+      cwd, config: coderConfig, env, skipReview, signal,
     });
     let stdout;
     try {
