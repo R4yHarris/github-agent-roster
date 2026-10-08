@@ -40,7 +40,7 @@ import { loadCapabilities } from './capabilities.mjs';
 import { initializeWorktreeSubmodules } from './contracts.mjs';
 import { formatStart, resolveStart, startOptions } from './start.mjs';
 import { createDebugLog } from './debug-log.mjs';
-import { throwIfCancelled } from '../runtime/cancel.mjs';
+import { isRunCancelled, throwIfCancelled } from '../runtime/cancel.mjs';
 import { earlierWaveFiles, issueWave, readWavePlan, requireEarlierWavesClosed, waveBoard } from './waves.mjs';
 import { githubRepository } from './issue.mjs';
 import { routeFailure } from '../llm/openai.mjs';
@@ -708,7 +708,43 @@ async function openWaves({ worktree, cwd, env, apiKeyEnv, runCommand, log }) {
   return { rows, next, reason };
 }
 
-async function runBuiltinAssignment(issueNumber, {
+async function runBuiltinAssignment(issueNumber, options = {}) {
+  const { env = process.env, log = console.log, onPrepared } = options;
+  const lifecycle = { runId: `run-${randomBytes(8).toString('hex')}`, store: null, prepared: null };
+  const capture = async (event, payload = {}) => {
+    const prepared = lifecycle.prepared;
+    if (!prepared) return;
+    const recorded = await captureLifecycleEvent(lifecycle.store, {
+      event, runId: lifecycle.runId, sessionId: prepared.session,
+      payload: { issue: prepared.issue.number ?? null, task: prepared.task, ...payload },
+    });
+    if (!recorded.durable && !provenanceOptOut(env)) {
+      log(`Provenance event ${event} was not persisted; durable history is incomplete.`);
+    }
+  };
+  let result;
+  try {
+    result = await executeBuiltinAssignment(issueNumber, { ...options, lifecycle,
+      async onPrepared(prepared) {
+        lifecycle.prepared = prepared;
+        lifecycle.store = provenanceOptOut(env) ? null
+          : provenanceStoreForRun({ repoRoot: prepared.repoRoot, env });
+        await capture('started');
+        await onPrepared?.(prepared);
+      },
+    });
+  } catch (error) {
+    await capture(isRunCancelled(error) || options.signal?.aborted ? 'cancellation' : 'failure');
+    throw error;
+  }
+  await capture(result.failed ? 'failure' : result.planningOnly || result.confirmedPause
+    ? 'session' : 'completed', { outcome: result.failed ? 'fail'
+      : result.planningOnly || result.confirmedPause ? 'paused'
+      : result.result?.mode === 'stub' ? 'unverified' : 'completed' });
+  return result;
+}
+
+async function executeBuiltinAssignment(issueNumber, {
   cwd = process.cwd(),
   repoRoot = rosterRoot,
   config = loadConfig({ repoRoot, cwd }),
@@ -739,6 +775,7 @@ async function runBuiltinAssignment(issueNumber, {
   steeringControl,
   attempts = 1,
   start,
+  lifecycle,
   [claimHook]: beforePreparation,
 } = {}) {
   throwIfCancelled(signal);
@@ -975,8 +1012,8 @@ async function runBuiltinAssignment(issueNumber, {
   }
   const taskClass = askKind === 'slice' && !planMode ? planner.metadata.task_class
     : prepared.metadata?.task_class ?? inferTaskClass(prepared.issue.title) ?? 'feat';
-  const provenanceRunId = `run-${randomBytes(8).toString('hex')}`;
-  const provenance = provenanceOptOut(env) ? null : provenanceStoreForRun({ repoRoot: prepared.repoRoot, env });
+  const provenanceRunId = lifecycle.runId;
+  const provenance = lifecycle.store;
   const reviewRepairs = [];
   let recordedReviewRepairs = 0;
   const delivery = {};
@@ -994,13 +1031,16 @@ async function runBuiltinAssignment(issueNumber, {
     if (seat === 'coder') recordedReviewRepairs = reviewRepairs.length;
     delivery[seat] = evidence;
     // Durable machine history for `roster history`; best-effort so provenance can never fail a run.
-    await captureLifecycleEvent(provenance, { event: 'session', runId: provenanceRunId, sessionId: session, payload: {
+    const recorded = await captureLifecycleEvent(provenance, { event: 'session', runId: provenanceRunId, sessionId: session, payload: {
       issue: prepared.issue.number ?? null, task: prepared.task, task_class: taskClass,
       seat: Object.keys(sessions).find((name) => sessions[name] === session) ??
         (session.endsWith('-coder') ? 'coder' : session.endsWith('-reviewer') ? 'reviewer' : null),
       model: run?.env?.AI_MODEL ?? null, provider: run?.provider ?? null,
       ...(excellence ? { outcome: excellence.pass ? 'pass' : 'fail' } : {}),
     } });
+    if (!recorded.durable && !provenanceOptOut(env)) {
+      log(`Provenance session ${session} was not persisted; durable history is incomplete.`);
+    }
   };
   const plannerRun = planner.run;
   if (!planner.reused) await recordSeat(sessions.planner, plannerRun);
