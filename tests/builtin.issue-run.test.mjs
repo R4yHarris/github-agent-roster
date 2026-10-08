@@ -107,7 +107,9 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
   assert.match(logs.join('\n'), /Publication unavailable: set model/);
   assert.equal((logs[0].match(/AI-Run:/g) ?? []).length, 0);
   assert.deepEqual(result.runs, { planner: null, coder: null, reviewer: null });
-  assert.deepEqual(options.calls.map(({ program }) => program), ['git', 'git', 'git', 'gh', 'git', 'git', 'git']);
+  assert.deepEqual(options.calls.map(({ program, args }) => program === 'gh' ? 'gh' : args[0]),
+    ['rev-parse', 'rev-parse', 'remote', 'gh', 'remote', 'fetch', 'symbolic-ref', 'for-each-ref',
+      'worktree', 'for-each-ref', 'worktree']);
   assert.deepEqual(options.calls[0].args, ['rev-parse', '--git-common-dir']);
   assert.equal(options.calls.some(({ args }) => args[0] === 'submodule'), false, 'no .gitmodules: nothing to initialize');
   assert.equal(options.calls.filter(({ program, args }) =>
@@ -291,7 +293,9 @@ test('an App-credentialed issue run reports claim and outcome on the issue witho
   assert.deepEqual(statuses.map(({ status }) => status), ['in-progress', result.review?.verdict === 'pass' ? 'review' : 'blocked']);
   assert.equal(statuses[0].url, options.issue.url);
   assert.equal(statuses[0].repoRoot, options.target);
-  assert.deepEqual(statuses[0].detail, ['Branch: issue-42', 'Seats: planner,coder,reviewer']);
+  assert.deepEqual(statuses[0].detail, ['Branch: issue-42',
+    'Start: current HEAD (fetched); origin default branch not found; starting from current HEAD',
+    'Seats: planner,coder,reviewer']);
   assert.ok(logs.includes('Issue #42 status not updated (in-progress): GitHub issue API request failed (HTTP 502)'));
 
   statuses.length = 0;

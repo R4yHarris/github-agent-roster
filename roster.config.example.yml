@@ -46,3 +46,6 @@ tools:
   run_test: true         # disables both model and automatic tests when false
 reviewer:
   required: true         # gate publication on REVIEW.md unless explicitly skipped
+# start:                 # how new task branches begin (defaults shown)
+#   base: trunk          # trunk = fresh origin/<default>; current = caller HEAD; or a ref
+#   sync: fetch          # fetch origin first; offline skips it (freshness unknown)

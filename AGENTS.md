@@ -59,6 +59,15 @@ Use [`resolveContractsPath`](src/lib/paths.mjs): submodule first, then
 Fail if no candidate contains the `scripts/agent-pr.mjs` file. See
 [the dependency guide](docs/DEPENDENCY.md).
 
+## Start of work
+
+Before any agent, LLM, or hardware work, start from a known state:
+`git fetch --prune origin`, check `git status -sb` (clean, not behind),
+`git submodule update --init --recursive`, and confirm the issue is open.
+Branch new work from fresh `origin/<default>`, never a stale local HEAD.
+Roster runs do this automatically (`start.base`/`start.sync`, `--base`,
+`--no-fetch`); see [one task loop](docs/ONE_TASK_LOOP.md).
+
 ## First loop (v0)
 
 1. Human states an ask (`roster ask` creates a GitHub issue when `gh` is available, otherwise an offline draft).

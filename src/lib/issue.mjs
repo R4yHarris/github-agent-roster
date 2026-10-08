@@ -10,6 +10,7 @@ import { cleanAskText, renderAssignment } from '../planner/stub.mjs';
 import { estimateTask } from '../runtime/estimate.mjs';
 import { initializeWorktreeSubmodules } from './contracts.mjs';
 import { githubRepository } from './github-repository.mjs';
+import { branchDrift, formatStart, resolveStart, startOptions } from './start.mjs';
 export { githubRepository } from './github-repository.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -84,8 +85,10 @@ export async function runIssue(issueNumber, {
   beforeWorktree = async () => {},
   sessionId,
   recordPreparation = true,
+  start: startOverrides = {},
 } = {}) {
   const number = validateIssueNumber(issueNumber);
+  const startChoice = startOptions(config, startOverrides);
   if (sessionId !== undefined && (typeof sessionId !== 'string' || !IDENTIFIER.test(sessionId))) {
     throw new TypeError('Session ID must be an opaque identifier of at most 64 characters');
   }
@@ -115,7 +118,7 @@ export async function runIssue(issueNumber, {
   const origin = await command('git', ['remote', 'get-url', 'origin'], repoRoot);
   const repository = githubRepository(origin);
   const rawIssue = await command('gh', [
-    'issue', 'view', String(number), '--repo', repository, '--json', 'number,title,body,url,labels',
+    'issue', 'view', String(number), '--repo', repository, '--json', 'number,title,body,url,labels,state',
   ], repoRoot);
   let issue;
   try {
@@ -133,7 +136,11 @@ export async function runIssue(issueNumber, {
   if (typeof issue.body !== 'string' || !issue.body.trim()) {
     throw new Error(`Issue #${number} has no body to use as the Ask`);
   }
+  if (typeof issue.state === 'string' && issue.state.toUpperCase() !== 'OPEN') {
+    throw new Error(`Issue #${number} is ${issue.state.toLowerCase()}; reopen it before starting work`);
+  }
   const { ask, metadata } = parseIssueBody(issue.body);
+  const start = await resolveStart({ repoRoot, runCommand, ...startChoice });
 
   const task = `issue-${number}`;
   const worktreePath = path.join(repoRoot, worktrees, task);
@@ -182,11 +189,17 @@ export async function runIssue(issueNumber, {
   if (reused && !entry) throw new Error('Registered issue worktree is missing; repair its Git registration before running');
   if (!reused && entry) throw new Error('Issue worktree path exists without matching Git registration; refusing to overwrite it');
   await beforeWorktree(repoRoot, worktreePath, issue, repository);
+  let drift = null;
   if (!reused) {
-    const knownBranch = await command('git', ['for-each-ref', '--format=%(refname)', branch], repoRoot);
+    const knownBranch = (await command('git', ['for-each-ref', '--format=%(refname)', branch], repoRoot))
+      .split('\n').includes(branch);
+    if (knownBranch) drift = await branchDrift({ repoRoot, runCommand, branch: task, start });
     await fileSystem.mkdir(path.dirname(worktreePath), { recursive: true });
-    await command('git', knownBranch.split('\n').includes(branch)
-      ? ['worktree', 'add', worktreePath, task] : ['worktree', 'add', '-b', task, worktreePath], repoRoot);
+    await command('git', knownBranch
+      ? ['worktree', 'add', worktreePath, task]
+      : ['worktree', 'add', '-b', task, worktreePath, ...(start.ref ? [start.ref] : [])], repoRoot);
+  } else {
+    drift = await branchDrift({ repoRoot, runCommand, branch: task, start });
   }
   await initializeWorktreeSubmodules(worktreePath, command);
 
@@ -223,7 +236,8 @@ export async function runIssue(issueNumber, {
     }
   }
 
-  log(`Worktree: ${worktreePath}${reused ? ' (reused)' : ''}
+  log(`${formatStart(start, drift)}
+Worktree: ${worktreePath}${reused ? ' (reused)' : ''}
 Assignment: ${assignmentPath}
 Environment: ${envPath}
 After editing inside the worktree, load .env into the worker environment and run:
@@ -233,5 +247,6 @@ ${nextCommand ?? (config.publish?.enabled === false
   ? 'Publication unavailable: publishing is disabled by publish.enabled.'
   : 'Publication unavailable: set model in AI_MODEL for GHCP, or complete a measured roster run.')}`);
 
-  return { issue, ask, metadata, repoRoot, worktreePath, assignmentPath, envPath, task, session, nextCommand, reused };
+  return { issue, ask, metadata, repoRoot, worktreePath, assignmentPath, envPath, task, session, nextCommand, reused,
+    start, drift };
 }

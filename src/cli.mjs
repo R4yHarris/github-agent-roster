@@ -21,7 +21,7 @@ const help = `Usage:
   roster fleet default ID
   roster fleet remove ID
   roster ask "..."
-  roster run --issue N [--runtime builtin] [--auto-model] [--seats planner,coder,reviewer] [--parallel K] [--attempts K] [--saved] [--publish] [--skip-review] [--confirm] [--plan]
+  roster run --issue N [--runtime builtin] [--auto-model] [--seats planner,coder,reviewer] [--parallel K] [--attempts K] [--saved] [--publish] [--skip-review] [--confirm] [--plan] [--base trunk|current|REF] [--no-fetch]
   roster run --seat coder --runtime builtin
   roster prepare --issue N
   roster run --ask-file PATH --runtime builtin
@@ -143,6 +143,7 @@ async function main(args) {
       `Mode: ${demo.mode}\n`);
   } else if (args[0] === 'run') {
     const { runBuiltinIssue, runBuiltinTask } = await import('./lib/builtin.mjs');
+    const { validateStartBase } = await import('./lib/start.mjs');
     const options = runOptions(args.slice(1));
     if (options.issue === undefined) await runBuiltinTask({ repoRoot: rosterRoot, debug });
     else {
@@ -151,6 +152,8 @@ async function main(args) {
         skipReview: options.skipReview,
         confirm: options.confirm,
         planMode: options.plan,
+        start: { ...(options.base ? { base: validateStartBase(options.base, '--base') } : {}),
+          ...(options.noFetch ? { sync: 'offline' } : {}) },
         autoModel: options.autoModel, repoRoot: rosterRoot, debug });
       if (result.failed) process.exitCode = 1;
     }
@@ -309,11 +312,12 @@ async function main(args) {
     const options = {};
     const seen = new Set();
     const usage = 'Use roster run --issue N [--runtime builtin] [--seats planner,coder,reviewer] ' +
-      '[--parallel K] [--attempts K] [--saved] [--publish] [--skip-review] [--confirm] [--plan], ' +
+      '[--parallel K] [--attempts K] [--saved] [--publish] [--skip-review] [--confirm] [--plan] ' +
+      '[--base trunk|current|REF] [--no-fetch], ' +
       'or roster run --seat coder --runtime builtin for an existing TASK.md.';
     for (let index = 0; index < args.length; index += 1) {
       const flag = args[index];
-      if (!['--issue', '--seat', '--seats', '--runtime', '--parallel', '--attempts', '--auto-model', '--saved', '--publish', '--skip-review', '--confirm', '--plan'].includes(flag) ||
+      if (!['--issue', '--seat', '--seats', '--runtime', '--parallel', '--attempts', '--auto-model', '--saved', '--publish', '--skip-review', '--confirm', '--plan', '--base', '--no-fetch'].includes(flag) ||
           seen.has(flag)) {
         throw new TypeError(usage);
       }
@@ -324,6 +328,7 @@ async function main(args) {
       else if (flag === '--skip-review') options.skipReview = true;
       else if (flag === '--confirm') options.confirm = true;
       else if (flag === '--plan') options.plan = true;
+      else if (flag === '--no-fetch') options.noFetch = true;
       else {
         const value = args[++index];
         if (!value || value.startsWith('--')) throw new TypeError(usage);
@@ -334,7 +339,8 @@ async function main(args) {
       }
     }
     if (options.issue === undefined && options.seat === 'coder' && options.runtime === 'builtin' &&
-        options.seats === undefined && options.parallel === undefined && options.attempts === undefined && !options.autoModel && !options.publish && !options.skipReview && !options.confirm && !options.plan) return options;
+        options.seats === undefined && options.parallel === undefined && options.attempts === undefined && !options.autoModel && !options.publish && !options.skipReview && !options.confirm && !options.plan &&
+        options.base === undefined && !options.noFetch) return options;
     if (!options.issue || (options.runtime !== undefined && options.runtime !== 'builtin') ||
         (options.seat !== undefined && options.seat !== 'coder') ||
         (options.seats !== undefined &&

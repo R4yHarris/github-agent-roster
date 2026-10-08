@@ -199,7 +199,9 @@ Roster CLI process or add a queue.
 `/run N` reuses an existing registered `issue-N` branch/worktree. Prior
 generated outputs are archived locally in Git metadata, while app changes and
 the assignment/environment are preserved. An existing branch is never passed
-to `git worktree add -b`. Malformed planner tool output is repaired once; if it
+to `git worktree add -b`, and it is not moved; the run logs how far it is behind
+the freshly fetched start base. New issue and Ask worktrees start from fresh
+`origin/<default>` (see [one task loop](ONE_TASK_LOOP.md)). Malformed planner tool output is repaired once; if it
 still cannot be decoded, RECIPE/TASK stubs and a clear error are written, coding
 and publication stay disabled, and `/help`, `/quit`, or a later `/run` still work.
 For a slice, when the existing RECIPE/TASK validate for the issue, `/run N` preserves them

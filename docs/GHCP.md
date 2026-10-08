@@ -12,7 +12,11 @@ subagent name. Only human-owned policy can grant capabilities.
 ## Parent Copilot handoff
 
 The parent Copilot coordinates the request by calling Roster, rather than
-starting separate coding chats or writing a second queue:
+starting separate coding chats or writing a second queue. Start from a known
+state first: `git fetch --prune origin`, confirm `git status -sb` is clean and
+not behind, run `git submodule update --init --recursive`, and confirm the
+issue is open. Roster then branches new issue work from fresh
+`origin/<default>`:
 
 ```sh
 node src/cli.mjs run --issue N --runtime builtin --seats planner,coder,reviewer

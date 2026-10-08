@@ -38,6 +38,7 @@ import { selectReasoning } from '../llm/reasoning.mjs';
 import { readTaskMetadata } from '../runtime/estimate.mjs';
 import { loadCapabilities } from './capabilities.mjs';
 import { initializeWorktreeSubmodules } from './contracts.mjs';
+import { formatStart, resolveStart, startOptions } from './start.mjs';
 import { createDebugLog } from './debug-log.mjs';
 import { throwIfCancelled } from '../runtime/cancel.mjs';
 import { earlierWaveFiles, issueWave, readWavePlan, requireEarlierWavesClosed, waveBoard } from './waves.mjs';
@@ -562,6 +563,7 @@ async function runTrackedAssignment(issueNumber, options) {
       prepared = ready;
       await onPrepared?.(ready);
       const posted = await post('in-progress', [`Branch: ${ready.task}`,
+        ready.start ? formatStart(ready.start, ready.drift) : null,
         `Seats: ${options.seats ?? 'planner,coder,reviewer'}`,
         options.autoModel ? 'Model routing: auto' : null].filter(Boolean));
       if (posted?.claimed) {
@@ -589,7 +591,7 @@ export async function runBuiltinAsk(ask, options = {}) {
   return runBuiltinAssignment(null, { ...options, ask: cleanAskText(ask), publish: false });
 }
 
-async function prepareLocalAsk(ask, { cwd, config, runCommand }) {
+async function prepareLocalAsk(ask, { cwd, config, runCommand, start: startOverrides }) {
   const repoRoot = path.resolve((await runCommand('git', ['rev-parse', '--show-toplevel'], cwd)).trim());
   const task = `local-${randomBytes(8).toString('hex')}`;
   const worktrees = config.paths.worktrees;
@@ -600,12 +602,13 @@ async function prepareLocalAsk(ask, { cwd, config, runCommand }) {
   }
   const worktreePath = path.join(repoRoot, worktrees, task);
   await ensureLocalPath(worktreePath, repoRoot);
-  await runCommand('git', ['worktree', 'add', '-b', task, worktreePath], repoRoot);
+  const start = await resolveStart({ repoRoot, runCommand, ...startOptions(config, startOverrides) });
+  await runCommand('git', ['worktree', 'add', '-b', task, worktreePath, ...(start.ref ? [start.ref] : [])], repoRoot);
   await initializeWorktreeSubmodules(worktreePath, runCommand);
   const assignmentPath = path.join(worktreePath, 'ASSIGNMENT.md');
   await fs.writeFile(assignmentPath, `# Local Ask\n\n${ask}\n`, { flag: 'wx' });
   return { repoRoot, worktreePath, task, session: `roster-${task}-coder`, ask, assignmentPath,
-    issue: { title: ask.split('\n')[0], body: ask }, local: true, reused: false };
+    issue: { title: ask.split('\n')[0], body: ask }, local: true, reused: false, start, drift: null };
 }
 
 async function reusePreparedAssignment(run, { cwd, config, runCommand, ask, issueNumber }) {
@@ -716,6 +719,7 @@ async function runBuiltinAssignment(issueNumber, {
   acceptPlan = false,
   steeringControl,
   attempts = 1,
+  start,
   [claimHook]: beforePreparation,
 } = {}) {
   throwIfCancelled(signal);
@@ -768,17 +772,19 @@ async function runBuiltinAssignment(issueNumber, {
     }
   };
   await beforePreparation?.(cwd, issueCommand);
+  const startChoice = startOptions(config, start ?? {});
   const prepared = preparedRun ? await reusePreparedAssignment(preparedRun, {
     cwd, config, runCommand: issueCommand, ask, issueNumber,
-  }) : issueNumber === null ? await prepareLocalAsk(ask, { cwd, config, runCommand: issueCommand })
+  }) : issueNumber === null ? await prepareLocalAsk(ask, { cwd, config, runCommand: issueCommand, start: startChoice })
     : await runIssue(issueNumber, {
     cwd, runCommand: issueCommand, worktrees: config.paths.worktrees, log: () => {}, now, config,
     beforeWorktree: async (root, worktreePath, issue, repository) => {
       await ensureLocalPath(worktreePath, root);
       await requireEarlierWavesClosed({ issue, repository, cwd: root, runCommand: issueCommand });
     },
-    sessionId: `roster-${issueNumber}-coder`, recordPreparation: false,
+    sessionId: `roster-${issueNumber}-coder`, recordPreparation: false, start: startChoice,
   });
+  if (prepared.start) log(formatStart(prepared.start, prepared.drift));
   if (preparedRun && !prepared.local) {
     const repository = githubRepository((await issueCommand('git', ['remote', 'get-url', 'origin'], prepared.repoRoot)).trim());
     await requireEarlierWavesClosed({ issue: prepared.issue, repository, cwd: prepared.repoRoot, runCommand: issueCommand });

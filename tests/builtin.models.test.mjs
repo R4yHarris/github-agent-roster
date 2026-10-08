@@ -364,7 +364,7 @@ test('fleet priors change endpoint/model only for explicit auto-model and never 
     if (autoModel) {
       assert.equal(result.route.source, 'prior');
       assert.equal(result.route.profile.id, 'burst');
-      assert.match(logs[0], /profile=burst source=prior/);
+      assert.match(logs.join('\n'), /profile=burst source=prior/);
       for (const seat of ['planner', 'coder']) {
         assert.equal(result.runs[seat].metrics.context_max, 32768);
         assert.equal(result.runs[seat].env.AI_CONTEXT_MAX, '32768');
