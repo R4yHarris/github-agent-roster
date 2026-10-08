@@ -145,8 +145,7 @@ export function groundingErrors({ checks = [], design = null, filesAllowed = [],
   }
   for (const { file, name } of design?.new_exports ?? []) {
     if (!isAllowedFile(file, filesAllowed)) errors.push(`design.new_exports puts \`${name}\` in \`${file}\`, outside files_allowed`);
-    const owner = [...index.exportsByFile].find(([other, names]) => names.has(name) && other !== file &&
-      !isAllowedFile(other, filesAllowed))?.[0];
+    const owner = [...index.exportsByFile].find(([other, names]) => names.has(name) && other !== file)?.[0];
     if (owner) errors.push(`design.new_exports \`${name}\` already exists in \`${owner}\`; extend that module instead`);
   }
   const text = [...checks, ...(design?.outline ?? []), ...(design?.edge_cases ?? [])].join('\n');

@@ -90,6 +90,33 @@ test('a declared new export may be cited; docs-only and ungrounded slices get no
   assert.doesNotMatch(plan(undefined, { acceptanceChecks: ['`made_up_name` works'] }).task, /## Design/);
 });
 
+test('an existing export cannot be redeclared in another allowed module', async (t) => {
+  const { grounding } = await grounded(t);
+  const filesAllowed = ['src/cli.mjs', 'src/provenance.mjs'];
+  const scopedAsk = ask.replace('tests/cli.test.mjs', 'src/provenance.mjs');
+  const design = {
+    extend: [], new_exports: [{ file: 'src/cli.mjs', name: 'readAll' }],
+    outline: [], edge_cases: [], out_of_scope: [],
+  };
+  const errors = groundingErrors({ design, filesAllowed, index: grounding.index });
+  assert.deepEqual(errors, [
+    'design.new_exports `readAll` already exists in `src/provenance.mjs`; extend that module instead',
+  ]);
+  const options = { filesAllowed, design, reference: 'issue:389',
+    acceptanceChecks: ['`readAll` returns recorded rows'] };
+  assert.throws(() => buildPlan(scopedAsk, { ...options, grounding }), /already exists/);
+  const task = buildPlan(scopedAsk, options).task.replace('## Files allowed',
+    `${renderDesign(design)}\n## Files allowed`);
+  const corrected = ensureDesign(task, grounding, scopedAsk);
+  assert.match(corrected, /rejected: design\.new_exports `readAll` already exists/);
+  assert.deepEqual(parseDesign(corrected).new_exports, []);
+  assert.ok(parseDesign(corrected).extend.some(({ file, exports }) =>
+    file === 'src/provenance.mjs' && exports.includes('readAll')));
+  assert.deepEqual(groundingErrors({
+    design: parseDesign(corrected), filesAllowed, index: grounding.index,
+  }), []);
+});
+
 test('missing or invalid planner designs are replaced by a derived one', async (t) => {
   const { grounding } = await grounded(t);
   const bare = plan(undefined).task;
