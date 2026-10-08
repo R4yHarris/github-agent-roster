@@ -33,6 +33,17 @@
         }
       }]
     },
+    "revise-incomplete": {
+      "role": "assistant",
+      "tool_calls": [{
+        "id": "revise-incomplete-status",
+        "type": "function",
+        "function": {
+          "name": "write_file",
+          "arguments": "{\"path\":\"README.md\",\"content\":\"# Example\\n\\n## Status\\nActive (detail pending).\\n\"}"
+        }
+      }]
+    },
     "review": {
       "role": "assistant",
       "content": "{\"verdict\":\"pass\",\"reasons\":[],\"security_notes\":[],\"checks\":[{\"id\":1,\"met\":true,\"evidence\":\"The harness checks passed.\"},{\"id\":2,\"met\":true,\"evidence\":\"README contains Status.\"}]}"
@@ -58,6 +69,12 @@
       "expected": {"requests": 7, "tools": 2, "tests": 2, "repairs": 0, "reviewRepairs": 1, "verdict": "pass", "readme": "# Example\n\n## Status\nActive. Ready.\n"}
     },
     {
+      "name": "review-exhausted",
+      "steps": [["planner", "plan"], ["coder", "write"], ["coder", "done"], ["reviewer", "review-fail"], ["coder", "revise-incomplete"], ["coder", "done"], ["reviewer", "review-fail"], ["coder", "revise-incomplete"], ["coder", "done"], ["reviewer", "review-fail"]],
+      "tests": ["pass", "pass", "pass"],
+      "expected": {"requests": 10, "tools": 3, "tests": 3, "repairs": 0, "reviewRepairs": 2, "verdict": "fail", "readme": "# Example\n\n## Status\nActive (detail pending).\n"}
+    },
+    {
       "name": "all-fail",
       "steps": [["planner", "plan"], ["coder", "done"], ["coder", "done"], ["coder", "done"], ["coder", "done"], ["coder", "done"], ["coder", "done"], ["coder", "done"], ["coder", "done"], ["coder", "done"]],
       "tests": ["fail", "fail", "fail", "fail", "fail", "fail", "fail", "fail", "fail"],
@@ -68,6 +85,12 @@
       "steps": [["planner", "plan"], ["coder", "cancel"]],
       "tests": [],
       "expected": {"requests": 2, "tools": 0, "tests": 0, "error": "cancel"}
+    },
+    {
+      "name": "post-edit-cancelled",
+      "steps": [["planner", "plan"], ["coder", "write"], ["coder", "cancel"]],
+      "tests": [],
+      "expected": {"requests": 3, "tools": 1, "tests": 0, "error": "cancel", "readme": "# Example\n\n## Status\nActive.\n"}
     }
   ]
 }
