@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { renderPlan, validatePlan } from '../src/planner/plan.mjs';
 import { parsePlanDocument } from '../src/planner/plan-document.mjs';
-import { earlierWaveFiles, requireEarlierWavesClosed, waveBoard } from '../src/lib/waves.mjs';
+import { earlierWaveFiles, issueDependencies, requireEarlierWavesClosed, waveBoard } from '../src/lib/waves.mjs';
 import { askRequirements, cleanAskText, renderAssignment } from '../src/planner/stub.mjs';
 import { classifyAsk } from '../src/planner/classify.mjs';
 import { formatHelp } from '../src/shell/commands.mjs';
@@ -130,4 +130,65 @@ test('earlier-wave files come from closed same-plan slices and skip tests', asyn
     worktree: 'wt', cwd: 'root', runCommand: async () => { throw new Error('not called'); } }), []);
   assert.deepEqual(await earlierWaveFiles({ issue, repository: 'x/y', worktree: 'wt', cwd: 'root',
     runCommand: async () => { throw new Error('offline'); } }), []);
+});
+
+test('explicit dependency links override wave labels and fail closed on invalid or unavailable metadata', async () => {
+  const issue = { number: 200, body: 'Depends on: #100, #101', labels: [{ name: 'wave:2' }] };
+  assert.deepEqual(issueDependencies(issue), [100, 101]);
+  assert.equal(issueDependencies({ body: '' }), null);
+  assert.deepEqual(issueDependencies({ body: 'Depends on: none' }), []);
+  for (const body of ['Depends on: #200', 'Depends on: #100, #100', 'Depends on: #100 garbage',
+    'Depends on: none\nDepends on: #100', 'Depends on: #999999999999999999']) {
+    assert.throws(() => issueDependencies({ ...issue, body }), /dependency links/);
+  }
+  const options = { issue, repository: 'example/project', cwd: process.cwd(),
+    runCommand: async (_program, args) => JSON.stringify({ number: Number(args[2]), state: 'CLOSED' }) };
+  await requireEarlierWavesClosed(options);
+  await assert.rejects(requireEarlierWavesClosed({ ...options,
+    runCommand: async () => JSON.stringify({ number: 100, state: 'OPEN' }) }), /dependency #100 is open/);
+  await assert.rejects(requireEarlierWavesClosed({ ...options,
+    runCommand: async () => { throw new Error('offline'); } }), /status is unavailable/);
+  await requireEarlierWavesClosed({ ...options, issue: { ...issue, body: 'Depends on: none' },
+    runCommand: () => assert.fail('Explicit independence needs no earlier-label lookup') });
+});
+
+test('created children carry issue-link dependencies and explicit independence drives the board', async (t) => {
+  const options = fixture(t);
+  await waveBoard({ ...options, open: true });
+  assert.match(options.issues[0].body, /^Depends on: none$/m);
+  assert.match(options.issues[1].body, /^Depends on: #100$/m);
+  options.issues[1].body = options.issues[1].body.replace('Depends on: #100', 'Depends on: none');
+  assert.deepEqual((await waveBoard(options)).map(({ state }) => state), ['todo', 'todo']);
+});
+
+test('closed children do not require a live lookup of their external dependencies', async (t) => {
+  const options = fixture(t);
+  await waveBoard({ ...options, open: true });
+  options.issues[0].state = 'CLOSED';
+  options.issues[0].body = options.issues[0].body.replace('Depends on: none', 'Depends on: #900');
+  const rows = await waveBoard(options);
+  assert.deepEqual(rows.map(({ state }) => state), ['done', 'todo']);
+});
+
+test('child creation orders wave dependencies even when draft numbering is not wave ordered', async (t) => {
+  const options = fixture(t);
+  const plan = { ...options.plan, issues: [...options.plan.issues].reverse() };
+  writeFileSync(path.join(options.worktree, 'PLAN.md'), renderPlan(plan, {
+    ask: 'Deliver two outcomes in README.md.', kind: 'feature', reference: 'local:wave-plan',
+  }));
+  const rows = await waveBoard({ ...options, open: true });
+  assert.match(options.issues[1].body, /^Depends on: #100$/m);
+  assert.deepEqual(rows.map(({ issue, state }) => [issue, state]), [[101, 'blocked'], [100, 'todo']]);
+});
+
+test('closed explicit dependency files are reused even within the same labeled wave', async () => {
+  const files = await earlierWaveFiles({ issue: { number: 101, body: 'Depends on: #100', labels: [{ name: 'wave:1' }] },
+    repository: 'example/project', worktree: 'wt', cwd: 'root',
+    runCommand: async (program, args) => {
+      assert.equal(program, 'git');
+      assert.ok(args.some((arg) => arg.includes('#100')));
+      return 'src/lib/store.mjs\n';
+    },
+  });
+  assert.deepEqual(files, ['src/lib/store.mjs']);
 });

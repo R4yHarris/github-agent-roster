@@ -176,6 +176,16 @@ counts as a route failure, so it does not quarantine the profile or escalate
 the seat. Requests without a fleet profile, such as an ordinary run on the
 saved default, are not admission-limited.
 
+Feature runs may opt into `--parallel K` to run ready GitHub-linked children
+in isolated worktrees. The child-task bound is `min(K, sum(profile.concurrency))`
+for fleet-routed runs; saved/default runs use their configured concurrency
+or 1. Every child retains sequential seats and its own routed profile.
+Per-profile FIFO admission remains the HTTP limit, including retries and
+reviewer calls; a summed task bound does not override a busy profile.
+This is one process on this machine, not distributed fleet coordination.
+See [parallel child waves](MULTIAGENT.md#opt-in-parallel-child-waves) for
+dependency closure, claim recovery, status rows and publication boundaries.
+
 `--auto-model` is the explicit permission to select a different endpoint
 and model for one run. It does not require clearing a saved default and
 does not rewrite that default. Ordinary runs and recommendations do not

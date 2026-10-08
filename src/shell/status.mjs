@@ -11,5 +11,7 @@ export function formatSessionStatus(state, { env = process.env } = {}) {
     `Model: ${safe(display.model || '-')}\nHost: ${safe(display.host || '-')}\nEffort: ${safe(effort)}\n` +
     `Last finish reason: ${safe(display.lastFinishReason)}\nLast test name: ${safe(display.lastTestName)}\n` +
     `Review: ${safe(display.review)}\n` +
+    (display.waves?.length ? 'Child waves:\n' + display.waves.map((row) =>
+      `  #${row.issue} wave:${row.wave} ${safe(row.seat)} ${safe(row.state)} ${safe(row.model)}\n`).join('') : '') +
     (state.lastRun?.worktreePath ? `Worktree: ${safe(state.lastRun.worktreePath)}\n` : '');
 }

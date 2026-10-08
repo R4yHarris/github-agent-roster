@@ -21,7 +21,7 @@ const help = `Usage:
   roster fleet default ID
   roster fleet remove ID
   roster ask "..."
-  roster run --issue N [--runtime builtin] [--auto-model] [--seats planner,coder,reviewer] [--saved] [--publish] [--skip-review] [--confirm] [--plan]
+  roster run --issue N [--runtime builtin] [--auto-model] [--seats planner,coder,reviewer] [--parallel K] [--saved] [--publish] [--skip-review] [--confirm] [--plan]
   roster run --seat coder --runtime builtin
   roster prepare --issue N
   roster run --ask-file PATH --runtime builtin
@@ -307,11 +307,11 @@ async function main(args) {
     const options = {};
     const seen = new Set();
     const usage = 'Use roster run --issue N [--runtime builtin] [--seats planner,coder,reviewer] ' +
-      '[--saved] [--publish] [--skip-review] [--confirm] [--plan], ' +
+      '[--parallel K] [--saved] [--publish] [--skip-review] [--confirm] [--plan], ' +
       'or roster run --seat coder --runtime builtin for an existing TASK.md.';
     for (let index = 0; index < args.length; index += 1) {
       const flag = args[index];
-      if (!['--issue', '--seat', '--seats', '--runtime', '--auto-model', '--saved', '--publish', '--skip-review', '--confirm', '--plan'].includes(flag) ||
+      if (!['--issue', '--seat', '--seats', '--runtime', '--parallel', '--auto-model', '--saved', '--publish', '--skip-review', '--confirm', '--plan'].includes(flag) ||
           seen.has(flag)) {
         throw new TypeError(usage);
       }
@@ -325,16 +325,20 @@ async function main(args) {
       else {
         const value = args[++index];
         if (!value || value.startsWith('--')) throw new TypeError(usage);
-        options[flag.slice(2)] = value;
+        if (flag === '--parallel') {
+          if (!/^[1-9]\d*$/.test(value) || !Number.isSafeInteger(Number(value))) throw new TypeError(usage);
+          options.parallel = Number(value);
+        } else options[flag.slice(2)] = value;
       }
     }
     if (options.issue === undefined && options.seat === 'coder' && options.runtime === 'builtin' &&
-        options.seats === undefined && !options.autoModel && !options.publish && !options.skipReview && !options.confirm && !options.plan) return options;
+        options.seats === undefined && options.parallel === undefined && !options.autoModel && !options.publish && !options.skipReview && !options.confirm && !options.plan) return options;
     if (!options.issue || (options.runtime !== undefined && options.runtime !== 'builtin') ||
         (options.seat !== undefined && options.seat !== 'coder') ||
         (options.seats !== undefined &&
           !['planner,coder', 'planner,coder,reviewer'].includes(options.seats)) ||
-        (options.seat !== undefined && options.seats !== undefined)) {
+        (options.seat !== undefined && options.seats !== undefined) ||
+        options.parallel > 1 && (options.confirm || options.plan)) {
       throw new TypeError(usage);
     }
     return { ...options, autoModel: options.saved ? false : options.autoModel !== false, seats: 'planner,coder,reviewer' };

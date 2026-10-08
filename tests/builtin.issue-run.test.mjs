@@ -107,7 +107,8 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
   assert.match(logs.join('\n'), /Publication unavailable: set model/);
   assert.equal((logs[0].match(/AI-Run:/g) ?? []).length, 0);
   assert.deepEqual(result.runs, { planner: null, coder: null, reviewer: null });
-  assert.deepEqual(options.calls.map(({ program }) => program), ['git', 'git', 'gh', 'git', 'git', 'git']);
+  assert.deepEqual(options.calls.map(({ program }) => program), ['git', 'git', 'git', 'gh', 'git', 'git', 'git']);
+  assert.deepEqual(options.calls[0].args, ['rev-parse', '--git-common-dir']);
   assert.equal(options.calls.some(({ args }) => args[0] === 'submodule'), false, 'no .gitmodules: nothing to initialize');
   assert.equal(options.calls.filter(({ program, args }) =>
     program === 'git' && args[0] === 'worktree' && args[1] === 'add').length, 1);

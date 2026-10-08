@@ -194,6 +194,26 @@ export function createDispatcher({
     emit: createShellPainter({ transcript: () => state.transcript, display: state.display, notify }) });
   const receiveEvent = (event) => {
     const display = state.display;
+    if (event.wave !== undefined && Number.isSafeInteger(event.issue)) {
+      const rows = display.waves ??= [];
+      let row = rows.find((item) => item.issue === event.issue);
+      if (!row) {
+        row = { issue: event.issue, wave: event.wave, state: 'running' };
+        rows.push(row);
+      }
+      if (event.type === 'wave-end') {
+        row.state = event.state;
+      } else if (event.type === 'seat-start') {
+        Object.assign(row, { seat: event.seat, model: event.model,
+          state: { planner: 'planning', coder: 'drafting', reviewer: 'reviewing' }[event.seat] });
+      } else if (event.type === 'route' || event.type === 'seat-measurement') {
+        if (event.model) row.model = event.model;
+      } else if (event.type === 'seat-error') row.state = 'failed';
+      else if (event.type === 'seat-end' && event.verdict) row.state = event.verdict === 'pass' ? 'passed' : 'failed';
+      else if (event.type === 'tool' && event.name === 'run_test') row.state = 'testing';
+      notify();
+      return;
+    }
     sink.receive(event);
     if (event.type === 'seat-measurement') {
       state.lastMeasuredSeat = Object.fromEntries(['seat', 'provider', 'model', 'effort', 'input', 'output',
@@ -319,7 +339,8 @@ export function createDispatcher({
     if (state.controller !== null) throw new Error('A seat is already running; cancel it before starting another.');
     const controller = new AbortController();
     state.controller = controller;
-    state.steeringControl = createSteeringControl({ signal: controller.signal });
+    state.steeringControl = options.parallel > 1 ? null : createSteeringControl({ signal: controller.signal });
+    state.display.waves = [];
     state.queuedInput = [];
     state.pendingConfirm = null;
     if (request) state.lastRequest = request;
@@ -381,6 +402,8 @@ export function createDispatcher({
       ? 'Planning failed; stubs are unverified. Coder, tests, reviewer, and publication did not run. Check the planner diagnostic, then retry.\n'
       : state.lastRun.planMode
       ? 'Plan ready. Press Enter to accept and continue, or /stop to keep the plan without coding.\n'
+      : state.lastRun.parallelRun
+      ? 'Parallel children finished; each reviewed worktree has its own App SDK handoff. Use /status for child outcomes.\n'
       : state.lastRun.planPath
       ? 'PLAN ready; review the child drafts and run bounded slices. No coder ran.\n'
       : state.lastRun.planningOnly
@@ -772,15 +795,24 @@ export function createDispatcher({
         return true;
       }
       case 'run': {
-        const issue = /^(?:--issue\s+)?([1-9]\d*)((?:\s+--[a-z-]+)*)$/.exec(args);
+        const issue = /^(?:--issue\s+)?([1-9]\d*)((?:\s+--[a-z-]+(?:\s+[1-9]\d*)?)*)$/.exec(args);
         const flags = issue?.[2].trim().split(/\s+/).filter(Boolean) ?? [];
+        let parallel;
+        const position = flags.indexOf('--parallel');
+        if (position !== -1 && /^[1-9]\d*$/.test(flags[position + 1] ?? '')) {
+          parallel = Number(flags[position + 1]);
+          flags.splice(position, 2);
+        }
         if (!issue || flags.some((flag) => !['--auto-model', '--saved', '--confirm', '--plan'].includes(flag)) ||
+            parallel !== undefined && (!Number.isSafeInteger(parallel) ||
+              parallel > 1 && (flags.includes('--confirm') || flags.includes('--plan'))) ||
             new Set(flags).size !== flags.length) {
-          throw new TypeError('Use /run N [--saved] [--confirm|--plan] or /run --issue N [--saved] [--confirm|--plan].');
+          throw new TypeError('Use /run N [--parallel K] [--saved] [--confirm|--plan].');
         }
         return runRequest({ kind: 'run', issue: issue[1], options: {
           autoModel: !flags.includes('--saved'), confirm: flags.includes('--confirm'),
           planMode: flags.includes('--plan'),
+          ...(parallel === undefined ? {} : { parallel }),
         } });
       }
       case 'status': {
@@ -844,6 +876,7 @@ export function createDispatcher({
         return true;
       }
       case 'publish': {
+        if (state.lastRun?.parallelRun) throw new Error('Parallel runs have separate child worktrees; publish each child through its reviewed App SDK handoff.');
         requirePublicationEnabled(state.config);
         if (state.lastRun?.askKind && state.lastRun.askKind !== 'slice') {
           throw new Error('Planning-only PLAN or clarification is not code to publish; create and run a bounded slice first.');

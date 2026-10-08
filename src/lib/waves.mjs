@@ -22,7 +22,43 @@ const labels = (issue) => (issue.labels ?? []).map((label) => typeof label === '
 // Accepts the plain board label and the label a Roster run sets through the App (e.g. roster:review).
 const hasLabel = (issue, name) => labels(issue ?? {}).some((label) => label === name || label === `roster:${name}`);
 
+export function issueDependencies(issue) {
+  const lines = (issue.body ?? '').split(/\r?\n/).filter((line) => /^Depends on:/i.test(line));
+  if (!lines.length) return null;
+  if (lines.length !== 1) throw new Error('Issue dependency links must be declared once.');
+  const value = lines[0].slice('Depends on:'.length).trim();
+  if (value === 'none') return [];
+  if (!/^#[1-9]\d*(?:,\s*#[1-9]\d*)*$/.test(value)) throw new Error('Issue dependency links must be comma-separated #numbers or none.');
+  const numbers = value.split(/,\s*/).map((part) => Number(part.slice(1)));
+  if (numbers.some((number) => !Number.isSafeInteger(number) || number === issue.number) ||
+      new Set(numbers).size !== numbers.length) throw new Error('Issue dependency links are invalid.');
+  return numbers;
+}
+
+async function dependencyClosed(number, { repository, cwd, runCommand }) {
+  let dependency;
+  try {
+    dependency = JSON.parse(await runCommand('gh', ['issue', 'view', String(number),
+      '--repo', repository, '--json', 'number,state'], cwd));
+  } catch (cause) {
+    throw new Error(`Dependency #${number} status is unavailable; child is blocked.`, { cause });
+  }
+  if (dependency?.number !== number || !['OPEN', 'CLOSED'].includes(dependency.state)) {
+    throw new Error(`Dependency #${number} metadata is invalid; child is blocked.`);
+  }
+  return dependency.state === 'CLOSED';
+}
+
 export async function requireEarlierWavesClosed({ issue, repository, cwd, runCommand }) {
+  const dependencies = issueDependencies(issue);
+  if (dependencies !== null) {
+    for (const number of dependencies) {
+      if (!await dependencyClosed(number, { repository, cwd, runCommand })) {
+        throw new Error(`Issue #${issue.number} is blocked while dependency #${number} is open.`);
+      }
+    }
+    return;
+  }
   const wave = issueWave(issue);
   if (wave === null || wave === 1) return;
   const key = /<!-- Roster-Plan: ([a-f0-9]{64}) -->/.exec(issue.body ?? '')?.[1];
@@ -44,15 +80,18 @@ export async function requireEarlierWavesClosed({ issue, repository, cwd, runCom
 export async function earlierWaveFiles({ issue, repository, worktree, cwd, runCommand, limit = 12 }) {
   const wave = issueWave(issue);
   const key = /<!-- Roster-Plan: ([a-f0-9]{64}) -->/.exec(issue.body ?? '')?.[1];
-  if (wave === null || wave === 1 || !key) return [];
-  let closed;
-  try {
-    closed = JSON.parse(await runCommand('gh', ['issue', 'list', '--repo', repository, '--state', 'closed',
-      '--search', `in:body "Roster-Plan: ${key}"`, '--limit', '100', '--json', 'number,body,labels'], cwd));
-  } catch { return []; }
-  if (!Array.isArray(closed)) return [];
-  const numbers = closed.filter((item) => Number.isSafeInteger(item?.number) && item.number !== issue.number &&
-    (issueWave(item) ?? wave) < wave).map(({ number }) => number).sort((a, b) => a - b);
+  let numbers = issueDependencies(issue);
+  if (numbers === null) {
+    if (wave === null || wave === 1 || !key) return [];
+    let closed;
+    try {
+      closed = JSON.parse(await runCommand('gh', ['issue', 'list', '--repo', repository, '--state', 'closed',
+        '--search', `in:body "Roster-Plan: ${key}"`, '--limit', '100', '--json', 'number,body,labels'], cwd));
+    } catch { return []; }
+    if (!Array.isArray(closed)) return [];
+    numbers = closed.filter((item) => Number.isSafeInteger(item?.number) && item.number !== issue.number &&
+      (issueWave(item) ?? wave) < wave).map(({ number }) => number).sort((a, b) => a - b);
+  }
   const files = new Set();
   for (const number of numbers) {
     let output;
@@ -139,11 +178,13 @@ export async function waveBoard({
       if (!known.some(({ name }) => name === `wave:${wave}`)) await runCommand('gh', ['label', 'create',
         `wave:${wave}`, '--repo', repository, '--color', '1D76DB', '--description', `Roster plan wave ${wave}`], cwd);
     }
-    for (const [index, draft] of plan.issues.entries()) {
+    for (const [index, draft] of [...plan.issues.entries()].sort((a, b) => a[1].wave - b[1].wave)) {
       if (matched.has(index + 1)) continue;
       const parent = /^issue:[1-9]\d*$/.test(plan.reference) ? `\n\nParent: #${plan.reference.slice('issue:'.length)}` : '';
+      const dependencies = [...matched.values()].filter((issue) => issueWave(issue) < draft.wave)
+        .map(({ number }) => `#${number}`);
       // Markers precede the headed lists: a trailing line would be parsed as part of Files allowed.
-      const ask = `${draft.title}\n\n${draft.outcome}${parent}\n\n` +
+      const ask = `${draft.title}\n\n${draft.outcome}${parent}\n\nDepends on: ${dependencies.join(', ') || 'none'}\n\n` +
         `<!-- Roster-Plan: ${key} -->\n<!-- Roster-Wave: ${draft.wave} -->\n<!-- Roster-Draft: ${index + 1} -->\n\n` +
         '## Acceptance checks\n' + draft.acceptance_checks.map((check) => `- ${check}`).join('\n') +
         (draft.files_allowed.length ? '\n\n## Files allowed\n' + draft.files_allowed.map((file) => `- \`${file}\``).join('\n') : '');
@@ -152,15 +193,26 @@ export async function waveBoard({
       const prefix = `https://github.com/${repository}/issues/`;
       const number = url.startsWith(prefix) ? Number(url.slice(prefix.length)) : NaN;
       if (!Number.isSafeInteger(number) || number < 1) throw new Error('GitHub did not confirm the created wave draft.');
-      matched.set(index + 1, { number, state: 'OPEN', labels: [{ name: `wave:${draft.wave}` }] });
+      matched.set(index + 1, { number, state: 'OPEN', body: ask, labels: [{ name: `wave:${draft.wave}` }] });
     }
   }
   const rows = [];
   for (const [index, draft] of plan.issues.entries()) {
     const issue = matched.get(index + 1);
+    const dependencies = issue ? issueDependencies(issue) : null;
+    let dependenciesOpen = false;
+    if (dependencies !== null && issue.state !== 'CLOSED') {
+      for (const number of dependencies) {
+        const known = [...matched.values()].find((item) => item.number === number);
+        if (known ? known.state !== 'CLOSED'
+          : !await dependencyClosed(number, { repository, cwd, runCommand })) dependenciesOpen = true;
+      }
+    } else if (dependencies === null) {
+      dependenciesOpen = [...matched.values()].some((earlier) =>
+        issueWave(earlier) < draft.wave && earlier.state === 'OPEN');
+    }
     let state = issue?.state === 'CLOSED' ? 'done'
-      : [...matched.values()].some((earlier) => issueWave(earlier) < draft.wave && earlier.state === 'OPEN') ||
-        hasLabel(issue, 'blocked') ? 'blocked'
+      : dependenciesOpen || hasLabel(issue, 'blocked') ? 'blocked'
       : issue && activeIssue === issue.number && ['planning', 'drafting', 'testing'].includes(activeState) ? 'running'
       : issue && activeIssue === issue.number && ['reviewing', 'passed'].includes(activeState) || hasLabel(issue, 'review')
         ? 'review'
