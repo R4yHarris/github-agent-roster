@@ -68,3 +68,38 @@ test('syntax preflight strips publishing credentials and propagates infrastructu
     } });
   await assert.rejects(tools.run_test({}, { full: true }), (error) => error.cause === failure);
 });
+
+test('syntax preflight cancellation never launches the full suite', async (t) => {
+  const worktree = fixture(t);
+  writeFileSync(path.join(worktree, 'src', 'app.mjs'), 'export const value = 1;\n');
+  const controller = new AbortController();
+  const calls = [];
+  const tools = await createTools({ worktree, allowedFiles: ['src/app.mjs'], signal: controller.signal,
+    runCommand: async (_program, args, options) => {
+      calls.push(args);
+      assert.equal(options.signal, controller.signal);
+      controller.abort();
+      throw Object.assign(new Error('aborted'), { code: 'ABORT_ERR' });
+    } });
+  await assert.rejects(tools.run_test({}, { full: true }), { code: 'ROSTER_CANCELLED' });
+  assert.deepEqual(calls, [['--check', 'src/app.mjs']]);
+});
+
+test('syntax preflight timeout names its file and never launches the full suite', async (t) => {
+  const worktree = fixture(t);
+  writeFileSync(path.join(worktree, 'src', 'app.mjs'), 'export const value = 1;\n');
+  const calls = [];
+  const failure = Object.assign(new Error('timed out'), { code: 'ETIMEDOUT', killed: true });
+  const tools = await createTools({ worktree, allowedFiles: ['src/app.mjs'],
+    runCommand: async (_program, args, options) => {
+      calls.push(args);
+      assert.equal(options.timeout, 30_000);
+      throw failure;
+    } });
+  await assert.rejects(tools.run_test({}, { full: true }), (error) => {
+    assert.match(error.message, /node --check src\/app\.mjs timed out after 30 seconds/);
+    assert.equal(error.cause.cause, failure);
+    return true;
+  });
+  assert.deepEqual(calls, [['--check', 'src/app.mjs']]);
+});
