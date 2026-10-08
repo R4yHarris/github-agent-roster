@@ -48,7 +48,7 @@ const BODY_FIELDS = new Set([
  * Validate JSON diagnostic metadata without serializing or dropping values.
  * Body snapshots are not provenance; callers must supply summaries/references.
  */
-export function validateProvenanceData(value, source = 'record', ancestors = new Set()) {
+export function validateProvenanceData(value, source = 'record', ancestors = new Set(), allowAbsentFields = false) {
   if (value === null || typeof value === 'string' || typeof value === 'boolean') return;
   if (typeof value === 'number' && Number.isFinite(value)) return;
   if (typeof value !== 'object' || (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype)) {
@@ -68,6 +68,7 @@ export function validateProvenanceData(value, source = 'record', ancestors = new
       if (BODY_FIELDS.has(key.replace(/[_-]/g, '').toLowerCase())) {
         throw new TypeError(`${field} is a prompt/source body snapshot; use a summary or reference instead`);
       }
+      if (allowAbsentFields && nested === undefined) continue;
       validateProvenanceData(nested, field, ancestors);
     }
   } finally {
@@ -174,7 +175,7 @@ export function validateProvenanceRecord(value) {
     }
   }
   try {
-    validateProvenanceData(value);
+    validateProvenanceData(value, 'record', new Set(), true);
   } catch (error) {
     if (!(error instanceof TypeError)) throw error;
     return { ok: false, reason: error.message };

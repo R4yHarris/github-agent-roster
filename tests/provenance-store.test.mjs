@@ -303,6 +303,18 @@ test('validateProvenanceRecord accepts valid and rejects malformed/incompatible 
   assert.equal(validateProvenanceRecord({ id: 'bad\nid', version: RECORD_VERSION }).ok, false);
 });
 
+test('optional envelope fields may be absent without relaxing nested JSON validation', async (t) => {
+  const root = await makeStoreRoot();
+  t.after(() => cleanup(root));
+  const store = openProvenanceStore(root);
+  const value = record('optional', { issue: undefined, seat: undefined, scope: undefined, payload: undefined });
+  assert.equal(validateProvenanceRecord(value).ok, true);
+  await store.appendRecord(value);
+  assert.deepEqual((await store.readAll()).records, [JSON.parse(JSON.stringify(value))]);
+  assert.equal(validateProvenanceRecord(record('nested', { payload: { output: undefined } })).ok, false);
+  assert.equal(validateProvenanceRecord(record('snapshot', { prompt: undefined })).ok, false);
+});
+
 test('schema-major incompatibility and body snapshots are rejected and quarantined without losing neighbors', async (t) => {
   const root = await makeStoreRoot();
   t.after(() => cleanup(root));

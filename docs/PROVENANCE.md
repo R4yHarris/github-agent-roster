@@ -169,6 +169,9 @@ field path; bodies are never silently dropped or replaced with fabricated
 metadata. Already-stored invalid records follow the same explicit quarantine
 path as incompatible versions.
 
+Optional envelope fields set to `undefined` remain absent during serialization,
+preserving existing in-memory history/export records. Nested payloads do not
+receive that exception, and body-bearing field names remain rejected.
 Payloads must be plain JSON objects with finite numbers and dense arrays:
 cycles, undefined values, non-JSON objects, and non-finite numbers are errors,
 not success-shaped empty payloads. Other diagnostic metadata and future
