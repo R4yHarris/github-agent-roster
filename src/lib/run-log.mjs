@@ -1,12 +1,14 @@
 import { constants, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
+import { randomUUID } from 'node:crypto';
 import { ensureLocalPath } from './paths.mjs';
 import { STATE_SCOPES, statePaths, LEGACY_STATE_DIRNAME } from './repo-state.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
 import { timeoutHint, validateRequestTimeout, validateRetryCommand } from '../llm/request.mjs';
 import { createDebugLog } from './debug-log.mjs';
 import { buildRun } from '../metrics/run.mjs';
+import { validateDelivery } from './delivery-metrics.mjs';
 
 const seats = ['planner', 'coder', 'reviewer'];
 const tools = ['read_file', 'write_file', 'edit_file', 'delete_file', 'glob_files', 'list_dir', 'run_test', 'run_command', 'search_text', 'web_search', 'web_fetch', 'update_checklist'];
@@ -66,6 +68,17 @@ export async function createRunLog({
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   await ensureLocalPath(file, repoRoot);
   let pending = Promise.resolve();
+  const deliveryId = randomUUID();
+  const deliveries = new Map();
+
+  function delivery(name, fields = {}) {
+    const evidence = deliveries.get(name);
+    if (!evidence) return undefined;
+    const snapshot = { ...evidence, gates: structuredClone(evidence.gates), ...fields };
+    if (snapshot.hardware) snapshot.hardware = safe(snapshot.hardware);
+    validateDelivery(snapshot);
+    return snapshot;
+  }
 
   function append(message, human = null) {
     const write = pending.then(async () => {
@@ -273,6 +286,24 @@ export async function createRunLog({
     let modelEvent;
     let effort;
     let finishReason;
+    const evidence = { id: deliveryId, attempt: (deliveries.get(name)?.attempt ?? 0) + 1,
+      gates: {}, ...(config.llm.hardware ? { hardware: safe(config.llm.hardware) } : {}) };
+    deliveries.set(name, evidence);
+    const countGate = (event) => {
+      const gate = event.type === 'shadow-modules' ? 'shadow'
+        : event.type === 'review-e2e' ? 'verifying-reviewer' : event.type;
+      const checked = gate === 'red-green' ? event.status === 'checked'
+        : gate === 'shadow' ? ['checked', 'flagged'].includes(event.status)
+        : gate === 'self-review' ? ['clean', 'findings'].includes(event.status)
+        : gate === 'verifying-reviewer' ? ['pass', 'fail'].includes(event.status) : false;
+      if (checked) {
+        const counts = evidence.gates[gate] ??= { checks: 0, failures: 0 };
+        counts.checks += 1;
+        if (gate === 'red-green' ? event.notRed > 0
+          : gate === 'shadow' ? event.findings > 0
+          : gate === 'self-review' ? event.status === 'findings' : event.status === 'fail') counts.failures += 1;
+      }
+    };
     const onEvent = async (event) => {
       // Model text reaches the live transcript only; the durable run log never records completions.
       if (event?.type === 'delta') {
@@ -293,6 +324,7 @@ export async function createRunLog({
         await observe?.({ ...event, seat: name, logSkipped: true });
         return;
       }
+      countGate(event);
       if (event.type === 'http' && event.phase === 'start') effort = event.effort;
       if (['completion', 'finish-reason'].includes(event.type)) finishReason = event.reason;
       await observe?.({ ...event, seat: name });
@@ -325,6 +357,9 @@ export async function createRunLog({
     await append(`seat ${name} mode ${mode}`);
     try {
       const result = await operation(onEvent);
+      if (name === 'reviewer' && result?.completed && ['pass', 'fail', 'escalate'].includes(result.verdict)) {
+        evidence.review_verdict = result.verdict;
+      }
       await measured(result);
       await observe?.({ type: 'seat-end', seat: name, verdict: result?.verdict,
         contextUsed: result?.response?.usage?.prompt_tokens, model: result?.response?.model });
@@ -343,12 +378,13 @@ export async function createRunLog({
       await append(`seat ${name} error class=${errorClass(error)}`);
       throw error;
     } finally {
+      evidence.duration_ms = Math.max(0, Math.round(clock() - started));
       await debug.record({ repoRoot, issue, seat: name, event: { type: 'seat-end' } });
       await append(`seat ${name} elapsed_ms=${Math.max(0, Math.round(clock() - started))} mode=${mode}`);
     }
   }
 
-  return { path: file, session, seat };
+  return { path: file, session, seat, delivery };
 }
 
 export async function readLastRunLog({

@@ -15,6 +15,44 @@ function fixture(t) {
 
 const config = { llm: { base_url: '', model: '' } };
 
+test('delivery snapshots retain monotonic seat timing and gate failures across successful repairs', async (t) => {
+  const options = fixture(t);
+  let ticks = 0;
+  const logger = await createRunLog({ ...options, clock: () => ticks });
+  await logger.seat('coder', options.session, { llm: { ...config.llm, hardware: 'GPU host' } }, async (onEvent) => {
+    await onEvent({ type: 'red-green', status: 'checked', tests: 1, notRed: 1 });
+    await onEvent({ type: 'red-green', status: 'checked', tests: 1, notRed: 0 });
+    await onEvent({ type: 'shadow-modules', status: 'flagged', findings: 1 });
+    await onEvent({ type: 'shadow-modules', status: 'checked', findings: 0 });
+    await onEvent({ type: 'self-review', status: 'findings', unmet: 1, findings: 1, ms: 1, input: 0, output: 0 });
+    await onEvent({ type: 'self-review', status: 'clean', unmet: 0, findings: 0, ms: 1, input: 0, output: 0 });
+    ticks = 120000;
+    return {};
+  });
+  const coder = logger.delivery('coder', { estimate_min: 5, review_repairs: 0 });
+  assert.equal(coder.duration_ms, 120000);
+  assert.equal(coder.hardware, 'GPU host');
+  assert.deepEqual(coder.gates['red-green'], { checks: 2, failures: 1 });
+  assert.deepEqual(coder.gates.shadow, { checks: 2, failures: 1 });
+  assert.deepEqual(coder.gates['self-review'], { checks: 2, failures: 1 });
+  coder.gates.shadow.failures = 0;
+  assert.equal(logger.delivery('coder').gates.shadow.failures, 1);
+  await logger.seat('reviewer', 'roster-42-reviewer', config, async (onEvent) => {
+    await onEvent({ type: 'review-e2e', status: 'fail', commands: 1, failures: 1 });
+    return { completed: true, verdict: 'fail' };
+  });
+  assert.equal(logger.delivery('reviewer').id, coder.id);
+  assert.equal(logger.delivery('reviewer').review_verdict, 'fail');
+  assert.equal(logger.delivery('reviewer').gates['verifying-reviewer'].failures, 1);
+  await assert.rejects(logger.seat('coder', options.session, config, async () => {
+    ticks += 1000;
+    throw new Error('endpoint down');
+  }), /endpoint down/);
+  assert.equal(logger.delivery('coder').attempt, 2);
+  assert.equal(logger.delivery('coder').duration_ms, 1000);
+  assert.equal(logger.delivery('coder').hardware, undefined);
+});
+
 test('timeout retry is visible to the human and readable as safe log metadata', async (t) => {
   const options = fixture(t);
   const logger = await createRunLog(options);

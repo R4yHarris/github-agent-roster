@@ -6,6 +6,7 @@ import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
 import { storeRecordId } from './provenance-api.mjs';
 import { materializeRun, normalizeRunEffort } from '../metrics/run.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
+import { validateDelivery } from './delivery-metrics.mjs';
 
 export const EFFORTS = ['l', 'm', 'h', 'x'];
 export const TASK_CLASSES = ['feat', 'fix', 'docs', 'test'];
@@ -16,7 +17,7 @@ export const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 export const IDENTIFIER = /^(?!-$)[A-Za-z0-9._-]{1,64}$/;
 const RUN_FIELDS = [
   'sha', 'session', 'task', 'seat', 'task_class', 'provider', 'model', 'effort',
-  'prompt_tokens', 'completion_tokens', 'context_used', 'context_max', 'context_out', 'excellence', 'defects',
+  'prompt_tokens', 'completion_tokens', 'context_used', 'context_max', 'context_out', 'excellence', 'defects', 'delivery',
 ];
 
 export function isObject(value) {
@@ -62,6 +63,7 @@ export function parseJsonl(text, source, validate, uniqueSha = false) {
 
 function validateLocalRun(record, source) {
   if (!isObject(record)) throw new Error(`${source}: expected a JSON object`);
+  if (record.delivery != null) validateDelivery(record.delivery, source);
   if (record.sha == null && record.session == null) {
     throw new Error(`${source}: a run needs a sha or session`);
   }
@@ -291,6 +293,20 @@ export function loadLearning({ cwd = process.cwd(), readFile = readFileSync } = 
   const status = statSync(evalsFile, { throwIfNoEntry: false });
   if (status && !status.isFile()) throw new Error(`${evalsFile} must be a JSONL file`);
   return { runs, evaluations: status ? read(evalsFile, validateLocalEvaluation) : [] };
+}
+
+export async function recordDeliveryPublication(run, publication) {
+  if (!run?.delivery || !publication?.deliveryTimestamps) return;
+  for (const [seat, evidence] of Object.entries(run.delivery)) {
+    if (!evidence || !run.runs?.[seat]) continue;
+    const delivery = { ...evidence, ...publication.deliveryTimestamps };
+    validateDelivery(delivery);
+    await recordRun({ task: run.task, session: run.sessions[seat], seat, delivery,
+      task_class: run.planner?.metadata?.task_class }, {
+      cwd: run.repoRoot, run: run.runs[seat], env: run.runs[seat].env, createDirectory: true,
+    });
+    run.delivery[seat] = delivery;
+  }
 }
 
 function knownFields(record) {

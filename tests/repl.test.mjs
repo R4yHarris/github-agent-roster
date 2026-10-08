@@ -33,6 +33,20 @@ function dispatcher({ env = {}, services = {}, config: activeConfig = config } =
   return { ...commands, output, errorOutput };
 }
 
+test('/stats --delivery --json exposes pure delivery groups without executing seats', async () => {
+  const records = [{ model: 'fixture', seat: 'coder',
+    delivery: { id: 'run', attempt: 1, hardware: 'fake GPU', duration_ms: 60000, review_repairs: 0 } }];
+  const shell = dispatcher({ services: {
+    loadMetrics(options) { assert.equal(options.delivery, true); return records; },
+    resolveContractsPath: () => root,
+  } });
+  await shell.dispatch('/stats --delivery --json');
+  const groups = JSON.parse(shell.output.text);
+  assert.equal(groups[0].coderMinutes, 1);
+  assert.equal(groups[0].hardware, 'fake GPU');
+  await assert.rejects(shell.dispatch('/stats --json'), /Use roster stats/);
+});
+
 test('/debug toggles process logging without config changes and /log debug tails its file', async (t) => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'roster-repl-debug-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
