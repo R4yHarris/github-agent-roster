@@ -44,7 +44,7 @@ test("help lists every prompt's command", () => {
   assert.match(result.stdout, /roster\s+eval/);
   assert.match(result.stdout, /roster\s+recommend\s+--task-class/);
   assert.match(result.stdout, /roster\s+ask/);
-  assert.match(result.stdout, /^  roster run --issue N \[--runtime builtin\] \[--auto-model\] \[--seats planner,coder,reviewer\] \[--parallel K\] \[--attempts K\] \[--saved\] \[--publish\] \[--skip-review\] \[--confirm\] \[--plan\]$/m);
+  assert.match(result.stdout, /^  roster run --issue N \[--runtime builtin\] \[--auto-model\] \[--seats planner,coder,reviewer\] \[--parallel K\] \[--attempts K\] \[--saved\] \[--publish\] \[--skip-review\] \[--confirm\] \[--plan\] \[--base trunk\|current\|REF\] \[--no-fetch\]$/m);
   assert.match(result.stdout, /--auto-model/);
   assert.match(result.stdout, /^  roster prepare --issue N$/m);
 });

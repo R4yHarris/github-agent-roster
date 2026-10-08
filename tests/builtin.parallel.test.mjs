@@ -24,6 +24,7 @@ function featureFixture(t) {
     kind: 'feature', title: options.issue.title, reference: 'issue:42' }));
   const children = [];
   const command = async (program, args, cwd) => {
+    if (program === 'git' && args[0] === 'fetch') return '';
     if (program === 'git') return git(cwd, ...args);
     if (args[0] === 'issue' && args[1] === 'view') {
       return JSON.stringify(Number(args[2]) === 42 ? options.issue : children.find((item) => item.number === Number(args[2])));

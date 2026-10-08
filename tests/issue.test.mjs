@@ -13,14 +13,19 @@ const issue = {
   url: 'https://github.com/example/repository/issues/42',
 };
 
+const trunkSha = 'a'.repeat(40);
+
 function harness(issueResponse = issue) {
   const calls = [];
   const writes = [];
   const messages = [];
   const runCommand = async (program, args, cwd) => {
     calls.push({ program, args, cwd });
+    if (program === 'git' && args[0] === 'rev-parse' && args[1] === '--verify') return `${trunkSha}\n`;
     if (program === 'git' && args[0] === 'rev-parse') return `${repoRoot}\n`;
     if (program === 'git' && args[0] === 'remote') return `${originUrl}\n`;
+    if (program === 'git' && args[0] === 'fetch') return '';
+    if (program === 'git' && args[0] === 'symbolic-ref') return 'origin/main\n';
     if (program === 'gh' && args[0] === 'issue') return JSON.stringify(issueResponse);
     if (program === 'git' && args[0] === 'worktree') return '';
     if (program === 'git' && args[0] === 'for-each-ref') return '';
@@ -61,10 +66,16 @@ test('reads the issue in the current repository and prepares one coder worktree'
   assert.deepEqual(calls, [
     { program: 'git', args: ['rev-parse', '--show-toplevel'], cwd: options.cwd },
     { program: 'git', args: ['remote', 'get-url', 'origin'], cwd: repoRoot },
-    { program: 'gh', args: ['issue', 'view', '42', '--repo', 'example/repository', '--json', 'number,title,body,url,labels'], cwd: repoRoot },
+    { program: 'gh', args: ['issue', 'view', '42', '--repo', 'example/repository', '--json', 'number,title,body,url,labels,state'], cwd: repoRoot },
+    { program: 'git', args: ['remote', 'get-url', 'origin'], cwd: repoRoot },
+    { program: 'git', args: ['fetch', '--prune', '--quiet', 'origin'], cwd: repoRoot },
+    { program: 'git', args: ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], cwd: repoRoot },
+    { program: 'git', args: ['for-each-ref', '--format=%(refname:short)', 'refs/remotes/origin/main',
+      'refs/remotes/origin/master'], cwd: repoRoot },
+    { program: 'git', args: ['rev-parse', '--verify', '--quiet', '--end-of-options', 'origin/main^{commit}'], cwd: repoRoot },
     { program: 'git', args: ['worktree', 'list', '--porcelain', '-z'], cwd: repoRoot },
     { program: 'git', args: ['for-each-ref', '--format=%(refname)', 'refs/heads/issue-42'], cwd: repoRoot },
-    { program: 'git', args: ['worktree', 'add', '-b', 'issue-42', worktreePath], cwd: repoRoot },
+    { program: 'git', args: ['worktree', 'add', '-b', 'issue-42', worktreePath, 'origin/main'], cwd: repoRoot },
   ]);
   assert.deepEqual(writes, [
     { directory: path.join(repoRoot, '.worktrees'), options: { recursive: true } },
@@ -100,6 +111,8 @@ ${issue.body}
     session: 'roster-20260928T222550149Z',
     nextCommand,
     reused: false,
+    start: { mode: 'trunk', ref: 'origin/main', sha: trunkSha, fetched: true, notes: [] },
+    drift: null,
   });
   assert.equal(messages.length, 1);
   assert.match(messages[0], /After editing inside the worktree, load \.env/);
@@ -254,7 +267,7 @@ test('selects the SSH origin explicitly instead of the gh default repository', a
       : originalRunCommand(program, args, cwd);
   await runIssue(42, options);
   assert.deepEqual(calls.find(({ program }) => program === 'gh').args,
-    ['issue', 'view', '42', '--repo', 'example/repository', '--json', 'number,title,body,url,labels']);
+    ['issue', 'view', '42', '--repo', 'example/repository', '--json', 'number,title,body,url,labels,state']);
 });
 
 test('rejects a non-GitHub origin before reading an issue', async () => {
@@ -315,10 +328,59 @@ test('surfaces worktree errors without writing assignment files', async () => {
     return originalRunCommand(program, args, cwd);
   };
 
-  await assert.rejects(runIssue(42, options), /git worktree add .*failed.*branch already exists/);
-  assert.deepEqual(calls.map(({ program }) => program), ['git', 'git', 'gh', 'git', 'git']);
+  await assert.rejects(runIssue(42, options),
+    /git worktree add -b issue-42 .*issue-42 origin\/main failed.*branch already exists/);
+  assert.deepEqual(calls.at(-1).args, ['for-each-ref', '--format=%(refname)', 'refs/heads/issue-42']);
   assert.equal(writes.length, 1);
   assert.deepEqual(messages, []);
+});
+
+test('a closed issue is refused before fetching or creating a worktree', async () => {
+  const { calls, writes, options } = harness({ ...issue, state: 'CLOSED' });
+  await assert.rejects(runIssue(42, options), /Issue #42 is closed; reopen it before starting work/);
+  assert.deepEqual(calls.map(({ program }) => program), ['git', 'git', 'gh']);
+  assert.deepEqual(writes, []);
+});
+
+test('an open issue state is accepted', async () => {
+  const { options } = harness({ ...issue, state: 'OPEN' });
+  assert.equal((await runIssue(42, options)).start.mode, 'trunk');
+});
+
+test('a reused issue branch is never moved and reports drift from the fresh trunk', async () => {
+  const { options, calls, messages } = harness();
+  const worktreePath = path.join(repoRoot, '.worktrees', 'issue-42');
+  const original = options.runCommand;
+  options.runCommand = async (program, args, cwd) => {
+    if (program === 'git' && args[0] === 'worktree') return `worktree ${worktreePath}\0HEAD abc\0branch refs/heads/issue-42\0\0`;
+    if (program === 'git' && args[0] === 'rev-list') {
+      calls.push({ program, args, cwd });
+      return '1\t4\n';
+    }
+    return original(program, args, cwd);
+  };
+  options.fileSystem.stat = async (file) => {
+    if (![worktreePath, path.join(worktreePath, 'ASSIGNMENT.md'), path.join(worktreePath, '.env')].includes(file)) {
+      throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    }
+    return { isDirectory: () => file === worktreePath, isFile: () => file !== worktreePath };
+  };
+  options.fileSystem.writeFile = async () => { throw Object.assign(new Error('exists'), { code: 'EEXIST' }); };
+  const result = await runIssue(42, options);
+  assert.deepEqual(result.drift, { ahead: 1, behind: 4 });
+  assert.deepEqual(calls.find(({ args }) => args[0] === 'rev-list').args,
+    ['rev-list', '--left-right', '--count', 'refs/heads/issue-42...origin/main']);
+  assert.equal(calls.some(({ args }) => ['rebase', 'reset', 'merge'].includes(args[0])), false);
+  assert.match(messages[0], /^Start: trunk origin\/main@aaaaaaa \(fetched\); existing branch is 4 behind origin\/main; not moved/);
+});
+
+test('the user can start from the current HEAD without fetching', async () => {
+  const { options, calls } = harness();
+  const result = await runIssue(42, { ...options, start: { base: 'current', sync: 'offline' } });
+  assert.equal(result.start.mode, 'current');
+  assert.equal(calls.some(({ args }) => args[0] === 'fetch'), false);
+  assert.deepEqual(calls.find(({ args }) => args[0] === 'worktree' && args[1] === 'add').args,
+    ['worktree', 'add', '-b', 'issue-42', path.join(repoRoot, '.worktrees', 'issue-42')]);
 });
 
 test('reports incomplete setup if writing the dotenv file fails', async () => {

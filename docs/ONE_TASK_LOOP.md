@@ -65,13 +65,21 @@ The live command requires Git, an installed and authenticated GitHub CLI (`gh`),
 and an accessible GitHub issue on the **current repository's origin remote**.
 `runIssue` finds the repository root with `git rev-parse --show-toplevel`, reads
 its GitHub HTTPS or SSH origin, and runs
-`gh issue view N --repo OWNER/REPO --json number,title,body,url` there. It does
-not read cached issue data or create issues. A missing issue, empty issue body
-(the Ask), or failed command is an error; no worktree is created if issue
+`gh issue view N --repo OWNER/REPO --json number,title,body,url,state` there. It does
+not read cached issue data or create issues. A missing, closed, or empty issue
+(the Ask), or a failed command, is an error; no worktree is created if issue
 lookup fails.
 
-For issue `N`, the function creates branch `issue-N` from the current HEAD in
-`.worktrees/issue-N`, writes `ASSIGNMENT.md` with the issue URL, number, title,
+Before creating a worktree, Roster fetches `origin` (`git fetch --prune`) and,
+by default, starts new branch `issue-N` from the fresh remote default branch
+(`origin/HEAD`, else `origin/main`/`origin/master`) in `.worktrees/issue-N`.
+`start.base` (or `run --base`) may be `trunk` (default), `current` (the caller's
+HEAD), or an explicit ref; `start.sync: offline` (or `--no-fetch`) skips the
+fetch and reports freshness unknown. If no origin default branch exists, Roster
+says so and starts from the current HEAD. An existing issue branch is never
+moved: Roster reports how far it is behind the start base and continues. The
+`Start:` line is logged and included in the tracked in-progress comment. The
+function writes `ASSIGNMENT.md` with the issue URL, number, title,
 and unmodified body under **Ask**, and writes an ignored `.env` file:
 
 ```dotenv

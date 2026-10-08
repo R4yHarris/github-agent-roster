@@ -71,6 +71,8 @@ export function fixture(context) {
   const runCommand = async (program, args, workingDirectory) => {
     calls.push({ program, args, workingDirectory });
     if (program === 'gh') return JSON.stringify(issue);
+    // Hermetic: never reach the fake GitHub origin from tests.
+    if (program === 'git' && args[0] === 'fetch') return '';
     return git(workingDirectory, ...args);
   };
   return { base, repoRoot, target, cwd, env, contracts, issue, calls, runCommand, errorOutput,

@@ -6,6 +6,7 @@ import { TextDecoder } from 'node:util';
 import { ensureLocalPath, resolveProjectRoot, RETENTION_POLICIES } from './paths.mjs';
 import { STATE_SCOPES, resolveStateDir } from './repo-state.mjs';
 import { validateRequestTimeout } from '../llm/request.mjs';
+import { START_SYNCS, validateStartBase } from './start.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
 const profileNames = ['vllm-local', 'ollama', 'lmstudio', 'openai'];
@@ -28,6 +29,7 @@ const fields = {
   review: ['required'],
   loop: ['turns'],
   context: ['budget'],
+  start: ['base', 'sync'],
 };
 const availableTools = ['read_file', 'write_file', 'edit_file', 'glob_files', 'list_dir', 'run_test', 'run_command', 'search_text', 'web_search', 'web_fetch'];
 
@@ -118,7 +120,7 @@ export function parseConfig(source) {
     invalid('expected UTF-8 text of at most 64 KiB');
   }
   const config = { llm: {}, profiles: {}, planner: {}, seat: {}, paths: {},
-    publish: {}, tools: {}, reviewer: {}, review: {}, loop: {}, context: {} };
+    publish: {}, tools: {}, reviewer: {}, review: {}, loop: {}, context: {}, start: {} };
   const roots = new Set();
   let section;
   let profile;
@@ -315,6 +317,20 @@ export function parseConfig(source) {
     }
     config.reviewer.required = config.review.required;
   }
+  if (roots.has('start')) {
+    if (Object.hasOwn(config.start, 'base')) {
+      config.start.base = stringValue(config.start.base, 'start.base');
+      try {
+        validateStartBase(config.start.base, 'start.base');
+      } catch (error) {
+        invalid(error.message);
+      }
+    }
+    if (Object.hasOwn(config.start, 'sync')) {
+      config.start.sync = stringValue(config.start.sync, 'start.sync');
+      if (!START_SYNCS.includes(config.start.sync)) invalid('start.sync must be fetch or offline');
+    }
+  }
   return Object.freeze({
     schema: 1,
     llm: Object.freeze(llm),
@@ -328,6 +344,7 @@ export function parseConfig(source) {
     ...(roots.has('review') ? { review: Object.freeze(config.review) } : {}),
     ...(roots.has('loop') ? { loop: Object.freeze(config.loop) } : {}),
     ...(roots.has('context') ? { context: Object.freeze(config.context) } : {}),
+    ...(roots.has('start') ? { start: Object.freeze(config.start) } : {}),
   });
 }
 
