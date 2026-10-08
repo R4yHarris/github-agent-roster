@@ -588,6 +588,7 @@ export async function createTools({
     if (metadata.difficulty < 4 || metadata.task_class === 'docs') throw new Error('Repo map access requires difficulty 4+ and a non-docs task');
   }
   let readmeWritten = false;
+  const writtenFiles = new Set();
   // Regression repairs an earlier attempt in this run made stay in scope for the next perspective.
   const repairFiles = new Set(taskAndRepairFiles([], initialRepairFiles));
   const scopeFiles = new Set(scopeExpansion ? taskAndRepairFiles([], [], initialScopeFiles).slice(0, scopeExpansion) : []);
@@ -945,6 +946,7 @@ export async function createTools({
         await handle.close();
       }
       if (readmeOnlyDocs && normalized === 'README.md') readmeWritten = true;
+      writtenFiles.add(normalized);
       seenFiles.add(seenKey(normalized));
       return { path: normalized, bytes: Buffer.byteLength(content, 'utf8'), ...expansionNote(normalized) };
     },
@@ -988,6 +990,7 @@ export async function createTools({
       if (seat === 'coder') await beforeWrite?.({ path: normalized, allowedFiles: scopedFiles() });
       if (await fs.readFile(file, 'utf8') !== text) throw new Error('edit_file target changed during the edit');
       await fs.writeFile(file, content, 'utf8');
+      writtenFiles.add(normalized);
       seenFiles.add(seenKey(normalized));
       return { path: normalized, replacements: 1, ...expansionNote(normalized) };
     },
@@ -1164,6 +1167,38 @@ export async function createTools({
       command.label = `node ${command.args.join(' ')}`;
       try {
         await assertContractsInitialized(root);
+        if (full && seat === 'coder') {
+          const candidates = [...new Set([...scopedFiles(), ...writtenFiles])]
+            .filter((file) => !file.includes('*') && /\.(?:mjs|cjs|js)$/.test(file)).sort();
+          for (const file of candidates) {
+            throwIfCancelled(signal);
+            const target = locate(file, { write: true });
+            await checkComponents(target.relative);
+            const entry = await fs.lstat(target.file).catch((error) => {
+              if (error.code === 'ENOENT') return null;
+              throw error;
+            });
+            if (!entry) continue;
+            if (!entry.isFile() || entry.nlink !== 1) {
+              throw new ToolAccessError('Syntax checks require regular single-link files');
+            }
+            await checkParent(target.file);
+            try {
+              await runCommand(process.execPath, ['--check', file], {
+                cwd: root, timeout: 30_000, encoding: 'utf8', maxBuffer: 1024 * 1024,
+                env: testEnv, signal,
+              });
+            } catch (error) {
+              throwIfCancelled(signal);
+              if (error.killed || error.code === 'ETIMEDOUT') {
+                throw new Error(`node --check ${file} timed out after 30 seconds`, { cause: error });
+              }
+              if (typeof error.code !== 'number') throw error;
+              return { exit_code: error.code, stdout: error.stdout ?? '', stderr: error.stderr ?? '',
+                failing_files: [file], syntax_check: true };
+            }
+          }
+        }
         const { stdout, stderr } = await runCommand(process.execPath, command.args, {
           cwd: root, timeout: command.timeoutMs, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
           env: testEnv, signal,

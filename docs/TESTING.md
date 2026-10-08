@@ -28,6 +28,12 @@ workers:
 
 ## Keeping it fast
 
+Before the builtin coder's final full-suite verification, Roster runs
+`node --check` on existing JavaScript files in its concrete planned/repair scope
+and files written in the current tool session (including wildcard-scope writes).
+Syntax errors return the exact failing path without launching the suite.
+Passing this preflight is not test evidence: the full suite still runs.
+
 Each test file runs in one process, so the slowest file sets a lower bound on
 wall time, however many cores there are. Two budgets keep files small enough to
 spread across workers:
