@@ -173,6 +173,7 @@ function isProtectedSurface(file) {
   return hasAmbiguousComponents(file) || isSecret(file) || isDebugLog(file) || isShellHistory(file) || isCheckpoint(file) || isRepoMap(file) ||
     parts.includes('.git') || parts.includes('agent-policy.yml') || parts[0] === 'vendor' ||
     parts.some((part, index) =>
+      (part === '.roster' && ['hooks.yml', 'hooks'].includes(parts[index + 1])) ||
       (part === '.github' && parts[index + 1] === 'workflows') ||
       (part === 'vendor' && parts[index + 1] === 'github-agent-contracts'));
 }

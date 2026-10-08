@@ -7,12 +7,15 @@ import { redactSecrets } from '../runtime/memory.mjs';
 import { timeoutHint, validateRequestTimeout, validateRetryCommand } from '../llm/request.mjs';
 import { createDebugLog } from './debug-log.mjs';
 import { buildRun } from '../metrics/run.mjs';
+import { hookEvents, hookScriptPattern } from '../runtime/hooks.mjs';
 
 const seats = ['planner', 'coder', 'reviewer'];
 const tools = ['read_file', 'write_file', 'edit_file', 'delete_file', 'glob_files', 'list_dir', 'run_test', 'run_command', 'search_text', 'web_search', 'web_fetch', 'update_checklist'];
 const artifacts = ['RECIPE.yml', 'TASK.md', 'PLAN.md', 'ESTIMATE.md', 'RESULT.md', 'REVIEW.md'];
 const httpErrors = ['authentication', 'network', 'timeout', 'http', 'response', 'abort'];
 const maximumLineBytes = 2048;
+const hookMetadata = new RegExp(`^lifecycle-hook (?:${hookEvents.join('|')}) ` +
+  `${hookScriptPattern.source.slice(1, -1)} (?:pass|fail|timeout|output-limit) ms=\\d+$`);
 
 export class RunLogError extends Error {
   code = 'ROSTER_RUN_LOG';
@@ -101,6 +104,9 @@ export async function createRunLog({
     if (event.type === 'test-repair') return `Tests failed. Repair ${event.attempt} of ${event.budget}.`;
     if (event.type === 'checklist' && event.open) return `Coder tried to finish with ${event.total - event.done} open checklist items.`;
     if (event.type === 'shadow-modules' && event.findings) return `${event.findings} new exports duplicate existing modules; one repair before review.`;
+    if (event.type === 'lifecycle-hook' && event.status !== 'pass') {
+      return `Lifecycle hook ${event.event} ${event.script}: ${event.status}.`;
+    }
     if (event.type === 'review-e2e' && event.failures) return `Reviewer end-to-end run found ${event.failures} failing CLI paths; review fails.`;
     if (event.type === 'self-review' && event.status === 'findings') return `Self-review found ${event.unmet} unmet checks and ${event.findings} findings; one repair before review.`;
     if (event.type === 'red-green' && event.notRed) return `${event.notRed} new tests already pass on the base revision (not red).`;
@@ -177,6 +183,14 @@ export async function createRunLog({
           throw new TypeError('Invalid live shadow-modules event');
         }
         return `shadow-modules ${event.status} findings=${event.findings}`;
+      case 'lifecycle-hook':
+        if (!hookEvents.includes(event.event) ||
+            !['pass', 'fail', 'timeout', 'output-limit'].includes(event.status) ||
+            typeof event.script !== 'string' || !hookScriptPattern.test(event.script) ||
+            !Number.isSafeInteger(event.ms) || event.ms < 0) {
+          throw new TypeError('Invalid live lifecycle-hook event');
+        }
+        return `lifecycle-hook ${event.event} ${event.script} ${event.status} ms=${event.ms}`;
       case 'review-e2e':
         if (!['pass', 'fail'].includes(event.status) ||
             ![event.commands, event.failures].every((value) => Number.isSafeInteger(value) && value >= 0)) {
@@ -386,6 +400,7 @@ export async function readLastRunLog({
       /^checklist \d+\/\d+(?: open-at-finish)?$/.test(value) ||
       /^red-green (?:checked|none|exempt|skipped|unavailable) tests=\d+ not-red=\d+$/.test(value) ||
       /^shadow-modules (?:none|checked|flagged|unavailable) findings=\d+$/.test(value) ||
+      hookMetadata.test(value) ||
       /^review-e2e (?:pass|fail) commands=\d+ failures=\d+$/.test(value) ||
       /^review-reads count=\d+ refused=\d+$/.test(value) ||
       /^self-review (?:clean|findings|unavailable) unmet=\d+ findings=\d+ ms=\d+ in=\d+ out=\d+$/.test(value);

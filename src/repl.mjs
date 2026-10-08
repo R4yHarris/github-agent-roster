@@ -9,6 +9,7 @@ import { recordEvaluation } from './lib/eval.mjs';
 import { inferTaskClass, parseRecommendationArgs, repositoryRoot } from './lib/learn.mjs';
 import { formatMetrics, loadAvailableMetrics, loadMetrics, summarizeMetrics } from './lib/metrics.mjs';
 import { formatFailureProposals, listFailureProposals, proposeRecurringFailures } from './lib/failure-proposals.mjs';
+import { requireLifecycleHooks } from './runtime/hooks.mjs';
 import { resolveContractsPath, resolveProjectRoot } from './lib/paths.mjs';
 import { formatRoute, routeTask } from './lib/route.mjs';
 import {
@@ -105,6 +106,7 @@ const defaultServices = {
   recordEvaluation, repositoryRoot, loadMetrics,
   summarizeMetrics, formatMetrics, loadAvailableMetrics, routeTask, formatRoute,
   formatFailureProposals, listFailureProposals, proposeRecurringFailures,
+  requireLifecycleHooks,
   resolveContractsPath, createFileVault,
   validateSecretName, readStatus, formatStatus, setConfigValue,
   publicationTask,
@@ -954,6 +956,8 @@ export function createDispatcher({
         } else {
           resolvePublishModel({ env, model: requestedModel, ghcp: true });
           publishRoot = currentRoot();
+          await api.requireLifecycleHooks('pre-publish', { worktree: publishRoot, env,
+            apiKeyEnv: state.config.llm.api_key_env });
           contractsPath = api.resolveContractsPath({ repoRoot: publishRoot, cwd, env });
           publishEnv = buildPublishEnv({ config: state.config, env, model: requestedModel,
             task: api.publicationTask({ cwd: publishRoot, env }) });
