@@ -85,7 +85,9 @@ Every code slice gets a `## Design` section before Files allowed. It lists:
 
 - **Extend:** existing modules and the exports to reuse.
 - **New exports:** each new export, in an allowed file, that does not duplicate
-  an export elsewhere.
+  an export elsewhere, even when the existing owner's file is also allowed.
+  Include that owner under Extend instead; scope permission is not evidence
+  that a second implementation is needed.
 - **Outline**, **Edge cases** and **Out of scope.**
 
 If the planner gives no Design, or an invalid one, the harness derives one from
