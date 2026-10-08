@@ -71,8 +71,9 @@ worktree; application edits and assignment/environment are preserved.
 [Lifecycle replay tests](../tests/builtin.replay.test.mjs) run the public
 `runBuiltinIssue` entry point against disposable Git repositories and strict
 fake HTTP responses from [the fixture](../tests/fixtures/lifecycle-replay.json).
-They cover acceptance, one repaired test failure, review-driven correction, repeated failures across
-the two fresh-context escalations, and operator cancellation. No model endpoint,
+They cover acceptance, one repaired test failure, review-driven correction,
+exhausted review repairs, repeated failures across the two fresh-context
+escalations, and operator cancellation before and after an application edit. No model endpoint,
 fleet probe, publication, or extra runtime dependency is involved.
 
 Run with Node 20: `node --test tests/builtin.replay.test.mjs`.
@@ -85,6 +86,16 @@ the harness's `run_test` calls, not just model-requested edits. A `run_test`
 tool result can be `ok` while its test verdict fails; gate assertions check
 the verdict separately.
 
+The post-edit cancellation sequence consumes three HTTP attempts and one edit,
+then stops with cancellation-classified failure, a failed RESULT, and no
+REVIEW or test invocation. The edit and planner artifacts remain in the issue
+worktree. The exhausted-review sequence consumes ten HTTP attempts, three
+edits, three passing test invocations, and exactly two review repairs. Its
+final REVIEW still fails check 2 and offers no publication command, even
+though the coder's test gate passes. Neither sequence permits extra inference
+after its stop boundary or publication; the base checkout's HEAD, tracked
+status, and diff remain unchanged.
+
 There is no live-transcript recorder or automatic snapshot regeneration.
 To change a fixture, hand-author the minimal response/test sequence, run the
 selector, and review both the expected counts and resulting gate/artifact
@@ -92,7 +103,7 @@ assertions against the intended behavior. Never simply bless new counts after
 a failure. Do not copy private prompts, source, URLs, credentials, or live
 transcripts into fixtures. Keep timestamps, temp paths, and elapsed durations
 out of comparisons. These fixtures implement FEATURE_SPEC sections 5.4, 5.5,
-and 5.6 while honoring sections 3 and 7.
+5.6, and 5.8 while honoring sections 3 and 7.
 
 ## Configuration
 
