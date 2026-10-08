@@ -1,5 +1,5 @@
 import { promises as fs, lstatSync, openSync, closeSync, statSync, unlinkSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join, relative, resolve, sep, isAbsolute, basename, parse as parsePath, dirname } from 'node:path';
+import { join, relative, resolve, sep, isAbsolute, basename, parse as parsePath, dirname, win32, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 
@@ -185,8 +185,10 @@ function pathSegments(value, platform) {
   // whole paths: "C:\\repo" contains "C:\\repo\\a" but never sibling
   // "C:\\repo-x". Comparing only `dir` would treat every sibling under one
   // parent as nested, which silently defeats the state/repo separation.
-  const parsed = parsePath(resolve(value));
-  const parts = resolve(value).slice(parsed.root.length).split(sep).filter((part) => part !== '');
+  const paths = platform === 'win32' ? win32 : posix;
+  const resolved = paths.resolve(value);
+  const parsed = paths.parse(resolved);
+  const parts = resolved.slice(parsed.root.length).split(paths.sep).filter((part) => part !== '');
   return {
     root: keyOf(parsed.root, platform),
     parts: parts.map((part) => keyOf(part, platform)),
@@ -203,7 +205,7 @@ export function isContainedIn(child, parent, { platform = process.platform } = {
   return parentPath.parts.every((part, index) => part === childPath.parts[index]);
 }
 
-function assertNoSymlinkComponents(root, { scope, skipTail = false } = {}) {
+export function assertNoSymlinkComponents(root, { scope, skipTail = false } = {}) {
   const parts = [];
   let current = resolve(root);
   for (;;) {
