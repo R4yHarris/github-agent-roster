@@ -71,10 +71,13 @@ export function validateProvenanceRecord(record, source = 'provenance record') {
 export function buildProvenanceRecord({ runId, sessionId, event, payload } = {}, { repoIdentity, now = Date.now(), redact = true } = {}) {
   const payloadObject = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : undefined;
   const record = createRecord({
-    runId,
-    sessionId,
-    event,
-    ...(payloadObject ? { payload: payloadObject } : {}),
+    ...Object.fromEntries([
+      'repository', 'issue', 'seat', 'route', 'requestedModel', 'servedModel',
+      'startedAt', 'endedAt', 'outcome', 'tools', 'metrics', 'evidence',
+    ].filter((field) => payloadObject?.[field] !== undefined)
+      .map((field) => [field, payloadObject[field]])),
+    run: runId,
+    session: sessionId,
   }, now);
   const normalized = {
     ...record,

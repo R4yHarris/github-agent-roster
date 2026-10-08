@@ -64,6 +64,17 @@ The invariant is: **unknown metric fields are explicitly marked `"unknown"`,
 never coerced to `0`, `null`, or dropped**. Downstream consumers must treat
 `"unknown"` as "no data", not as a measurement of zero.
 
+The typed API projects explicitly supplied payload fields `repository`,
+`issue`, `seat`, `route`, `requestedModel`, `servedModel`, `startedAt`,
+`endedAt`, `outcome`, `tools`, `metrics`, and `evidence` into the canonical
+schema through `createRecord`. Structured fields use the shapes documented
+above. Canonical metrics retain finite measurements, including zero, and
+normalize missing/invalid values to `"unknown"`. The diagnostic payload is
+preserved separately; its null or other unknown markers are not rewritten.
+No served model is inferred from a requested model. This addresses
+FEATURE_SPEC sections 5.6 and 5.8; runtime producers must still supply
+response-backed evidence.
+
 ### Immutability and append-safety
 
 - `createRecord` returns `Object.freeze(record)`, with `metrics` and

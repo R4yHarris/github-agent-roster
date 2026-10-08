@@ -12,6 +12,7 @@ import {
   validateProvenanceRecord,
   compareIdentity,
   openProvenanceStore,
+  buildProvenanceRecord,
 } from '../src/lib/provenance-api.mjs';
 import { identityHash, resolveRepoIdentity } from '../src/lib/repo-identity.mjs';
 import {
@@ -91,6 +92,49 @@ test('validateProvenanceRecord enforces the five lifecycle events', () => {
 });
 
 // --- lifecycle: five required cases ----------------------------------------
+
+test('typed records project supplied canonical evidence without fabricating metrics or mutating payloads', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'prov-projection-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const { store } = await makeStore({ root, ...REPO_A });
+  const payload = {
+    repository: { commit: 'fixture-commit' },
+    issue: { issue: '42', task: 'issue-42' },
+    seat: { name: 'coder' }, route: { name: 'fixture-route' },
+    requestedModel: 'requested-fixture', servedModel: 'served-fixture',
+    startedAt: 1000, endedAt: 2000, outcome: 'failed',
+    tools: { name: 'fixture-tool', version: '1' },
+    metrics: { tokens_prompt: 123, tokens_completion: 0, cost_usd: null },
+    evidence: { check: 'fixture-check', verdict: 'fail' },
+  };
+  const original = JSON.stringify(payload);
+  const built = buildProvenanceRecord({
+    runId: 'projection-run', sessionId: 'projection-session', event: 'failure', payload,
+  });
+  assert.equal(built.requestedModel, payload.requestedModel);
+  assert.equal(built.servedModel, payload.servedModel);
+  assert.equal(built.repository.commit, 'fixture-commit');
+  assert.deepEqual(built.issue, payload.issue);
+  assert.deepEqual(built.seat, payload.seat);
+  assert.deepEqual(built.route, payload.route);
+  assert.equal(built.startedAt, 1000);
+  assert.equal(built.endedAt, 2000);
+  assert.equal(built.outcome, 'failed');
+  assert.deepEqual(built.tools, payload.tools);
+  assert.deepEqual(built.evidence, payload.evidence);
+  assert.equal(built.metrics.tokens_prompt, 123);
+  assert.equal(built.metrics.tokens_completion, 0);
+  assert.equal(built.metrics.cost_usd, 'unknown');
+  assert.equal(built.metrics.duration_ms, 'unknown');
+  await store.recordEvent({
+    runId: 'projection-run', sessionId: 'projection-session', event: 'failure', payload,
+  });
+  const [persisted] = await store.query({});
+  assert.equal(persisted.servedModel, 'served-fixture');
+  assert.equal(persisted.metrics.tokens_completion, 0);
+  assert.deepEqual(persisted.payload, payload);
+  assert.equal(JSON.stringify(payload), original);
+});
 
 test('the typed API records and queries all five lifecycle events', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'lifecycle-'));

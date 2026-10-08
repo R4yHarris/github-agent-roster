@@ -205,6 +205,12 @@ test('recovered lifecycle: requested-vs-served discrepancy, unknown usage, failu
   assert.notEqual(failure.payload.requestedModel, failure.payload.servedModel, 'discrepancy preserved');
   assert.equal(failure.payload.metrics.duration_ms, 950);
   assert.equal(failure.payload.metrics.cost_usd, null, 'unknown usage carried through as-is (not a string sentinel)');
+  assert.equal(failure.requestedModel, 'gpt-large-preview');
+  assert.equal(failure.servedModel, 'gpt-large-stable');
+  assert.equal(failure.metrics.duration_ms, 950);
+  assert.equal(failure.metrics.cost_usd, 'unknown');
+  assert.equal(failure.metrics.tokens_prompt, 'unknown');
+  assert.equal(failure.metrics.speculative_cache, 'unknown');
 
   tick(1500);
   await store.recordEvent({
