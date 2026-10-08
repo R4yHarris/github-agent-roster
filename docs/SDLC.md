@@ -68,14 +68,14 @@ worktree; application edits and assignment/environment are preserved.
 
 ## Deterministic lifecycle regression fixtures
 
-[Lifecycle replay tests](../tests/lifecycle.replay.test.mjs) run the public
+[Lifecycle replay tests](../tests/builtin.replay.test.mjs) run the public
 `runBuiltinIssue` entry point against disposable Git repositories and strict
 fake HTTP responses from [the fixture](../tests/fixtures/lifecycle-replay.json).
 They cover acceptance, one repaired test failure, review-driven correction, repeated failures across
 the two fresh-context escalations, and operator cancellation. No model endpoint,
 fleet probe, publication, or extra runtime dependency is involved.
 
-Run with Node 20: `node --test tests/lifecycle.replay.test.mjs`.
+Run with Node 20: `node --test tests/builtin.replay.test.mjs`.
 The fixture pins seat order, actual HTTP attempt counts, offered tool calls,
 successful tool results, test invocation counts, gates, and public
 TASK/RESULT/REVIEW artifacts. Responses omit provider usage deliberately;
