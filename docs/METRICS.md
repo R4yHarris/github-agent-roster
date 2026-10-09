@@ -57,6 +57,25 @@ measured duration accompany them. Missing counts stay `unknown`, reported zero
 stays zero, and inherited `AI_*` counts cannot fill absent evidence. Records
 contain no endpoint credentials or prompt/source snapshots.
 
+The same typed session record retains observed `evidence.verification` for
+coder tests: numeric `exit_code`, explicit `skipped` status, the original
+`full_suite_exit_code` when available, and existing baseline/transient
+classification metadata. Baseline files are classified outside the slice;
+this field alone does not claim a successful baseline rerun. File lists retain
+at most eight entries of 128 characters each; the baseline count retains the
+full observed count. No stdout or stderr is retained. Documentation-only
+verification records a skip without inventing a test exit; a stub cannot
+claim verified tests.
+
+Reviewer `evidence.review` retains the observed verdict, `completed` and
+`queried` flags, at most sixteen unmet check IDs, and a bounded artifact
+reference (`REVIEW.md` plus the SHA-256 of its actual written content).
+The reference is an integrity identifier, not an archived review body.
+Failed and incomplete reviews retain their real status; missing evidence
+remains absent. These records survive worktree removal and use the existing
+typed/redacted machine store. They do not change gates or create human evals.
+This implements [FEATURE_SPEC sections 5.5, 5.6 and 5.8](FEATURE_SPEC.md).
+
 Durable provenance identity hashes the canonical origin rather than the checkout
 path, so moves, reclones, and linked worktrees share a history identity.
 HTTPS and SSH spellings normalize together; credentials do not affect identity.
