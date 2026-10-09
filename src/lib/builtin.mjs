@@ -13,6 +13,7 @@ import { acceptPlannerPlan, preparePlannerHandoff, readPlannerHandoff, readPlann
 import { requirePassingReview, runReviewer } from '../seats/reviewer.mjs';
 import {
   isAllowedFile, isForbiddenWrite, isManagedFile, isRepairTestFile, isScopeExpansionFile, taskAndRepairFiles, ToolAccessError,
+  toolDefinitions,
 } from '../runtime/tools.mjs';
 import { checkExcellence, redactEvidence } from '../runtime/excellence.mjs';
 import { requireLifecycleHooks } from '../runtime/hooks.mjs';
@@ -105,6 +106,8 @@ export function rescopeContinuation({ previous, budget, files, changedFiles = []
     'diff, write the files the change genuinely needs, justify each file outside the plan in your summary (the reviewer ' +
     'judges it), and rerun node --test until it exits 0.';
 }
+
+const toolVocabulary = new Set([...toolDefinitions.map(({ function: tool }) => tool.name), 'update_checklist']);
 
 // Budget exhaustion means the coder's context is stuck; hard denials, cancellation, and setup errors are not.
 export function coderStuckReason(error) {
@@ -711,8 +714,22 @@ async function openWaves({ worktree, cwd, env, apiKeyEnv, runCommand, log }) {
 async function runBuiltinAssignment(issueNumber, options = {}) {
   const { env = process.env, log = console.log, onPrepared } = options;
   const lifecycle = { runId: `run-${randomBytes(8).toString('hex')}`, store: null, prepared: null,
-    seats: new Map(), sessionOccurrences: new Map() };
+    seats: new Map(), sessionOccurrences: new Map(), toolCounts: new Map() };
   const timestamp = () => (options.now?.() ?? new Date()).toISOString();
+  const recordToolResult = (event) => {
+    const counts = lifecycle.toolCounts.get(event.seat);
+    if (!counts) return;
+    const name = toolVocabulary.has(event.name) ? event.name : 'unknown';
+    const status = ['ok', 'error', 'denied'].includes(event.status) ? event.status : 'unknown';
+    const entry = counts.get(name) ?? { ok: 0, error: 0, denied: 0 };
+    entry[status] ??= 0;
+    entry[status] += 1;
+    if (Number.isSafeInteger(event.exit_code) && event.exit_code >= 0) {
+      const exit = event.exit_code === 0 ? 'exit_zero' : 'exit_nonzero';
+      entry[exit] = (entry[exit] ?? 0) + 1;
+    }
+    counts.set(name, entry);
+  };
   const capture = async (event, payload = {}) => {
     const prepared = lifecycle.prepared;
     if (!prepared) return;
@@ -731,6 +748,9 @@ async function runBuiltinAssignment(issueNumber, options = {}) {
         if (event.type === 'seat-start') {
           lifecycle.seats.set(event.seat, { requestedModel: event.model,
             startedAt: timestamp(), endedAt: null });
+          lifecycle.toolCounts.set(event.seat, new Map());
+        } else if (event.type === 'tool-result') {
+          recordToolResult(event);
         } else if (['seat-end', 'seat-error'].includes(event.type)) {
           const timing = lifecycle.seats.get(event.seat);
           if (timing) timing.endedAt = timestamp();
@@ -1106,6 +1126,9 @@ async function executeBuiltinAssignment(issueNumber, {
       ...(excellence ? { outcome: excellence.pass ? 'pass' : 'fail' } : {}),
       evidence: {
         attempt: { sessionId: session, index: occurrence },
+        ...(lifecycle.toolCounts.get(seat)?.size ? {
+          observed_tool_events: structuredClone(Object.fromEntries(lifecycle.toolCounts.get(seat))),
+        } : {}),
         ...(seat === 'coder' && observed.coder ? { verification: verificationEvidence(observed.coder) } : {}),
         ...(seat === 'reviewer' && observed.review ? { review: reviewEvidence(observed.review) } : {}),
       },

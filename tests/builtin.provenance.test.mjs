@@ -59,10 +59,12 @@ test('stub seat evidence leaves models and usage unknown rather than borrowing e
   assert.ok(records.every((record) => record.evidence.eval === undefined));
 });
 
-async function configuredEvidence(t, { tests, incomplete = false, exception, docsOnly = false } = {}) {
+async function configuredEvidence(t, { tests, incomplete = false, exception, docsOnly = false,
+  infrastructureError = false, unknownTool, initialFailures = 0 } = {}) {
   const options = multiFileFixture(t);
   if (exception) options.issue.body = options.issue.body.replace('`smoke.test.mjs`', '`planned.test.mjs`');
   let coderTurns = 0;
+  let testRuns = 0;
   const execute = () => runIssueWithSeats(42, { ...options, config: llmConfig, log: () => {},
     fetchImpl: async (_url, request) => {
       const body = JSON.parse(request.body);
@@ -78,7 +80,9 @@ async function configuredEvidence(t, { tests, incomplete = false, exception, doc
         message = { role: 'assistant', content: 'Inventory reviewed.' };
       } else {
         coderTurns++;
-        message = coderTurns === 1 ? { role: 'assistant', tool_calls: [
+        message = unknownTool && coderTurns === 1 ? { role: 'assistant', tool_calls: [{
+          id: 'unknown', type: 'function', function: { name: unknownTool, arguments: '{}' },
+        }] } : coderTurns === (unknownTool ? 2 : 1) ? { role: 'assistant', tool_calls: [
           { id: 'read', type: 'function', function: { name: 'read_file',
             arguments: JSON.stringify({ path: 'README.md' }) } },
           { id: 'write', type: 'function', function: { name: 'write_file',
@@ -91,6 +95,7 @@ async function configuredEvidence(t, { tests, incomplete = false, exception, doc
     },
     runTestCommand: async (program, args, commandOptions) => {
       if (docsOnly) assert.fail('Docs-only task must not execute tests');
+      if (infrastructureError) throw new Error('private-infrastructure-error-marker');
       if (program === 'git') return { stdout: git(commandOptions.cwd, ...args), stderr: '' };
       if (exception) {
         const full = args.includes('--test') && !args.includes('smoke.test.mjs');
@@ -101,15 +106,16 @@ async function configuredEvidence(t, { tests, incomplete = false, exception, doc
         }
         return { stdout: 'pass', stderr: '' };
       }
-      if (tests.exit_code !== 0) throw Object.assign(new Error('tests failed'), {
-        code: tests.exit_code, stdout: 'test-output-private-marker', stderr: 'stderr-private-marker',
+      testRuns++;
+      if (tests.exit_code !== 0 || testRuns <= initialFailures) throw Object.assign(new Error('tests failed'), {
+        code: tests.exit_code || 1, stdout: 'test-output-private-marker', stderr: 'stderr-private-marker',
       });
       return { stdout: 'test-output-private-marker', stderr: 'stderr-private-marker' };
     },
   });
   let result;
-  if (tests.exit_code !== 0 && !exception) {
-    await assert.rejects(execute, /Final node --test failed/);
+  if (infrastructureError || tests.exit_code !== 0 && !exception) {
+    await assert.rejects(execute, infrastructureError ? /node --test could not run/ : /Final node --test failed/);
   } else {
     result = await execute();
   }
@@ -157,6 +163,58 @@ test('documentation verification records an intentional skip without a test exit
   const { records } = await configuredEvidence(t, { tests: { exit_code: 0 }, docsOnly: true });
   const coder = records.find((record) => record.event === 'session' && record.sessionId === 'roster-42-coder');
   assert.deepEqual(coder.evidence.verification, { skipped: true });
+});
+
+test('configured seats persist actual successful tool signals and numeric zero exits', async (t) => {
+  const { records, options } = await configuredEvidence(t, { tests: { exit_code: 0 } });
+  const coder = records.find((record) => record.event === 'session' && record.sessionId === 'roster-42-coder');
+  assert.deepEqual(coder.evidence.observed_tool_events, {
+    read_file: { ok: 1, error: 0, denied: 0 },
+    write_file: { ok: 1, error: 0, denied: 0 },
+    run_test: { ok: 1, error: 0, denied: 0, exit_zero: 1 },
+  });
+  assert.doesNotMatch(JSON.stringify(coder.evidence.observed_tool_events),
+    /test-output-private-marker|stderr-private-marker|## Status|README\.md/);
+  git(options.target, 'worktree', 'remove', '--force', path.join(options.target, '.worktrees', 'issue-42'));
+  assert.deepEqual((await openProvenanceStore(path.join(options.base, 'machine', 'provenance')).readAll()).records,
+    records, 'observed tool outcomes survive actual worktree removal');
+});
+
+test('stub coder and reviewer persist no invented tool signals', async (t) => {
+  const options = fixture(t);
+  await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {} });
+  const { records } = await openProvenanceStore(path.join(options.base, 'machine', 'provenance')).readAll();
+  for (const record of records.filter((record) => record.event === 'session' &&
+    ['roster-42-coder', 'roster-42-reviewer'].includes(record.sessionId))) {
+    assert.equal(record.evidence.observed_tool_events, undefined);
+  }
+});
+
+test('tool infrastructure errors remain errors without invented numeric exits', async (t) => {
+  const { records } = await configuredEvidence(t, { tests: { exit_code: 0 }, infrastructureError: true });
+  const coder = records.find((record) => record.event === 'session' && record.sessionId === 'roster-42-coder');
+  assert.deepEqual(coder.evidence.observed_tool_events.run_test, { ok: 0, error: 1, denied: 0 });
+  assert.doesNotMatch(JSON.stringify(records), /private-infrastructure-error-marker/);
+});
+
+test('a repaired test preserves both nonzero and zero exit events in the same occurrence', async (t) => {
+  const { records } = await configuredEvidence(t, { tests: { exit_code: 0 }, initialFailures: 1 });
+  const coder = records.find((record) => record.event === 'session' && record.sessionId === 'roster-42-coder');
+  const events = coder.evidence.observed_tool_events.run_test;
+  assert.equal(events.exit_nonzero, 1);
+  assert.ok(events.exit_zero >= 1);
+  assert.equal(events.ok, events.exit_nonzero + events.exit_zero);
+  assert.equal(coder.evidence.verification.exit_code, 0);
+});
+
+test('unrecognized tool names use one fixed bucket without persisting the label', async (t) => {
+  const { records } = await configuredEvidence(t, { tests: { exit_code: 0 },
+    unknownTool: 'private-unrecognized-tool-marker' });
+  const coder = records.find((record) => record.event === 'session' && record.sessionId === 'roster-42-coder');
+  assert.deepEqual(coder.evidence.observed_tool_events.unknown, { ok: 0, error: 0, denied: 1 });
+  assert.equal(Object.keys(coder.evidence.observed_tool_events).length, 4);
+  assert.ok(JSON.stringify(coder.evidence.observed_tool_events).length < 512);
+  assert.doesNotMatch(JSON.stringify(records), /private-unrecognized-tool-marker/);
 });
 
 test('classified transient and baseline exceptions retain their actual verification evidence', async (t) => {
