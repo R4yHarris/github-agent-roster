@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1029,7 +1029,48 @@ async function executeBuiltinAssignment(issueNumber, {
   const reviewRepairs = [];
   let recordedReviewRepairs = 0;
   const delivery = {};
-  const recordSeat = async (session, run, excellence, seatConfig = activeConfig) => {
+  const verificationEvidence = (coderResult) => {
+    const tests = coderResult?.tests;
+    const evidence = {};
+    if (tests && typeof tests === 'object') {
+      if (Number.isSafeInteger(tests.exit_code) && tests.exit_code >= 0) evidence.exit_code = tests.exit_code;
+      evidence.skipped = tests.skipped === true;
+      if (Number.isSafeInteger(tests.full_suite_exit_code) && tests.full_suite_exit_code >= 0) {
+        evidence.full_suite_exit_code = tests.full_suite_exit_code;
+      }
+    } else if (typeof coderResult?.testsSkipped === 'boolean') {
+      evidence.skipped = coderResult.testsSkipped;
+    }
+    const preexisting = Array.isArray(coderResult?.baselineFailures) && coderResult.baselineFailures.length
+      ? coderResult.baselineFailures
+      : (Array.isArray(tests?.preexisting_files) ? tests.preexisting_files : []);
+    if (preexisting.length) {
+      evidence.baseline = {
+        preexisting_failures: preexisting.length,
+        files: preexisting.slice(0, 8).map((file) => String(file).slice(0, 128)),
+      };
+    }
+    if (Number.isSafeInteger(tests?.full_suite_exit_code) && tests.full_suite_exit_code > 0 &&
+        Array.isArray(tests?.transient_files) && tests.transient_files.length) {
+      evidence.transient = {
+        full_suite_exit_code: tests.full_suite_exit_code,
+        rerun_passed: tests.transient_files.slice(0, 8).map((file) => String(file).slice(0, 128)),
+      };
+    }
+    return evidence;
+  };
+  const reviewEvidence = (review) => {
+    if (!review || typeof review.verdict !== 'string') return {};
+    const evidence = { verdict: review.verdict };
+    if (typeof review.completed === 'boolean') evidence.completed = review.completed;
+    if (typeof review.queried === 'boolean') evidence.queried = review.queried;
+    if (Array.isArray(review.unmetChecks)) evidence.unmet_checks = review.unmetChecks.slice(0, 16);
+    if (typeof review.content === 'string' && review.reviewPath) {
+      evidence.artifact = { file: 'REVIEW.md', sha256: createHash('sha256').update(review.content).digest('hex') };
+    }
+    return evidence;
+  };
+  const recordSeat = async (session, run, excellence, seatConfig = activeConfig, observed = {}) => {
     const seat = Object.keys(sessions).find((name) => sessions[name] === session);
     const evidence = liveLog.delivery(seat, {
       ...(planner.metadata?.estimate_min != null ? { estimate_min: planner.metadata.estimate_min } : {}),
@@ -1060,6 +1101,12 @@ async function executeBuiltinAssignment(issueNumber, {
         ...(evidence?.duration_ms !== undefined ? { duration_ms: evidence.duration_ms } : {}),
       },
       ...(excellence ? { outcome: excellence.pass ? 'pass' : 'fail' } : {}),
+      ...(seat === 'coder' && observed.coder ? {
+        evidence: { verification: verificationEvidence(observed.coder) },
+      } : {}),
+      ...(seat === 'reviewer' && observed.review ? {
+        evidence: { review: reviewEvidence(observed.review) },
+      } : {}),
     } });
     if (!recorded.durable && !provenanceOptOut(env)) {
       log(`Provenance session ${session} was not persisted; durable history is incomplete.`);
@@ -1222,7 +1269,7 @@ async function executeBuiltinAssignment(issueNumber, {
           // The discarded attempt still spent real tokens; record it so seat metrics do not undercount.
           await recordSeat(sessions.reviewer, buildRun({
             config: reviewConfig, response: review.response, session: sessions.reviewer, task: prepared.task, env,
-          }), undefined, reviewConfig);
+          }), undefined, reviewConfig, { review });
           await removeIncompleteReview(review.reviewPath);
           independent = next;
           continue;
@@ -1233,7 +1280,7 @@ async function executeBuiltinAssignment(issueNumber, {
         config: reviewConfig, response: review.response, session: sessions.reviewer,
         task: prepared.task, env,
       }) : null;
-      await recordSeat(sessions.reviewer, reviewerRun, undefined, reviewConfig);
+      await recordSeat(sessions.reviewer, reviewerRun, undefined, reviewConfig, { review });
       return { review, reviewerRun };
     }
   };
@@ -1300,7 +1347,8 @@ async function executeBuiltinAssignment(issueNumber, {
       break;
     } catch (error) {
       if (error instanceof Error && error.result) {
-        await recordSeat(sessions.coder, error.result.run, error.result.excellence, coderConfig);
+        await recordSeat(sessions.coder, error.result.run, error.result.excellence, coderConfig,
+          { coder: error.result });
       }
       const failedProfile = route?.profile.id;
       if (await recoverRoute('coder', error)) {
@@ -1357,7 +1405,7 @@ async function executeBuiltinAssignment(issueNumber, {
     }
   }
   coderRun = result.run;
-  await recordSeat(sessions.coder, coderRun, result.excellence, coderConfig);
+  await recordSeat(sessions.coder, coderRun, result.excellence, coderConfig, { coder: result });
   ({ review, reviewerRun } = await reviewSeat(result, reviewFindings));
   if (review.verdict !== 'fail' || !review.completed || skipReview || result.mode !== 'llm' ||
       reviewRepairs.length >= maxReviewRepairs) break;
