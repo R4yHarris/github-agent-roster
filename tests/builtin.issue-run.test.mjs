@@ -109,8 +109,10 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
   assert.deepEqual(result.runs, { planner: null, coder: null, reviewer: null });
   assert.deepEqual(options.calls.map(({ program, args }) => program === 'gh' ? 'gh' : args[0]),
     ['rev-parse', 'rev-parse', 'remote', 'gh', 'remote', 'fetch', 'symbolic-ref', 'for-each-ref',
-      'worktree', 'for-each-ref', 'worktree']);
+      'worktree', 'for-each-ref', 'worktree', 'rev-parse']);
   assert.deepEqual(options.calls[0].args, ['rev-parse', '--git-common-dir']);
+  assert.deepEqual(options.calls.at(-1).args, ['rev-parse', '--verify', 'HEAD']);
+  assert.equal(options.calls.at(-1).workingDirectory, result.worktreePath);
   assert.equal(options.calls.some(({ args }) => args[0] === 'submodule'), false, 'no .gitmodules: nothing to initialize');
   assert.equal(options.calls.filter(({ program, args }) =>
     program === 'git' && args[0] === 'worktree' && args[1] === 'add').length, 1);

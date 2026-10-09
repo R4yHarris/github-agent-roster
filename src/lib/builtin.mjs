@@ -23,7 +23,7 @@ import { runIssue, validateIssueNumber } from './issue.mjs';
 import {
   commentMergedIssue, mergedPullNumber, mergedPullNumberFromFailure, setIssueRunStatus,
 } from './issue-board.mjs';
-import { IDENTIFIER, inferTaskClass, loadLearning, recordDeliveryPublication, recordRun, selectedAttemptRecord } from './learn.mjs';
+import { IDENTIFIER, inferTaskClass, loadLearning, recordDeliveryPublication, recordRun, selectedAttemptRecord, SHA } from './learn.mjs';
 import { captureLifecycleEvent, provenanceOptOut, provenanceStoreForRun } from './local-runs.mjs';
 import { loadMetrics } from './metrics.mjs';
 import { ensureLocalPath, resolveContractsPath } from './paths.mjs';
@@ -111,6 +111,24 @@ const toolVocabulary = new Set([...toolDefinitions.map(({ function: tool }) => t
 
 function provenanceIssue(prepared) {
   return { issue: prepared.issue.number == null ? '' : String(prepared.issue.number), task: prepared.task };
+}
+
+async function provenanceRepository(prepared, { runCommand, log }) {
+  let output;
+  try {
+    const args = ['rev-parse', '--verify', 'HEAD'];
+    output = runCommand ? await runCommand('git', args, prepared.worktreePath)
+      : (await execFileAsync('git', args, { cwd: prepared.worktreePath, encoding: 'utf8',
+        timeout: 10000, maxBuffer: 1024, windowsHide: true })).stdout;
+  } catch {
+    log('Provenance starting commit could not be read; revision evidence is unavailable.');
+    return { remote: '', commit: '' };
+  }
+  if (typeof output !== 'string' || !SHA.test(output.trim())) {
+    log('Provenance starting commit was invalid; revision evidence is unavailable.');
+    return { remote: '', commit: '' };
+  }
+  return { remote: '', commit: output.trim().toLowerCase() };
 }
 
 // Budget exhaustion means the coder's context is stuck; hard denials, cancellation, and setup errors are not.
@@ -718,6 +736,7 @@ async function openWaves({ worktree, cwd, env, apiKeyEnv, runCommand, log }) {
 async function runBuiltinAssignment(issueNumber, options = {}) {
   const { env = process.env, log = console.log, onPrepared } = options;
   const lifecycle = { runId: `run-${randomBytes(8).toString('hex')}`, store: null, prepared: null,
+    repository: { remote: '', commit: '' },
     seats: new Map(), sessionOccurrences: new Map(), toolCounts: new Map() };
   const timestamp = () => (options.now?.() ?? new Date()).toISOString();
   const recordToolResult = (event) => {
@@ -739,7 +758,8 @@ async function runBuiltinAssignment(issueNumber, options = {}) {
     if (!prepared) return;
     const recorded = await captureLifecycleEvent(lifecycle.store, {
       event, runId: lifecycle.runId, sessionId: prepared.session,
-      payload: { issue: provenanceIssue(prepared), task: prepared.task, ...payload },
+      payload: { repository: lifecycle.repository,
+        issue: provenanceIssue(prepared), task: prepared.task, ...payload },
     });
     if (!recorded.durable && !provenanceOptOut(env)) {
       log(`Provenance event ${event} was not persisted; durable history is incomplete.`);
@@ -765,6 +785,9 @@ async function runBuiltinAssignment(issueNumber, options = {}) {
         lifecycle.prepared = prepared;
         lifecycle.store = provenanceOptOut(env) ? null
           : provenanceStoreForRun({ repoRoot: prepared.repoRoot, env });
+        if (lifecycle.store) {
+          lifecycle.repository = await provenanceRepository(prepared, { runCommand: options.runCommand, log });
+        }
         await capture('started');
         await onPrepared?.(prepared);
       },
@@ -1112,6 +1135,7 @@ async function executeBuiltinAssignment(issueNumber, {
     const durableSession = occurrence === 1 ? session : `${session}-attempt-${occurrence}`;
     // Durable machine history for `roster history`; best-effort so provenance can never fail a run.
     const recorded = await captureLifecycleEvent(provenance, { event: 'session', runId: provenanceRunId, sessionId: durableSession, payload: {
+      repository: lifecycle.repository,
       issue: provenanceIssue(prepared), task: prepared.task, task_class: taskClass,
       seat: { name: seat ?? observed.seat ?? '' },
       model: run?.env?.AI_MODEL ?? null, provider: run?.provider ?? null,
