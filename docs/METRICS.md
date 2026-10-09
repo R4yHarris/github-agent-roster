@@ -68,6 +68,18 @@ invent a seat. Existing numeric issue and named-seat history filters continue
 to work; historical scalar payload records remain readable without migration.
 This implements [FEATURE_SPEC sections 5.6 and 5.8](FEATURE_SPEC.md).
 
+Builtin records also retain canonical `repository.commit`: the full Git object
+ID read once from the prepared task worktree's HEAD before execution. This is
+the starting revision, not proof of uncommitted edits or the eventual published
+commit. All lifecycle and seat records share that observed anchor; reused
+worktrees are observed at their actual HEAD, not the caller checkout's HEAD or
+a trunk selection hint. Unreadable or invalid revision evidence remains empty
+with a safe diagnostic, without blocking execution or masking its failure.
+Opt-out skips this provenance read. `repository.remote` remains empty; the
+origin-derived `repoIdentity` hash associates history without persisting raw
+remote URLs, credentials or checkout paths. No schema or identity migration is
+required. This implements [FEATURE_SPEC sections 5.6 and 5.8](FEATURE_SPEC.md).
+
 The same typed session record retains observed `evidence.verification` for
 coder tests: numeric `exit_code`, explicit `skipped` status, the original
 `full_suite_exit_code` when available, and existing baseline/transient

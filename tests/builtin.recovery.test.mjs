@@ -132,6 +132,7 @@ test('a repeated test failure escalates to fresh coder perspectives, then stops 
   assert.equal(new Set(coder.map((record) => record.id)).size, attempts);
   assert.equal(new Set(records.map((record) => record.runId)).size, 1);
   for (const [index, record] of coder.entries()) {
+    assert.deepEqual(record.repository, { remote: '', commit: git(options.target, 'rev-parse', 'HEAD') });
     assert.deepEqual(record.issue, { issue: '42', task: 'issue-42' });
     assert.deepEqual(record.seat, { name: 'coder' });
     assert.deepEqual(record.evidence.attempt, { sessionId: 'roster-42-coder', index: index + 1 });
@@ -151,6 +152,7 @@ test('a repeated test failure escalates to fresh coder perspectives, then stops 
   assert.deepEqual((await store.readAll()).records, records);
   const typed = createProvenanceStore({ root: store.root, repoRoot: options.target });
   const queried = await typed.query({ runId: coder[0].runId, event: 'session' });
+  assert.ok(queried.every((record) => record.repository.commit === git(options.target, 'rev-parse', 'HEAD')));
   assert.ok(queried.every((record) => record.issue.issue === '42' && record.issue.task === 'issue-42'));
   assert.equal(queried.filter((record) => record.seat.name === 'coder').length, attempts);
   assert.deepEqual(queried.map((record) => record.id).sort(),
