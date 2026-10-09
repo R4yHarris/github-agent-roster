@@ -2,8 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readdir, readFile, rm, writeFile, stat } from 'node:fs/promises';
 import path from 'node:path';
-import { execFile } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
+import { resolveRepoIdentity } from '../src/lib/repo-identity.mjs';
 import { openProvenanceStore, LOG_DIRNAME, SEGMENT_NAME } from '../src/lib/provenance-store.mjs';
 import { createRecord } from '../src/lib/provenance-schema.mjs';
 import { createProvenanceStore } from '../src/lib/provenance-api.mjs';
@@ -224,6 +226,64 @@ test('filesystem and git resolution failures are not disguised as missing histor
   const file = path.join(dir, 'not-a-directory');
   await writeFile(file, 'data');
   await assert.rejects(loadProvenanceRecords({ storePath: file }), /must be a directory/);
+});
+
+test('two distinct repositories with different origins never collide in history queries', async (t) => {
+  const temp = await mkdtemp(path.join(tmpdir(), 'roster-hist-distinct-'));
+  t.after(() => rm(temp, { recursive: true, force: true }));
+  const git = (...args) => execFileSync('git', args, { stdio: 'pipe' });
+  // Same path suffix, distinct hosts: path-based identities would collide here,
+  // origin-based identities must not.
+  for (const [name, origin] of [
+    ['a', 'https://example.invalid/same/widget-a.git'],
+    ['b', 'https://other.invalid/same/widget-b.git'],
+  ]) {
+    const dir = path.join(temp, name);
+    git('init', '-q', dir);
+    git('-C', dir, 'remote', 'add', 'origin', origin);
+    git('-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@example.com',
+      'commit', '-q', '--allow-empty', '-m', 'seed');
+  }
+  const identityA = await resolveRepoIdentity({ repoRoot: path.join(temp, 'a') });
+  const identityB = await resolveRepoIdentity({ repoRoot: path.join(temp, 'b') });
+  assert.notEqual(identityA, identityB);
+  const records = [
+    { id: 'rec-a', version: 1, runId: 'run-a', sessionId: 'sess-a', repoIdentity: identityA, event: 'completed', createdAt: JAN, payload: {} },
+    { id: 'rec-b', version: 1, runId: 'run-b', sessionId: 'sess-b', repoIdentity: identityB, event: 'completed', createdAt: FEB, payload: {} },
+  ];
+  assert.deepEqual(ids(filterRepositories(records, [identityA])), ['run-a']);
+  assert.deepEqual(ids(filterRepositories(records, [identityB])), ['run-b']);
+  assert.deepEqual(ids(filterRecords(records, { repository: identityA })), ['run-a']);
+  assert.deepEqual(ids(filterRecords(records, { repository: identityB })), ['run-b']);
+  assert.deepEqual(ids(filterRepositories(records, [identityA, identityB])), ['run-a', 'run-b']);
+  // A query for one repository never returns the other repository's record.
+  assert.deepEqual(ids(filterRepositories(records, identityA)), ['run-a']);
+  assert.equal(ids(filterRecords(records, { repository: identityB })).includes('run-a'), false);
+});
+
+test('typed history survives reclones and transport changes but excludes a distinct repository', async (t) => {
+  const { dir, root } = await fixture(t, { populate: false });
+  const repos = ['first', 'reclone', 'other'].map((name) => path.join(dir, name));
+  const remotes = [
+    'https://git.example.invalid/team/widget.git',
+    'git@git.example.invalid:team/widget.git',
+    'https://git.example.invalid/other/widget.git',
+  ];
+  for (let index = 0; index < repos.length; index++) {
+    execFileSync('git', ['init', '-q', repos[index]], { stdio: 'pipe' });
+    execFileSync('git', ['-C', repos[index], 'remote', 'add', 'origin', remotes[index]], { stdio: 'pipe' });
+  }
+  const stores = repos.map((repoRoot) => createProvenanceStore({ root, repoRoot }));
+  await stores[0].recordEvent({
+    runId: 'before-reclone', sessionId: 'original', event: 'completed', payload: { outcome: 'pass' },
+  });
+  await stores[2].recordEvent({
+    runId: 'other-repo', sessionId: 'other', event: 'completed', payload: { outcome: 'pass' },
+  });
+  assert.deepEqual(ids(await stores[1].query()), ['before-reclone']);
+  assert.deepEqual(ids(await stores[2].query()), ['other-repo']);
+  const identity = await stores[1].identity();
+  assert.deepEqual(ids(await createHistoryReader({ root }).list({ repository: identity })), ['before-reclone']);
 });
 
 test('actual CLI list and show use --store with no network or real remotes', async (t) => {

@@ -57,6 +57,21 @@ measured duration accompany them. Missing counts stay `unknown`, reported zero
 stays zero, and inherited `AI_*` counts cannot fill absent evidence. Records
 contain no endpoint credentials or prompt/source snapshots.
 
+Durable provenance identity hashes the canonical origin rather than the checkout
+path, so moves, reclones, and linked worktrees share a history identity.
+HTTPS and SSH spellings normalize together; credentials do not affect identity.
+Non-default ports, forks, and case-sensitive paths on arbitrary Git servers stay
+distinct (GitHub paths are case-insensitive). Local origins resolve relative to
+the checkout. Repository/worktree state containment and explicit state-path
+overrides remain separate and unchanged. This implements
+[FEATURE_SPEC sections 5.6 and 5.8](FEATURE_SPEC.md).
+
+Legacy path-derived hashes are not automatically reassigned or deleted. Existing
+records remain available through explicit history-store diagnostics; identity
+mismatch still fails closed. Preserve state before an explicit reinitialization.
+This slice does not implement the broader offline/no-origin fallback described
+in [state ownership](STATE.md#6-repository-identity).
+
 Effort records the orchestrator-selected compact tier, not a hardcoded
 medium or a model's private reasoning. Local DeepSeek-V4.1 medium is
 normalized to high. `none` is encoded as `-` in the existing contracts schema

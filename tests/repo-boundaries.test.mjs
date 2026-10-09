@@ -309,12 +309,13 @@ test('recloning the checkout keeps prior machine history readable', async (t) =>
   await initRepo(cloneA, { remote: remoteA });
   await initRepo(cloneB, { remote: remoteA });
 
-  // Two checkouts of the same remote URL carry a different local directory
-  // name in each. The durable identity (remote URL plus repo path) must
-  // distinguish them even when the slug collides.
+  // Re-cloning the same remote at a different path must NOT change the
+  // durable identity: a repository stays identifiable across checkouts
+  // (issue #391), so the identity is derived from the origin remote alone
+  // and is invariant under clone path, checkout location, and git common dir.
   const hashA = identityHash({ gitCommonDir: join(cloneA, '.git'), remoteUrl: remoteA });
   const hashB = identityHash({ gitCommonDir: join(cloneB, '.git'), remoteUrl: remoteA });
-  assert.notEqual(hashA, hashB, 'same remote from two different checkouts still hashes distinctly');
+  assert.equal(hashA, hashB, 'same remote from two different checkouts hashes identically');
 
   // An explicit identity token (the documented durable-identity escape hatch)
   // is stable across path changes: deleting and recloning at a new directory
