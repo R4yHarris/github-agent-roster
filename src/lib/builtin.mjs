@@ -710,7 +710,9 @@ async function openWaves({ worktree, cwd, env, apiKeyEnv, runCommand, log }) {
 
 async function runBuiltinAssignment(issueNumber, options = {}) {
   const { env = process.env, log = console.log, onPrepared } = options;
-  const lifecycle = { runId: `run-${randomBytes(8).toString('hex')}`, store: null, prepared: null };
+  const lifecycle = { runId: `run-${randomBytes(8).toString('hex')}`, store: null, prepared: null,
+    seats: new Map() };
+  const timestamp = () => (options.now?.() ?? new Date()).toISOString();
   const capture = async (event, payload = {}) => {
     const prepared = lifecycle.prepared;
     if (!prepared) return;
@@ -725,6 +727,16 @@ async function runBuiltinAssignment(issueNumber, options = {}) {
   let result;
   try {
     result = await executeBuiltinAssignment(issueNumber, { ...options, lifecycle,
+      async onRunEvent(event) {
+        if (event.type === 'seat-start') {
+          lifecycle.seats.set(event.seat, { requestedModel: event.model,
+            startedAt: timestamp(), endedAt: null });
+        } else if (['seat-end', 'seat-error'].includes(event.type)) {
+          const timing = lifecycle.seats.get(event.seat);
+          if (timing) timing.endedAt = timestamp();
+        }
+        await options.onRunEvent?.(event);
+      },
       async onPrepared(prepared) {
         lifecycle.prepared = prepared;
         lifecycle.store = provenanceOptOut(env) ? null
@@ -1017,7 +1029,7 @@ async function executeBuiltinAssignment(issueNumber, {
   const reviewRepairs = [];
   let recordedReviewRepairs = 0;
   const delivery = {};
-  const recordSeat = async (session, run, excellence) => {
+  const recordSeat = async (session, run, excellence, seatConfig = activeConfig) => {
     const seat = Object.keys(sessions).find((name) => sessions[name] === session);
     const evidence = liveLog.delivery(seat, {
       ...(planner.metadata?.estimate_min != null ? { estimate_min: planner.metadata.estimate_min } : {}),
@@ -1036,6 +1048,17 @@ async function executeBuiltinAssignment(issueNumber, {
       seat: Object.keys(sessions).find((name) => sessions[name] === session) ??
         (session.endsWith('-coder') ? 'coder' : session.endsWith('-reviewer') ? 'reviewer' : null),
       model: run?.env?.AI_MODEL ?? null, provider: run?.provider ?? null,
+      ...lifecycle.seats.get(seat),
+      servedModel: run?.metrics?.model ?? '',
+      route: { name: seatConfig.llm.fleet_profile ?? seatConfig.llm.profile ?? '',
+        ...(seatConfig.llm.fleet_profile ? { profile: seatConfig.llm.fleet_profile } : {}),
+        ...(seatConfig.llm.hardware ? { hardware: seatConfig.llm.hardware } : {}) },
+      metrics: {
+        ...(run?.metrics?.prompt_tokens !== undefined ? { tokens_prompt: run.metrics.prompt_tokens } : {}),
+        ...(run?.metrics?.completion_tokens !== undefined
+          ? { tokens_completion: run.metrics.completion_tokens } : {}),
+        ...(evidence?.duration_ms !== undefined ? { duration_ms: evidence.duration_ms } : {}),
+      },
       ...(excellence ? { outcome: excellence.pass ? 'pass' : 'fail' } : {}),
     } });
     if (!recorded.durable && !provenanceOptOut(env)) {
@@ -1199,7 +1222,7 @@ async function executeBuiltinAssignment(issueNumber, {
           // The discarded attempt still spent real tokens; record it so seat metrics do not undercount.
           await recordSeat(sessions.reviewer, buildRun({
             config: reviewConfig, response: review.response, session: sessions.reviewer, task: prepared.task, env,
-          }));
+          }), undefined, reviewConfig);
           await removeIncompleteReview(review.reviewPath);
           independent = next;
           continue;
@@ -1210,7 +1233,7 @@ async function executeBuiltinAssignment(issueNumber, {
         config: reviewConfig, response: review.response, session: sessions.reviewer,
         task: prepared.task, env,
       }) : null;
-      await recordSeat(sessions.reviewer, reviewerRun);
+      await recordSeat(sessions.reviewer, reviewerRun, undefined, reviewConfig);
       return { review, reviewerRun };
     }
   };
@@ -1277,7 +1300,7 @@ async function executeBuiltinAssignment(issueNumber, {
       break;
     } catch (error) {
       if (error instanceof Error && error.result) {
-        await recordSeat(sessions.coder, error.result.run, error.result.excellence);
+        await recordSeat(sessions.coder, error.result.run, error.result.excellence, coderConfig);
       }
       const failedProfile = route?.profile.id;
       if (await recoverRoute('coder', error)) {
@@ -1334,7 +1357,7 @@ async function executeBuiltinAssignment(issueNumber, {
     }
   }
   coderRun = result.run;
-  await recordSeat(sessions.coder, coderRun, result.excellence);
+  await recordSeat(sessions.coder, coderRun, result.excellence, coderConfig);
   ({ review, reviewerRun } = await reviewSeat(result, reviewFindings));
   if (review.verdict !== 'fail' || !review.completed || skipReview || result.mode !== 'llm' ||
       reviewRepairs.length >= maxReviewRepairs) break;

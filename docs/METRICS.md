@@ -50,6 +50,13 @@ reported as incomplete durable history; opt-out is intentional, not an error.
 `completed` means execution ended, not human acceptance; a deterministic stub
 retains an `unverified` outcome.
 
+Session provenance records retain the requested model from the actual seat
+start and the canonical served model and token counts from its response-backed
+run object. Observed seat start/end times, selected route/profile/hardware, and
+measured duration accompany them. Missing counts stay `unknown`, reported zero
+stays zero, and inherited `AI_*` counts cannot fill absent evidence. Records
+contain no endpoint credentials or prompt/source snapshots.
+
 Effort records the orchestrator-selected compact tier, not a hardcoded
 medium or a model's private reasoning. Local DeepSeek-V4.1 medium is
 normalized to high. `none` is encoded as `-` in the existing contracts schema
