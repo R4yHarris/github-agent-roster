@@ -154,6 +154,65 @@ test('a repeated test failure escalates to fresh coder perspectives, then stops 
   assert.equal((await typed.query({ runId: coder[0].runId, sessionId: 'roster-42-coder', event: 'session' })).length, 1);
 });
 
+test('each perspective occurrence resets observed tool counters while durable earlier attempts remain', async (context) => {
+  const options = multiFileFixture(context);
+  let tests = 0;
+  let coderTurns = 0;
+  await assert.rejects(runBuiltinIssue(42, { ...options, config: llmConfig, log: () => {},
+    now: () => new Date(Date.UTC(2026, 9, 9) + 1000 * (tests + coderTurns)),
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      const system = body.messages[0].content;
+      if (system.startsWith('You are the builtin planner seat.')) {
+        return Response.json({ choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant', content: JSON.stringify({ title: 'Add Status',
+            acceptance_checks: ['node --test exits 0'], files_allowed: multiFileScope }),
+        } }] });
+      }
+      assert.ok(!system.startsWith('You are the builtin reviewer seat.'), 'Stalled tests cannot request reviewer inference');
+      const call = coderTurns;
+      coderTurns += 1;
+      if (call === 0) {
+        return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant', tool_calls: [
+            { id: 'read', type: 'function', function: { name: 'read_file',
+              arguments: JSON.stringify({ path: 'README.md' }) } },
+            { id: 'missing', type: 'function', function: { name: 'read_file',
+              arguments: JSON.stringify({ path: 'missing-private-marker.mjs' }) } },
+            { id: 'absolute', type: 'function', function: { name: 'read_file',
+              arguments: JSON.stringify({ path: path.join(options.target, '.worktrees', 'issue-42', 'README.md') }) } },
+          ],
+        } }] });
+      }
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Done.' } }] });
+    },
+    runTestCommand: async () => {
+      tests += 1;
+      throw Object.assign(new Error('tests failed'), { code: 1, stdout: 'not ok', stderr: '' });
+    },
+  }), /Test repair stalled/);
+  const store = await openProvenanceStore(path.join(options.base, 'machine', 'provenance'));
+  const { records } = await store.readAll();
+  const coder = records.filter((record) => record.event === 'session' &&
+    record.evidence.attempt.sessionId === 'roster-42-coder')
+    .sort((a, b) => a.evidence.attempt.index - b.evidence.attempt.index);
+  const attempts = 1 + maxPerspectiveEscalations;
+  assert.equal(coder.length, attempts);
+  assert.equal(coder[0].evidence.observed_tool_events.read_file.ok, 1);
+  assert.equal(coder[0].evidence.observed_tool_events.read_file.error, 0);
+  assert.equal(coder[0].evidence.observed_tool_events.read_file.denied, 4);
+  assert.deepEqual(coder[0].evidence.observed_tool_events.run_test,
+    { ok: 3, error: 0, denied: 0, exit_nonzero: 3 });
+  for (const [index, record] of coder.slice(1).entries()) {
+    assert.equal(record.sessionId, `roster-42-coder-attempt-${index + 2}`);
+    assert.deepEqual(record.evidence.observed_tool_events,
+      { run_test: { ok: 3, error: 0, denied: 0, exit_nonzero: 3 } });
+  }
+  assert.doesNotMatch(JSON.stringify(records), /missing-private-marker/);
+  git(options.target, 'worktree', 'remove', '--force', path.join(options.target, '.worktrees', 'issue-42'));
+  assert.deepEqual((await store.readAll()).records, records);
+});
+
 test('fresh perspectives carry earlier contexts and their failure counts, within the two-escalation cap', async (context) => {
   const options = multiFileFixture(context);
   let tests = 0;

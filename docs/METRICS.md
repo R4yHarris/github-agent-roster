@@ -88,6 +88,24 @@ never overwritten by a later pass. Operational metrics, AI-Run and publication
 session IDs are unchanged, as are store duplicate protection and opt-out.
 This implements [FEATURE_SPEC sections 5.4, 5.5, 5.6 and 5.8](FEATURE_SPEC.md).
 
+Seat evidence also retains `observed_tool_events`, a bounded map of builtin
+tool names to `ok`, `error` and `denied` event counts. Unrecognized labels use
+one `unknown` tool bucket, never their raw text; an unrecognized status has an
+`unknown` counter rather than an invented success/error. Numeric nonnegative
+exit signals increment `exit_zero` or `exit_nonzero` only when observed.
+Both remain visible if a failure is later repaired within that occurrence.
+Invocation status `ok` does not mean tests passed: a returned nonzero test
+exit is still an observed `ok` invocation with `exit_nonzero` evidence.
+
+These are emitted event counts, not unique executions: wrapper and loop
+denials can both report the same refusal. Counters reset at each seat start,
+and snapshots attach to that occurrence's durable record. There are at most
+twelve known tool buckets plus `unknown`, each with at most six numeric
+counters; no arguments, paths, output or error messages are retained.
+No observed results means the map is absent. Stub coder/reviewer seats do
+not invent tool results (planner artifact writes may still emit real events).
+This implements [FEATURE_SPEC sections 5.4, 5.6 and 5.8](FEATURE_SPEC.md).
+
 Durable provenance identity hashes the canonical origin rather than the checkout
 path, so moves, reclones, and linked worktrees share a history identity.
 HTTPS and SSH spellings normalize together; credentials do not affect identity.
