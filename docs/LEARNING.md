@@ -168,6 +168,29 @@ Malformed arguments or existing JSONL fail explicitly rather than silently
 skipping data.
 
 The human command enriches known SHA/session/model/class fields from run history.
+If an opaque session has no matching local/Git metric record, it matches exact
+durable session IDs or recorded operational attempt lineage through the
+repository-scoped typed durable API at the machine
+root. This restores observed served-model, seat and task-class attribution
+after a checkout loses its local ledger, including a reclone with the same
+origin identity. Lifecycle records are not seat attribution. Multiple matching
+session records, including retries of one operational session, fail before
+writing or commenting rather than selecting an arbitrary occurrence. A specific
+attempt-suffixed durable session ID can disambiguate that occurrence.
+Local/Git matches retain precedence without a durable read.
+
+Recovered decisions retain a bounded `provenance` reference with the source
+record ID, run ID and session ID. An absent served model remains unknown;
+the requested model is never substituted. A starting `repository.commit`
+is never treated as a published evaluation SHA. Other repositories are
+excluded by the existing identity-scoped typed query. Durable-history opt-out
+skips the lookup; no origin gives an explicit local-only diagnostic, while
+other reader failures stop evaluation before writing.
+
+This lookup does not generate verdicts, migrate storage, write evaluations to
+machine history or replace routing's existing ledger. Only a genuine human
+decision is enriched. It implements [FEATURE_SPEC sections 5.6 and 5.8](FEATURE_SPEC.md).
+
 With `gh` and one matching PR, it posts `AI-Eval: 1|accept|3|n` and `Minutes: 18`
 using the human's GitHub identity, not the App. The free-text comment stays local.
 Missing minutes remain unknown (`null`); legacy four-argument calls still work.
