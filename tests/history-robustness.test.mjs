@@ -1,12 +1,54 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cp, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { openProvenanceStore, LOG_DIRNAME } from '../src/lib/provenance-store.mjs';
-import { identityHash } from '../src/lib/repo-identity.mjs';
+import { identityHash, resolveRepoIdentity } from '../src/lib/repo-identity.mjs';
+import { buildProvenanceRecord, createProvenanceStore, storeRecordId } from '../src/lib/provenance-api.mjs';
 import { runHistory } from '../src/lib/history-cli.mjs';
 
 const REPO = identityHash({ gitCommonDir: 'common-a', remoteUrl: 'sentinel-a' });
+
+test('machine history survives linked-worktree cleanup and actual checkout deletion/reclone without copying records', async (t) => {
+  const dir = await scratch(t);
+  const origin = path.join(dir, 'origin');
+  const checkout = path.join(dir, 'checkout');
+  const linked = path.join(dir, 'linked');
+  const reclone = path.join(dir, 'reclone');
+  const root = path.join(dir, 'machine', 'provenance');
+  const git = (...args) => execFileSync('git', args, { stdio: 'pipe' });
+  git('init', '-q', origin);
+  git('-C', origin, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+    'commit', '-q', '--allow-empty', '-m', 'seed');
+  git('clone', '-q', '--no-local', origin, checkout);
+  git('-C', checkout, 'worktree', 'add', '-q', '--detach', linked);
+  const identity = await resolveRepoIdentity({ repoRoot: linked });
+  const now = 1735689600000;
+  const record = {
+    ...buildProvenanceRecord({ runId: 'cleanup-run', sessionId: 'cleanup-session', event: 'cancellation',
+      payload: { outcome: 'cancelled' } }, { repoIdentity: identity, now }),
+    id: storeRecordId(identity, 'cleanup-run', 'cleanup-session', 'cancellation', 'raw-history'),
+    version: 1, section: 'raw-history',
+  };
+  await openProvenanceStore(root, { clock: () => now }).appendRecord(record);
+  const recordPath = path.join(root, LOG_DIRNAME, `${record.id}.json`);
+  const bytes = await readFile(recordPath);
+  git('-C', checkout, 'worktree', 'remove', linked);
+  await rm(checkout, { recursive: true, force: true });
+  git('clone', '-q', '--no-local', origin, reclone);
+  const reader = createProvenanceStore({ root, repoRoot: reclone });
+  assert.equal(await reader.identity(), identity);
+  const records = await reader.query({ runId: 'cleanup-run' });
+  assert.equal(records.length, 1);
+  assert.equal(records[0].event, 'cancellation');
+  assert.equal(records[0].payload.outcome, 'cancelled');
+  assert.equal(records[0].createdAt, record.createdAt);
+  assert.deepEqual(await readFile(recordPath), bytes);
+  git('-C', reclone, 'remote', 'set-url', 'origin', 'https://example.invalid/different/repository.git');
+  assert.deepEqual(await createProvenanceStore({ root, repoRoot: reclone }).query(), []);
+  assert.deepEqual(await readFile(recordPath), bytes);
+});
 
 async function scratch(t) {
   const dir = await mkdtemp(path.join(process.cwd(), '.history-robust-'));

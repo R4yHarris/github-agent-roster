@@ -27,10 +27,48 @@ import { packAgentRun } from '../vendor/github-agent-contracts/scripts/parse-age
 import { recordedCoderRun } from '../src/lib/seat-publication.mjs';
 import { createDebugLog } from '../src/lib/debug-log.mjs';
 import { readLocalRun } from '../src/lib/local-runs.mjs';
+import { openProvenanceStore } from '../src/lib/provenance-store.mjs';
+import { createProvenanceStore } from '../src/lib/provenance-api.mjs';
 import { createSteeringControl } from '../src/runtime/steering.mjs';
 import {
   runBuiltinIssue, example, stubConfig, llmConfig, vllmConfig, multiFileScope, git, fixture, multiFileFixture,
 } from './helpers/builtin.mjs';
+
+test('builtin early failure and cancellation stay truthful after worktree cleanup without contacting a fleet', async (t) => {
+  const options = fixture(t);
+  const root = path.join(options.base, 'machine', 'provenance');
+  const prior = createProvenanceStore({ root, repoRoot: options.target });
+  await prior.recordEvent({ runId: 'prior-run', sessionId: 'prior-session', event: 'failure',
+    payload: { outcome: 'failure', startedAt: '2025-01-01T00:00:00.000Z' } });
+  const committed = (await openProvenanceStore(root).readAll()).records[0];
+  const priorPath = path.join(root, 'log', `${committed.id}.json`);
+  const bytes = readFileSync(priorPath);
+  const failure = new Error('prepared handoff failed');
+  await assert.rejects(runBuiltinIssue(42, { ...options, config: llmConfig, log: () => {},
+    now: () => new Date('2025-01-01T00:00:01.000Z'),
+    onPrepared: () => { throw failure; },
+    fetchImpl: () => assert.fail('early failure must not contact the fleet'),
+  }), (error) => error === failure);
+  const afterFailure = await prior.query();
+  const failedRun = afterFailure.find((record) => record.runId !== 'prior-run').runId;
+  assert.deepEqual(afterFailure.filter((record) => record.runId === failedRun).map((record) => record.event),
+    ['started', 'failure']);
+  const worktree = path.join(options.target, '.worktrees', 'issue-42');
+  git(options.target, 'worktree', 'remove', '--force', worktree);
+  const controller = new AbortController();
+  await assert.rejects(runBuiltinIssue(42, { ...options, config: llmConfig, log: () => {},
+    now: () => new Date('2025-01-01T00:00:02.000Z'), signal: controller.signal,
+    onPrepared: () => controller.abort(),
+    fetchImpl: () => assert.fail('cancelled run must not contact the fleet'),
+  }), { code: 'ROSTER_CANCELLED' });
+  git(options.target, 'worktree', 'remove', '--force', worktree);
+  const records = await createProvenanceStore({ root, repoRoot: options.target }).query();
+  const cancelledRun = records.find((record) => !['prior-run', failedRun].includes(record.runId)).runId;
+  assert.deepEqual(records.filter((record) => record.runId === cancelledRun).map((record) => record.event),
+    ['started', 'cancellation']);
+  assert.ok(!records.some((record) => record.event === 'completed'));
+  assert.deepEqual(readFileSync(priorPath), bytes);
+});
 
 test('a repeated test failure escalates to fresh coder perspectives, then stops before review', async (context) => {
   const options = multiFileFixture(context);
