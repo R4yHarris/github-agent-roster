@@ -11,12 +11,19 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 import { redactEvidence, redactRecord, secretMaterialLines } from '../src/lib/redaction.mjs';
+
 import {
   buildProvenanceRecord,
   createProvenanceStore,
+  ProvenanceStore,
+  storeRecordId,
 } from '../src/lib/provenance-api.mjs';
+import { openProvenanceStore } from '../src/lib/provenance-store.mjs';
 import { createRecord } from '../src/lib/provenance-schema.mjs';
 
 // All sentinel values live in ROSTER_API_KEY: the typed API surface
@@ -33,6 +40,46 @@ const ENV = Object.freeze({ ROSTER_API_KEY: SENTINEL });
 const NOW = 1735689600000; // 2025-01-01T00:00:00Z
 
 const REPO_IDENTITY = 'git-' + 'a'.repeat(64);
+
+test('recovered disk records redact sentinels and refuse protected source snapshots before writing', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'roster-redaction-recovery-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const durable = openProvenanceStore(root, { clock: () => NOW });
+  const record = {
+    ...buildProvenanceRecord({ runId: 'redacted-run', sessionId: 'redacted-session', event: 'failure',
+      payload: { note: `api_key: "${SENTINEL}"`, requestedModel: 'requested', servedModel: 'served',
+        metrics: { tokens_prompt: 0 }, outcome: 'failure' },
+    }, { repoIdentity: REPO_IDENTITY, now: NOW }),
+    id: storeRecordId(REPO_IDENTITY, 'redacted-run', 'redacted-session', 'failure', 'raw-history'),
+    version: 1, section: 'raw-history',
+  };
+  await durable.appendRecord(record);
+  const typed = new ProvenanceStore({ root, underlying: durable, resolveIdentity: () => REPO_IDENTITY });
+  const protectedBody = 'protected-source-body-test-marker';
+  for (const field of ['source', 'prompt']) {
+    await assert.rejects(typed.recordEvent({ runId: `rejected-${field}`, sessionId: 'redacted-session',
+      event: 'failure', payload: { evidence: { [field]: protectedBody } } }), /snapshot|prohibited|forbidden|not allowed/i);
+  }
+  await durable.recover();
+  assert.equal((await typed.query()).length, 1);
+  const recovered = (await typed.query())[0];
+  assert.equal(recovered.event, 'failure');
+  assert.equal(recovered.metrics.tokens_prompt, 0);
+  assert.equal(recovered.metrics.tokens_completion, 'unknown');
+  assert.equal(recovered.createdAt, record.createdAt);
+  const inspect = async (directory) => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory()) await inspect(file);
+      else {
+        const text = await readFile(file, 'utf8');
+        assertNoSecretsPersisted(text);
+        assert.equal(text.includes(protectedBody), false);
+      }
+    }
+  };
+  await inspect(root);
+});
 
 function assertNoSecretsPersisted(persistedText, label = 'persisted text') {
   assert.ok(

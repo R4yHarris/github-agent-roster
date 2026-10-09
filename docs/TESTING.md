@@ -41,6 +41,16 @@ nonzero test results still enter the bounded repair loop.
 
 ## Reporting exceptions in RESULT.md
 
+Durable recovery acceptance (FEATURE_SPEC sections 5.6 and 5.8) is covered by
+`tests/builtin.recovery.test.mjs`, `tests/provenance-recovery.test.mjs`,
+`tests/history-robustness.test.mjs`, and `tests/redaction-integrity.test.mjs`.
+The fixtures isolate machine roots, inject store clocks and record IDs, and
+exercise actual linked-worktree removal and Git recloning without copying the
+history store. Builtin early failure/cancellation uses hermetic issue fixtures
+and refuses fleet requests. A torn completion remains incomplete; recovery
+never synthesizes a successful run. Disk bytes, redaction, and refusal of
+protected prompt/source snapshots are asserted independently of export checks.
+
 The coder's RESULT.md never presents a nonzero full-suite exit as an
 unqualified `Checks: PASS`. Two recorded exceptions are reported explicitly:
 

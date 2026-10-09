@@ -17,7 +17,7 @@ import {
   SEGMENT_NAME,
   SEGMENT_SUFFIX,
 } from '../src/lib/provenance-store.mjs';
-import { createProvenanceStore } from '../src/lib/provenance-api.mjs';
+import { buildProvenanceRecord, createProvenanceStore, ProvenanceStore, storeRecordId } from '../src/lib/provenance-api.mjs';
 
 // Fixed, deterministic clock: every lock timestamp and record createdAt in
 // this file is derived from these values.
@@ -28,6 +28,37 @@ const tick = (ms) => { now += ms; };
 
 const RUN_ID = 'run-2025-0101-700';
 const SESSION_ID = 'sess-2025-0101-700';
+
+test('recovering a torn completion never turns a committed started run into success', async (t) => {
+  const root = await makeStoreRoot();
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const identity = `sha256-${'b'.repeat(64)}`;
+  const section = 'raw-history';
+  const store = openProvenanceStore(root, { clock: () => T0, holder: 'recovery-test' });
+  const started = {
+    ...buildProvenanceRecord({ runId: RUN_ID, sessionId: SESSION_ID, event: 'started',
+      payload: { requestedModel: 'requested', servedModel: 'served', metrics: { tokens_prompt: 0 } },
+    }, { repoIdentity: identity, now: T0 }),
+    id: storeRecordId(identity, RUN_ID, SESSION_ID, 'started', section), version: 1, section,
+  };
+  await store.appendRecord(started);
+  const committedPath = join(root, LOG_DIRNAME, `${started.id}.json`);
+  const bytes = await fs.readFile(committedPath);
+  const completionId = storeRecordId(identity, RUN_ID, SESSION_ID, 'completed', section);
+  await fs.writeFile(join(root, LOG_DIRNAME, `.${completionId}.0123456789abcdef${SEGMENT_SUFFIX}`), '{"event":');
+  const recovered = await store.recover();
+  assert.deepEqual(recovered.interrupted.map(({ recordId, incomplete }) => ({ recordId, incomplete })),
+    [{ recordId: completionId, incomplete: true }]);
+  const reader = new ProvenanceStore({ root, underlying: store, resolveIdentity: () => identity });
+  const records = await reader.query({ runId: RUN_ID });
+  assert.deepEqual(records.map((record) => record.event), ['started']);
+  assert.equal(records[0].createdAt, started.createdAt);
+  assert.equal(records[0].metrics.tokens_prompt, 0);
+  assert.equal(records[0].metrics.tokens_completion, 'unknown');
+  assert.equal(records[0].outcome, '');
+  assert.deepEqual(await fs.readFile(committedPath), bytes);
+  assert.deepEqual(await store.recover(), { recovered: [], interrupted: [] });
+});
 
 async function makeStoreRoot() {
   return fs.mkdtemp(join(tmpdir(), 'prov-recovery-'));
