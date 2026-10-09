@@ -109,6 +109,10 @@ export async function resolveRepoIdentity({ repoRoot, run = execute } = {}) {
       { code: 'E_GIT_METADATA', cause: error });
   }
 
+  if (!remoteUrl) {
+    throw new RepoIdentityError('Origin remote is empty; refusing ambiguous repository identity.',
+      { code: 'E_IDENTITY_INPUT' });
+  }
   // Relative local origins are relative to the checkout, not the machine cwd.
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(remoteUrl) &&
       !/^(?:[^@/:]+@)?[^/:]+:.+/.test(remoteUrl)) {

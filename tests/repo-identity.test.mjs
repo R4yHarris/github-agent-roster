@@ -109,6 +109,14 @@ test('resolveRepoIdentity fails closed when the origin remote is unconfigured', 
   );
 });
 
+test('empty origin cannot turn into a checkout-path identity', async () => {
+  const run = async (_cmd, args) => ({
+    stdout: args.includes('--git-common-dir') ? '.git\n' : ' \n',
+  });
+  await assert.rejects(resolveRepoIdentity({ repoRoot: process.cwd(), run }),
+    (error) => error instanceof RepoIdentityError && error.code === 'E_IDENTITY_INPUT');
+});
+
 test('a re-clone of the same repository at a different path resolves to the same identity', async (context) => {
   const temp = mkdtempSync(path.join(tmpdir(), 'roster-reclone-'));
   context.after(() => rmSync(temp, { recursive: true, force: true }));
