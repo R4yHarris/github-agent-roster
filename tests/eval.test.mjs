@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { parseEvaluationArgs, recordEvaluation } from '../src/lib/eval.mjs';
 import { parseShellEvaluationArgs } from '../src/shell/evaluation.mjs';
 import { loadLearning } from '../src/lib/learn.mjs';
+import { provenanceStoreForRun } from '../src/lib/local-runs.mjs';
 
 const cli = fileURLToPath(new URL('../src/cli.mjs', import.meta.url));
 const evaluations = readFileSync(new URL('./fixtures/learn-evals.jsonl', import.meta.url), 'utf8');
@@ -24,6 +25,7 @@ function fixture(t) {
     calls,
     options: {
       cwd, env: {}, now: () => new Date(at), metricsLoader: () => [], commenter: async () => {},
+      durableReader: async () => [],
       run(program, args, options) {
         calls.push({ program, args, cwd: options.cwd });
         assert.equal(program, 'git');
@@ -280,4 +282,254 @@ test('human evaluations retain an explicitly recorded seat for later ceiling der
   });
   assert.equal(result.seat, 'planner');
   assert.equal(loadLearning({ cwd }).evaluations[0].seat, 'planner');
+});
+
+function durableFixture(t) {
+  const { cwd: base, options } = fixture(t);
+  const cwd = join(base, 'project');
+  const machine = join(base, 'machine');
+  mkdirSync(cwd);
+  mkdirSync(machine);
+  const git = (root, ...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: 'pipe' }).trim();
+  git(cwd, 'init', '-b', 'main');
+  git(cwd, '-c', 'user.name=Test Fixture', '-c', 'user.email=fixture@example.invalid',
+    'commit', '--allow-empty', '-m', 'Disposable evaluation fixture');
+  git(cwd, 'remote', 'add', 'origin', 'https://github.com/example/evaluation.git');
+  const env = { ROSTER_STATE_ROOT: machine };
+  const store = provenanceStoreForRun({ repoRoot: cwd, env });
+  const payload = { issue: { issue: '42', task: 'issue-42' }, seat: { name: 'coder' },
+    requestedModel: 'requested-model', servedModel: 'observed-served-model', task_class: 'fix',
+    repository: { remote: '', commit: git(cwd, 'rev-parse', 'HEAD') }, outcome: 'pass' };
+  return { base, cwd, env, store, payload, git,
+    options: { ...options, cwd, env, run: execFileSync, durableReader: undefined } };
+}
+
+test('human evaluation recovers exact typed session attribution after checkout deletion and reclone', async (t) => {
+  const f = durableFixture(t);
+  const sessionId = 'opaque-coder-session';
+  await f.store.recordEvent({ runId: 'durable-run', sessionId, event: 'started', payload: {} });
+  const source = await f.store.recordEvent({ runId: 'durable-run', sessionId, event: 'session', payload: f.payload });
+  await f.store.recordEvent({ runId: 'durable-run', sessionId, event: 'completed', payload: { outcome: 'completed' } });
+  mkdirSync(join(f.cwd, '.roster', 'runs'), { recursive: true });
+  writeFileSync(join(f.cwd, '.roster', 'runs', 'runs.jsonl'), JSON.stringify({
+    session: sessionId, model: 'local-ledger-model', task_class: 'docs',
+  }) + '\n');
+  const reclone = join(f.base, 'reclone');
+  f.git(f.base, 'clone', '--no-local', f.cwd, reclone);
+  f.git(reclone, 'remote', 'set-url', 'origin', 'git@github.com:example/evaluation.git');
+  rmSync(f.cwd, { recursive: true });
+  assert.equal(existsSync(join(reclone, '.roster', 'runs')), false);
+  let commented;
+  const result = await recordEvaluation(sessionId, 'reject', '3', 'n', {
+    ...f.options, cwd: reclone, metricsLoader: undefined, commenter: async (input) => { commented = input; },
+  });
+  assert.equal(result.verdict, 'reject', 'run pass never overrides the human decision');
+  assert.equal(result.model, 'observed-served-model');
+  assert.equal(result.task_class, 'fix');
+  assert.equal(result.seat, 'coder');
+  assert.equal(result.sha, null, 'starting revision is not a published SHA');
+  assert.deepEqual(result.provenance, { recordId: source.id, runId: 'durable-run', sessionId });
+  assert.equal(commented.record.task, 'issue-42');
+  assert.equal(commented.record.sha, undefined);
+  const stored = loadLearning({ cwd: reclone }).evaluations[0];
+  assert.equal(stored.model, result.model);
+  assert.deepEqual(stored.provenance, result.provenance);
+  const serialized = JSON.stringify(stored);
+  for (const excluded of ['requested-model', f.cwd, 'github.com', source.repository.commit]) {
+    assert.equal(serialized.includes(excluded), false);
+  }
+  f.git(reclone, 'remote', 'set-url', 'origin', 'https://github.com/example/other-evaluation.git');
+  const isolated = await recordEvaluation(sessionId, 'accept', '2', 'y', {
+    ...f.options, cwd: reclone,
+  });
+  assert.equal(isolated.model, null);
+  assert.equal(isolated.provenance, undefined);
+});
+
+test('ambiguous actual durable runs fail before an evaluation write or comment', async (t) => {
+  const f = durableFixture(t);
+  for (const runId of ['first-run', 'second-run']) {
+    await f.store.recordEvent({ runId, sessionId: 'shared-session', event: 'session', payload: f.payload });
+  }
+  await assert.rejects(recordEvaluation('shared-session', 'accept', '2', 'y', {
+    ...f.options, commenter: () => assert.fail('ambiguous attribution must not comment'),
+  }), /Multiple durable session records/);
+  assert.equal(existsSync(join(f.cwd, '.roster', 'evals.jsonl')), false);
+});
+
+test('local/Git attribution and SHA evaluations never query durable sessions', async (t) => {
+  const { options } = fixture(t);
+  const durableReader = () => assert.fail('existing attribution and SHA targets must not query durable history');
+  const known = await recordEvaluation('known-session', 'accept', '2', 'y', {
+    ...options, durableReader, metricsLoader: () => [{ session: 'known-session', model: 'git-model', seat: 'reviewer' }],
+  });
+  assert.equal(known.model, 'git-model');
+  assert.equal(known.seat, 'reviewer');
+  assert.equal(known.provenance, undefined);
+  const sha = await recordEvaluation('a'.repeat(40), 'accept', '2', 'y', { ...options, durableReader });
+  assert.equal(sha.model, null);
+  assert.equal(sha.provenance, undefined);
+});
+
+test('durable attribution uses only exact session records and never substitutes requested model', async (t) => {
+  for (const servedModel of ['', 'unknown', 'builtin-stub']) {
+    await t.test(servedModel || 'empty', async (context) => {
+      const { options } = fixture(context);
+      const source = { id: 'a'.repeat(64), runId: 'recorded-run', sessionId: 'requested-session',
+        event: 'session', servedModel, requestedModel: 'not-observed', seat: { name: 'planner' },
+        issue: { task: 'issue-42' }, payload: {}, repository: { commit: 'b'.repeat(40) } };
+      const evaluation = await recordEvaluation('requested-session', 'rework', '2', 'n', {
+        ...options, durableReader: async ({ sessionId }) => {
+          assert.equal(sessionId, 'requested-session');
+          return [{ ...source, event: 'started', servedModel: 'wrong-lifecycle' },
+            { ...source, sessionId: 'other-session', servedModel: 'wrong-session' },
+            { ...source, seat: { name: '' }, servedModel: 'run-level-pause' }, source];
+        },
+      });
+      assert.equal(evaluation.model, null);
+      assert.equal(evaluation.task_class, null);
+      assert.equal(evaluation.seat, 'planner');
+      assert.equal(evaluation.sha, null);
+    });
+  }
+});
+
+test('durable-history opt-out, invalid input and agent seats bypass the reader', async (t) => {
+  const { options } = fixture(t);
+  const durableReader = () => assert.fail('disabled or invalid evaluation must not read durable history');
+  for (const env of [{ ROSTER_PROVENANCE_OPT_OUT: 'true' }, { ROSTER_PROVENANCE_DISABLED: '1' }]) {
+    const result = await recordEvaluation('local-session', 'accept', '2', 'y', { ...options, env, durableReader });
+    assert.equal(result.model, null);
+    assert.equal(result.provenance, undefined);
+  }
+  await assert.rejects(recordEvaluation('../invalid', 'accept', '2', 'y', { ...options, durableReader }));
+  await assert.rejects(recordEvaluation('agent-session', 'accept', '2', 'y', {
+    ...options, env: { ROSTER_SEAT: 'coder' }, durableReader,
+  }), /human-only/);
+});
+
+test('missing origin preserves local-only evaluation with a safe diagnostic', async (t) => {
+  const f = durableFixture(t);
+  f.git(f.cwd, 'remote', 'remove', 'origin');
+  const logs = [];
+  const result = await recordEvaluation('offline-session', 'accept', '2', 'y', {
+    ...f.options, log: (line) => logs.push(line),
+  });
+  assert.equal(result.model, null);
+  assert.equal(result.provenance, undefined);
+  assert.deepEqual(logs, ['No origin remote; durable evaluation attribution is unavailable.']);
+});
+
+test('reader errors and invalid references fail safely before evaluation writes', async (t) => {
+  for (const durableReader of [
+    () => { throw new Error('test-only-private-api-key'); },
+    async () => ({}),
+    async () => [{ event: 'session', sessionId: 'failed-session', id: 'unsafe/path', runId: 'run',
+      seat: { name: 'coder' } }],
+  ]) {
+    await t.test('reader rejection', async (context) => {
+      const { cwd, options } = fixture(context);
+      await assert.rejects(recordEvaluation('failed-session', 'accept', '2', 'y', {
+        ...options, durableReader, commenter: () => assert.fail('reader failure must not comment'),
+      }), (error) => {
+        assert.match(error.message, /Durable.*(?:could not be read|invalid)/);
+        assert.equal(error.message.includes('test-only-private-api-key'), false);
+        return true;
+      });
+      assert.equal(existsSync(join(cwd, '.roster', 'evals.jsonl')), false);
+    });
+  }
+});
+
+test('default typed reader surfaces malformed durable storage without saving a decision', async (t) => {
+  const f = durableFixture(t);
+  const record = await f.store.recordEvent({
+    runId: 'damaged-run', sessionId: 'damaged-session', event: 'session', payload: f.payload,
+  });
+  writeFileSync(join(f.store.root, 'log', `${record.id}.json`), 'invalid-json');
+  await assert.rejects(recordEvaluation('damaged-session', 'accept', '2', 'y', {
+    ...f.options, commenter: () => assert.fail('invalid store must not comment'),
+  }), /Durable evaluation history could not be read/);
+  assert.equal(existsSync(join(f.cwd, '.roster', 'evals.jsonl')), false);
+});
+
+test('default reader does not treat Git failures other than missing origin as local-only success', async (t) => {
+  const f = durableFixture(t);
+  await assert.rejects(recordEvaluation('failed-session', 'accept', '2', 'y', {
+    ...f.options, run(program, args, options) {
+      if (args[0] === 'config') {
+        throw Object.assign(new Error('test-only-private-api-key'), { status: 2 });
+      }
+      return execFileSync(program, args, options);
+    },
+    commenter: () => assert.fail('Git inspection failure must not comment'),
+  }), (error) => {
+    assert.equal(error.message, 'Durable evaluation history could not be read; no evaluation was saved.');
+    return true;
+  });
+  assert.equal(existsSync(join(f.cwd, '.roster', 'evals.jsonl')), false);
+});
+
+test('CLI human eval uses durable attribution without injected application readers', async (t) => {
+  const f = durableFixture(t);
+  const source = await f.store.recordEvent({
+    runId: 'cli-run', sessionId: 'cli-session', event: 'session',
+    payload: { ...f.payload, issue: { issue: '', task: 'docs-fixture' }, task_class: 'docs' },
+  });
+  const result = spawnSync(process.execPath, [cli, 'eval', 'cli-session', 'rework', '2', 'n'], {
+    cwd: f.cwd, encoding: 'utf8', timeout: 10000,
+    env: { ...process.env, ...f.env, ROSTER_SEAT: undefined },
+  });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+  const evaluation = loadLearning({ cwd: f.cwd }).evaluations[0];
+  assert.equal(evaluation.model, 'observed-served-model');
+  assert.equal(evaluation.seat, 'coder');
+  assert.equal(evaluation.task_class, 'docs');
+  assert.equal(evaluation.verdict, 'rework');
+  assert.equal(evaluation.sha, null);
+  assert.equal(evaluation.provenance.recordId, source.id);
+});
+
+test('recovered canonical task directs the existing human PR commenter for an opaque session', async (t) => {
+  const f = durableFixture(t);
+  await f.store.recordEvent({
+    runId: 'comment-run', sessionId: 'opaque-session', event: 'session', payload: f.payload,
+  });
+  const githubCalls = [];
+  await recordEvaluation('opaque-session', 'reject', '3', 'n', {
+    ...f.options, commenter: undefined, run(program, args, options) {
+      if (program === 'git') return execFileSync(program, args, options);
+      assert.equal(program, 'gh');
+      githubCalls.push(args);
+      if (args[0] === '--version') return 'gh fixture\n';
+      if (args[0] === 'api') return 'User\n';
+      if (args[1] === 'list') return '[{"number":42}]';
+      return '';
+    },
+  });
+  assert.deepEqual(githubCalls.find((args) => args[1] === 'list'), [
+    'pr', 'list', '--repo', 'example/evaluation', '--head', 'issue-42', '--state', 'all', '--limit', '2', '--json', 'number',
+  ]);
+  assert.deepEqual(githubCalls.find((args) => args[1] === 'comment'), [
+    'pr', 'comment', '42', '--repo', 'example/evaluation', '--body', 'AI-Eval: 1|reject|3|n',
+  ]);
+});
+
+test('operational retry lineage is ambiguous unless a specific durable occurrence is selected', async (t) => {
+  const f = durableFixture(t);
+  for (const index of [1, 2]) {
+    await f.store.recordEvent({
+      runId: 'retry-run', sessionId: index === 1 ? 'retry-session' : 'retry-session-attempt-2', event: 'session',
+      payload: { ...f.payload, servedModel: `served-attempt-${index}`,
+        evidence: { attempt: { sessionId: 'retry-session', index } } },
+    });
+  }
+  await assert.rejects(recordEvaluation('retry-session', 'accept', '2', 'y', f.options),
+    /Multiple durable session records/);
+  assert.equal(existsSync(join(f.cwd, '.roster', 'evals.jsonl')), false);
+  const result = await recordEvaluation('retry-session-attempt-2', 'rework', '2', 'n', f.options);
+  assert.equal(result.model, 'served-attempt-2');
+  assert.equal(result.provenance.sessionId, 'retry-session-attempt-2');
+  assert.equal(result.verdict, 'rework');
 });

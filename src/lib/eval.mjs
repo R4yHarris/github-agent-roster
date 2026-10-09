@@ -8,6 +8,7 @@ import {
 import { githubRepository } from './issue.mjs';
 import { loadAvailableMetrics } from './metrics.mjs';
 import { splitArguments } from './arguments.mjs';
+import { provenanceOptOut, provenanceStoreForRun } from './local-runs.mjs';
 
 const usage = 'Use eval <sha-or-session> <accept|reject|rework> <1-5> <y|n> [--minutes N] [--comment "TEXT"].';
 
@@ -78,6 +79,22 @@ async function commentEvaluation({ evaluation, record, cwd, run, env, log }) {
   command('gh', ['pr', 'comment', String(pulls[0].number), '--repo', repository, '--body', body]);
 }
 
+async function readDurableSession({ cwd, env, run, log }) {
+  const commandOptions = { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 10000, maxBuffer: 65536 };
+  try {
+    run('git', ['config', '--get', 'remote.origin.url'], commandOptions);
+  } catch (error) {
+    if (error.status !== 1) throw error;
+    log('No origin remote; durable evaluation attribution is unavailable.');
+    return [];
+  }
+  const store = provenanceStoreForRun({ repoRoot: cwd, env,
+    run: async (program, args, options) => ({ stdout: run(program, args, { ...options, env }) }),
+  });
+  return store.query({ event: 'session' });
+}
+
 export async function recordEvaluation(target, verdict, difficulty, again, {
   cwd = process.cwd(),
   run = execFileSync,
@@ -90,6 +107,7 @@ export async function recordEvaluation(target, verdict, difficulty, again, {
   metricsLoader = loadAvailableMetrics,
   commenter = commentEvaluation,
   log = console.warn,
+  durableReader = readDurableSession,
 } = {}) {
   if (env.ROSTER_SEAT) throw new Error('AI-Eval is human-only; an agent seat cannot record an evaluation');
   if (typeof target !== 'string' || !IDENTIFIER.test(target) || target.startsWith('-')) {
@@ -127,7 +145,34 @@ export async function recordEvaluation(target, verdict, difficulty, again, {
   const matches = records.filter((record) => evaluation.sha
     ? record.sha?.toLowerCase() === evaluation.sha
     : record.session === evaluation.session);
-  const record = matches.find((match) => match.sha) ?? matches.at(-1);
+  let record = matches.find((match) => match.sha) ?? matches.at(-1);
+  if (!record && evaluation.session && !provenanceOptOut(env)) {
+    let durable;
+    try {
+      durable = await durableReader({ cwd: root, env, run, log, sessionId: evaluation.session });
+    } catch (cause) {
+      throw new Error('Durable evaluation history could not be read; no evaluation was saved.', { cause });
+    }
+    if (!Array.isArray(durable)) throw new Error('Durable history reader returned an invalid record list');
+    const sessions = durable.filter((item) => item?.event === 'session' &&
+      (item.sessionId === evaluation.session || item.evidence?.attempt?.sessionId === evaluation.session) &&
+      typeof item.seat?.name === 'string' && item.seat.name !== '');
+    if (sessions.length > 1) {
+      throw new Error('Multiple durable session records match; resolve the ambiguity before evaluating.');
+    }
+    const source = sessions[0];
+    if (source) {
+      if (typeof source.id !== 'string' || !/^[A-Za-z0-9._-]{1,256}$/.test(source.id) ||
+          typeof source.runId !== 'string' || !IDENTIFIER.test(source.runId) ||
+          typeof source.sessionId !== 'string' || !IDENTIFIER.test(source.sessionId)) {
+        throw new Error('Durable evaluation source reference is invalid.');
+      }
+      record = { session: source.sessionId, model: source.servedModel || null,
+        task: source.issue?.task || null, task_class: source.payload?.task_class ?? null,
+        seat: source.seat?.name || null };
+      evaluation.provenance = { recordId: source.id, runId: source.runId, sessionId: source.sessionId };
+    }
+  }
   if (record) {
     evaluation.sha ??= record.sha?.toLowerCase() ?? null;
     evaluation.session ??= record.session ?? null;
