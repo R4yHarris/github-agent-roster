@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createTools, isAllowedFile, isForbiddenRead, isForbiddenWrite, taskAndRepairFiles, testFailureEvidence, toolDefinitions } from '../src/runtime/tools.mjs';
+import { createTools, expandTestShards, isAllowedFile, isForbiddenRead, isForbiddenWrite, taskAndRepairFiles, testFailureEvidence, toolDefinitions } from '../src/runtime/tools.mjs';
 
 function fixture(context) {
   const worktree = mkdtempSync(path.join(tmpdir(), 'roster-tools-'));
@@ -576,6 +576,31 @@ test('a targeted run includes every shard of a split module test', async (contex
     runCommand: async (_program, args) => { received = args; return { stdout: '', stderr: '' }; } });
   await tools.run_test();
   assert.deepEqual(received.slice(4), ['tests/builtin.models.test.mjs', 'tests/builtin.resume.test.mjs']);
+});
+
+test('planned test shards narrow scoped verification but never final verification', async (t) => {
+  const worktree = fixture(t);
+  docsCheck(worktree);
+  for (const name of ['builtin.test.mjs', 'builtin.models.test.mjs', 'builtin.resume.test.mjs']) {
+    writeFileSync(path.join(worktree, 'tests', name), '');
+  }
+  const calls = [];
+  const tools = await createTools({ worktree,
+    allowedFiles: ['src/lib/builtin.mjs', 'tests/builtin.models.test.mjs'],
+    runCommand: async (_program, args) => { calls.push(args); return { stdout: '', stderr: '' }; },
+  });
+  await tools.run_test();
+  assert.deepEqual(calls.at(-1).slice(4), ['tests/builtin.models.test.mjs']);
+  await tools.run_test({}, { full: true });
+  assert.deepEqual(calls.at(-1).slice(0, 2), ['--test', '--test-concurrency']);
+  assert.equal(calls.at(-1).length, 4, 'final verification still discovers the whole suite');
+});
+
+test('explicit base tests and missing planned shards retain module-wide coverage', () => {
+  const available = ['tests/builtin.test.mjs', 'tests/builtin.models.test.mjs', 'tests/builtin.resume.test.mjs'];
+  assert.deepEqual(expandTestShards(available.slice(0, 2), available, available.slice(0, 2)), available);
+  assert.deepEqual(expandTestShards(['tests/builtin.test.mjs', 'tests/builtin.missing.test.mjs'],
+    available, ['tests/builtin.missing.test.mjs']), available);
 });
 
 test('a coder write to a harness report is a recoverable usage denial; handoff tampering stays a hard stop', async (t) => {

@@ -39,6 +39,11 @@ the coder context with the original error. They are not tool denials that a
 model can ignore before requesting a more expensive full suite. Ordinary
 nonzero test results still enter the bounded repair loop.
 
+Scoped verification uses existing explicitly planned test shards instead of
+expanding that module into every sibling shard. Without a present planned
+shard, it retains the whole module's test family. Final full-suite verification
+is unchanged; narrowed development checks never replace the delivery gate.
+
 Each test file runs in one process, so the slowest file sets a lower bound on
 wall time, however many cores there are. Two budgets keep files small enough to
 spread across workers:

@@ -108,9 +108,11 @@ export function coversTestFile(tests, file) {
   return tests.includes(normalized) || tests.includes(testShardBase(normalized));
 }
 
-export function expandTestShards(files, available) {
+export function expandTestShards(files, available, planned = []) {
   const expanded = new Set();
   for (const file of files) {
+    if (!planned.includes(file) &&
+        planned.some((selected) => testShardBase(selected) === file && available.includes(selected))) continue;
     if (available.includes(file)) expanded.add(file);
     for (const candidate of available) if (testShardBase(candidate) === file) expanded.add(candidate);
   }
@@ -1158,7 +1160,8 @@ export async function createTools({
           const entry = await fs.lstat(path.join(root, 'tests', file)).catch(() => null);
           if (entry?.isFile()) shards.push(`tests/${file}`);
         }
-        present.push(...expandTestShards(command.args.slice(3), shards).filter((file) => !present.includes(file)));
+        present.splice(0, present.length, ...expandTestShards(command.args.slice(3),
+          [...present, ...shards], [...planned, ...repairFiles]));
         if (!present.length) return { exit_code: 0, skipped: true, stdout: 'no relevant tests exist for the changed files', stderr: '' };
         // A per-test timeout turns a hanging test into a located, repairable failure before the outer kill.
         command.args = ['--test', '--test-concurrency', command.args[2],
