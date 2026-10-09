@@ -138,10 +138,10 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
   const { records: provenance } = await openProvenanceStore(path.join(options.env.ROSTER_STATE_ROOT, 'provenance')).readAll();
   const seatEvents = provenance.filter((record) => record.event === 'session')
     .map(({ sessionId, runId, payload }) => ({ sessionId, runId, seat: payload.seat, issue: payload.issue, outcome: payload.outcome }));
-  assert.deepEqual(seatEvents.map(({ seat }) => seat).sort(), ['coder', 'planner', 'reviewer']);
+  assert.deepEqual(seatEvents.map(({ seat }) => seat.name).sort(), ['coder', 'planner', 'reviewer']);
   assert.equal(new Set(seatEvents.map(({ runId }) => runId)).size, 1, 'one durable run id per process run');
-  assert.ok(seatEvents.every(({ issue }) => issue === 42));
-  assert.equal(seatEvents.find(({ seat }) => seat === 'coder').outcome, 'fail');
+  assert.ok(seatEvents.every(({ issue }) => issue.issue === '42' && issue.task === 'issue-42'));
+  assert.equal(seatEvents.find(({ seat }) => seat.name === 'coder').outcome, 'fail');
   assert.doesNotThrow(() => git(options.target, 'check-ignore', '--quiet',
     '.roster/runs/runs.jsonl'));
   await assert.rejects(stageReviewedFiles(result.worktreePath, ['README.md']),

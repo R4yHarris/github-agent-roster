@@ -148,7 +148,7 @@ test('failed coder persists its actual nonzero verification without inventing a 
   const coder = records.find((record) => record.event === 'session' && record.sessionId === 'roster-42-coder');
   assert.equal(coder.evidence.verification.exit_code, 1);
   assert.equal(coder.outcome, 'fail');
-  assert.equal(records.find((record) => record.event === 'session' && record.seat === 'reviewer'), undefined);
+  assert.equal(records.find((record) => record.event === 'session' && record.seat.name === 'reviewer'), undefined);
 });
 
 test('incomplete configured reviewer persists failure and actual artifact reference', async (t) => {
