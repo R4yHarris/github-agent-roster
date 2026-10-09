@@ -366,6 +366,121 @@ test('a regression repair from an earlier coder attempt stays in scope for the n
   assert.deepEqual(result.repairFiles, ['tests/other.test.mjs']);
 });
 
+test('a permitted baseline exception reports the exception and affected files without an unqualified pass', async (context) => {
+  const options = await fixture(context);
+  writeFileSync(path.join(options.worktree, 'README.md'), '# After\n');
+  options.result.tests = { exit_code: 1, stdout: 'ℹ tests 74\nℹ pass 73\nℹ cancelled 1\n',
+    stderr: '', preexisting_files: ['tests/flaky-baseline.test.mjs'] };
+  options.result.baselineFailures = ['tests/flaky-baseline.test.mjs'];
+  const gate = await checkExcellence(options);
+  const file = await writeResult({ ...options, excellence: gate });
+  const report = readFileSync(file, 'utf8');
+  assert.match(report, /Checks: PASS \(with test exceptions\)/);
+  assert.match(report, /Baseline test exception: 1 failure\(s\) classified outside this change in tests\/flaky-baseline\.test\.mjs/);
+  assert.match(report, /do not count as a clean full-suite pass/);
+  assert.doesNotMatch(report, /Operational checks passed/);
+  assert.match(report, /node --test exited 1/);
+  assert.doesNotMatch(report, /fail at the base commit/);
+  assert.match(report, /ℹ pass 73\n/);
+  assert.match(report, /ℹ cancelled 1\n/);
+});
+
+test('exception evidence never overrides failed, timed-out, or blocked gate verdicts', async (context) => {
+  for (const state of ['failed', 'timedOut', 'blocked']) {
+    const options = await fixture(context);
+    options.result.baselineFailures = ['tests/outside.test.mjs'];
+    options.result.tests = { exit_code: 1, full_suite_exit_code: 1,
+      transient_files: ['tests/transient.test.mjs'] };
+    if (state !== 'failed') options.result[state] = true;
+    const excellence = { pass: state !== 'failed', reasons: ['Independent gate failure'],
+      files: [], model: 'local-model', turns: 2 };
+    const file = await writeResult({ ...options, excellence });
+    const report = readFileSync(file, 'utf8');
+    assert.match(report, new RegExp(`Checks: ${state === 'blocked' ? 'BLOCKED' : 'FAIL'}\\n`));
+    assert.doesNotMatch(report, /Checks: PASS/);
+    assert.doesNotMatch(report, /## Summary\n/);
+    assert.match(report, /Baseline test exception/);
+    assert.match(report, /original full-suite exit 1/);
+    assert.doesNotMatch(report, /the rerun above passed/);
+  }
+});
+
+test('a transient rerun success keeps the original full-suite nonzero exit distinct from the passing rerun', async (context) => {
+  const options = await fixture(context);
+  writeFileSync(path.join(options.worktree, 'README.md'), '# After\n');
+  options.result.tests = { exit_code: 0, stdout: 'ℹ tests 73\nℹ pass 73\nℹ fail 0\n',
+    stderr: 'Transient full-suite failure: tests/transient.test.mjs passed when rerun alone.',
+    transient_files: ['tests/transient.test.mjs'], full_suite_exit_code: 1 };
+  const gate = await checkExcellence(options);
+  const file = await writeResult({ ...options, excellence: gate });
+  const report = readFileSync(file, 'utf8');
+  assert.match(report, /Transient test exception: full suite exited 1; rerun passed for tests\/transient\.test\.mjs/);
+  assert.match(report, /original full-suite exit 1 is preserved/);
+  assert.match(report, /node --test exited 0/);
+  assert.match(report, /Full suite: exited 1 before isolated rerun classification/);
+});
+
+test('missing isolated rerun evidence is not reported as passing', async (context) => {
+  const options = await fixture(context);
+  options.result.tests = { exit_code: 0, full_suite_exit_code: 1 };
+  const gate = await checkExcellence(options);
+  const file = await writeResult({ ...options, excellence: gate });
+  const report = readFileSync(file, 'utf8');
+  assert.match(report, /isolated rerun evidence is unavailable/);
+  assert.match(report, /Checks: PASS \(with test exceptions\)/);
+  assert.doesNotMatch(report, /rerun passed for|Operational checks passed/);
+});
+
+test('normal passing, failing, blocked, timed-out, and docs-only results keep their reporting and redaction', async (context) => {
+  const options = await fixture(context);
+  writeFileSync(path.join(options.worktree, 'README.md'), 'value: fixture-only-private-value\n');
+  options.env = { CUSTOM_KEY: 'fixture-only-private-value' };
+  options.apiKeyEnv = 'CUSTOM_KEY';
+  const gate = await checkExcellence(options);
+  // A hard gate failure (secret material) stays FAIL and its secret stays redacted.
+  const failing = await writeResult({ ...options, excellence: gate });
+  const failingReport = readFileSync(failing, 'utf8');
+  assert.match(failingReport, /Checks: FAIL[\s\S]*First failure: Secret material/);
+  assert.doesNotMatch(failingReport, /fixture-only-private-value/);
+  assert.doesNotMatch(failingReport, /Operational checks passed/);
+  rmSync(failing);
+
+  const blocked = await writeResult({ ...options, excellence: gate,
+    result: { ...options.result, blocked: true } });
+  assert.match(readFileSync(blocked, 'utf8'), /Outcome: blocked \(contracts infrastructure\)[\s\S]*Checks: BLOCKED/);
+  rmSync(blocked);
+
+  const timedOut = await writeResult({ ...options, excellence: gate,
+    result: { ...options.result, timedOut: true } });
+  assert.match(readFileSync(timedOut, 'utf8'), /Outcome: timed out \(unverified\)/);
+  rmSync(timedOut);
+
+  const clean = { ...(await fixture(context)), worktree: undefined };
+  clean.worktree = path.join(clean.repoRoot, 'clean-worktree');
+  mkdirSync(clean.worktree);
+  writeFileSync(path.join(clean.worktree, 'README.md'), '# Before\n');
+  writeFileSync(path.join(clean.worktree, 'TASK.md'), clean.task);
+  clean.baseline = await snapshotWorktree(clean.worktree);
+  writeFileSync(path.join(clean.worktree, 'README.md'), '# After\n');
+  const cleanGate = await checkExcellence(clean);
+  const cleanFile = await writeResult({ ...clean, excellence: cleanGate });
+  const cleanReport = readFileSync(cleanFile, 'utf8');
+  assert.match(cleanReport, /Checks: PASS\n/);
+  assert.match(cleanReport, /Operational checks passed/);
+  assert.match(cleanReport, /## Summary\n/);
+  assert.doesNotMatch(cleanReport, /with test exceptions/);
+  assert.doesNotMatch(cleanReport, /Baseline test exception|Transient test exception/);
+  // No exception lines and the summary heading are only correct when the report is
+  // gated on the (new) exception state: a clean gate must not be demoted to "Unverified summary".
+  assert.doesNotMatch(cleanReport, /## Unverified summary/);
+
+  rmSync(cleanFile);
+  const docsOnly = await writeResult({ ...clean, excellence: cleanGate,
+    result: { ...clean.result, tests: undefined, testsSkipped: true } });
+  assert.match(readFileSync(docsOnly, 'utf8'), /Tests skipped: docs-only change is checked by reading the file\./);
+  assert.doesNotMatch(readFileSync(docsOnly, 'utf8'), /node --test exited/);
+});
+
 test('test evidence quotes suite totals and every result from changed test files, not just the output head', () => {
   const names = declaredTestNames("test('dry-run touches nothing', () => {});\ntest(\"it\\'s idempotent\", () => {});\n" +
     'for (const x of [1]) test(`loop ${x}`, () => {});\n');

@@ -234,19 +234,47 @@ async function changedTestNames(worktree, files) {
   return changed;
 }
 
+function testExceptionNotes(result) {
+  const notes = [];
+  const preexisting = Array.isArray(result.baselineFailures) && result.baselineFailures.length
+    ? result.baselineFailures : (Array.isArray(result.tests?.preexisting_files) ? result.tests.preexisting_files : []);
+  if (preexisting.length) {
+    notes.push(`- Baseline test exception: ${preexisting.length} failure(s) classified outside this change in ${preexisting.join(', ')}. ` +
+      'These exceptions do not count as a clean full-suite pass. ' +
+      'Classification alone does not establish a passing full suite or successful acceptance.');
+  }
+  if (result.tests?.full_suite_exit_code !== undefined && result.tests.full_suite_exit_code !== 0) {
+    const rerun = result.tests.transient_files?.length
+      ? `rerun passed for ${result.tests.transient_files.join(', ')}` : 'isolated rerun evidence is unavailable';
+    notes.push(`- Transient test exception: full suite exited ${result.tests.full_suite_exit_code}; ${rerun}. ` +
+      `The original full-suite exit ${result.tests.full_suite_exit_code} is preserved and distinct from the passing ` +
+      'rerun classification.');
+  }
+  return notes;
+}
+
 export async function writeResult({ worktree, result, excellence, env, apiKeyEnv, run }) {
   const timedOut = result.timedOut === true;
   const blocked = result.blocked === true;
+  const exceptionNotes = testExceptionNotes(result);
   const passed = excellence.pass && !timedOut && !blocked;
+  const checks = blocked ? 'BLOCKED' : !passed ? 'FAIL'
+    : exceptionNotes.length ? 'PASS (with test exceptions)' : 'PASS';
   const summary = timedOut ? 'Coder HTTP request timed out. No change was verified; this run did not complete.' : result.summary;
-  const tests = result.tests?.skipped ? `Tests skipped: ${result.tests.stdout}`
+  let tests = result.tests?.skipped ? `Tests skipped: ${result.tests.stdout}`
     : result.tests ? testEvidence(result.tests, await changedTestNames(worktree, excellence.files ?? []))
     : result.testsSkipped ? 'Tests skipped: docs-only change is checked by reading the file.' : 'Tests were not run.';
+  if (result.tests?.full_suite_exit_code !== undefined && result.tests.full_suite_exit_code !== 0) {
+    tests += `\nFull suite: exited ${result.tests.full_suite_exit_code} before isolated rerun classification; ` +
+      `reported test result exit ${result.tests.exit_code} is separate from that original exit.`;
+  }
   const body = '# Result\n\n' + (blocked ? 'Outcome: blocked (contracts infrastructure)\n\n'
     : timedOut ? 'Outcome: timed out (unverified)\n\n' : '') +
-    `## Verification\n\nChecks: ${blocked ? 'BLOCKED' : passed ? 'PASS' : 'FAIL'}\n` +
-    (passed ? '- Operational checks passed.\n'
+    `## Verification\n\nChecks: ${checks}\n` +
+    (passed ? exceptionNotes.length ? '- Operational gate passed with test exceptions; full-suite success is not claimed.\n'
+      : '- Operational checks passed.\n'
       : excellence.reasons.map((reason, index) => `- ${index === 0 ? 'First failure: ' : ''}${reason}`).join('\n') + '\n') +
+    (exceptionNotes.length ? `${exceptionNotes.join('\n')}\n` : '') +
     `- ${tests}\n\n` + (result.checklist?.length ? `## Checklist\n\n${checklistTable({ items: result.checklist })}\n` : '') +
     (result.redGreen ? `## Red/green\n\n${redGreenTable(result.redGreen)}\n` : '') +
     (result.shadow ? `## Shadow modules\n\n${shadowSection(result.shadow)}\n` : '') +

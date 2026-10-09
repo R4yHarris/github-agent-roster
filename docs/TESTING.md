@@ -39,6 +39,30 @@ the coder context with the original error. They are not tool denials that a
 model can ignore before requesting a more expensive full suite. Ordinary
 nonzero test results still enter the bounded repair loop.
 
+## Reporting exceptions in RESULT.md
+
+The coder's RESULT.md never presents a nonzero full-suite exit as an
+unqualified `Checks: PASS`. Two recorded exceptions are reported explicitly:
+
+- **Baseline exceptions:** failures classified outside the change may be
+  permitted by the existing gate, but RESULT.md names the affected
+  files, states the failure count, and labels the line
+  `Checks: PASS (with test exceptions)`. The report states that these failures
+  do not count as a clean full-suite pass. It does not claim the base commit
+  was tested merely because a baseline exception was supplied.
+- **Transient failures:** when the full suite exits nonzero but the failing
+  tests pass when rerun alone, the run is classified as passing, yet RESULT.md
+  preserves the original full-suite exit code and reports it distinctly from
+  the passing rerun: `Transient test exception: full suite exited <n>; rerun
+  passed for <files>` plus a `Full suite: exited <n> before isolated rerun classification` line in
+  the test evidence.
+
+Failed, blocked, and timed-out verdicts take precedence over exception notes.
+Missing isolated-rerun evidence is reported as unavailable, not passing.
+Normal passing, failing, blocked, timed-out, and docs-only results keep their
+existing reporting, and RESULT.md still passes through the standard secret
+redaction.
+
 Scoped verification uses existing explicitly planned test shards instead of
 expanding that module into every sibling shard. Without a present planned
 shard, it retains the whole module's test family. Final full-suite verification
