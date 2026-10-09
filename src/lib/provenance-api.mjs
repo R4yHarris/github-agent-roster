@@ -90,6 +90,9 @@ export function buildProvenanceRecord({ runId, sessionId, event, payload } = {},
   }, now);
   const normalized = {
     ...record,
+    route: { ...record.route,
+      ...Object.fromEntries(['profile', 'hardware'].filter((field) =>
+        typeof payloadObject.route?.[field] === 'string').map((field) => [field, payloadObject.route[field]])) },
     runId,
     sessionId,
     event,
