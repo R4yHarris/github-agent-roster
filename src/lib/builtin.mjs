@@ -711,7 +711,7 @@ async function openWaves({ worktree, cwd, env, apiKeyEnv, runCommand, log }) {
 async function runBuiltinAssignment(issueNumber, options = {}) {
   const { env = process.env, log = console.log, onPrepared } = options;
   const lifecycle = { runId: `run-${randomBytes(8).toString('hex')}`, store: null, prepared: null,
-    seats: new Map() };
+    seats: new Map(), sessionOccurrences: new Map() };
   const timestamp = () => (options.now?.() ?? new Date()).toISOString();
   const capture = async (event, payload = {}) => {
     const prepared = lifecycle.prepared;
@@ -1083,8 +1083,11 @@ async function executeBuiltinAssignment(issueNumber, {
     }, { cwd: prepared.repoRoot, env: { ...metricEnv, ...run?.env }, createDirectory: true, run });
     if (seat === 'coder') recordedReviewRepairs = reviewRepairs.length;
     delivery[seat] = evidence;
+    const occurrence = (lifecycle.sessionOccurrences.get(session) ?? 0) + 1;
+    lifecycle.sessionOccurrences.set(session, occurrence);
+    const durableSession = occurrence === 1 ? session : `${session}-attempt-${occurrence}`;
     // Durable machine history for `roster history`; best-effort so provenance can never fail a run.
-    const recorded = await captureLifecycleEvent(provenance, { event: 'session', runId: provenanceRunId, sessionId: session, payload: {
+    const recorded = await captureLifecycleEvent(provenance, { event: 'session', runId: provenanceRunId, sessionId: durableSession, payload: {
       issue: prepared.issue.number ?? null, task: prepared.task, task_class: taskClass,
       seat: Object.keys(sessions).find((name) => sessions[name] === session) ??
         (session.endsWith('-coder') ? 'coder' : session.endsWith('-reviewer') ? 'reviewer' : null),
@@ -1101,12 +1104,11 @@ async function executeBuiltinAssignment(issueNumber, {
         ...(evidence?.duration_ms !== undefined ? { duration_ms: evidence.duration_ms } : {}),
       },
       ...(excellence ? { outcome: excellence.pass ? 'pass' : 'fail' } : {}),
-      ...(seat === 'coder' && observed.coder ? {
-        evidence: { verification: verificationEvidence(observed.coder) },
-      } : {}),
-      ...(seat === 'reviewer' && observed.review ? {
-        evidence: { review: reviewEvidence(observed.review) },
-      } : {}),
+      evidence: {
+        attempt: { sessionId: session, index: occurrence },
+        ...(seat === 'coder' && observed.coder ? { verification: verificationEvidence(observed.coder) } : {}),
+        ...(seat === 'reviewer' && observed.review ? { review: reviewEvidence(observed.review) } : {}),
+      },
     } });
     if (!recorded.durable && !provenanceOptOut(env)) {
       log(`Provenance session ${session} was not persisted; durable history is incomplete.`);

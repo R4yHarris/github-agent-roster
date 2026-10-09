@@ -27,6 +27,7 @@ import { packAgentRun } from '../vendor/github-agent-contracts/scripts/parse-age
 import { recordedCoderRun } from '../src/lib/seat-publication.mjs';
 import { createDebugLog } from '../src/lib/debug-log.mjs';
 import { readLocalRun } from '../src/lib/local-runs.mjs';
+import { openProvenanceStore } from '../src/lib/provenance-store.mjs';
 import { createSteeringControl } from '../src/runtime/steering.mjs';
 import {
   runBuiltinIssue, example, stubConfig, llmConfig, vllmConfig, multiFileScope, git, fixture, multiFileFixture,
@@ -40,10 +41,11 @@ test('a bounded docs review failure returns its findings to the coder, which rep
   let coderCalls = 0;
   let reviews = 0;
   let tests = 0;
+  const logs = [];
   const result = await runIssueWithSeats(42, {
     ...options,
     config: llmConfig,
-    log: () => {},
+    log: (text) => logs.push(text),
     fetchImpl: async (_url, request) => {
       const body = JSON.parse(request.body);
       const system = body.messages[0].content;
@@ -88,6 +90,33 @@ test('a bounded docs review failure returns its findings to the coder, which rep
   assert.equal(coderCalls, 4);
   assert.deepEqual(result.reviewRepairs.map(({ unmetChecks }) => unmetChecks), [[]]);
   assert.match(readFileSync(path.join(result.worktreePath, 'README.md'), 'utf8'), /## Status\nActive\./);
+  const store = await openProvenanceStore(path.join(options.base, 'machine', 'provenance'));
+  const { records } = await store.readAll();
+  const sessions = records.filter((record) => record.event === 'session');
+  const reviewers = sessions.filter((record) => record.evidence.attempt.sessionId === result.sessions.reviewer)
+    .sort((a, b) => a.evidence.attempt.index - b.evidence.attempt.index);
+  const coders = sessions.filter((record) => record.evidence.attempt.sessionId === result.sessions.coder)
+    .sort((a, b) => a.evidence.attempt.index - b.evidence.attempt.index);
+  assert.equal(coders.length, 2);
+  assert.deepEqual(reviewers.map((record) => record.evidence.review.verdict), ['fail', 'pass']);
+  assert.deepEqual(reviewers.map((record) => record.sessionId),
+    ['roster-42-reviewer', 'roster-42-reviewer-attempt-2']);
+  assert.deepEqual(coders.map((record) => record.sessionId),
+    ['roster-42-coder', 'roster-42-coder-attempt-2']);
+  for (const [index, record] of reviewers.entries()) {
+    assert.deepEqual(record.evidence.attempt, { sessionId: result.sessions.reviewer, index: index + 1 });
+    assert.equal(record.evidence.review.completed, true);
+    assert.match(record.evidence.review.artifact.sha256, /^[a-f0-9]{64}$/);
+  }
+  assert.notEqual(reviewers[0].evidence.review.artifact.sha256, reviewers[1].evidence.review.artifact.sha256);
+  assert.equal(new Set(records.map((record) => record.id)).size, records.length);
+  assert.equal(new Set(records.map((record) => record.runId)).size, 1);
+  assert.equal(records.filter((record) => record.event === 'completed').length, 1);
+  assert.equal(result.runs.coder.metrics.session, 'roster-42-coder', 'publication attribution is unchanged');
+  assert.equal(result.runs.reviewer.metrics.session, 'roster-42-reviewer');
+  assert.doesNotMatch(logs.join('\n'), /durable history is incomplete/);
+  git(options.target, 'worktree', 'remove', '--force', result.worktreePath);
+  assert.deepEqual((await store.readAll()).records, records);
 });
 
 test('a repaired failing test passes excellence, read-only review, and declared-scope publication staging', async (context) => {

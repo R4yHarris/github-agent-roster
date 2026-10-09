@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { openProvenanceStore } from '../src/lib/provenance-store.mjs';
+import { storeRecordId } from '../src/lib/provenance-api.mjs';
 import { runBuiltinIssue as runIssueWithSeats } from '../src/lib/builtin.mjs';
 import { fixture, multiFileFixture, git, llmConfig, stubConfig, runBuiltinIssue } from './helpers/builtin.mjs';
 import { passingReview } from './helpers/review.mjs';
@@ -48,6 +49,8 @@ test('stub seat evidence leaves models and usage unknown rather than borrowing e
   assert.equal(planner.metrics.tokens_prompt, 'unknown');
   assert.equal(planner.metrics.tokens_completion, 'unknown');
   const coder = records.find((record) => record.event === 'session' && record.sessionId === 'roster-42-coder');
+  assert.deepEqual(coder.evidence.attempt, { sessionId: 'roster-42-coder', index: 1 });
+  assert.equal(coder.id, storeRecordId(coder.repoIdentity, coder.runId, 'roster-42-coder', 'session', 'raw-history'));
   assert.equal(coder.evidence.verification.exit_code, undefined);
   const reviewer = records.find((record) => record.event === 'session' && record.sessionId === 'roster-42-reviewer');
   assert.equal(reviewer.evidence.review.verdict, 'fail');

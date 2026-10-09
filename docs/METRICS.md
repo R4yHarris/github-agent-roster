@@ -76,6 +76,18 @@ remains absent. These records survive worktree removal and use the existing
 typed/redacted machine store. They do not change gates or create human evals.
 This implements [FEATURE_SPEC sections 5.5, 5.6 and 5.8](FEATURE_SPEC.md).
 
+Every recorded builtin seat occurrence has a distinct durable session ID
+within its run. The first retains the existing session ID; later occurrences
+use `<session>-attempt-2`, `<session>-attempt-3`, and so on.
+`evidence.attempt.sessionId` links to the original operational session and
+`evidence.attempt.index` gives its one-based occurrence. Query by run ID to
+retrieve the complete retry/review-repair history; an exact original session
+query still identifies the first occurrence. Each occurrence keeps its own
+observed model, timing and verification/review evidence. Earlier failure is
+never overwritten by a later pass. Operational metrics, AI-Run and publication
+session IDs are unchanged, as are store duplicate protection and opt-out.
+This implements [FEATURE_SPEC sections 5.4, 5.5, 5.6 and 5.8](FEATURE_SPEC.md).
+
 Durable provenance identity hashes the canonical origin rather than the checkout
 path, so moves, reclones, and linked worktrees share a history identity.
 HTTPS and SSH spellings normalize together; credentials do not affect identity.

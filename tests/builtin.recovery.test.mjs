@@ -77,7 +77,9 @@ test('a repeated test failure escalates to fresh coder perspectives, then stops 
   let failed;
   const logs = [];
   const continuations = [];
+  let clock = 0;
   await assert.rejects(runBuiltinIssue(42, { ...options, config: llmConfig, log: (text) => logs.push(text),
+    now: () => new Date(Date.UTC(2026, 9, 9) + clock++ * 1000),
     fetchImpl: async (_url, request) => {
       const system = JSON.parse(request.body).messages[0].content;
       if (system.startsWith('You are the builtin planner seat.')) {
@@ -90,7 +92,9 @@ test('a repeated test failure escalates to fresh coder perspectives, then stops 
       coderTurns += 1;
       const fresh = system.match(/Fresh perspective (\d)/);
       if (fresh && !continuations.includes(fresh[1])) continuations.push(fresh[1]);
-      return Response.json({ choices: [{ finish_reason: 'stop', message: {
+      return Response.json({ model: `served-perspective-${Math.floor((coderTurns - 1) / 3) + 1}`,
+        usage: { prompt_tokens: coderTurns, completion_tokens: 0 },
+        choices: [{ finish_reason: 'stop', message: {
         role: 'assistant', content: 'Done.',
       } }] });
     },
@@ -117,6 +121,37 @@ test('a repeated test failure escalates to fresh coder perspectives, then stops 
     assert.match(logs.join('\n'), new RegExp(`Perspective escalation ${attempt} of ${maxPerspectiveEscalations}: ` +
       'coder repeated an earlier test failure; continuing with model=\\S+ in a fresh context\\.'));
   }
+  const store = await openProvenanceStore(path.join(options.base, 'machine', 'provenance'));
+  const { records } = await store.readAll();
+  const coder = records.filter((record) => record.event === 'session' &&
+    record.evidence.attempt.sessionId === 'roster-42-coder')
+    .sort((a, b) => a.evidence.attempt.index - b.evidence.attempt.index);
+  assert.equal(coder.length, attempts);
+  assert.deepEqual(coder.map((record) => record.sessionId),
+    ['roster-42-coder', 'roster-42-coder-attempt-2', 'roster-42-coder-attempt-3']);
+  assert.equal(new Set(coder.map((record) => record.id)).size, attempts);
+  assert.equal(new Set(records.map((record) => record.runId)).size, 1);
+  for (const [index, record] of coder.entries()) {
+    assert.deepEqual(record.evidence.attempt, { sessionId: 'roster-42-coder', index: index + 1 });
+    assert.equal(record.outcome, 'fail');
+    assert.equal(record.evidence.verification.exit_code, 1);
+    assert.equal(record.requestedModel, 'local-model');
+    assert.equal(record.servedModel, `served-perspective-${index + 1}`);
+    assert.equal(record.metrics.tokens_prompt, (index + 1) * 3);
+    assert.equal(record.metrics.tokens_completion, 0);
+    assert.ok(record.startedAt < record.endedAt);
+    if (index) assert.ok(coder[index - 1].endedAt < record.startedAt);
+  }
+  assert.equal(records.filter((record) => record.event === 'failure').length, 1);
+  assert.equal(records.some((record) => record.event === 'completed'), false);
+  assert.doesNotMatch(logs.join('\n'), /durable history is incomplete/);
+  git(options.target, 'worktree', 'remove', '--force', path.dirname(failed.resultPath));
+  assert.deepEqual((await store.readAll()).records, records);
+  const typed = createProvenanceStore({ root: store.root, repoRoot: options.target });
+  const queried = await typed.query({ runId: coder[0].runId, event: 'session' });
+  assert.deepEqual(queried.map((record) => record.id).sort(),
+    records.filter((record) => record.event === 'session').map((record) => record.id).sort());
+  assert.equal((await typed.query({ runId: coder[0].runId, sessionId: 'roster-42-coder', event: 'session' })).length, 1);
 });
 
 test('fresh perspectives carry earlier contexts and their failure counts, within the two-escalation cap', async (context) => {
