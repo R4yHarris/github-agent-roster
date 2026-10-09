@@ -286,6 +286,34 @@ test('typed history survives reclones and transport changes but excludes a disti
   assert.deepEqual(ids(await createHistoryReader({ root }).list({ repository: identity })), ['before-reclone']);
 });
 
+test('deleting a checkout and cloning again preserves its durable typed history', async (t) => {
+  const { dir, root } = await fixture(t, { populate: false });
+  const origin = path.join(dir, 'origin');
+  const first = path.join(dir, 'first');
+  const reclone = path.join(dir, 'reclone');
+  const git = (...args) => execFileSync('git', args, { stdio: 'pipe' });
+  git('init', '-q', origin);
+  git('-C', origin, '-c', 'user.name=t', '-c', 'user.email=t@example.com',
+    'commit', '-q', '--allow-empty', '-m', 'seed');
+  git('clone', '-q', '--no-local', origin, first);
+  const before = createProvenanceStore({ root, repoRoot: first });
+  const identity = await before.identity();
+  await before.recordEvent({
+    runId: 'preserved-after-delete', sessionId: 'first-clone', event: 'failure',
+    payload: { outcome: 'failure' },
+  });
+  const bytes = await snapshot(root);
+  await rm(first, { recursive: true, force: true });
+  git('clone', '-q', '--no-local', origin, reclone);
+  const after = createProvenanceStore({ root, repoRoot: reclone });
+  assert.equal(await after.identity(), identity);
+  const records = await after.query();
+  assert.deepEqual(ids(records), ['preserved-after-delete']);
+  assert.equal(records[0].event, 'failure');
+  assert.equal(records[0].payload.outcome, 'failure');
+  assert.deepEqual(await snapshot(root), bytes);
+});
+
 test('actual CLI list and show use --store with no network or real remotes', async (t) => {
   const { root } = await fixture(t);
   const cli = path.resolve('src', 'cli.mjs');
