@@ -1,11 +1,25 @@
 import assert from 'node:assert/strict';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { openProvenanceStore } from '../src/lib/provenance-store.mjs';
+import { createProvenanceStore } from '../src/lib/provenance-api.mjs';
+import { filterRecords } from '../src/lib/history-query.mjs';
+import { runBuiltinAsk } from '../src/lib/builtin.mjs';
+import { formatFleet } from '../src/lib/fleet.mjs';
 import { fixture, runBuiltinIssue, stubConfig, llmConfig } from './helpers/builtin.mjs';
 
 async function records(options) {
-  return (await openProvenanceStore(path.join(options.base, 'machine', 'provenance')).readAll()).records
+  const persisted = await createProvenanceStore({
+    root: path.join(options.base, 'machine', 'provenance'), repoRoot: options.target,
+  }).query();
+  for (const record of persisted) {
+    assert.deepEqual(record.issue, { issue: '42', task: 'issue-42' });
+    assert.deepEqual(record.seat, { name: record.event === 'session'
+      ? record.sessionId.split('-').at(-1) : '' });
+  }
+  assert.equal(filterRecords(persisted, { issue: 42 }).length, persisted.length);
+  return persisted
     .sort((left, right) => left.seq - right.seq);
 }
 
@@ -20,6 +34,7 @@ test('builtin lifecycle persists started, seats and completed under one run id',
     ['roster-42-planner', 'roster-42-coder', 'roster-42-reviewer']);
   assert.equal(new Set(persisted.map((record) => record.runId)).size, 1);
   assert.ok(persisted.every((record) => record.repoIdentity));
+  assert.equal(filterRecords(persisted, { issue: '42', seat: 'coder' }).length, 1);
 });
 
 test('failure before planner starts records failure and preserves the original error', async (t) => {
@@ -68,4 +83,67 @@ test('durable history opt-out preserves execution without creating records', asy
   });
   assert.deepEqual(await records(options), []);
   assert.ok(!logs.some((line) => line.includes('durable history is incomplete')));
+});
+
+test('local asks retain canonical task and real seat identity without inventing an issue number', async (t) => {
+  const options = fixture(t);
+  const result = await runBuiltinAsk('Add a one-line Status section to README.md.', {
+    ...options, config: stubConfig, log: () => {},
+  });
+  const root = path.join(options.base, 'machine', 'provenance');
+  const persisted = await createProvenanceStore({ root, repoRoot: options.target }).query();
+  assert.ok(persisted.length > 0);
+  for (const record of persisted) {
+    assert.deepEqual(record.issue, { issue: '', task: result.task });
+    assert.equal(record.payload.task, result.task);
+  }
+  const sessions = persisted.filter((record) => record.event === 'session');
+  assert.deepEqual(sessions.map((record) => record.seat.name).sort(), ['coder', 'planner', 'reviewer']);
+  assert.equal(filterRecords(persisted, { issue: 42 }).length, 0);
+  assert.equal(filterRecords(persisted, { seat: 'coder' }).length, 1);
+  assert.deepEqual((await openProvenanceStore(root).readAll()).records.map((record) => record.id).sort(),
+    persisted.map((record) => record.id).sort());
+});
+
+test('planner critic and revision declare their seat without borrowed timing or tool evidence', async (t) => {
+  const options = fixture(t);
+  mkdirSync(path.join(options.target, '.roster'), { recursive: true });
+  writeFileSync(path.join(options.target, '.roster', 'fleet.yml'), formatFleet({ profiles: [{
+    id: 'critic-fixture', base_url: 'http://fixture.invalid/v1', model: 'critic-model', provider: 'vllm',
+    context_max: 32768, concurrency: 1, hardware: 'fixture-only', notes: '',
+  }] }));
+  let criticCalls = 0;
+  await runBuiltinIssue(42, { ...options,
+    config: { ...llmConfig, planner: { ...llmConfig.planner, critic_profile: 'critic-fixture' } },
+    confirm: true, log: () => {}, vault: { get: async () => undefined },
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      return Response.json({ model: body.model, choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant', content: body.model === 'critic-model'
+          ? JSON.stringify({ defects: ++criticCalls === 1
+            ? [{ check: 1, problem: 'Clarify the requested Status evidence.',
+              fix: 'Name the Status section in the acceptance check.' }] : [] }) :
+          JSON.stringify({ title: 'Add Status', acceptance_checks: ['README has a Status section'],
+            files_allowed: ['README.md'] }),
+      } }] });
+    },
+  });
+  const persisted = await createProvenanceStore({
+    root: path.join(options.base, 'machine', 'provenance'), repoRoot: options.target,
+  }).query({ event: 'session' });
+  const critic = persisted.find((record) => record.sessionId === 'roster-42-planner-critic-1');
+  assert.ok(critic);
+  assert.deepEqual(critic.seat, { name: 'planner' });
+  assert.deepEqual(critic.issue, { issue: '42', task: 'issue-42' });
+  assert.equal(critic.servedModel, 'critic-model');
+  assert.equal(critic.startedAt, null);
+  assert.equal(critic.endedAt, null);
+  assert.equal(critic.evidence.observed_tool_events, undefined);
+  const revision = persisted.find((record) => record.sessionId === 'roster-42-planner-revision');
+  assert.ok(revision);
+  assert.deepEqual(revision.seat, { name: 'planner' });
+  assert.deepEqual(revision.issue, { issue: '42', task: 'issue-42' });
+  assert.equal(revision.startedAt, null);
+  assert.equal(revision.endedAt, null);
+  assert.equal(revision.evidence.observed_tool_events, undefined);
 });

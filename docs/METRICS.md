@@ -57,6 +57,17 @@ measured duration accompany them. Missing counts stay `unknown`, reported zero
 stays zero, and inherited `AI_*` counts cannot fill absent evidence. Records
 contain no endpoint credentials or prompt/source snapshots.
 
+Builtin producers populate canonical typed `issue.issue` with the decimal
+GitHub issue number string and `issue.task` with the assigned task ID on both
+run lifecycle and seat-session records. Local asks have an empty issue number,
+not a fabricated GitHub issue. The existing payload `task` alias remains.
+Session `seat.name` identifies the actual planner, coder or reviewer; planner
+critic/revision sessions are explicitly planner records without borrowing the
+primary planner's timing or tool counters. Run-level lifecycle records do not
+invent a seat. Existing numeric issue and named-seat history filters continue
+to work; historical scalar payload records remain readable without migration.
+This implements [FEATURE_SPEC sections 5.6 and 5.8](FEATURE_SPEC.md).
+
 The same typed session record retains observed `evidence.verification` for
 coder tests: numeric `exit_code`, explicit `skipped` status, the original
 `full_suite_exit_code` when available, and existing baseline/transient

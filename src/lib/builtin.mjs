@@ -109,6 +109,10 @@ export function rescopeContinuation({ previous, budget, files, changedFiles = []
 
 const toolVocabulary = new Set([...toolDefinitions.map(({ function: tool }) => tool.name), 'update_checklist']);
 
+function provenanceIssue(prepared) {
+  return { issue: prepared.issue.number == null ? '' : String(prepared.issue.number), task: prepared.task };
+}
+
 // Budget exhaustion means the coder's context is stuck; hard denials, cancellation, and setup errors are not.
 export function coderStuckReason(error) {
   if (!(error instanceof Error) || !error.result) return null;
@@ -735,7 +739,7 @@ async function runBuiltinAssignment(issueNumber, options = {}) {
     if (!prepared) return;
     const recorded = await captureLifecycleEvent(lifecycle.store, {
       event, runId: lifecycle.runId, sessionId: prepared.session,
-      payload: { issue: prepared.issue.number ?? null, task: prepared.task, ...payload },
+      payload: { issue: provenanceIssue(prepared), task: prepared.task, ...payload },
     });
     if (!recorded.durable && !provenanceOptOut(env)) {
       log(`Provenance event ${event} was not persisted; durable history is incomplete.`);
@@ -1108,9 +1112,8 @@ async function executeBuiltinAssignment(issueNumber, {
     const durableSession = occurrence === 1 ? session : `${session}-attempt-${occurrence}`;
     // Durable machine history for `roster history`; best-effort so provenance can never fail a run.
     const recorded = await captureLifecycleEvent(provenance, { event: 'session', runId: provenanceRunId, sessionId: durableSession, payload: {
-      issue: prepared.issue.number ?? null, task: prepared.task, task_class: taskClass,
-      seat: Object.keys(sessions).find((name) => sessions[name] === session) ??
-        (session.endsWith('-coder') ? 'coder' : session.endsWith('-reviewer') ? 'reviewer' : null),
+      issue: provenanceIssue(prepared), task: prepared.task, task_class: taskClass,
+      seat: { name: seat ?? observed.seat ?? '' },
       model: run?.env?.AI_MODEL ?? null, provider: run?.provider ?? null,
       ...lifecycle.seats.get(seat),
       servedModel: run?.metrics?.model ?? '',
@@ -1139,8 +1142,13 @@ async function executeBuiltinAssignment(issueNumber, {
   };
   const plannerRun = planner.run;
   if (!planner.reused) await recordSeat(sessions.planner, plannerRun);
-  for (const run of planner.critic?.runs ?? []) await recordSeat(run.metrics.session, run);
-  if (planner.critic?.revisionRun) await recordSeat(`${sessions.planner}-revision`, planner.critic.revisionRun);
+  for (const run of planner.critic?.runs ?? []) {
+    await recordSeat(run.metrics.session, run, undefined, activeConfig, { seat: 'planner' });
+  }
+  if (planner.critic?.revisionRun) {
+    await recordSeat(`${sessions.planner}-revision`, planner.critic.revisionRun, undefined, activeConfig,
+      { seat: 'planner' });
+  }
   if (planner.error) {
     log(`Planning failed: ${planner.error}\nRECIPE/TASK stubs are unverified; coder, reviewer, tests, and publication did not run.`);
     return {
