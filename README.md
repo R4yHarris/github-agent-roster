@@ -43,6 +43,9 @@ or GUI. No Hermes, Claude Code, or Copilot worker is required.
 
 Product intent lives in the [feature spec](docs/FEATURE_SPEC.md); all
 development is grounded in it.
+The [Eve research and design proposal](docs/EVE_RESEARCH.md) explores one
+AI-native software worker, cognitive functions, scoped memory, and measurable
+experiments; it is a design study, not a shipped capability.
 The harness is a [delivery feedback loop](docs/FEEDBACK_LOOP.md), not a chat UI:
 [principals](docs/PRINCIPALS.md) bound each seat, [estimates](docs/ESTIMATION.md)
 precede work, and tools, research, tests, and excellence checks produce delivery
