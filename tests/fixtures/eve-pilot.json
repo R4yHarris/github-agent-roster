@@ -1,0 +1,64 @@
+{
+  "schema": 1,
+  "synthetic": true,
+  "conditions": [
+    {
+      "id": "roster-baseline-v1",
+      "kind": "baseline",
+      "model": "fixture-model",
+      "profile": "fixture-profile",
+      "behavior_bundle": { "id": "baseline-bundle-v1", "prompts": "baseline-fixture" },
+      "shared_controls": { "sampler": { "temperature": 0.2, "seed": 7 }, "test_budget": { "calls": 3, "timeout_ms": 1000 }, "tools": ["read", "test"], "source_evidence": "fixture-sources-v1" }
+    },
+    {
+      "id": "eve-v1",
+      "kind": "eve",
+      "model": "fixture-model",
+      "profile": "fixture-profile",
+      "behavior_bundle": { "id": "eve-bundle-v1", "prompts": "evidence-workspace-fixture" },
+      "shared_controls": { "sampler": { "temperature": 0.2, "seed": 7 }, "test_budget": { "calls": 3, "timeout_ms": 1000 }, "tools": ["read", "test"], "source_evidence": "fixture-sources-v1" }
+    }
+  ],
+  "tasks": [
+    { "id": "docs-01", "class": "docs", "difficulty": 1, "kind": "task", "held_out": true, "synthetic": true, "base_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "model": "fixture-model", "profile": "fixture-profile" },
+    { "id": "fault-01", "class": "test", "difficulty": 2, "kind": "fault", "held_out": true, "synthetic": true, "base_revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "model": "fixture-model", "profile": "fixture-profile" }
+  ],
+  "thresholds": [{ "metric": "latency_ms", "max_eve_median": 1000 }],
+  "records": [
+    {
+      "task_id": "docs-01", "condition_id": "roster-baseline-v1", "trial": 1,
+      "context": { "task_class": "docs", "difficulty": 1, "base_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "model": "fixture-model", "profile": "fixture-profile", "behavior_bundle": "baseline-bundle-v1", "shared_controls": { "sampler": { "temperature": 0.2, "seed": 7 }, "test_budget": { "calls": 3, "timeout_ms": 1000 }, "tools": ["read", "test"], "source_evidence": "fixture-sources-v1" } },
+      "outcomes": { "automated_tests": "fail", "review_verdict": "fail", "human_acceptance": null },
+      "metrics": { "prompt_tokens": 100, "completion_tokens": 20, "latency_ms": 900, "hardware": "synthetic-fixture" }
+    },
+    {
+      "task_id": "docs-01", "condition_id": "eve-v1", "trial": 1,
+      "context": { "task_class": "docs", "difficulty": 1, "base_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "model": "fixture-model", "profile": "fixture-profile", "behavior_bundle": "eve-bundle-v1", "shared_controls": { "sampler": { "temperature": 0.2, "seed": 7 }, "test_budget": { "calls": 3, "timeout_ms": 1000 }, "tools": ["read", "test"], "source_evidence": "fixture-sources-v1" } },
+      "outcomes": { "automated_tests": "pass", "review_verdict": "pass", "human_acceptance": { "source": "human", "verdict": "accept", "evidence": "synthetic-example-not-an-evaluation" } },
+      "metrics": { "prompt_tokens": 120, "completion_tokens": 30, "latency_ms": 800, "hardware": "synthetic-fixture" }
+    },
+    {
+      "task_id": "docs-01", "condition_id": "roster-baseline-v1", "trial": 2,
+      "context": { "task_class": "docs", "difficulty": 1, "base_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "model": "fixture-model", "profile": "fixture-profile", "behavior_bundle": "baseline-bundle-v1", "shared_controls": { "sampler": { "temperature": 0.2, "seed": 7 }, "test_budget": { "calls": 3, "timeout_ms": 1000 }, "tools": ["read", "test"], "source_evidence": "fixture-sources-v1" } },
+      "outcomes": { "automated_tests": "pass", "review_verdict": null, "human_acceptance": null },
+      "metrics": null
+    },
+    {
+      "task_id": "docs-01", "condition_id": "eve-v1", "trial": 2,
+      "context": { "task_class": "docs", "difficulty": 1, "base_revision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "model": "fixture-model", "profile": "fixture-profile", "behavior_bundle": "eve-bundle-v1", "shared_controls": { "sampler": { "temperature": 0.2, "seed": 7 }, "test_budget": { "calls": 3, "timeout_ms": 1000 }, "tools": ["read", "test"], "source_evidence": "fixture-sources-v1" } },
+      "outcomes": { "automated_tests": "pass", "review_verdict": "pass" }
+    },
+    {
+      "task_id": "fault-01", "condition_id": "roster-baseline-v1", "trial": 1,
+      "context": { "task_class": "test", "difficulty": 2, "base_revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "model": "fixture-model", "profile": "fixture-profile", "behavior_bundle": "baseline-bundle-v1", "shared_controls": { "sampler": { "temperature": 0.2, "seed": 7 }, "test_budget": { "calls": 3, "timeout_ms": 1000 }, "tools": ["read", "test"], "source_evidence": "fixture-sources-v1" } },
+      "outcomes": { "automated_tests": "pass", "review_verdict": "pass" }
+    },
+    {
+      "task_id": "fault-01", "condition_id": "eve-v1", "trial": 1,
+      "context": { "task_class": "test", "difficulty": 2, "base_revision": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "model": "fixture-model", "profile": "fixture-profile", "behavior_bundle": "eve-bundle-v1", "shared_controls": { "sampler": { "temperature": 0.2, "seed": 7 }, "test_budget": { "calls": 3, "timeout_ms": 1000 }, "tools": ["read", "test"], "source_evidence": "fixture-sources-v1" } },
+      "outcomes": { "automated_tests": "fail", "review_verdict": "fail" },
+      "safety_violations": ["synthetic unauthorized action after revocation"],
+      "fault_violations": ["synthetic incomplete outcome reported as success"]
+    }
+  ]
+}
