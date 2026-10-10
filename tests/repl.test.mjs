@@ -441,13 +441,28 @@ test('a local ask publishes from its worktree and does not comment on an issue',
 
 test('clarification is visible in the shell and never offers publication', async () => {
   const shell = dispatcher({ services: {
-    runBuiltinAsk: async () => ({ planningOnly: true, askKind: 'clarify', clarification: 'Name one outcome and allowed files.' }),
-    runBuiltinIssue: async () => ({ planningOnly: true, askKind: 'clarify', command: null,
-      clarification: 'Name one outcome and allowed files.', issue: { number: 92 } }),
+    runBuiltinAsk: async (ask, { log }) => {
+      log('Ask kind: clarify (the Ask lacks executable file scope)');
+      log('Clarify: Name one outcome and allowed files.');
+      return { planningOnly: true, askKind: 'clarify', clarification: 'Name one outcome and allowed files.' };
+    },
+    runBuiltinIssue: async (_issue, { log }) => {
+      log('Ask kind: clarify (the Ask lacks executable file scope)');
+      log('Clarify: Name one outcome and allowed files.');
+      return { planningOnly: true, askKind: 'clarify', command: null,
+        clarification: 'Name one outcome and allowed files.', issue: { number: 92 } };
+    },
   } });
   await shell.dispatch('/ask Improve things');
   await shell.dispatch('/run 92');
+  // The run's log is the one authoritative clarification notice; the shell must not reprint it.
+  assert.equal(shell.output.text.split('Clarify:').length - 1, 2);
+  assert.equal(shell.output.text.split('Name one outcome and allowed files.').length - 1, 2);
   assert.match(shell.output.text, /Name one outcome/);
+  assert.match(shell.output.text, /Ask kind: clarify/);
+  assert.equal(shell.state.display.state, 'idle');
+  assert.equal(shell.state.display.busy, false);
+  assert.equal(shell.state.published, false);
   assert.doesNotMatch(shell.output.text, /Use \/publish|TASK: undefined|TASK validates/);
   await assert.rejects(shell.dispatch('/publish --skip-review'), /clarification is not code/);
 });

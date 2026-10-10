@@ -228,6 +228,12 @@ the first runnable child slice; rerunning the parent reuses that PLAN and moves
 to the next ready child. `--confirm`, local Asks, and initiatives stop at
 PLAN.md with no coder, reviewer, tests, or publisher.
 
+An ambiguous Ask prints `Ask kind: clarify` with its reason and exactly one
+clarification notice from the builtin run's shared log. The shell returns to
+idle without claiming successful implementation or offering publication;
+`/help` and the next Ask remain available. Direct builtin callers retain that
+log and the structured clarification result, with no completed seat.
+
 The slice senior-team default uses Ask, TASK outcome/scope/checks, two small
 skills, final tests/excellence, read-only review, and a human eval hint.
 Classified slices do not load research/implementation packs, even at
