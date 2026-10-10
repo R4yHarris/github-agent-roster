@@ -40,6 +40,7 @@ for (const scenario of recording.scenarios) {
           assert.equal(controller.signal.aborted, false, 'No inference after cancellation');
           const body = JSON.parse(request.body);
           const system = body.messages[0].content;
+          assert.doesNotMatch(system, /## Acceptance continuation/, 'default-disabled replays keep their original context');
           const role = system.match(/^You are the builtin (planner|reviewer) seat\./)?.[1]
             ?? (body.messages[1]?.content?.startsWith('Complete this task using only the offered tools.') ? 'coder' : undefined);
           const step = scenario.steps[requests++];

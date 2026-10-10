@@ -1,4 +1,5 @@
-import { checklistProgress, checklistTool, closeFromSummary, createChecklist, openChecklistCorrection, openItems, updateChecklist }
+import { acceptanceObservation, acceptanceUpdateReferences, authoritativeAcceptanceChecks, exportAcceptanceContinuation,
+  checklistProgress, checklistTool, closeFromSummary, createChecklist, openChecklistCorrection, openItems, updateChecklist }
   from './checklist.mjs';
 import { createBuiltinChat } from '../lib/llm.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
@@ -93,7 +94,7 @@ function stubSummary(task) {
 }
 
 async function executeLoop({ config, context, tools, fetchImpl, env, vault, verify, onEvent, retryCommand, signal, steeringControl,
-  priorWrites = [] }, progress) {
+  priorWrites = [], acceptanceSource, worktree }, progress) {
   throwIfCancelled(signal);
   if (!config.llm.base_url) {
     const summary = stubSummary(context.task);
@@ -119,8 +120,48 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
 
   const verification = verificationDecision(parsedTask.files_allowed);
   const docsOnly = isDocsOnlyScope(parsedTask.files_allowed);
-  const checklist = !boundedTask && parsedTask.acceptance_checks.length ? createChecklist(parsedTask.acceptance_checks) : null;
+  const evidenceWorkspace = config.seat.evidence_workspace === true;
+  if (evidenceWorkspace && typeof acceptanceSource !== 'function') {
+    throw new TypeError('Acceptance continuation requires a source snapshot provider');
+  }
+  const checklist = (evidenceWorkspace || !boundedTask) && parsedTask.acceptance_checks.length
+    ? context.acceptanceState?.checklist ?? createChecklist(evidenceWorkspace
+      ? authoritativeAcceptanceChecks(context.task) : parsedTask.acceptance_checks, { exact: evidenceWorkspace }) : null;
   if (checklist) progress.checklist = checklist.items;
+  if (evidenceWorkspace) {
+    progress.acceptanceObservations = context.acceptanceState?.observations ?? [];
+    progress.acceptanceNotices = context.acceptanceState?.notices ?? [];
+  }
+  const observe = async (tool, args, result) => {
+    if (!evidenceWorkspace) return;
+    const observations = progress.acceptanceObservations;
+    progress.acceptanceObservationId = (progress.acceptanceObservationId ??
+      Math.max(0, ...observations.map(({ id }) => id))) + 1;
+    const observation = acceptanceObservation({ id: progress.acceptanceObservationId,
+      tool, args, result, source: await acceptanceSource(), env, apiKeyEnv: config.llm.api_key_env });
+    if (observation) progress.acceptanceObservations = [...observations.filter((entry) =>
+      tool !== 'run_test' || entry.tool !== 'run_test'), observation].slice(-32);
+  };
+  if (evidenceWorkspace && tools.run_test) {
+    const runTest = tools.run_test;
+    tools = { ...tools, run_test: async (...args) => {
+      const before = await acceptanceSource();
+      const previous = progress.acceptanceObservations.find(({ tool }) => tool === 'run_test');
+      // A failed or cancelled invocation cannot leave an earlier passing observation live.
+      progress.acceptanceObservations = progress.acceptanceObservations.filter(({ tool }) => tool !== 'run_test');
+      const result = await runTest(...args);
+      throwIfCancelled(signal);
+      await observe('run_test', args[0], result);
+      const current = progress.acceptanceObservations.find(({ tool }) => tool === 'run_test');
+      if (previous?.source === before && current && previous.verdict === current.verdict) {
+        current.id = previous.id;
+      }
+      if (before !== await acceptanceSource()) {
+        progress.acceptanceObservations = progress.acceptanceObservations.filter(({ tool }) => tool !== 'run_test');
+      }
+      return result;
+    } };
+  }
   const rules = [
     'Work to completion within the task boundary. When an attempt fails, use the new evidence to change strategy; ' +
       'do not repeat the same action against the same unchanged state. Consider a different implementation perspective ' +
@@ -138,6 +179,9 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       'with evidence (file and symbol or test) or blocked with the reason. You cannot finish with open items. ' +
       'Write the acceptance tests first and run them to see them fail, then implement: a new test that already ' +
       'passes on the base code is rejected as not red.' : '',
+    evidenceWorkspace ? 'Acceptance state survives host handoffs, not prose claims. After the last edit, gather current ' +
+      'file or run_test evidence before marking done. A blocked check needs observed failing run_test evidence. ' +
+      'Changed bytes or a failed/cancelled test invalidate earlier passing evidence.' : '',
     'A failing test you did not write that is outside Allowed Files is pre-existing: report it and do not edit it.',
     !boundedTask && !docsOnly && (config.seat.scope_expansion ?? 3) > 0
       ? `Allowed Files are the planned scope. If the outcome truly requires another product file, you may write at most ` +
@@ -149,7 +193,8 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     { role: 'system', content: context.pack },
     { role: 'user', content: 'Complete this task using only the offered tools. ' +
       'Deliver each numbered TASK.md check; the task is done only when every item holds.\n\n' +
-      parsedTask.acceptance_checks.map((check, index) => `${index + 1}. ${check}`).join('\n') +
+      (evidenceWorkspace ? checklist?.items.map(({ check }) => check) ?? [] : parsedTask.acceptance_checks)
+        .map((check, index) => `${index + 1}. ${check}`).join('\n') +
       '\n\nRules:\n' + rules.map((rule) => `- ${rule}`).join('\n') +
       '\n\nFinish with a concise summary of changes, test results, and blockers, naming each numbered check as done or blocked.' },
   ];
@@ -543,7 +588,12 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         }
         if (call.function.name === 'update_checklist') {
           try {
+            const references = evidenceWorkspace ? acceptanceUpdateReferences(call.args,
+              progress.acceptanceObservations, await acceptanceSource()) : [];
             messages.push({ role: 'tool', tool_call_id: call.id, content: updateChecklist(checklist, call.args) });
+            if (evidenceWorkspace) for (const [index, update] of call.args.items.entries()) {
+              checklist.items.find(({ id }) => id === update.id).evidenceRef = references[index];
+            }
             progress.checklist = checklist.items;
             progress.checklistEngaged = true;
             await onEvent?.({ type: 'checklist', ...checklistProgress(checklist) });
@@ -578,6 +628,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         const shown = call.function.name === 'run_test' && result && typeof result === 'object' && result.exit_code !== 0
           ? { ...result, stdout: testFailureEvidence(result.stdout, 8000), stderr: String(result.stderr ?? '').slice(-2000) }
           : result;
+        if (call.function.name !== 'run_test') await observe(call.function.name, call.args, result);
         const content = redactEvidence(typeof shown === 'string' ? shown : JSON.stringify(shown), {
           env, apiKeyEnv: config.llm.api_key_env,
         });
@@ -646,8 +697,8 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     const usage = mergeUsage(...usages);
     const summary = deterministic ?? message.content.trim();
     // A coder that never used the checklist reports per check in its summary; one that did must close it.
-    if (checklist && !progress.checklistEngaged) closeFromSummary(checklist, summary);
-    if (checklist && progress.checklistEngaged && !deterministic && openItems(checklist).length &&
+    if (checklist && !progress.checklistEngaged && !evidenceWorkspace) closeFromSummary(checklist, summary);
+    if (checklist && (progress.checklistEngaged || evidenceWorkspace) && !deterministic && openItems(checklist).length &&
         (progress.checklistCorrections ?? 0) < 2) {
       progress.checklistCorrections = (progress.checklistCorrections ?? 0) + 1;
       attemptTurns = 0;
@@ -685,7 +736,29 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     if (typeof excellence?.pass !== 'boolean' || !Array.isArray(excellence.reasons)) {
       throw new TypeError('Coder excellence verifier returned an invalid report');
     }
-    if (excellence.pass && (!tests || tests.exit_code === 0)) return result;
+    if (excellence.pass && (!tests || tests.exit_code === 0)) {
+      if (evidenceWorkspace && checklist) {
+        const refreshed = exportAcceptanceContinuation({ task: context.task, worktree,
+          checklist, observations: progress.acceptanceObservations, source: await acceptanceSource(),
+          outcome: 'verified', env, apiKeyEnv: config.llm.api_key_env });
+        checklist.items = refreshed.items;
+        progress.checklist = checklist.items;
+        progress.acceptanceNotices.push(...refreshed.notices);
+      }
+      if (evidenceWorkspace && openItems(checklist ?? { items: [] }).length) {
+        if ((progress.checklistCorrections ?? 0) < 2) {
+          progress.checklistCorrections = (progress.checklistCorrections ?? 0) + 1;
+          attemptTurns = 0;
+          finalSummaryOnly = false;
+          checksPassedAfterWrite = false;
+          needsTools = false;
+          messages.push({ role: 'assistant', content: summary }, { role: 'user', content: openChecklistCorrection(checklist) });
+          continue;
+        }
+        throw new Error('Coder acceptance checklist still has open obligations');
+      }
+      return result;
+    }
     const reasons = excellence.reasons.map((reason) => redactEvidence(reason, {
       env, apiKeyEnv: config.llm.api_key_env,
     }));
@@ -803,17 +876,32 @@ export async function runLoop(options) {
     model: options.config.llm.base_url ? options.config.llm.model : 'builtin-stub',
     turns: 0, usage: null, response: null,
   };
+  const finish = async (result) => {
+    if (options.config.seat.evidence_workspace === true && progress.checklist) {
+      result.acceptanceContinuation = exportAcceptanceContinuation({
+        task: options.context.task, worktree: options.worktree, checklist: { items: progress.checklist },
+        observations: progress.acceptanceObservations, source: await options.acceptanceSource(),
+        priorNotices: progress.acceptanceNotices,
+        outcome: options.signal?.aborted ? 'cancelled' : result.error ? 'failed' : 'verified',
+        env: options.env, apiKeyEnv: options.config.llm.api_key_env,
+      });
+    }
+    delete result.acceptanceObservations;
+    delete result.acceptanceNotices;
+    delete result.acceptanceObservationId;
+    return result;
+  };
   try {
     const result = await executeLoop(options, progress);
-    return { ...progress, ...result };
+    return await finish({ ...progress, ...result });
   } catch (error) {
     if (!(error instanceof Error)) throw error;
     if (error instanceof ContractsSubmoduleError) {
-      return { ...progress, tests: error.tests, blocked: true, summary: error.message, error };
+      return finish({ ...progress, tests: error.tests, blocked: true, summary: error.message, error });
     }
     if (error instanceof UnsupportedFinishReasonError) {
-      return { ...progress, finishReason: error.finishReason, summary: error.message, error };
+      return finish({ ...progress, finishReason: error.finishReason, summary: error.message, error });
     }
-    return { ...progress, summary: 'Coder execution stopped before a verified result.', error };
+    return finish({ ...progress, summary: 'Coder execution stopped before a verified result.', error });
   }
 }

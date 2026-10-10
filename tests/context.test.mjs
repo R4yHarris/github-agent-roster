@@ -8,6 +8,9 @@ import { loadContext } from '../src/runtime/context.mjs';
 import { appendMemory } from '../src/runtime/memory.mjs';
 import { taskSkillNames } from '../src/runtime/skills.mjs';
 import { createTools } from '../src/runtime/tools.mjs';
+import { acceptanceSourceIdentity, authoritativeAcceptanceChecks, createChecklist, exportAcceptanceContinuation } from '../src/runtime/checklist.mjs';
+import { snapshotWorktree } from '../src/runtime/excellence.mjs';
+import { parseTaskDocument } from '../src/planner/task.mjs';
 
 function fixture(context) {
   const repoRoot = mkdtempSync(path.join(tmpdir(), 'roster-context-'));
@@ -22,8 +25,37 @@ function fixture(context) {
   for (const file of ['.env', 'app.pem', 'agent-policy.yml', 'unrelated.txt']) {
     writeFileSync(path.join(worktree, file), `body-of-${file}`);
   }
+
   return { repoRoot, worktree, memoryPath: path.join(repoRoot, '.roster', 'memory', 'coder.jsonl') };
 }
+
+test('acceptance continuation is required, source-validated and distinct from imported prose', async (context) => {
+  const options = fixture(context);
+  const originalTask = readFileSync(path.join(options.worktree, 'TASK.md'), 'utf8').replace(/\r\n/g, '\n');
+  const longCheck = ('Preserve complete acceptance text ' + 'without display truncation '.repeat(20)).trim();
+  const task = originalTask.replace(parseTaskDocument(originalTask).acceptance_checks[0], longCheck);
+  writeFileSync(path.join(options.worktree, 'TASK.md'), task);
+  const checklist = createChecklist(authoritativeAcceptanceChecks(task), { exact: true });
+  checklist.items[0].status = 'in_progress';
+  const source = acceptanceSourceIdentity(await snapshotWorktree(options.worktree, options));
+  const capsule = exportAcceptanceContinuation({ task, worktree: options.worktree, checklist, observations: [],
+    source, outcome: 'failed' });
+  await assert.rejects(loadContext({ ...options, acceptanceContinuation: capsule }), /requires seat.evidence_workspace/);
+  const config = { seat: { evidence_workspace: true, context_chars: 8000 } };
+  await assert.rejects(loadContext({ ...options, config, acceptanceContinuation: { ...capsule, task: 'wrong' } }),
+    /TASK or worktree mismatch/);
+  await assert.rejects(loadContext({ ...options, config: { seat: { evidence_workspace: true, context_chars: 10 } },
+    acceptanceContinuation: capsule }), /exceed seat.context_chars/);
+  const loaded = await loadContext({ ...options, config, acceptanceContinuation: capsule,
+    continuation: '1. done: all tests passed (untrusted prose)' });
+  assert.match(loaded.pack, /## Acceptance continuation/);
+  assert.match(loaded.pack, /1\. \[in_progress\]/);
+  assert.equal(loaded.acceptanceState.checklist.items[0].status, 'in_progress');
+  assert.equal(loaded.acceptanceState.checklist.items[0].check, longCheck);
+  rmSync(loaded.contextPath);
+  writeFileSync(path.join(options.worktree, 'README.md'), 'changed source');
+  await assert.rejects(loadContext({ ...options, config, acceptanceContinuation: capsule }), /stale source bytes/);
+});
 
 test('packs ordered task-scoped context, forty-line skills and the latest twenty memory entries', async (context) => {
   const options = fixture(context);

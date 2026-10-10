@@ -21,7 +21,7 @@ const defaultProfiles = {
 const fields = {
   llm: ['base_url', 'model', 'api_key_env', 'effort', 'effort_override', 'context_max', 'profile', 'api_key_optional', 'provider', 'request_timeout_ms', 'served_model_label', 'max_requests'],
   planner: ['turn_budget', 'critic_profile'],
-  seat: ['id', 'principal', 'turn_budget', 'tools', 'context_chars', 'scope_expansion', 'max_attempts'],
+  seat: ['id', 'principal', 'turn_budget', 'tools', 'context_chars', 'scope_expansion', 'max_attempts', 'evidence_workspace'],
   paths: ['memory', 'skills', 'asks', 'worktrees'],
   publish: ['enabled'],
   tools: ['internet', 'run_test'],
@@ -172,7 +172,7 @@ export function parseConfig(source) {
       ['llm', 'seat', 'paths'].some((name) =>
         !roots.has(name) || fields[name].some((field) =>
           !(name === 'llm' && ['profile', 'api_key_optional', 'provider', 'request_timeout_ms', 'effort_override', 'served_model_label', 'max_requests'].includes(field)) &&
-          !(name === 'seat' && ['context_chars', 'scope_expansion', 'max_attempts'].includes(field)) && !Object.hasOwn(config[name], field))) ||
+          !(name === 'seat' && ['context_chars', 'scope_expansion', 'max_attempts', 'evidence_workspace'].includes(field)) && !Object.hasOwn(config[name], field))) ||
       (roots.has('planner') && !Object.hasOwn(config.planner, 'turn_budget'))) {
     invalid('schema, llm, seat, paths, and optional planner must contain every documented field');
   }
@@ -255,6 +255,8 @@ export function parseConfig(source) {
   }
 
   const seat = config.seat;
+  seat.evidence_workspace = Object.hasOwn(seat, 'evidence_workspace')
+    ? booleanValue(seat.evidence_workspace, 'seat.evidence_workspace') : false;
   seat.id = stringValue(seat.id, 'seat.id');
   seat.principal = stringValue(seat.principal, 'seat.principal');
   seat.turn_budget = integerValue(seat.turn_budget, 'seat.turn_budget');

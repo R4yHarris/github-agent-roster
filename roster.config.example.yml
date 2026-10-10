@@ -33,6 +33,7 @@ seat:
   max_attempts: 3        # opt-in --attempts cap; normal runs still use one
   turn_budget: 1000
   context_chars: 200000  # context-pack budget in characters, not tokens
+  evidence_workspace: false # carry host-validated acceptance state across coder handoffs
   tools: [read_file, write_file, list_dir, run_test, search_text]
 paths:
   memory: .roster/memory/coder.jsonl

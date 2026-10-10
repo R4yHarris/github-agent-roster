@@ -12,6 +12,9 @@ import { isForbiddenRead } from './tools.mjs';
 import { seatRules } from './seat-rules.mjs';
 import { RULE_LAYERS, conventionsText, deriveConventions } from './conventions.mjs';
 import { fieldContracts } from './field-contracts.mjs';
+import { acceptanceReferenceEvidence, acceptanceSourceIdentity, authoritativeAcceptanceChecks,
+  importAcceptanceContinuation, renderAcceptanceChecklist } from './checklist.mjs';
+import { snapshotWorktree } from './excellence.mjs';
 
 // Export signatures of modules that allowed JS files import directly; the coder may read these.
 export async function readPublicSeams(worktree, files, { limit = 2400 } = {}) {
@@ -105,7 +108,7 @@ function boundedPack(sections, budget, minimum = false) {
 }
 
 export async function loadContext({ worktree, memoryPath, repoRoot, config, principal, env, priorFeedback = null, askKind,
-  continuation = null, priorWaveFiles = [], platform = process.platform }) {
+  continuation = null, acceptanceContinuation = null, priorWaveFiles = [], platform = process.platform }) {
   if (priorFeedback !== null && typeof priorFeedback !== 'string') throw new TypeError('Prior feedback must be text');
   if (continuation !== null && typeof continuation !== 'string') throw new TypeError('Continuation must be text');
   const budget = config?.seat?.context_chars ?? 8000;
@@ -115,6 +118,15 @@ export async function loadContext({ worktree, memoryPath, repoRoot, config, prin
   const task = await requiredFile(path.join(worktree, 'TASK.md'), worktree);
   const files = taskFilesAllowed(task);
   const document = parseTaskDocument(task);
+  let acceptanceState;
+  if (acceptanceContinuation !== null) {
+    if (config?.seat?.evidence_workspace !== true) throw new TypeError('Acceptance continuation requires seat.evidence_workspace');
+    acceptanceState = importAcceptanceContinuation(acceptanceContinuation, {
+      task, worktree, checks: authoritativeAcceptanceChecks(task),
+      source: acceptanceSourceIdentity(await snapshotWorktree(worktree, { memoryPath })),
+      env, apiKeyEnv: config?.llm?.api_key_env,
+    });
+  }
   const policy = taskContextPolicy(task, { askKind, files });
   const minimalDocs = policy.minimum;
   const skillNames = policy.skills;
@@ -159,6 +171,11 @@ export async function loadContext({ worktree, memoryPath, repoRoot, config, prin
   // A harness continuation (for example after a route recovery) is required in every pack mode.
   if (continuation) sections.splice(1, 0, { heading: 'Continuation',
     body: redactSecrets(continuation, { env, apiKeyEnv: config?.llm?.api_key_env }), required: true });
+  if (acceptanceState) sections.splice(1, 0, { heading: 'Acceptance continuation',
+    body: 'Host-validated TASK obligations; prose is not acceptance evidence. Rerun checks after changes.\n' +
+      renderAcceptanceChecklist(acceptanceState.checklist, acceptanceState.observations) + '\n' +
+      acceptanceState.observations.map(acceptanceReferenceEvidence).join('\n') + '\n' +
+      acceptanceState.notices.join('\n'), required: true });
   const delivered = priorWaveFiles.length ? await moduleExports(worktree, priorWaveFiles) : '';
   if (delivered) sections.splice(continuation ? 2 : 1, 0, { heading: 'Earlier waves delivered',
     body: 'Earlier slices of this plan already merged these modules. Import and extend them; do not ' +
@@ -189,6 +206,7 @@ export async function loadContext({ worktree, memoryPath, repoRoot, config, prin
   await ensureLocalPath(contextPath, worktree);
   await fs.writeFile(contextPath, pack, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
   return { agents, task, memory, files, skills, pack, contextPath, truncated, minimalDocs, skillNames,
+    ...(acceptanceState ? { acceptanceState } : {}),
     contextPolicy: policy, packBudgetChars: budget,
     priorFeedbackIncluded: sections.some(({ heading }) => heading === 'Prior feedback') };
 }
