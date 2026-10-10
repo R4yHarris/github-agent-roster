@@ -49,6 +49,9 @@ experiments; it is a design study, not a shipped capability.
 The [Eve first-wave implementation plan](docs/EVE_IMPLEMENTATION.md) links
 the remote initiative, independent implementation slices, and gated follow-up
 work; it distinguishes dispatched work from measured capability.
+The [offline paired Eve evaluator](docs/EVE_PILOT.md) compares operator-provided
+observations without model calls or inferred human acceptance; its bundled
+synthetic fixture reports an incomplete pilot.
 The harness is a [delivery feedback loop](docs/FEEDBACK_LOOP.md), not a chat UI:
 [principals](docs/PRINCIPALS.md) bound each seat, [estimates](docs/ESTIMATION.md)
 precede work, and tools, research, tests, and excellence checks produce delivery

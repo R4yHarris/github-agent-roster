@@ -135,6 +135,67 @@ was used.
 If a future App publication returns HTTP 422 for Checks permission, stop
 and report the installation issue; never use a credential workaround.
 
+## Verified recovery and available operations
+
+The initial registered private-endpoint runs did not deliver application code.
+One baseline verification path incorrectly applied a 20-second Node 20
+aggregate test-file limit to healthy lifecycle fixtures; later attempts also
+encountered stalled inference, restricted-read retries, and a rejected planner
+revision. These are failed delivery attempts, not evidence of model quality,
+successful seats, or Eve performance.
+
+The tightly coupled verification fix was independently reviewed and merged
+through the App in [#479](https://github.com/R4yHarris/github-agent-roster/pull/479).
+It reuses the existing 15-minute code-verification bound for scoped and final
+test files/processes, preserving selectors, explicit failures, cancellation,
+scope checks, and acceptance assertions. Node 20 also bounds aggregate file
+lifetime; this is not a separate two-minute subtest guarantee.
+
+After preserving the plans and cancelling the unsuccessful local coder
+requests, explicit GHCP implementation specialists recovered the two slices
+with one writer per isolated worktree. They are implementation assistance, not
+new Roster seats, a swarm runtime, or successful local-model measurements.
+Independent code review and coordinator verification precede App publication.
+No failed or cancelled seat is assigned fabricated completion or usage.
+
+The offline evaluator for #475 is merged in
+[#480](https://github.com/R4yHarris/github-agent-roster/pull/480), with both
+trusted checks successful. Its Node 20 pilot tests pass 19/19; the coordinator
+also verified byte-deterministic public CLI output and the golden JSON shape.
+See [EVE_PILOT](EVE_PILOT.md) for the schema, library API, bounds, and limits:
+
+```powershell
+node scripts\eve-pilot.mjs --manifest tests\fixtures\eve-pilot.json
+node scripts\eve-pilot.mjs --help
+node --test tests\eve-pilot.test.mjs
+```
+
+The sample remains synthetic and `pilot-incomplete`. A successful comparison
+command is not a passed pilot, measured acceptance, or human `AI-Eval`.
+Human evaluation and closure of #474/#475 remain prerequisites for #476;
+merged PRs and successful automated checks do not advance that authority gate.
+
+Acceptance continuation for #474 is reviewed in non-draft
+[#481](https://github.com/R4yHarris/github-agent-roster/pull/481).
+Coordinator Node 20 verification passed 85 assertions with one existing Windows
+symlink skip, plus 26 boundary assertions. Review caught and resolved an
+evidence-prose elevation bug: only canonical host references cross the handoff,
+not free-form instructions from the previous coder.
+
+The first full CI run passed 1,573 assertions and failed only the unchanged
+1,000-line test-layout gate. The new regression was extracted, unchanged, to
+`tests/loop.acceptance.test.mjs`, with the justified one-file scope expansion
+recorded on #474. Coordinator runtime/shard/layout verification passed 36/36.
+The source-module naming and size gates were not weakened.
+
+Publication hit the pinned contracts publisher's stale PR-head race on
+subsequent pushes. The corrected code and verification documentation are
+remotely persistent; the PR is ready, not draft, but merge is not claimed here.
+A retry with no staged changes is rejected by that publisher, so it is not an
+idempotent merge-resume path. Do not generate duplicate commits, rewrite the
+vendor pack, or use human push/PR credentials to conceal that limitation.
+Confirm the latest head and trusted checks before resolving the merge blocker.
+
 ## Spec trace and non-goals
 
 This plan traces to [FEATURE_SPEC](FEATURE_SPEC.md) sections 5.2
