@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { parseConfig } from '../src/lib/config.mjs';
 import { classifyAsk } from '../src/planner/classify.mjs';
+import { askRequirements } from '../src/planner/stub.mjs';
 import { planOutline, validatePlan } from '../src/planner/plan.mjs';
 import { parsePlanDocument } from '../src/planner/plan-document.mjs';
 import { createTools, isForbiddenWrite, isManagedFile } from '../src/runtime/tools.mjs';
@@ -13,6 +14,40 @@ const example = readFileSync(new URL('../roster.config.example.yml', import.meta
 const stub = parseConfig(example);
 const configured = parseConfig(example.replace('base_url: ""', 'base_url: http://localhost:8000/v1')
   .replace('model: ""', 'model: plan-model'));
+
+test('ordinary output-directory asks are executable without classifier-invented filenames', () => {
+  const ask = 'Write me a one page design of a simple marketing web page for a Security and Risk Analaysis consulting business and setup instructions for obtaining a web page and serving the web page to market the business. Output it in a new "new-design" directory';
+  assert.equal(classifyAsk(ask).kind, 'slice');
+  assert.deepEqual(askRequirements(ask), { files: [], outcomes: null, explicit: false,
+    outputDirectory: 'new-design', requiresRun: true });
+  assert.equal(classifyAsk('Write a design. Output it in a new "notes/design" directory').kind, 'slice');
+  assert.deepEqual(askRequirements('Write a design. Output it in a new "notes.md" directory').files, []);
+  const explicit = `Implement directory intake for this example:\n${ask}\n\n## Files allowed\n- src/planner/classify.mjs`;
+  assert.deepEqual(askRequirements(explicit).files, ['src/planner/classify.mjs']);
+  assert.equal(askRequirements(explicit).outputDirectory, undefined);
+  for (const text of ['Explain the new-design directory.', 'Write a design mentioning the new-design directory.',
+    'The example says Output it in a new "new-design" directory', 'Write a design for this business.',
+    'Explain this example:\n```\nOutput it in a new "new-design" directory\n```',
+    'Explain this quoted example:\n> Output it in a new "new-design" directory',
+    'Explain this phrase: \'Write docs. Output it in a new "new-design" directory\'',
+    'Explain this hidden example. <!-- Output it in a new "new-design" directory -->']) {
+    assert.equal(classifyAsk(text).kind, 'clarify', text);
+  }
+  assert.equal(classifyAsk('Build a platform. Output it in a new "new-design" directory').kind, 'initiative');
+  assert.equal(classifyAsk('Add an end-to-end feature. Output it in a new "new-design" directory').kind, 'feature');
+});
+
+test('directory authority rejects unsafe destinations instead of silently widening intake', () => {
+  for (const directory of ['/', '/outside', 'C:/outside', 'C:\\outside', '\\\\host\\share', '..', '.', './notes',
+    'notes/../escape', 'notes.', 'notes//docs', 'notes/**', '.git', 'notes/.git', 'vendor',
+    'notes/vendor', '.github/workflows', 'notes/.github/workflows', 'agent-policy.yml', 'keys.pem',
+    '.env', 'private.env', '.roster', 'notes/.env', 'notes\\escape']) {
+    assert.throws(() => classifyAsk(`Write a design. Output it in a new "${directory}" directory`),
+      /Output directory/, directory);
+  }
+  assert.throws(() => askRequirements('Write a design. Output it in a "notes" directory. Output it in an "other" directory'),
+    /one output directory/);
+});
 
 function outline(count = 2) {
   return { outcomes: ['An agreed feature works'], issues: Array.from({ length: count }, (_, index) => ({

@@ -9,7 +9,7 @@ import { writeEstimate } from '../runtime/estimate.mjs';
 import { buildRun } from '../metrics/run.mjs';
 import { createTools, isForbiddenWrite, planArtifactFiles } from '../runtime/tools.mjs';
 import { ensureLocalPath } from '../lib/paths.mjs';
-import { parseTaskDocument, taskFilesAllowed, taskSections } from '../planner/task.mjs';
+import { outputDirectoryFromAsk, parseTaskDocument, taskFilesAllowed, taskSections } from '../planner/task.mjs';
 import { deriveDesign, groundingDefinitions, groundingErrors, isCodeSlice, parseDesign, symbolIndex, withDesign }
   from '../planner/grounding.mjs';
 import { validatePlanningReceipt } from '../planner/receipt.mjs';
@@ -29,6 +29,7 @@ export async function critiquePlannerHandoff(plan, {
   retryCommand, signal, lockedModel, session, task,
 }) {
   if (plan.error) return plan;
+  await validateDirectoryHandoff(plan.task, ask, worktree, title);
   const initialPlannerArtifacts = {};
   for (const name of ['TASK.md', 'ESTIMATE.md']) {
     const content = await readArtifact(worktree, name);
@@ -91,6 +92,7 @@ export async function critiquePlannerHandoff(plan, {
     task, ...(session ? { session: `${session}-critic-${index + 1}` } : {}) }));
   if (revision?.response) critic.revisionRun = buildRun({ config, response: revision.response,
     task, ...(session ? { session: `${session}-revision` } : {}), env });
+  await validateDirectoryHandoff(critic.task, ask, worktree, title);
   if (!critic.defects.length && !critic.revised) return { ...plan, critic };
   const tools = await createTools({ worktree, seat: 'planner', env, apiKeyEnv: config.llm.api_key_env, signal,
     initialPlannerArtifacts });
@@ -106,6 +108,12 @@ export async function critiquePlannerHandoff(plan, {
 
 const execFileAsync = promisify(execFile);
 const repositoryFileLimit = 1500;
+
+async function validateDirectoryHandoff(task, ask, worktree, title) {
+  if (!outputDirectoryFromAsk(ask)) return;
+  const document = planFromTask(task, ask, { issueTitle: title });
+  for (const file of document.files_allowed) await ensureLocalPath(path.join(worktree, file), worktree);
+}
 
 // Tracked, writable paths ground planner-proposed child scope; protected and vendored paths never appear.
 export async function trackedRepositoryFiles(worktree) {
@@ -182,6 +190,7 @@ export async function readPlannerHandoff({ worktree, reference, ask, issueTitle,
   let runtimeRecipe = recipe;
   try {
     const metadata = planFromTask(task, ask, { issueTitle, issueBody });
+    await validateDirectoryHandoff(task, ask, worktree, issueTitle);
     if (taskSections(task).sections.some(({ name }) => name === 'planning failure')) {
       throw new TypeError('Existing TASK records a failed planner attempt');
     }
@@ -285,6 +294,7 @@ export async function runPlanner({
         ...options, memory, learningRoot, metadata, lockedModel, tools, grounding,
       });
       if (grounding && !plan.error) plan = { ...plan, task: ensureDesign(plan.task, grounding, `${title ?? ''}\n${ask}`) };
+      await validateDirectoryHandoff(plan.task, ask, worktree, title);
       validateBuiltinRecipe(plan.recipe, reference);
       plan = { ...plan, ...await writeEstimate(plan.task, {
         worktree, learningRoot, config, env, recommendation: plan.feedback?.recommendation,

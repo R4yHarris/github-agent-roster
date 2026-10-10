@@ -88,6 +88,47 @@ rail, never inside the prompt body.
 with non-TTY stdin print that usage and exit 2. Flags remain available for
 agents and CI.
 
+## Directory-scoped local asks
+
+An explicit output destination can bound a slice without human-authored
+filenames (FEATURE_SPEC §5.3, §5.4, §5.5, §5.7). With a configured model, paste
+this exact ordinary prompt at `roster> `, or prefix it with `/ask `:
+
+```text
+Write me a one page design of a simple marketing web page for a Security and Risk Analaysis consulting business and setup instructions for obtaining a web page and serving the web page to market the business. Output it in a new "new-design" directory
+```
+
+The sequential planner chooses concrete paths, such as `new-design/DESIGN.md`
+and `new-design/SETUP.md`, inside the granted directory. It preserves the human
+Ask, including spelling, and declares new files. Public `runBuiltinAsk` preserves
+the captured directory Ask's leading/trailing whitespace and normalizes only
+CRLF line endings. The shell retains its existing command-boundary trimming
+before capture; named-file intake retains its existing trimming contract.
+TASK, recipe, estimate, paths
+and acceptance checks validate before coder; the read-only reviewer then checks
+the written documents. The local output lives under
+`<repository>/.worktrees/local-<id>/new-design/`, next to that run's `TASK.md`,
+`RESULT.md` and `REVIEW.md`, **not** in the main checkout or shell launch
+directory. Local asks do not create issues or publish changes.
+
+The directory must be relative and unprotected: no absolute paths, traversal,
+dot directories, Git metadata, vendor, secrets, policy, workflows or symlinks.
+The planner must name individual files; wildcards and outside paths fail before
+coding, and coder cannot expand this authority. An explicit human file allowlist
+takes precedence and keeps its existing semantics. Merely mentioning a
+directory is not permission; unbounded asks
+still clarify, and features/initiatives remain planning-only. Design/setup
+instructions authorize Markdown documents, not executable artifacts, purchases, account creation, live
+network access, deployment or production action. Markdown-only output is
+checked by reading it. Planner checks must describe document contents, not
+successful installation, deployment, publication, network, purchase or account
+actions; executable/non-Markdown output and action-success checks are rejected
+before coder. Other directory implementation asks can still plan concrete code
+files and their usual tests. Document/design/setup intent is detected from the
+requested artifacts, not a short list of opening verbs; it fails closed unless
+the human explicitly requests an implementation artifact.
+Without a configured endpoint the stub does not implement or claim delivery.
+
 | Command | Behavior |
 | --- | --- |
 | `TEXT` (no slash) | Classify a direct local ask without `gh` or issue creation. In a local Git worktree, slices print the task summary and run planner/coder/reviewer to RESULT.md and REVIEW.md; features and initiatives write PLAN.md and stop. |

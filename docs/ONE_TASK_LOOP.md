@@ -49,6 +49,49 @@ unless `--skip-review` explicitly bypasses the reviewer verdict; neither
 option waives coder excellence or required checks. A direct contracts SDK
 command is outside this gate and requires human review.
 
+## Local output-directory handoff
+
+The shell's plain-text and `/ask` paths call public `runBuiltinAsk` without
+creating an issue or publishing. One explicit relative output directory is
+enough for a bounded slice; filenames are the planner's responsibility
+(FEATURE_SPEC §5.3, §5.4, §5.5, §5.7). After configuring an endpoint/model,
+start `roster` inside the target Git repository and enter this exact example:
+
+```text
+Write me a one page design of a simple marketing web page for a Security and Risk Analaysis consulting business and setup instructions for obtaining a web page and serving the web page to market the business. Output it in a new "new-design" directory
+```
+
+Planner → coder → read-only reviewer run sequentially in one isolated
+`.worktrees/local-<id>` worktree. Planner preserves the human Ask verbatim
+(CRLF line endings normalized, captured leading/trailing whitespace retained),
+chooses concrete files beneath `new-design`,
+declares new files for the critic and writes the normal TASK/RECIPE/ESTIMATE
+handoff. Invalid checks, malformed file lists or paths outside the grant fail
+before coder. Public `runBuiltinAsk` preserves those captured bytes; the shell
+retains its existing command-boundary trimming before capture, and named-file
+intake retains its existing trimming behavior. The documents are at
+`<repository>/.worktrees/local-<id>/new-design/` (for example `DESIGN.md` and
+`SETUP.md`), with RESULT/REVIEW in that worktree's root; the main checkout is
+unchanged.
+
+This is not repository-wide write permission or a general chatbot/deployment
+runtime. Absolute, traversal, dot, Git, vendor, secret, policy, workflow and
+symlink destinations remain forbidden. Coder cannot widen directory authority,
+and explicit human file allowlists take precedence with their existing
+semantics. Incidental directory
+mentions grant nothing; unbounded asks still clarify or plan, and
+features/initiatives still stop at planning. Design/setup instructions mean
+Markdown documentation only, not executable artifacts, purchases, accounts, network operations, deployment
+or production changes. Markdown-only tasks have content checks, with tests
+skipped rather than executing installation/deployment instructions. Such
+document intent also rejects checks asserting installation, deployment,
+publication, network, purchase or account actions succeeded; checks must
+describe document contents. This does not make all directory asks docs-only:
+implementation asks can still plan code files and matching tests. The
+document gate follows artifact intent regardless of opening verb and fails
+closed unless an implementation artifact is explicitly requested. The
+no-endpoint stub still writes a summary without implementing anything.
+
 Manual handoff remains available explicitly:
 
 `runIssue(issueNumber)` in `src/lib/issue.mjs` implements

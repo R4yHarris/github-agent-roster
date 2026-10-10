@@ -16,6 +16,67 @@ export function allowedFile(value) {
   return file;
 }
 
+// A destination directive grants a directory, not paths mentioned in explanatory prose.
+export function outputDirectoryFromAsk(ask) {
+  if (/^#{1,3} (?:Files allowed|Allowed files|files_allowed|allowed_files)\s*$/im.test(String(ask ?? ''))) {
+    return undefined;
+  }
+  const directive = /(?:^|[.!?\n]\s*)(?:output|save|put|place)\s+(?:(?:it|them|the (?:output|documents|files))\s+)?(?:in|into|to)\s+(?:(?:a|an|the)\s+)?(?:new\s+)?(?:"([^"\n]+)"|'([^'\n]+)'|`([^`\n]+)`|([^\s"'`]+))\s+directory\b/gi;
+  const text = String(ask ?? '').replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ {0,3}\1[ \t]*$/gm, '')
+    .replace(/^[ \t]*>.*$/gm, '')
+    .replace(/(["'`])((?:(?!\1)[^\n])*)\1/g, (span, _quote, content) =>
+      /\b(?:output|save|put|place)\s+/i.test(content) ? '' : span);
+  const directories = [...text.matchAll(directive)].map((match) => {
+    const directory = match.slice(1).find((value) => value !== undefined);
+    if (!/^[A-Za-z0-9_-][A-Za-z0-9_.-]*(?:\/[A-Za-z0-9_-][A-Za-z0-9_.-]*)*$/.test(directory) ||
+        directory.split('/').some((part) => part.endsWith('.') || part.toLowerCase() === 'vendor') ||
+        isForbiddenWrite(directory) || isForbiddenWrite(`${directory}/output.md`)) {
+      throw new TypeError('Output directory must be relative, bounded, and exclude protected paths');
+    }
+    return directory;
+  });
+  if (new Set(directories).size > 1) throw new TypeError('Ask must grant one output directory');
+  return directories[0];
+}
+
+export function validateDirectoryFiles(files, directory) {
+  const fold = (value) => process.platform === 'win32' ? value.toLowerCase() : value;
+  if (files.some((file) => {
+    allowedFile(file);
+    return file.includes('*') || !fold(file).startsWith(`${fold(directory)}/`) ||
+      file.split('/').some((part) => part.startsWith('.') || part.toLowerCase() === 'vendor');
+  })) throw new TypeError('Planner must choose concrete, unprotected files inside the granted output directory');
+}
+
+export function isDirectoryDocumentAsk(ask) {
+  if (!outputDirectoryFromAsk(ask)) return false;
+  const text = String(ask).trim();
+  const documentIntent = /\b(?:docs?|documentation|documents?|designs?|setup|set-up|instructions?|guides?|manuals?|specifications?|reports?|proposals?|readme)\b/i;
+  if (!documentIntent.test(text)) return false;
+  // Documentation language fails closed unless the human explicitly requests an implementation artifact.
+  const implementation = /(?:^|[.!?\n]\s*)(?:please\s+)?(?:implement|build|develop|code|write|generate|create)\s+(?:me\s+)?(?:(?:a|an|the|new|simple|working|executable|static|shell|node|python)\s+)*(?:script|program|application|app|code|website|web page)\b/i;
+  return !implementation.test(text);
+}
+
+export function validateDirectoryDocumentPlan(ask, files, checks) {
+  if (!isDirectoryDocumentAsk(ask)) return;
+  if (files.some((file) => !/\.md$/i.test(file))) {
+    throw new TypeError('Directory documentation asks authorize Markdown documents, not executable or deployment artifacts');
+  }
+  const commands = /\b(?:npm|npx|pnpm|yarn|pip|apt|docker|kubectl|terraform|curl|wget|ssh|bash|powershell|Invoke-WebRequest)\b|\b(?:git\s+(?:push|clone)|gh\s+(?:pr|release)|node\s+--test)\b/i;
+  const action = /\b(?:install(?:ation|ed|s)?|deploy(?:ment|ed|s)?|publish(?:ed|es|ing)?|purchase(?:d|s)?|buy|account|network|request|fetch|download(?:ed|s)?|upload(?:ed|s)?|serve(?:d|s)?|hosting)\b/i;
+  const assertion = /\b(?:run|execute|succeeds?|successful(?:ly)?|exits?|passes?|created|activated|completed|live|reachable)\b|\b(?:is|are|was|were)\s+(?:installed|deployed|published|purchased|serving|running)\b/i;
+  const content = /\b(?:documents?|describes?|explains?|outlines?|contains?|includes?|covers?|lists?|mentions?|states?|warns?)\b/i;
+  const activeClause = /(?:[;:]|\b(?:and|then))\s+(?:run|execute|install|deploy|publish|purchase|buy|register|create an? account|fetch|download|upload|request)(?:s|ed)?\b/i;
+  for (const check of checks) {
+    if (!content.test(check) || activeClause.test(check) || commands.test(check) && assertion.test(check) ||
+        action.test(check) && assertion.test(check)) {
+      throw new TypeError('Directory documentation requires document-content checks, not installation, deployment, publication, network, purchase or account actions');
+    }
+  }
+}
+
 export function checkedList(items, label, check, limit = 8) {
   if (!Array.isArray(items) || items.length < 1 || items.length > limit) {
     throw new TypeError(`${label} must contain 1-${limit} entries` +
@@ -73,6 +134,7 @@ export function taskSections(task) {
   const sections = starts.map((section, index) => {
     const end = starts[index + 1]?.start ?? text.length;
     return { ...section, content: text.slice(section.contentStart, end).trim(),
+      rawContent: text.slice(section.contentStart, end),
       source: text.slice(section.start, end) };
   });
   const bodyStart = starts[0]?.start ?? text.length;
@@ -174,10 +236,23 @@ export function ensureAcceptanceChecks(task, ask) {
 
 export function parseTaskDocument(task, { expectedAsk, issueTitle, issueBody } = {}) {
   const parsed = taskSections(task);
-  const ask = parsed.sections.find(({ name }) => name === 'ask')?.content;
+  const askSection = parsed.sections.find(({ name }) => name === 'ask');
+  let ask = askSection?.content;
   const normalized = ask ? normalizeAsk(ask) : '';
   if (!normalized) {
     throw new TypeError('Planner TASK.md must contain a nonempty Original Ask (or Ask)');
+  }
+  const authoritativeAsk = expectedAsk ?? issueBody;
+  const outputDirectory = outputDirectoryFromAsk(authoritativeAsk ?? ask);
+  if (outputDirectory) {
+    const originalHeading = /^#{2,6} +Original[ _-]+Ask\b/i.test(askSection.source);
+    const raw = askSection.rawContent;
+    // Canonical ## Ask has one structural final newline; human-style ## Original Ask has blank separators.
+    ask = originalHeading && raw.startsWith('\n') && raw.endsWith('\n\n')
+      ? raw.slice(1, -2) : raw.endsWith('\n') ? raw.slice(0, -1) : raw;
+    if (authoritativeAsk !== undefined && ask !== String(authoritativeAsk).replace(/\r\n/g, '\n')) {
+      throw new TypeError('Directory-scoped TASK.md must preserve the unchanged original Ask');
+    }
   }
   if (expectedAsk !== undefined || issueTitle !== undefined || issueBody !== undefined) {
     const candidates = [
@@ -191,5 +266,14 @@ export function parseTaskDocument(task, { expectedAsk, issueTitle, issueBody } =
   const acceptance_checks = checkedList(sectionList(parsed.sections.find(({ name }) => name === 'acceptance checks'),
     'Acceptance Checks (or acceptance_checks)', { continuations: true }),
   'Acceptance checks', (line) => oneLine(line, 'Acceptance check'));
-  return { title: parsed.title, ask, acceptance_checks, files_allowed: taskFilesAllowed(task) };
+  const files_allowed = taskFilesAllowed(task);
+  if (outputDirectory) {
+    validateDirectoryFiles(files_allowed, outputDirectory);
+    validateDirectoryDocumentPlan(authoritativeAsk ?? ask, files_allowed, acceptance_checks);
+    if (files_allowed.every((file) => file.endsWith('.md')) &&
+        acceptance_checks.every((check) => /node --test/.test(check))) {
+      throw new TypeError('Directory documentation requires document-content acceptance checks');
+    }
+  }
+  return { title: parsed.title, ask, acceptance_checks, files_allowed };
 }

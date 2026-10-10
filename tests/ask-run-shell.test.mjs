@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync, symlinkSync, cpSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -12,8 +13,273 @@ import { createDispatcher, startRepl } from '../src/repl.mjs';
 import { RunCancelledError } from '../src/runtime/cancel.mjs';
 import { classifyAsk, clarificationHint } from '../src/planner/classify.mjs';
 import { runBuiltinAsk } from '../src/lib/builtin.mjs';
+import { buildPlan } from '../src/planner/stub.mjs';
+import { parseTaskDocument } from '../src/planner/task.mjs';
+import { readPlannerHandoff } from '../src/seats/planner.mjs';
+import { resolveContractsPath } from '../src/lib/paths.mjs';
+import { passingReview } from './helpers/review.mjs';
 
 const config = parseConfig(readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8'));
+
+const directoryAsk = 'Write me a one page design of a simple marketing web page for a Security and Risk Analaysis consulting business and setup instructions for obtaining a web page and serving the web page to market the business. Output it in a new "new-design" directory';
+const directoryPlan = { title: 'One-page design and setup instructions',
+  files_allowed: ['new-design/DESIGN.md', 'new-design/SETUP.md'],
+  acceptance_checks: ['DESIGN describes the one-page consulting business marketing web page',
+    'SETUP documents obtaining and serving the page without purchases or deployment'],
+  task_class: 'docs', difficulty: 1, estimate_min: 8 };
+const localConfig = { ...config, planner: { ...config.planner, turn_budget: 2 },
+  seat: { ...config.seat, turn_budget: 8 }, start: { base: 'current', sync: 'offline' },
+  llm: { ...config.llm, base_url: 'http://localhost:1234/v1', model: 'fake-directory-model' } };
+
+function directoryFixture(t) {
+  const root = path.join(process.cwd(), 'tests', `.directory-ask-${randomUUID()}`);
+  mkdirSync(root);
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim();
+  writeFileSync(path.join(root, '.gitignore'), '.worktrees/\n.roster/\n');
+  writeFileSync(path.join(root, 'README.md'), '# Main checkout stays unchanged\n');
+  git('init', '-b', 'main');
+  git('add', '--all');
+  git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'Fixture');
+  mkdirSync(path.join(root, '.roster', 'machine'), { recursive: true });
+  const repoRoot = path.join(root, '.roster', 'installation');
+  mkdirSync(repoRoot);
+  for (const name of ['principals', 'skills']) {
+    cpSync(new URL(`../${name}/`, import.meta.url), path.join(repoRoot, name), { recursive: true });
+  }
+  writeFileSync(path.join(repoRoot, 'roster.config.example.yml'),
+    readFileSync(new URL('../roster.config.example.yml', import.meta.url)));
+  const env = { ...process.env, ROSTER_SEAT: undefined, GITHUB_APP_ID: undefined,
+    GITHUB_APP_PRIVATE_KEY_PATH: undefined, AI_MODEL: '', ROSTER_MODEL: '',
+    GITHUB_AGENT_CONTRACTS: resolveContractsPath(),
+    ROSTER_STATE_ROOT: path.join(root, '.roster', 'machine') };
+  return { root, repoRoot, git, env };
+}
+
+test('the exact human prompt executes the public local shell planner→coder→reviewer and writes isolated docs', async (t) => {
+  const { root, repoRoot, git, env } = directoryFixture(t);
+  const before = readFileSync(path.join(root, 'README.md'));
+  const head = git('rev-parse', 'HEAD');
+  const seats = [];
+  const files = {
+    'new-design/DESIGN.md': '# One-page design\n\nSecurity and Risk Analysis consulting: hero, services, trust and contact.\n',
+    'new-design/SETUP.md': '# Setup instructions\n\nCompare domains and static hosting; obtain and serve the page only after human approval.\n',
+  };
+  let coderTurns = 0;
+  const fetchImpl = async (_url, request) => {
+    const body = JSON.parse(request.body);
+    const system = body.messages[0].content;
+    const reply = (content) => Response.json({ model: 'fake-directory-model',
+      choices: [{ finish_reason: 'stop', message: { role: 'assistant', content } }] });
+    if (system.includes('builtin planner seat')) {
+      seats.push('planner');
+      assert.match(system, /only the output directory "new-design"/);
+      assert.ok(body.messages[1].content.startsWith(directoryAsk));
+      return reply(JSON.stringify(directoryPlan));
+    }
+    if (system.startsWith('You are the builtin reviewer seat.')) {
+      seats.push('reviewer');
+      return reply(passingReview(body));
+    }
+    assert.doesNotMatch(system, /critic|research/i);
+    if (coderTurns++ === 0) {
+      seats.push('coder');
+      return Response.json({ model: 'fake-directory-model', choices: [{ finish_reason: 'tool_calls',
+        message: { role: 'assistant', tool_calls: Object.entries(files).map(([file, content], index) => ({
+          id: `write-${index}`, type: 'function', function: { name: 'write_file',
+            arguments: JSON.stringify({ path: file, content }) },
+        })) } }] });
+    }
+    return reply('Check 1 done: new-design/DESIGN.md contains the one-page design. ' +
+      'Check 2 done: new-design/SETUP.md contains setup instructions. Docs-only; tests skipped.');
+  };
+  const instance = createDispatcher({ cwd: root, repoRoot, config: localConfig, env,
+    output: { write() {} }, errorOutput: { write() {} },
+    services: {
+      repositoryBranch: () => 'main',
+      submitAsk: () => assert.fail('Local shell must not create an issue'),
+      runBuiltinAsk: (ask, options) => runBuiltinAsk(ask, { ...options, autoModel: false, fetchImpl,
+        publisher: () => assert.fail('Local docs must not publish'),
+        runTestCommand: () => assert.fail('Docs must not execute tests or installation commands') }),
+    } });
+  await instance.dispatch(directoryAsk);
+  const result = instance.state.lastRun;
+  assert.deepEqual(seats, ['planner', 'coder', 'reviewer']);
+  assert.equal(result.local, true);
+  assert.equal(result.failed, false);
+  assert.equal(result.review.verdict, 'pass');
+  assert.equal(result.result.testsSkipped, true);
+  assert.equal(parseTaskDocument(readFileSync(result.taskPath, 'utf8')).ask, directoryAsk);
+  assert.ok(existsSync(path.join(result.worktreePath, 'ESTIMATE.md')));
+  assert.ok(existsSync(path.join(result.worktreePath, 'RECIPE.yml')));
+  for (const [file, content] of Object.entries(files)) {
+    assert.equal(readFileSync(path.join(result.worktreePath, file), 'utf8'), content);
+    assert.equal(existsSync(path.join(root, file)), false);
+  }
+  assert.deepEqual(readFileSync(path.join(root, 'README.md')), before);
+  assert.equal(git('rev-parse', 'HEAD'), head);
+  assert.equal(git('status', '--porcelain'), '');
+  assert.match(readFileSync(result.review.reviewPath, 'utf8'), /pass/i);
+});
+
+test('public directory runs reject invalid planner files or checks without invoking coder', async (t) => {
+  const { root, repoRoot, env } = directoryFixture(t);
+  for (const invalid of [
+    { files_allowed: ['outside/DESIGN.md'] }, { files_allowed: ['new-design/**'] },
+    { files_allowed: ['new-design/.env'] }, { files_allowed: ['new-design/../DESIGN.md'] },
+    { files_allowed: ['new-design/vendor/file.md'] }, { files_allowed: ['new-design/agent-policy.yml'] },
+    { acceptance_checks: [] }, { acceptance_checks: ['node --test exits 0'] },
+    { files_allowed: 'new-design/DESIGN.md' },
+    { files_allowed: ['new-design/deploy.sh'], acceptance_checks: ['npm run deploy succeeds'] },
+    { files_allowed: ['new-design/index.html'], acceptance_checks: directoryPlan.acceptance_checks },
+    { acceptance_checks: ['SETUP documents instructions and npm run deploy succeeds'] },
+    { acceptance_checks: ['SETUP describes hosting and the account is created'] },
+    { acceptance_checks: ['SETUP describes network access and curl https://example.invalid succeeds'] },
+  ]) {
+    let calls = 0;
+    await assert.rejects(runBuiltinAsk(directoryAsk, { cwd: root, repoRoot, config: localConfig, env, log: () => {},
+      errorOutput: { write() {} },
+      runTestCommand: () => assert.fail('Invalid handoffs must not execute tests'),
+      fetchImpl: async (_url, request) => {
+        calls += 1;
+        assert.match(JSON.parse(request.body).messages[0].content, /builtin planner seat/);
+        return Response.json({ choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant',
+          content: JSON.stringify({ ...directoryPlan, ...invalid }),
+        } }] });
+      } }), /Planner turn budget/);
+    assert.equal(calls, 2);
+    assert.equal(existsSync(path.join(root, 'new-design')), false);
+  }
+});
+
+test('public documentation intent denies unsafe plans across verbs and noun-only requests', async (t) => {
+  const { root, repoRoot, env } = directoryFixture(t);
+  for (const ask of [
+    'Generate documentation for the site. Output it in a new `new-design` directory',
+    'Compose setup instructions for the site. Output it in a new "new-design" directory',
+    'A one-page design and hosting guide, please. Output it in a new "new-design" directory',
+    'Give me a deployment manual. Output it in a new "new-design" directory',
+    'Summarize the account setup instructions. Output it in a new "new-design" directory',
+  ]) {
+    let calls = 0;
+    await assert.rejects(runBuiltinAsk(ask, { cwd: root, repoRoot, config: localConfig, env,
+      log: () => {}, errorOutput: { write() {} },
+      runTestCommand: () => assert.fail('Documentation request must not execute deployment'),
+      fetchImpl: async (_url, request) => {
+        calls += 1;
+        assert.match(JSON.parse(request.body).messages[0].content, /builtin planner seat/);
+        return Response.json({ choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant', content: JSON.stringify({ ...directoryPlan,
+            files_allowed: ['new-design/deploy.sh'], acceptance_checks: ['npm run deploy succeeds'] }),
+        } }] });
+      } }), /Planner turn budget.*Markdown documents/);
+    assert.equal(calls, 2);
+  }
+});
+
+test('public directory handoff preserves raw captured whitespace through planner, estimate and critic', async (t) => {
+  const { root, repoRoot, env } = directoryFixture(t);
+  const raw = ` \t\r\n${directoryAsk.replace('. Output', '.\r\nOutput')}\r\n \t\r\n`;
+  const original = raw.replace(/\r\n/g, '\n');
+  let calls = 0;
+  const result = await runBuiltinAsk(raw, { cwd: root, repoRoot, config: localConfig, env, confirm: true,
+    log: () => {}, errorOutput: { write() {} },
+    fetchImpl: async (_url, request) => {
+      calls += 1;
+      const body = JSON.parse(request.body);
+      assert.match(body.messages[0].content, /builtin planner seat/);
+      assert.ok(body.messages[1].content.startsWith(original));
+      return Response.json({ choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant', content: JSON.stringify(directoryPlan),
+      } }] });
+    } });
+  assert.equal(calls, 1);
+  assert.equal(result.confirmedPause, true);
+  assert.equal(result.ask, original);
+  assert.equal(readFileSync(result.assignmentPath, 'utf8'), `# Local Ask\n\n${original}\n`);
+  assert.equal(parseTaskDocument(readFileSync(result.taskPath, 'utf8'), { expectedAsk: raw }).ask, original);
+  assert.ok(existsSync(path.join(result.worktreePath, 'ESTIMATE.md')));
+  assert.deepEqual(result.planner.critic.defects, []);
+  assert.equal(result.runs.coder, null);
+  assert.equal(result.runs.reviewer, null);
+});
+
+test('public handoff rejects tool-written directory TASKs with trimmed, case-changed or respaced original Ask', async (t) => {
+  const { root, repoRoot, env } = directoryFixture(t);
+  const raw = ` \t\n${directoryAsk}\n \t\n`;
+  const task = buildPlan(raw, { reference: 'local:fixture', title: directoryPlan.title,
+    filesAllowed: directoryPlan.files_allowed, acceptanceChecks: directoryPlan.acceptance_checks }).task;
+  for (const changed of [task.replace(raw, raw.trim()), task.replace('Security', 'security'),
+    task.replace('one page', 'one  page')]) {
+    let calls = 0;
+    await assert.rejects(runBuiltinAsk(raw, { cwd: root, repoRoot, config: localConfig, env,
+      log: () => {}, errorOutput: { write() {} },
+      runTestCommand: () => assert.fail('Changed asks must not reach test execution'),
+      fetchImpl: async (_url, request) => {
+        calls += 1;
+        assert.match(JSON.parse(request.body).messages[0].content, /builtin planner seat/);
+        return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant', tool_calls: [{ id: `changed-ask-${calls}`, type: 'function', function: {
+            name: 'write_file', arguments: JSON.stringify({ path: 'TASK.md', content: changed }),
+          } }],
+        } }] });
+      } }), /unchanged original Ask/);
+    assert.ok(calls > 0);
+  }
+});
+
+test('public directory handoff retains non-document implementation intent and concrete code files', async (t) => {
+  const { root, repoRoot, env } = directoryFixture(t);
+  const ask = 'Write a script with setup instructions. Output it in a new "scripts" directory';
+  const result = await runBuiltinAsk(ask, { cwd: root, repoRoot, config: localConfig, env, confirm: true,
+    log: () => {}, errorOutput: { write() {} },
+    fetchImpl: async (_url, request) => {
+      assert.match(JSON.parse(request.body).messages[0].content, /builtin planner seat/);
+      return Response.json({ choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant', content: JSON.stringify({ title: 'Script implementation',
+          files_allowed: ['scripts/task.mjs'], acceptance_checks: ['node --test exits 0',
+            'The script implements the requested behavior'], task_class: 'feat' }),
+      } }] });
+    } });
+  assert.equal(result.askKind, 'slice');
+  assert.equal(result.confirmedPause, true);
+  assert.deepEqual(parseTaskDocument(result.planner.task, { expectedAsk: ask }).files_allowed, ['scripts/task.mjs']);
+});
+
+test('directory-scoped public coder cannot expand to a harmless outside document', async (t) => {
+  const { root, repoRoot, env } = directoryFixture(t);
+  let worktree;
+  let coderCalls = 0;
+  await assert.rejects(runBuiltinAsk(directoryAsk, { cwd: root, repoRoot, config: localConfig, env, log: () => {},
+    errorOutput: { write() {} }, onPrepared: (prepared) => { worktree = prepared.worktreePath; },
+    fetchImpl: async (_url, request) => {
+      const system = JSON.parse(request.body).messages[0].content;
+      if (system.includes('builtin planner seat')) return Response.json({ choices: [{ finish_reason: 'stop',
+        message: { role: 'assistant', content: JSON.stringify(directoryPlan) } }] });
+      coderCalls += 1;
+      return Response.json({ choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', tool_calls: [{
+        id: 'outside', type: 'function', function: { name: 'write_file',
+          arguments: JSON.stringify({ path: 'outside.md', content: '# Unauthorized\n' }) },
+      }] } }] });
+    } }), /not allowed/);
+  assert.equal(coderCalls, 1);
+  assert.equal(existsSync(path.join(worktree, 'outside.md')), false);
+});
+
+test('cached directory handoff rejects symlink destinations before coder dispatch', async (t) => {
+  const { root } = directoryFixture(t);
+  const outside = path.join(root, 'outside');
+  const worktree = path.join(root, 'worktree');
+  mkdirSync(outside);
+  mkdirSync(worktree);
+  symlinkSync(outside, path.join(worktree, 'new-design'), process.platform === 'win32' ? 'junction' : 'dir');
+  const plan = buildPlan(directoryAsk, { reference: 'local:fixture', title: directoryPlan.title,
+    filesAllowed: directoryPlan.files_allowed, acceptanceChecks: directoryPlan.acceptance_checks });
+  writeFileSync(path.join(worktree, 'RECIPE.yml'), plan.recipe);
+  writeFileSync(path.join(worktree, 'TASK.md'), plan.task);
+  assert.equal((await readPlannerHandoff({ worktree, ask: directoryAsk, reference: 'local:fixture' })).plan, null);
+});
 
 function shell(services) {
   let text = '';
