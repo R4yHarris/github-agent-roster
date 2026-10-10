@@ -24,6 +24,7 @@ import { captureCheckpoint } from '../lib/checkpoints.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
 import { isTestPath, triageChecks, triageText } from '../runtime/check-triage.mjs';
 import { runLifecycleHooks } from '../runtime/hooks.mjs';
+import { acceptanceSourceIdentity, exportAcceptanceContinuation } from '../runtime/checklist.mjs';
 
 export async function runCoder({
   worktree, repoRoot, config, task, session, fetchImpl, env = process.env, vault, runTestCommand,
@@ -35,6 +36,7 @@ export async function runCoder({
   initialScopeFiles = [],
   initialRepairFiles = [],
   continuation = null,
+  acceptanceContinuation = null,
   priorWaveFiles = [],
   priorWrites = [],
 }) {
@@ -67,7 +69,7 @@ export async function runCoder({
   };
   try {
     throwIfCancelled(signal);
-    context = await loadContext({ worktree, memoryPath, repoRoot, config, env, priorFeedback, askKind, continuation,
+    context = await loadContext({ worktree, memoryPath, repoRoot, config, env, priorFeedback, askKind, continuation, acceptanceContinuation,
       priorWaveFiles });
     if (!context.minimalDocs) stages.push('principal');
     stages.push('context');
@@ -193,7 +195,10 @@ export async function runCoder({
       },
     };
     result = await runLoop({
-      config, context, tools: trackedTools, fetchImpl, env, vault, onEvent, retryCommand, signal, steeringControl, priorWrites,
+      config, context, tools: trackedTools, fetchImpl, env, vault, onEvent, retryCommand, signal, steeringControl, priorWrites, worktree,
+      ...(config.seat.evidence_workspace === true ? {
+        acceptanceSource: async () => acceptanceSourceIdentity(await snapshotWorktree(worktree, { memoryPath })),
+      } : {}),
       verify: async (candidate) => {
         const evidence = await checkExcellence({
           worktree, task: context.task, result: { ...candidate, scopeFiles: [...scopeFiles].sort(), repairFiles: withRepairs(candidate.repairFiles) }, baseline, memoryPath,
@@ -320,6 +325,16 @@ export async function runCoder({
     if (!(error instanceof Error)) throw error;
     excellence.pass = false;
     excellence.reasons.push(`AI-Run metadata failed: ${error.message}`);
+  }
+  if (result.acceptanceContinuation) {
+    result.acceptanceContinuation = exportAcceptanceContinuation({
+      task: context.task, worktree, checklist: { items: result.acceptanceContinuation.items },
+      observations: result.acceptanceContinuation.observations,
+      priorNotices: result.acceptanceContinuation.notices,
+      source: acceptanceSourceIdentity(await snapshotWorktree(worktree, { memoryPath })),
+      outcome: signal?.aborted ? 'cancelled' : excellence.pass ? 'verified' : 'failed',
+      env, apiKeyEnv: config.llm.api_key_env,
+    });
   }
   const resultPath = await writeResult({
     worktree, result, excellence, run, env, apiKeyEnv: config.llm.api_key_env,

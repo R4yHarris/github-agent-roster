@@ -1351,7 +1351,7 @@ async function executeBuiltinAssignment(issueNumber, {
     if (priorWaveFiles.length) log(`Earlier waves delivered: ${priorWaveFiles.join(', ')}; the coder is told to reuse them.`);
   }
   const coderSeat = (priorFeedback = planner.feedback?.context,
-    { initialBaseline, initialScopeFiles, initialRepairFiles, continuation, priorWrites } = {}) => {
+    { initialBaseline, initialScopeFiles, initialRepairFiles, continuation, acceptanceContinuation, priorWrites } = {}) => {
     assertSeatCovers(recipeCoder, {
       ...(recipeCoder.max_difficulty === undefined ? {} : { difficulty: readTaskMetadata(planner.task).difficulty }),
       ...(recipeCoder.skills === undefined ? {} : { skills: taskSkillNames(planner.task) }),
@@ -1359,7 +1359,7 @@ async function executeBuiltinAssignment(issueNumber, {
     return liveLog.seat('coder', sessions.coder, coderConfig, (onEvent) => runCoder({
       worktree: worktreePath, repoRoot, config: coderConfig, task: prepared.task, session: sessions.coder,
       fetchImpl, env, vault, runTestCommand, priorFeedback, onEvent, askKind, retryCommand, signal, steeringControl,
-      initialBaseline, initialScopeFiles, initialRepairFiles, continuation, priorWaveFiles, priorWrites,
+      initialBaseline, initialScopeFiles, initialRepairFiles, continuation, acceptanceContinuation, priorWaveFiles, priorWrites,
     }));
   };
   let result;
@@ -1377,6 +1377,7 @@ async function executeBuiltinAssignment(issueNumber, {
     }
   }
   let continuation;
+  let acceptanceContinuation;
   let reviewFindings = [];
   if (planner.reused) {
     const passed = (text) => /^Verdict: pass\s*$/m.test(text ?? '');
@@ -1400,7 +1401,7 @@ async function executeBuiltinAssignment(issueNumber, {
   for (;;) {
     try {
       result = await coderSeat(undefined, { initialBaseline: coderBaseline, initialScopeFiles: coderScopeFiles,
-        initialRepairFiles: coderRepairFiles, continuation, priorWrites: coderWrites });
+        initialRepairFiles: coderRepairFiles, continuation, acceptanceContinuation, priorWrites: coderWrites });
       break;
     } catch (error) {
       if (error instanceof Error && error.result) {
@@ -1452,6 +1453,12 @@ async function executeBuiltinAssignment(issueNumber, {
           sameModel: coderConfig.llm.model === previousModel });
       }
       coderBaseline ??= error.result?.baseline;
+      if (coderConfig.seat.evidence_workspace === true) {
+        if (error.result?.checklist?.length && !error.result.acceptanceContinuation) {
+          throw new Error('Acceptance continuation missing from the failed coder attempt', { cause: error });
+        }
+        acceptanceContinuation = error.result?.acceptanceContinuation ?? null;
+      }
       coderScopeFiles = [...new Set([...coderScopeFiles, ...(error.result?.scopeFiles ?? [])])];
       coderRepairFiles = [...new Set([...coderRepairFiles, ...(error.result?.repairFiles ?? [])])];
       coderWrites = [...new Set([...coderWrites, ...(error.result?.excellence?.files ?? [])])];
@@ -1466,7 +1473,16 @@ async function executeBuiltinAssignment(issueNumber, {
   ({ review, reviewerRun } = await reviewSeat(result, reviewFindings));
   if (review.verdict !== 'fail' || !review.completed || skipReview || result.mode !== 'llm' ||
       reviewRepairs.length >= maxReviewRepairs) break;
+  if (coderConfig.seat.evidence_workspace === true) acceptanceContinuation = result.acceptanceContinuation ?? null;
   const unmetChecks = review.unmetChecks ?? [];
+  if (acceptanceContinuation) {
+    acceptanceContinuation = { ...acceptanceContinuation,
+      items: acceptanceContinuation.items.map((item) => unmetChecks.includes(item.id)
+        ? { ...item, status: 'pending', evidence: '', evidenceRef: null } : item),
+      notices: [...acceptanceContinuation.notices, ...unmetChecks.map((id) =>
+        `Check ${id}: reopened by independent review.`)].slice(-acceptanceContinuation.items.length),
+    };
+  }
   const previousUnmet = reviewRepairs.at(-1)?.unmetChecks;
   // Repeating a repair that left the same checks unmet is the same move twice; switch perspective instead.
   const stalled = previousUnmet !== undefined && unmetChecks.length > 0 &&

@@ -38,6 +38,7 @@ test('loads the tracked example when private config is absent', (context) => {
     seat: {
       id: 'coder', principal: 'coder', turn_budget: 1000, context_chars: 200000, scope_expansion: 3,
       max_attempts: 3,
+      evidence_workspace: false,
       tools: ['read_file', 'write_file', 'list_dir', 'run_test', 'search_text'],
     },
     paths: {
@@ -48,12 +49,25 @@ test('loads the tracked example when private config is absent', (context) => {
     tools: { internet: false, run_test: true },
     reviewer: { required: true },
   });
+
   assert.equal(Object.isFrozen(config.seat.tools), true);
   assert.equal(Object.isFrozen(config.llm), true);
   assert.equal(Object.isFrozen(config.planner), true);
   assert.equal(Object.isFrozen(config.profiles), true);
   assert.equal(Object.isFrozen(config.profiles['vllm-local']), true);
   assert.equal(Object.isFrozen(config.profiles.openai), true);
+});
+
+test('acceptance evidence workspace defaults off and only accepts booleans', () => {
+  const legacy = example.replace(/\r\n/g, '\n').replace(/^  evidence_workspace:.*\n/m, '');
+  assert.deepEqual(parseConfig(legacy), parseConfig(example));
+  for (const value of ['true', 'false']) {
+    assert.equal(parseConfig(legacy.replace('seat:\n', `seat:\n  evidence_workspace: ${value}\n`))
+      .seat.evidence_workspace, value === 'true');
+  }
+  for (const value of ['1', '"true"', 'yes', 'null', '[]']) {
+    assert.throws(() => parseConfig(legacy.replace('seat:\n', `seat:\n  evidence_workspace: ${value}\n`)), ConfigError);
+  }
 });
 
 test('onboarding vLLM fields accept a custom host without changing the named profile defaults', () => {

@@ -8,6 +8,44 @@ per TASK.md acceptance check, followed by the rules
 ([#294](https://github.com/R4yHarris/github-agent-roster/issues/294)).
 Subsequent responses and tool results are not part of this initial pack.
 
+## Acceptance continuation (opt-in)
+
+For spec §5.4 execution and §5.8 operation, `seat.evidence_workspace: true`
+(default **false**) carries a bounded, host-validated acceptance capsule between
+coder contexts in the same builtin issue run: endpoint recovery, scope
+expansion, perspective escalation, and review repair. There is no CLI flag,
+new store, runtime, task board, or cross-seat memory access.
+
+TASK.md and the current worktree remain authoritative. Original check numbers
+and full text, including pending and in_progress state, are carried unchanged.
+Missing entries start pending. A required Acceptance continuation section
+appears in the next CONTEXT.md and counts against `seat.context_chars`; it is
+never silently truncated. Malformed entries, TASK/worktree mismatch, stale
+source identity, or an oversized capsule fail explicitly before inference.
+
+The capsule is at most 65,536 characters and includes at most 32 observed tool
+references (file paths or `node --test`, verdicts, and source fingerprints),
+not file bodies, stdout, transcripts, reasoning, or model/usage claims.
+References and evidence are credential-redacted. Terminal checklist updates
+require matching current observed evidence; blocked requires an observed test
+failure. Imported or final-summary prose alone never closes a check. Missing
+or changed evidence reopens terminal entries with an explicit notice; a failed
+or cancelled attempt cannot carry a passing completion. A later failed or
+cancelled test invalidates an earlier passing test observation. Changed source
+bytes require fresh evidence, even if tests previously passed.
+
+Free-form coder checklist evidence is used only to select an already observed
+reference. It is never exported or replayed in the next context. Terminal
+capsule evidence and its rendering are derived exclusively by the host from
+the observation ID, tool, quoted reference, and verdict. Import rejects
+terminal evidence that differs from that canonical reference, including added
+instructions. Exact authoritative TASK text is preserved independently.
+
+This is continuity of obligations, not an acceptance oracle: the existing scope,
+cancellation, final verification, unknown-usage rejection, independent reviewer,
+and publication gates still apply. Default-disabled runs retain the original
+checklist and prose-continuation behavior.
+
 The order is:
 
 1. The installation's [coder conduct](../principals/coder.md).
