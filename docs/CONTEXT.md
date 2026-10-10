@@ -46,6 +46,15 @@ cancellation, final verification, unknown-usage rejection, independent reviewer,
 and publication gates still apply. Default-disabled runs retain the original
 checklist and prose-continuation behavior.
 
+Verify the opt-in behavior on Node 20 with the config, context, checklist,
+runtime, builtin recovery, and replay suites. Include
+`tests/loop.acceptance.test.mjs`: its source-freshness, failed-test, cancellation,
+and test-mutated-source cases are a standard shard of `src/runtime/loop.mjs`,
+not additional independent task samples. Run `tests/test-layout.test.mjs` to
+check the repository's unchanged test-file size and source-module naming gates.
+The builtin recovery cases exercise a real perspective handoff and reviewer
+repair with a deterministic transport; they do not measure a live model.
+
 The order is:
 
 1. The installation's [coder conduct](../principals/coder.md).
