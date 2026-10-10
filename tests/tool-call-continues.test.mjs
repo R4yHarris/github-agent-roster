@@ -8,6 +8,7 @@ import { parseConfig } from '../src/lib/config.mjs';
 import { captureCheckpoint } from '../src/lib/checkpoints.mjs';
 import { planStub } from '../src/planner/stub.mjs';
 import { runCoder } from '../src/seats/coder.mjs';
+import { fullTestPerTestTimeoutMs, fullTestTimeoutMs } from '../src/runtime/tools.mjs';
 
 const example = readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8');
 const config = parseConfig(example.replace('base_url: ""', 'base_url: http://localhost:3456/v1')
@@ -278,7 +279,8 @@ test('a full-suite regression outside Allowed Files is repaired, not excused as 
       runs.push([program === 'git' ? 'git' : 'node', path.resolve(cwd) === path.resolve(options.worktree) ? 'work' : 'base',
         ...args].join(' '));
       if (program === 'git' || path.resolve(cwd) !== path.resolve(options.worktree)) return { stdout: '', stderr: '' };
-      if (args.includes('--test-timeout=120000') && !fixed()) throw failure;
+      if (args.some((arg) => [`--test-timeout=${fullTestTimeoutMs}`,
+        `--test-timeout=${fullTestPerTestTimeoutMs}`].includes(arg)) && !fixed()) throw failure;
       return { stdout: 'all tests pass', stderr: '' };
     },
     fetchImpl: withResearch(async (_url, request) => {
