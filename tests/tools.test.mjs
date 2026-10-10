@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createTools, expandTestShards, isAllowedFile, isForbiddenRead, isForbiddenWrite, taskAndRepairFiles, testFailureEvidence, toolDefinitions } from '../src/runtime/tools.mjs';
+import { createTools, expandTestShards, fullTestTimeoutMs, isAllowedFile, isForbiddenRead, isForbiddenWrite, taskAndRepairFiles, testCommandFor, testFailureEvidence, toolDefinitions } from '../src/runtime/tools.mjs';
 
 function fixture(context) {
   const worktree = mkdtempSync(path.join(tmpdir(), 'roster-tools-'));
@@ -203,7 +203,7 @@ test('a killed test process with numeric exit 1 is a terminal timeout, not a rep
     runCommand: async () => { throw Object.assign(new Error('killed'), {
       code: 1, killed: true, stdout: 'not ok', stderr: '',
     }); } });
-  await assert.rejects(tools.run_test(), /timed out after 60 seconds/);
+  await assert.rejects(tools.run_test(), /timed out after 900 seconds/);
 });
 
 test('edit_file tolerates indentation drift when unambiguous and otherwise shows the closest real text', async (context) => {
@@ -404,13 +404,51 @@ test('a code slice runs only the matching test file', async (context) => {
     runCommand: async (_program, args, options) => { received = { args, timeout: options.timeout }; return { stdout: '', stderr: '' }; } });
   await tools.run_test();
   assert.deepEqual(received.args.slice(0, 3), ['--test', '--test-concurrency', received.args[2]]);
-  assert.equal(received.args[3], '--test-timeout=20000');
+  assert.equal(received.args[3], `--test-timeout=${fullTestTimeoutMs}`);
   assert.equal(received.args.at(-1), 'tests/repl.test.mjs');
-  assert.equal(received.timeout, 60_000);
+  assert.equal(received.timeout, fullTestTimeoutMs);
   const otherRepo = fixture(context);
   const fallback = await createTools({ worktree: otherRepo, allowedFiles: ['README.md'],
     runCommand: async () => { throw new Error('docs-only must not spawn'); } });
   assert.equal((await fallback.run_test()).skipped, true);
+});
+
+test('scoped lifecycle verification permits slow Node 20 file lifetimes under the full code-test policy', async (context) => {
+  const worktree = fixture(context);
+  const selected = ['tests/builtin.recovery.test.mjs', 'tests/builtin.replay.test.mjs'];
+  mkdirSync(path.join(worktree, 'tests'));
+  for (const file of [...selected, 'tests/builtin.models.test.mjs']) {
+    writeFileSync(path.join(worktree, file), '');
+  }
+  assert.equal(testCommandFor(selected).timeoutMs, fullTestTimeoutMs);
+  const controller = new AbortController();
+  const { signal } = controller;
+  const calls = [];
+  const tools = await createTools({ worktree, allowedFiles: selected, signal,
+    runCommand: async (program, args, options) => {
+      if (args[0] === '--check') return { stdout: '', stderr: '' };
+      calls.push(args);
+      assert.equal(program, process.execPath);
+      assert.equal(options.cwd, worktree);
+      assert.equal(options.signal, signal);
+      assert.equal(options.timeout, fullTestTimeoutMs);
+      assert.equal(args[3], `--test-timeout=${fullTestTimeoutMs}`);
+      // Healthy replay exceeds both the former scoped limit and the 2-minute full-suite limit.
+      const lifecycleFileMs = 129_553;
+      assert.ok(Number(args[3].split('=')[1]) > lifecycleFileMs);
+      assert.ok(options.timeout > lifecycleFileMs * selected.length);
+      return { stdout: 'lifecycle fixtures pass', stderr: '' };
+    } });
+  assert.equal((await tools.run_test()).exit_code, 0);
+  assert.deepEqual(calls[0].slice(4), selected);
+  assert.deepEqual(calls[0].slice(0, 3), testCommandFor(selected).args.slice(0, 3));
+  assert.equal((await tools.run_test({}, { full: true })).exit_code, 0);
+  assert.deepEqual(calls[1], calls[0].slice(0, 4), 'final verification still runs the entire suite');
+  controller.abort();
+  await assert.rejects(tools.run_test(), { code: 'ROSTER_CANCELLED' });
+  assert.equal(calls.length, 2, 'cancellation must not spawn another verification');
+  assert.match(toolDefinitions.find(({ function: tool }) => tool.name === 'run_test').function.description,
+    /15-minute test-file and process timeouts/);
 });
 
 test('every tool refuses "..", vendor, and absolute paths before it runs', async (context) => {

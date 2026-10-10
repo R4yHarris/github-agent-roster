@@ -237,15 +237,20 @@ before a search tool-start event.
 `run_test` accepts no arbitrary command or shell arguments. It strips the
 configured model API key and App/GitHub credentials from the child
 environment, marks the child as `ROSTER_SEAT=coder` to preserve the human-only
-evaluation boundary, and captures test output. A docs slice whose only allowed
-file is `README.md` runs `node --test tests/repl.test.mjs` with a 60-second
-cap and never spawns the full suite; a repository without that file falls back
-to the full suite. A code slice's own `run_test` calls run the tests that cover
-its files plus any failing tests already surfaced for repair, with a 60-second
-cap. A module test split into `tests/<module>.<topic>.test.mjs` shards counts
+evaluation boundary, and captures test output. Docs-only scope, including
+`README.md`, skips tests and checks the file; it never spawns a fallback suite.
+A code slice's own `run_test` calls run the tests that cover
+its files plus any failing tests already surfaced for repair, using the existing
+code verification policy: a 15-minute process cap and a 15-minute Node test-file cap.
+Node 20 also applies `--test-timeout` to aggregate test-file lifetime, so a healthy
+slow lifecycle fixture must not inherit a docs-only or 2-minute aggregate cap.
+This does not guarantee a separate 2-minute per-subtest deadline. This Eve rollout
+verification fix (#473) follows feature spec sections [5.4, 5.5, and 5.8](FEATURE_SPEC.md#54-execution):
+scoped execution, unchanged verification gates, and bounded operation.
+A module test split into `tests/<module>.<topic>.test.mjs` shards counts
 as `tests/<module>.test.mjs`: the run includes every shard, and the coder may
 update any shard (see [testing](TESTING.md)). Final verification, which only the harness can request, runs the full
-`node --test` suite with a 15-minute cap and a 2-minute per-test timeout,
+`node --test` suite with the same 15-minute process and test-file caps,
 because a slice can break tests in files it never planned to touch.
 Full-suite failures outside Allowed Files are rerun alone (a pass marks a
 flake), then once at the base commit in a temporary detached worktree. Initialized
@@ -268,10 +273,10 @@ steering path. Failed-test evidence shown to the coder and in RESULT.md keeps
 the reporter's `failing tests:` section (or `✖`/`not ok` blocks) and counts,
 plus the stderr tail, rather than the head of a long list of passing lines.
 A nonzero Node exit is a failed tool result rather than completion,
-so the coder receives its summary and a fresh repair attempt. Each test also
-gets `--test-timeout` of one third of the cap, so a hanging test (for example
-an unbounded retry loop) fails at its location as a repairable check instead
-of starving the whole run. A whole-process timeout is still an explicit
+so the coder receives its summary and a fresh repair attempt. Both scoped and
+full code verification use the same 15-minute `--test-timeout`; Node timeout
+failures remain failed checks, and the process cap bounds the whole invocation.
+A whole-process timeout is still an explicit
 error. Final verification must pass before a configured run reports
 success or publishes. The [excellence gate](EXCELLENCE.md) verifies actual
 diff paths and secret checks before RESULT.md and again before publication;

@@ -10,7 +10,7 @@ import { appendMemory, readMemory, seatMemoryPath } from '../src/runtime/memory.
 import { loadSkills } from '../src/runtime/skills.mjs';
 import { runCoder as runCoderSeat } from '../src/seats/coder.mjs';
 import { failingTestCount, runLoop } from '../src/runtime/loop.mjs';
-import { ToolUsageError } from '../src/runtime/tools.mjs';
+import { fullTestTimeoutMs, ToolUsageError } from '../src/runtime/tools.mjs';
 import { withResearchSummary } from './helpers/research.mjs';
 
 function runCoder(options) {
@@ -844,8 +844,8 @@ test('a nonzero run_test returns captured output for the coder to fix in the nex
     runTestCommand: async (_program, _args, { timeout }) => {
       if (_args[0] === '--check') return { stdout: '', stderr: '' };
       testRuns += 1;
-      // The coder's own run is targeted; final verification runs the full suite with its longer cap.
-      assert.equal(timeout, testRuns === 1 ? 60_000 : 900_000);
+      // Targeted and final verification share the bounded code-test policy.
+      assert.equal(timeout, fullTestTimeoutMs);
       if (testRuns === 1) throw Object.assign(new Error('tests failed'), {
         code: 1, stdout: 'not ok', stderr: 'assertion failed',
       });

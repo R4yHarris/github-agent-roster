@@ -413,7 +413,7 @@ test('an issue-176-shaped planner response reaches coder, real tests, and review
       testCalls += 1;
       assert.equal(args[0], '--test');
       // Final verification runs the whole suite of the fixture worktree.
-      assert.equal(args.at(-1), '--test-timeout=120000');
+      assert.equal(args.at(-1), '--test-timeout=900000');
       return { stdout: execFileSync(program, args, { ...commandOptions, encoding: 'utf8' }), stderr: '' };
     },
   });

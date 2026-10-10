@@ -136,7 +136,7 @@ export function testCommandFor(allowedFiles, available = os.availableParallelism
   }
   const files = relevantTestFiles(allowedFiles);
   return files.length
-    ? { args: ['--test', '--test-concurrency', jobs, ...files], timeoutMs: docsTestTimeoutMs,
+    ? { args: ['--test', '--test-concurrency', jobs, ...files], timeoutMs: fullTestTimeoutMs,
       label: `node --test --test-concurrency ${jobs} ${files.join(' ')}` }
     : { skip: true, args: [], timeoutMs: 0, label: 'no relevant tests for the changed files' };
 }
@@ -453,7 +453,7 @@ export const toolDefinitions = [
     type: 'function',
     function: {
       name: 'run_test',
-      description: 'Run node --test in the worktree with a 60-second timeout.',
+      description: 'Run scoped node --test in the worktree with 15-minute test-file and process timeouts; docs-only scope skips tests.',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
     },
   },
@@ -1147,7 +1147,7 @@ export async function createTools({
       const jobs = String(testConcurrency());
       if (full && seat === 'coder') {
         // Final verification runs the whole suite: a slice can break tests in files it never planned to touch.
-        command.args = ['--test', '--test-concurrency', jobs, `--test-timeout=${fullTestPerTestTimeoutMs}`];
+        command.args = ['--test', '--test-concurrency', jobs, `--test-timeout=${fullTestTimeoutMs}`];
         command.timeoutMs = fullTestTimeoutMs;
       } else {
         const present = [];
@@ -1163,9 +1163,9 @@ export async function createTools({
         present.splice(0, present.length, ...expandTestShards(command.args.slice(3),
           [...present, ...shards], [...planned, ...repairFiles]));
         if (!present.length) return { exit_code: 0, skipped: true, stdout: 'no relevant tests exist for the changed files', stderr: '' };
-        // A per-test timeout turns a hanging test into a located, repairable failure before the outer kill.
+        // Node 20 also caps aggregate test-file lifetime, so scoped code uses the full verification limit.
         command.args = ['--test', '--test-concurrency', command.args[2],
-          `--test-timeout=${Math.floor(command.timeoutMs / 3)}`, ...present];
+          `--test-timeout=${fullTestTimeoutMs}`, ...present];
       }
       command.label = `node ${command.args.join(' ')}`;
       try {
