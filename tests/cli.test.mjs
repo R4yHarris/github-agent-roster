@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { createFileVault } from "../src/vault/file.mjs";
+import { classifyAsk, clarificationHint } from "../src/planner/classify.mjs";
 
 const cli = fileURLToPath(new URL("../src/cli.mjs", import.meta.url));
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -111,6 +112,17 @@ test("ask CLI creates an offline draft with a create command when gh is missing"
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("ask CLI reports a genuinely ambiguous ask without creating a draft", () => {
+  const ask = "Improve the product overall.";
+  const classification = classifyAsk(ask);
+  assert.equal(classification.kind, "clarify");
+  const result = run(["ask", ask]);
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, `Ask kind: clarify\n${clarificationHint}\n`);
+  assert.doesNotMatch(result.stdout, /Ask:|RECIPE:|TASK:|Next:|RESULT:|REVIEW:/);
 });
 
 test("builtin CLI defaults to paired seats, rejects unsupported selections, and refuses stub publication", () => {

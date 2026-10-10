@@ -403,9 +403,8 @@ export function createDispatcher({
       display: { ...state.display },
     });
     notify();
-    output.write(state.lastRun.askKind === 'clarify'
-      ? `${state.lastRun.clarification}\n`
-      : state.lastRun.failed
+    // Builtin clarification already prints its notice through the shared log.
+    if (state.lastRun.askKind !== 'clarify') output.write(state.lastRun.failed
       ? 'Planning failed; stubs are unverified. Coder, tests, reviewer, and publication did not run. Check the planner diagnostic, then retry.\n'
       : state.lastRun.planMode
       ? 'Plan ready. Press Enter to accept and continue, or /stop to keep the plan without coding.\n'
