@@ -33,7 +33,7 @@ import { createRunLog } from './run-log.mjs';
 import { humanEvalHint, recordedCoderRun } from './seat-publication.mjs';
 import { formatRoute, routeTask } from './route.mjs';
 import { classifyAsk, clarificationHint } from '../planner/classify.mjs';
-import { parseTaskDocument } from '../planner/task.mjs';
+import { outputDirectoryFromAsk, parseTaskDocument } from '../planner/task.mjs';
 import { retryCommandForTask } from '../llm/request.mjs';
 import { selectReasoning } from '../llm/reasoning.mjs';
 import { readTaskMetadata } from '../runtime/estimate.mjs';
@@ -652,7 +652,8 @@ async function prepareLocalAsk(ask, { cwd, config, runCommand, start: startOverr
   const assignmentPath = path.join(worktreePath, 'ASSIGNMENT.md');
   await fs.writeFile(assignmentPath, `# Local Ask\n\n${ask}\n`, { flag: 'wx' });
   return { repoRoot, worktreePath, task, session: `roster-${task}-coder`, ask, assignmentPath,
-    issue: { title: ask.split('\n')[0], body: ask }, local: true, reused: false, start, drift: null };
+    issue: { title: outputDirectoryFromAsk(ask) ? ask.trim().split('\n')[0] : ask.split('\n')[0],
+      body: ask }, local: true, reused: false, start, drift: null };
 }
 
 async function reusePreparedAssignment(run, { cwd, config, runCommand, ask, issueNumber }) {
@@ -1239,10 +1240,13 @@ async function executeBuiltinAssignment(issueNumber, {
     return selected;
   };
   const recipeCoder = parseRecipe(planner.recipe).seats.find(({ id }) => id === 'coder');
+  const directoryScoped = Boolean(outputDirectoryFromAsk(prepared.ask));
   let scopeBudget;
   const buildCoderConfig = (model) => selectReasoning({ ...activeConfig,
+    ...(directoryScoped ? { tools: { ...activeConfig.tools, internet: false } } : {}),
     seat: { ...activeConfig.seat, ...(recipeCoder.tools === undefined ? {} : { recipe_tools: recipeCoder.tools }),
-      ...(scopeBudget === undefined ? {} : { scope_expansion: scopeBudget }) },
+      ...(directoryScoped ? { scope_expansion: 0 }
+        : scopeBudget === undefined ? {} : { scope_expansion: scopeBudget }) },
     llm: {
     ...activeConfig.llm, model,
     effort: planner.feedback?.effort ?? activeConfig.llm.effort,
@@ -1359,7 +1363,10 @@ async function executeBuiltinAssignment(issueNumber, {
     return liveLog.seat('coder', sessions.coder, coderConfig, (onEvent) => runCoder({
       worktree: worktreePath, repoRoot, config: coderConfig, task: prepared.task, session: sessions.coder,
       fetchImpl, env, vault, runTestCommand, priorFeedback, onEvent, askKind, retryCommand, signal, steeringControl,
-      initialBaseline, initialScopeFiles, initialRepairFiles, continuation, acceptanceContinuation, priorWaveFiles, priorWrites,
+      initialBaseline,
+      initialScopeFiles: directoryScoped ? [] : initialScopeFiles,
+      initialRepairFiles: directoryScoped ? [] : initialRepairFiles,
+      continuation, acceptanceContinuation, priorWaveFiles, priorWrites,
     }));
   };
   let result;
@@ -1415,7 +1422,7 @@ async function executeBuiltinAssignment(issueNumber, {
           `The previous coder attempt on fleet profile ${failedProfile} stopped because of an endpoint route failure, ` +
           'not a task failure. Its edits remain in the worktree: inspect them, keep what is correct, and continue ' +
           'to a verified result with a different approach rather than repeating the same steps.';
-      } else if (rescopeBudget(error, coderConfig.seat.scope_expansion ?? 3, rescopes.length)) {
+      } else if (!directoryScoped && rescopeBudget(error, coderConfig.seat.scope_expansion ?? 3, rescopes.length)) {
         // The plan is a pre-read estimate: a coder blocked only by the expansion limit gets a larger budget,
         // not a failed run. Protected paths stay denied and the reviewer still judges every expanded file.
         const previous = coderConfig.seat.scope_expansion ?? 3;

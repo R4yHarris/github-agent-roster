@@ -4,7 +4,7 @@ import { normalizeAsk } from './task.mjs';
 export const askKinds = Object.freeze(['clarify', 'slice', 'feature', 'initiative']);
 
 export const clarificationHint = 'Clarify one concrete outcome and name the allowed files, ' +
-  'or state a feature or initiative to plan. No seat or implementation ran.';
+  'grant a relative output directory, or state a feature or initiative to plan. No seat or implementation ran.';
 
 export function classifyAsk(ask, { title, filesAllowed = [] } = {}) {
   const text = cleanAskText(ask);
@@ -41,6 +41,9 @@ export function classifyAsk(ask, { title, filesAllowed = [] } = {}) {
   }
   if (requirements.files.length || filesAllowed.length || oneLiner) {
     return result('slice', 'One bounded, named-file outcome can use the sequential seats');
+  }
+  if (requirements.outputDirectory) {
+    return result('slice', 'One explicit relative output directory bounds planner-chosen files for the sequential seats');
   }
   return result('clarify', 'The Ask lacks executable file scope or a clear planning outcome');
 }

@@ -7,7 +7,7 @@ import { isAllowedFile, plannerToolDefinitions } from '../runtime/tools.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
 import { applyFeedback } from './feedback.mjs';
 import { parsePlannerToolCalls } from './tool-calls.mjs';
-import { allowedFile, checkedList, ensureAcceptanceChecks, ensureAllowedFiles, ensureOriginalAsk, ensureTitleHeading, oneLine, parseTaskDocument } from './task.mjs';
+import { allowedFile, checkedList, ensureAcceptanceChecks, ensureAllowedFiles, ensureOriginalAsk, ensureTitleHeading, isDirectoryDocumentAsk, oneLine, outputDirectoryFromAsk, parseTaskDocument, validateDirectoryDocumentPlan, validateDirectoryFiles } from './task.mjs';
 import { selectReasoning } from '../llm/reasoning.mjs';
 import { isLlmTimeout, localRequestTimeoutMs, resolveRequestTimeout } from '../llm/request.mjs';
 import { issueWave } from '../lib/wave-labels.mjs';
@@ -43,7 +43,7 @@ export function cleanAskText(ask) {
   if (/[\x00-\x08\x0b-\x1f\x7f]/.test(normalized)) {
     throw new TypeError('Ask must be nonempty UTF-8 text of at most 16 KiB');
   }
-  return normalized.trim();
+  return outputDirectoryFromAsk(normalized) ? normalized : normalized.trim();
 }
 
 function listInAsk(ask, heading) {
@@ -61,18 +61,23 @@ function listInAsk(ask, heading) {
 export function askRequirements(ask, { allowMissing = false } = {}) {
   const cleanAsk = cleanAskText(ask);
   const explicitFiles = listInAsk(cleanAsk, '(?:Files allowed|Allowed files|files_allowed|allowed_files)');
+  const outputDirectory = outputDirectoryFromAsk(cleanAsk);
   const files = explicitFiles ? checkedList(explicitFiles, 'Files allowed', allowedFile, 32)
     : [...new Set((cleanAsk.match(filename) ?? []).filter((file) => {
       try { allowedFile(file); return true; } catch { return false; }
-    }))].filter((file) => !new RegExp(`node --test(?:\\s+\\S+)*\\s+${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(cleanAsk));
-  if (!files.length && !allowMissing) {
+    }))].filter((file) => file !== outputDirectory &&
+      !new RegExp(`node --test(?:\\s+\\S+)*\\s+${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(cleanAsk));
+  if (!files.length && !outputDirectory && !allowMissing) {
     throw new TypeError('Ask must name or declare allowed files before TASK can validate; no file scope will be invented');
   }
   const outcomes = listInAsk(cleanAsk, 'Outcomes');
-  return { files, outcomes, explicit: Boolean(explicitFiles), requiresRun: !explicitFiles || (outcomes?.length ?? 1) !== 1 };
+  return { files, outcomes, explicit: Boolean(explicitFiles),
+    ...(outputDirectory ? { outputDirectory } : {}),
+    requiresRun: !explicitFiles || (outcomes?.length ?? 1) !== 1 };
 }
 
 function checkAskScope(files, requirements) {
+  if (requirements.outputDirectory) validateDirectoryFiles(files, requirements.outputDirectory);
   if (requirements.files.length && files.some((file) => !isAllowedFile(file, requirements.files))) {
     throw new TypeError('Planner cannot invent extra files beyond the human Ask allowed paths');
   }
@@ -87,7 +92,11 @@ export function buildPlan(ask, { reference, title, acceptanceChecks, filesAllowe
     (check) => oneLine(check, 'Acceptance check'))
     .filter((check) => !(docsOnly && /node --test/.test(check)));
   const requirements = scope ?? askRequirements(cleanAsk);
+  if (requirements.outputDirectory && !checks.length) {
+    throw new TypeError('Acceptance checks must include a verifiable requested outcome');
+  }
   checkAskScope(files, requirements);
+  validateDirectoryDocumentPlan(cleanAsk, files, checks);
   const design = grounding && !docsOnly && isCodeSlice(files) ? normalizeDesign(plannedDesign) : null;
   const unknown = groundingErrors({ checks, design, filesAllowed: files, askText: `${title ?? ''}\n${cleanAsk}`, index: grounding?.index });
   if (unknown.length) throw new TypeError(`Plan cites names that do not exist: ${unknown.slice(0, 6).join('; ')}`);
@@ -95,7 +104,7 @@ export function buildPlan(ask, { reference, title, acceptanceChecks, filesAllowe
   const estimate = estimateTask({
     ...metadata, task_class: metadata.task_class === undefined ? inferTaskClass(title) ?? 'feat' : metadata.task_class,
   });
-  const task = render(template('TASK'), {
+  let task = render(template('TASK'), {
       TITLE: oneLine(title || cleanAsk.split(/\r?\n/).find((line) => line.trim()) || 'Task', 'Task title'),
       DIFFICULTY: estimate.difficulty,
       ESTIMATE_MIN: estimate.estimate_min,
@@ -105,6 +114,11 @@ export function buildPlan(ask, { reference, title, acceptanceChecks, filesAllowe
       FILES: files.map((file) => `- \`${file}\``).join('\n'),
       ASK: cleanAsk,
   });
+  if (requirements.outputDirectory) {
+    const newFiles = files.filter((file) => !grounding?.index?.files.has(file));
+    if (newFiles.length) task = task.replace(/^## Ask$/m,
+      `## New files\n\n${newFiles.map((file) => `- \`${file}\``).join('\n')}\n\n## Ask`);
+  }
   return { recipe, task: design ? withDesign(task, design) : task };
 }
 
@@ -116,13 +130,15 @@ export function runtimeRecipe(reference) {
 
 export function planStub(ask, { reference = 'local:draft', title, metadata } = {}) {
   const cleanAsk = cleanAskText(ask);
-  const checkList = listInAsk(cleanAsk, 'Acceptance checks') ?? defaultChecks;
+  const checkList = listInAsk(cleanAsk, 'Acceptance checks') ??
+    (isDirectoryDocumentAsk(cleanAsk) ? ['The Markdown documents describe the requested design and instructions'] : defaultChecks);
   const requirements = askRequirements(title ? `${title}\n${cleanAsk}` : cleanAsk);
   return buildPlan(ask, {
     reference,
-    title: title ?? cleanAsk.split(/\r?\n/)[0].slice(0, 200),
+    title: title ?? cleanAsk.trim().split(/\r?\n/)[0].slice(0, 200),
     acceptanceChecks: checkList,
-    filesAllowed: requirements.files,
+    filesAllowed: requirements.files.length ? requirements.files
+      : [`${requirements.outputDirectory}/README.md`],
     metadata, scope: requirements,
   });
 }
@@ -181,6 +197,7 @@ export async function planAsk(ask, {
     throw new TypeError('Planner tools must expose only the scoped write_file function');
   }
   const requirements = askRequirements(title ? `${title}\n${cleanAsk}` : cleanAsk);
+  if (criticFeedback) requirements.files = parseTaskDocument(criticFeedback.task, { expectedAsk: cleanAsk }).files_allowed;
   const finish = (plan) => ({ ...(learningRoot
     ? { ...plan, ...applyFeedback(plan.task, { learningRoot, config, env }) } : plan),
     requiresRun: requirements.requiresRun });
@@ -208,6 +225,12 @@ export async function planAsk(ask, {
       'Optional fields: difficulty (1-5), estimate_min, task_class (feat|fix|docs|test), model, steps, notes. ' +
       (lockedModel ? `Keep model ${lockedModel}; do not choose another model. ` : '') +
       'Stay within the human Ask paths. Work toward a complete executable handoff. ' +
+      (requirements.outputDirectory ? `The human grants only the output directory "${requirements.outputDirectory}". ` +
+        'Choose concrete files beneath it, never a wildcard or an outside file. Preserve Original Ask exactly, including spelling. ' +
+        'Declare new paths under ## New files when writing TASK.md; JSON plans are declared by the harness. ' +
+        'Design/setup documentation requests authorize documents only, not purchases, accounts, deployment, network or publication. ' +
+        'For document intent, choose only Markdown files and checks describing document contents, never action-success checks. ' +
+        'Use document-content acceptance checks for documentation, not installation/deployment commands. ' : '') +
       (grounding ? 'Existing definitions below are real repository code. In acceptance_checks, name real exports in backticks ' +
         '(for example `openStore`) instead of concepts; the harness rejects backticked names that do not exist. ' +
         'For a code task add design: {extend:[{file,exports}], new_exports:[{file,name}], outline:[steps], ' +
