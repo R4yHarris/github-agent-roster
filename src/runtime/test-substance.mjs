@@ -119,7 +119,9 @@ function parseImports(text) {
     if (named) {
       for (const part of named[1].split(',')) {
         const local = part.trim().split(/\s+as\s+/).pop()?.trim();
-        if (local && /^[A-Za-z_$][\w$]*$/.test(local)) names.push({ name: local });
+        if (local && /^[A-Za-z_$][\w$]*$/.test(local)) {
+          names.push({ name: local, imported: part.trim().split(/\s+as\s+/)[0].trim() });
+        }
       }
     }
     const fallback = /^([A-Za-z_$][\w$]*)/.exec(clause.trim());
@@ -174,6 +176,10 @@ function calls(masked, names, instances = new Set()) {
 // File-local functions whose bodies call app code (directly or through another such helper).
 function appHelpers(text, masked, appNames) {
   const definitions = [];
+  const promisifiers = parseImports(text).filter(({ specifier, imported }) =>
+    /^(node:)?util$/.test(specifier) && imported === 'promisify').map(({ name }) => name);
+  const aliasPattern = /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([A-Za-z_$][\w$]*)\s*\(\s*([A-Za-z_$][\w$]*)\s*\)\s*;/g;
+  const aliases = [...masked.matchAll(aliasPattern)].filter((match) => promisifiers.includes(match[2]));
   const pattern = /(?:^|[^\w$.])(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*\(|(?:^|[^\w$.])(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s+)?(?:function\b|\([^)]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)/g;
   for (const match of masked.matchAll(pattern)) {
     const name = match[1] ?? match[2];
@@ -182,7 +188,12 @@ function appHelpers(text, masked, appNames) {
     if (match[1]) {
       const brace = masked.indexOf('{', masked.indexOf(')', start));
       end = brace < 0 ? masked.length : matchingClose(masked, brace);
-    } else end = statementEnd(masked, masked.indexOf('=', start) + 1);
+    } else {
+      const bodyStart = match[0].endsWith('=>') ? start + match[0].length
+        : masked.indexOf('=', start) + 1;
+      const first = masked.slice(bodyStart).search(/\S/);
+      end = statementEnd(masked, first < 0 ? masked.length : bodyStart + first);
+    }
     definitions.push({ name, body: masked.slice(start, end < 0 ? masked.length : end + 1) });
   }
   const helpers = new Set();
@@ -190,6 +201,12 @@ function appHelpers(text, masked, appNames) {
   while (changed) {
     changed = false;
     const sinks = new Set([...appNames, ...helpers]);
+    for (const [, name, , wrapped] of aliases) {
+      if (!helpers.has(name) && sinks.has(wrapped)) {
+        helpers.add(name);
+        changed = true;
+      }
+    }
     for (const { name, body } of definitions) {
       if (helpers.has(name) || appNames.has(name)) continue;
       if (calls(body.replace(new RegExp(`^[\\s\\S]*?${name.replace(/\$/g, '\\$')}`), ''), sinks).length) {
