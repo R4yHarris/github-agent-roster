@@ -38,6 +38,74 @@ test('all planner ingress paths reject oversized checks and preserve the exact 2
   assert.equal(parseTaskDocument(task.replace(full, long), { expectedAsk: ask }).acceptance_checks[0], long);
 });
 
+test('every planner ingress identifies the normalized oversized check without echoing its contents', () => {
+  const safe = 'The guide contains setup instructions';
+  const secret = 'test-only-private-api-key';
+  const long = `${check(241 - secret.length - 1)} ${secret}`;
+  assert.equal(long.length, 241);
+  const raw = long.replace(' contains ', '  contains \n   ');
+  const task = buildPlan(ask, { ...options, acceptanceChecks: [safe, check(240)] }).task;
+  const receipt = `title: ${JSON.stringify(parseTaskDocument(task).title)}\n` +
+    `acceptance_checks:\n  - ${JSON.stringify(safe)}\n  - ${JSON.stringify(raw)}\nfiles_allowed:\n  - guide/README.md\n`;
+  const plan = outline(check(240));
+  plan.issues[0].acceptance_checks = [safe, raw];
+  for (const operation of [
+    () => buildPlan(ask, { ...options, acceptanceChecks: [safe, raw] }),
+    () => planFromTask(task.replace(check(240), raw), ask),
+    () => validatePlan(plan, { kind: 'feature', filesAllowed: options.filesAllowed }),
+    () => validatePlanningReceipt(receipt, parseTaskDocument(task)),
+  ]) {
+    assert.throws(operation, (error) => {
+      assert.match(error.message, /^Acceptance check must be at most 240 characters/);
+      assert.match(error.message, /check 2, got 241, exceeds limit by 1/);
+      assert.match(error.message, /split.*without dropping requirements/);
+      assert.ok(!error.message.includes(secret));
+      return true;
+    });
+  }
+});
+
+test('measured feedback lets the planner split an oversized check without losing the original requirements', async () => {
+  const config = parseConfig(readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8')
+    .replace('base_url: ""', 'base_url: "http://localhost:1234/v1"').replace('model: ""', 'model: test-model'));
+  const safe = 'The guide contains setup instructions';
+  const pieces = [
+    'The guide contains setup instructions covering prerequisites, local preview commands and verification steps that the reader can follow.',
+    'The guide contains a safety warning explaining that commands are illustrative examples and that readers must supply their own placeholder values.',
+  ];
+  const long = pieces.join('; ');
+  assert.ok(long.length > 240);
+  assert.ok(pieces.every((piece) => piece.length <= 240));
+  let calls = 0;
+  const result = await planAsk(ask, { config, env: {},
+    tools: { write_file: async () => ({ ok: true }) },
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      calls += 1;
+      if (calls === 1) {
+        const valid = buildPlan(ask, { ...options, acceptanceChecks: [safe, check(240)] }).task;
+        return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant', tool_calls: [{ id: 'long-check', type: 'function', function: {
+            name: 'write_file', arguments: JSON.stringify({ path: 'TASK.md', content: valid.replace(check(240), long) }),
+          } }],
+        } }] });
+      }
+      assert.ok(body.messages.at(-1).content.includes(
+        `check 2, got ${long.length}, exceeds limit by ${long.length - 240}`));
+      return Response.json({ choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant', content: JSON.stringify({
+          title: 'Guide', acceptance_checks: [safe, ...pieces], files_allowed: options.filesAllowed,
+        }),
+      } }] });
+    } });
+  assert.equal(calls, 2);
+  const parsed = parseTaskDocument(result.task, { expectedAsk: ask });
+  assert.deepEqual(parsed.acceptance_checks, [safe, ...pieces]);
+  assert.deepEqual(parsed.files_allowed, options.filesAllowed);
+  assert.equal(parsed.ask, ask);
+  assert.equal(result.error, undefined);
+});
+
 test('an oversized written TASK stays invalid until a complete concise JSON correction', async () => {
   const config = parseConfig(readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8')
     .replace('base_url: ""', 'base_url: "http://localhost:1234/v1"').replace('model: ""', 'model: test-model'));

@@ -12,10 +12,12 @@ export function oneLine(value, label) {
   return normalizedLine(value, label).slice(0, 240);
 }
 
-export function acceptanceCheck(value) {
+export function acceptanceCheck(value, index = 0) {
   const check = normalizedLine(value, 'Acceptance check');
   if (check.length > 240) {
-    throw new TypeError('Acceptance check must be at most 240 characters; split it into several shorter checks (up to 8) without dropping requirements');
+    throw new TypeError('Acceptance check must be at most 240 characters' +
+      ` (check ${index + 1}, got ${check.length}, exceeds limit by ${check.length - 240}); ` +
+      'split it into several shorter checks (up to 8) without dropping requirements');
   }
   return check;
 }

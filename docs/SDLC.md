@@ -203,7 +203,11 @@ without editing the tracked example or storing credentials.
   accept `steps`/`notes` hints without granting extra scope. A complete validated
   JSON plan accompanying an incomplete artifact draft is finalized without an
   extra model call. Invalid drafts return their validation error to the planner,
-  rather than a misleading successful write alone. Written tasks and JSON plans
+  rather than a misleading successful write alone. An oversized acceptance check
+  reports its 1-based position, normalized character count and excess over the
+  240-character limit without echoing its contents. Split the requirement into
+  shorter checks (at most eight total), preserving every outcome; checks are never
+  truncated and correction budgets are unchanged. Written tasks and JSON plans
   must both keep the routed model. Failed planning stops the seat chain:
   unverified stubs never start a coder, reviewer, tests, or publisher.
   Feature/initiative planning instead uses tool-free JSON and a PLAN-only
