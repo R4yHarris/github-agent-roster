@@ -1,10 +1,17 @@
 import { splitTaskFrontmatter } from '../runtime/skills.mjs';
 import { isForbiddenWrite, planArtifactFiles, plannerArtifactFiles } from '../runtime/tools.mjs';
 
-export function oneLine(value, label) {
+export function oneLine(value, label, { truncate = true } = {}) {
   const collapsed = typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim() : '';
   if (!collapsed) throw new TypeError(`${label} must be one nonempty line (at most 240 characters)`);
+  if (!truncate && collapsed.length > 240) {
+    throw new TypeError(`${label} must be at most 240 characters; shorten it without dropping requirements`);
+  }
   return collapsed.slice(0, 240);
+}
+
+export function acceptanceCheck(value) {
+  return oneLine(value, 'Acceptance check', { truncate: false });
 }
 
 export function allowedFile(value) {
@@ -266,7 +273,7 @@ export function parseTaskDocument(task, { expectedAsk, issueTitle, issueBody } =
   }
   const acceptance_checks = checkedList(sectionList(parsed.sections.find(({ name }) => name === 'acceptance checks'),
     'Acceptance Checks (or acceptance_checks)', { continuations: true }),
-  'Acceptance checks', (line) => oneLine(line, 'Acceptance check'));
+  'Acceptance checks', acceptanceCheck);
   const files_allowed = taskFilesAllowed(task);
   if (outputDirectory) {
     validateDirectoryFiles(files_allowed, outputDirectory);

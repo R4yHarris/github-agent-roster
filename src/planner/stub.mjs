@@ -7,7 +7,7 @@ import { isAllowedFile, plannerToolDefinitions } from '../runtime/tools.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
 import { applyFeedback } from './feedback.mjs';
 import { parsePlannerToolCalls } from './tool-calls.mjs';
-import { allowedFile, checkedList, ensureAcceptanceChecks, ensureAllowedFiles, ensureOriginalAsk, ensureTitleHeading, isDirectoryDocumentAsk, oneLine, outputDirectoryFromAsk, parseTaskDocument, validateDirectoryDocumentPlan, validateDirectoryFiles } from './task.mjs';
+import { acceptanceCheck, allowedFile, checkedList, ensureAcceptanceChecks, ensureAllowedFiles, ensureOriginalAsk, ensureTitleHeading, isDirectoryDocumentAsk, oneLine, outputDirectoryFromAsk, parseTaskDocument, validateDirectoryDocumentPlan, validateDirectoryFiles } from './task.mjs';
 import { selectReasoning } from '../llm/reasoning.mjs';
 import { isLlmTimeout, localRequestTimeoutMs, resolveRequestTimeout } from '../llm/request.mjs';
 import { issueWave } from '../lib/wave-labels.mjs';
@@ -89,7 +89,7 @@ export function buildPlan(ask, { reference, title, acceptanceChecks, filesAllowe
   const files = checkedList(filesAllowed, 'Files allowed', allowedFile, 32);
   const docsOnly = files.length > 0 && files.every((file) => file.endsWith('.md'));
   const checks = checkedList(acceptanceChecks, 'Acceptance checks',
-    (check) => oneLine(check, 'Acceptance check'))
+    acceptanceCheck)
     .filter((check) => !(docsOnly && /node --test/.test(check)));
   const requirements = scope ?? askRequirements(cleanAsk);
   if (requirements.outputDirectory && !checks.length) {
@@ -222,6 +222,7 @@ export async function planAsk(ask, {
         : 'You have no tools in this draft-only planning context. ') +
       'Plan one software task. JSON shape: {"title":"Task title","acceptance_checks":["check"],"files_allowed":["path"]}. ' +
       'Use 1-8 acceptance checks in JSON or TASK.md; group related checks without dropping requirements. ' +
+      'Each acceptance check must be at most 240 characters; shorten wording without dropping requirements. ' +
       'A code task needs acceptance_checks including node --test exits 0 and files_allowed. ' +
       'Optional fields: difficulty (1-5), estimate_min, task_class (feat|fix|docs|test), model, steps, notes. ' +
       (lockedModel ? `Keep model ${lockedModel}; do not choose another model. ` : '') +

@@ -42,6 +42,13 @@ it. Planner memory is not read by the coder. This introduces no new store,
 shared raw history, model-learning claim or autonomous permission grant.
 These boundaries implement FEATURE_SPEC sections 5.2, 5.4 and 5.6.
 
+Acceptance checks are bounded to 240 characters after whitespace normalization.
+Slice JSON, written task/plan documents, child outlines and planning receipts
+reject oversized checks explicitly rather than cutting off requirements.
+Model validation feedback requests concise complete wording within the existing
+turn budget. Title shortening is unchanged. This implements FEATURE_SPEC
+sections 5.3-5.5; neither the original Ask nor its safety obligations are waived.
+
 Both ordinary minimum and full coder packs include the complete configured
 [coder principal](../principals/coder.md) and root repository coding rules.
 The existing rules filter still omits harness-only publication, credentials
