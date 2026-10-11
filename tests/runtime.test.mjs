@@ -172,8 +172,9 @@ test('LLM coder uses only offered tools within the turn budget, then verifies te
     assert.equal(request.headers.Authorization, 'Bearer private-value');
     const sent = JSON.parse(request.body);
     assert.match(sent.messages[0].content, /Principal coder:[\s\S]*No merge, no deploy/);
-    assert.equal(sent.messages[0].content,
-      readFileSync(path.join(options.worktree, 'CONTEXT.md'), 'utf8'));
+    assert.ok(sent.messages[0].content.startsWith(
+      readFileSync(path.join(options.worktree, 'CONTEXT.md'), 'utf8')));
+    assert.match(sent.messages[0].content, /# Engineering mission and operating baseline/);
     assert.ok(sent.messages[0].content.length <= options.config.seat.context_chars);
     assert.equal(options.config.seat.context_chars, 200000);
     assert.deepEqual(sent.tools.map((tool) => tool.function.name),

@@ -232,7 +232,7 @@ for (const selection of ['explicit', 'feedback']) {
         assert.equal(body.model, requests === 1 ? 'local-model' : 'task-model');
         if (requests === 2) {
           assert.match(body.messages[0].content, /# Outcome:[\s\S]*## Checks/);
-          assert.doesNotMatch(body.messages[0].content, /## Prior feedback|## Principal/);
+          assert.doesNotMatch(body.messages[0].content, /## Principal/);
           assert.match(readFileSync(path.join(options.target, '.worktrees', 'issue-42', 'ESTIMATE.md'), 'utf8'),
             new RegExp(`Source: ${selection === 'explicit' ? 'history' : 'recommendation'}`));
         }

@@ -307,7 +307,8 @@ test('docs slice review repair is bounded when every review fails', async (conte
         coderTurns += 1;
         assert.equal(body.reasoning_effort, effort);
         assert.equal(body.max_tokens, 8192);
-        assert.doesNotMatch(system, /## Principal|## Seat memory|implement-task/);
+        assert.doesNotMatch(system, /## Principal|implement-task/);
+        assert.match(system, /## Seat memory/);
         const drafting = body.tools?.length;
         return Response.json({ choices: [{ finish_reason: drafting ? 'tool_calls' : 'stop',
           message: drafting ? { role: 'assistant', reasoning_content: 'PRIVATE_CODER_THINKING',

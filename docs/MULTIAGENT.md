@@ -23,6 +23,25 @@ run, using qualifying human evaluations before starting priors. It changes
 neither the saved default nor the sequential seat/worktree topology.
 See [opt-in routing](ROUTING.md) for the source and context constraints.
 
+## Engineering baseline and learning context
+
+Every builtin model invocation carries the repository's
+[engineering baseline](../principals/engineering.md) in its first system
+message, including auxiliary critics, self-review, research and correction
+turns. It supplements the seat role without changing the Ask, supplied tools,
+scope or publishing authority. Retries retain one copy. The baseline is bounded
+to 8192 characters of fixed transport instructions, separate from the bounded
+coder context artifact; missing or invalid baseline content fails explicitly.
+
+Ordinary slice coder packs include the existing recent coder-memory tail
+(at most 20 compact records), using the same local path guards and redaction
+as larger tasks. Memory is optional budgeted data; newest complete records
+survive truncation. Supplied prior feedback is required redacted context in
+both minimum and full packs; an undersized budget fails rather than dropping
+it. Planner memory is not read by the coder. This introduces no new store,
+shared raw history, model-learning claim or autonomous permission grant.
+These boundaries implement FEATURE_SPEC sections 5.2, 5.4 and 5.6.
+
 ## Opt-in parallel child waves
 
 ```sh

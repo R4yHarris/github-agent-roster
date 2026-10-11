@@ -38,7 +38,8 @@ test('ordinary team pack is short, includes Ask/outcome/scope/checks, and does n
   assert.equal(context.contextPolicy.minimum, true);
   assert.deepEqual(context.skills.map(({ name }) => name), ['read-before-write', 'small-diff']);
   assert.match(context.pack, /## Issue Ask[\s\S]*# Outcome:[\s\S]*## Allowed files[\s\S]*## Checks/);
-  assert.doesNotMatch(context.pack, /skills: \[|## Principal|## AGENTS|## Seat memory|## Prior feedback/);
+  assert.doesNotMatch(context.pack, /skills: \[|## Principal|## AGENTS|## Prior feedback/);
+  assert.match(context.pack, /## Seat memory[\s\S]*no previous entries/);
   assert.ok(context.pack.length < 3500, `Minimum pack grew to ${context.pack.length} characters`);
 });
 

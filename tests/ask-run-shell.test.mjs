@@ -81,7 +81,7 @@ test('the exact human prompt executes the public local shell planner→coder→r
       seats.push(system.includes('independent Original Ask audit') ? 'reviewer-ask-audit' : 'reviewer');
       return reply(passingReview(body));
     }
-    assert.doesNotMatch(system, /critic|research/i);
+    assert.doesNotMatch(system, /You are the .*critic|builtin research step/i);
     if (coderTurns++ === 0) {
       seats.push('coder');
       return Response.json({ model: 'fake-directory-model', choices: [{ finish_reason: 'tool_calls',

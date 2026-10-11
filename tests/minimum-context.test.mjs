@@ -312,24 +312,26 @@ test('an uninitialized contracts worktree writes blocked result and review witho
   assert.ok(!events.some(({ type }) => type === 'test-repair'));
 });
 
-test('difficulty1 docs uses exactly TASK, allowed files, read-before-write and small-diff without auxiliary loads', async (t) => {
+test('difficulty1 docs includes scoped memory and feedback without principal or research loads', async (t) => {
   const options = fixture(t);
   writeFileSync(join(options.worktree, 'AGENTS.md'), 'UNNEEDED_AGENTS_MARKER');
   writeFileSync(join(options.worktree, 'RESEARCH.md'), 'UNNEEDED_RESEARCH_MARKER');
   mkdirSync(join(options.repoRoot, '.roster', 'memory'), { recursive: true });
-  writeFileSync(join(options.repoRoot, '.roster', 'memory', 'coder.jsonl'), 'invalid unused memory');
+  writeFileSync(join(options.repoRoot, '.roster', 'memory', 'coder.jsonl'), '{"summary":"recent coder lesson"}\n');
   const context = await loadContext({ ...options, memoryPath: join(options.repoRoot, '.roster', 'memory', 'coder.jsonl'),
-    priorFeedback: 'UNNEEDED_FEEDBACK_MARKER' });
+    priorFeedback: 'REQUIRED_FEEDBACK_MARKER' });
   assert.equal(context.minimalDocs, true);
   assert.deepEqual(context.skillNames, ['read-before-write', 'small-diff']);
   assert.deepEqual(context.skills.map(({ name }) => name), context.skillNames);
-  assert.deepEqual(context.memory, []);
+  assert.deepEqual(context.memory, ['{"summary":"recent coder lesson"}']);
   assert.equal(context.agents, null);
   assert.match(context.pack, /## Issue Ask\n\nAdd a one-line Status section to README.md/);
   assert.match(context.pack, /## TASK.md\n\n# Outcome:/);
   assert.deepEqual(context.skills.map(({ name }) => name), ['read-before-write', 'small-diff']);
   assert.doesNotMatch(context.pack, /skills: \[|difficulty:|estimate_min:/);
-  assert.doesNotMatch(context.pack, /UNNEEDED_|## Principal|## Seat memory|## Task skills/);
+  assert.doesNotMatch(context.pack, /UNNEEDED_|## Principal|## Task skills/);
+  assert.match(context.pack, /## Seat memory[\s\S]*recent coder lesson/);
+  assert.match(context.pack, /## Prior feedback[\s\S]*REQUIRED_FEEDBACK_MARKER/);
   assert.equal(existsSync(join(options.repoRoot, 'principals')), false);
 });
 
