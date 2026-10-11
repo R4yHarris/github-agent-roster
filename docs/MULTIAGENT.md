@@ -59,6 +59,10 @@ Title shortening is unchanged. This implements FEATURE_SPEC
 sections 5.3-5.5; neither the original Ask nor its safety obligations are waived.
 Directory-document checks also recognize content phrasing such as "covering",
 "gives instructions" and "indexes"; operation-success assertions stay denied.
+Directory-granted plans receive the rejected path and concrete correction guidance
+when they propose hidden files, wildcards, vendor paths or files outside that
+directory. Test scratch fixtures belong in the OS temporary directory. This
+feedback does not grant hidden files or relax the existing directory scope.
 
 The coder test-substance gate recognizes app calls through dynamic imports and
 named `node:util`/`util` `promisify` imports wrapping child-process functions,
