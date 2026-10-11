@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { parseConfig } from '../src/lib/config.mjs';
 import { groundingErrors, renderDesign } from '../src/planner/grounding.mjs';
-import { buildPlan, planFromTask, planStub } from '../src/planner/stub.mjs';
+import { buildPlan, planAsk, planFromTask, planStub, taskFilesAllowed } from '../src/planner/stub.mjs';
 import { runPlanner, sliceGrounding } from '../src/seats/planner.mjs';
 
 const example = readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8');
@@ -17,6 +17,30 @@ const body = 'Plan cleanup operations for stale worktrees.\n\n## Files allowed\n
 const files = ['src/lib/clean-ops.mjs', 'tests/clean-ops.test.mjs'];
 const design = { extend: [], new_exports: [{ name: 'planCleanOps', file: 'src/lib/clean-ops.mjs' }],
   outline: ['Add `planCleanOps`'], edge_cases: [], out_of_scope: [] };
+
+test('code-directory planning retains scope guidance without introducing documentation obligations', async () => {
+  const ask = 'Create a tiny Node 20 ESM utility exporting clamp(value, min, max). ' +
+    'Accept only finite numbers and min <= max; otherwise throw TypeError. Include Node built-in tests. ' +
+    'No dependencies, network or publication. Output it in a new "easy-clamp" directory';
+  const allowed = ['easy-clamp/package.json', 'easy-clamp/clamp.js', 'easy-clamp/clamp.test.js'];
+  let guidance;
+  const result = await planAsk(ask, { config, env: {},
+    fetchImpl: async (_url, request) => {
+      guidance = JSON.parse(request.body).messages[0].content;
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+        content: JSON.stringify({ title: 'Clamp utility',
+          acceptance_checks: ['clamp exports a function validating finite inputs and ordered bounds',
+            'node --test exits 0'], files_allowed: allowed }),
+      } }] });
+    },
+  });
+  assert.match(guidance, /human grants only the output directory "easy-clamp"/);
+  assert.match(guidance, /Choose concrete files beneath it, never a wildcard or an outside file/);
+  assert.doesNotMatch(guidance, /Markdown guide|document-content acceptance|For document intent|The guide states/);
+  assert.equal(result.error, undefined);
+  assert.deepEqual(taskFilesAllowed(result.task), allowed);
+  assert.ok(result.task.includes(ask));
+});
 
 function worktree(t) {
   const repoRoot = mkdtempSync(join(tmpdir(), 'roster-task-design-'));

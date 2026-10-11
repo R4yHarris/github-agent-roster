@@ -18,6 +18,20 @@ cancellation: inspect the PR before retrying; cancellation is not rollback.
 
 ## Default path
 
+Directory-scoped planning shares concrete-path guidance for code and documents.
+Markdown-guide examples and document-content-only checks are supplied only for
+documentation intent; code-directory Asks retain their requested executable
+and test obligations without being instructed to add an unrequested guide.
+The strict granted-directory boundary is unchanged.
+
+Planner checks and Design must preserve the Original Ask and agree on expected
+results, including the ordinary semantics of worked examples. The critic checks
+these relationships; green tests of a wrong expectation do not validate a plan.
+Documentation for obtaining or publicly serving a page includes complete
+future setup steps. The tools still deny executing deployment, purchases,
+account creation or publication without authority; describing those steps
+does not execute them.
+
 The default builtin path is `roster run --issue N` ([SDLC](SDLC.md)).
 `--runtime builtin` remains accepted for agents and CI. A run reads the
 existing issue, creates one worktree, runs a
