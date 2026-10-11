@@ -18,7 +18,9 @@ class MalformedCoderTools extends Error {}
 class MissingCoderToolName extends MalformedCoderTools {}
 const rosterToolNames = new Set(toolDefinitions.map((tool) => tool.function.name));
 const safeToolName = (name) => String(name).replace(/[^\w.-]/g, '?').slice(0, 64);
-// A hallucinated tool (not a Roster tool at all) gets one correction; a withheld Roster tool still fails the seat.
+// A hallucinated tool (not a Roster tool at all) gets one correction, and so does a read-only discovery tool the
+// task scope withheld; any other withheld Roster tool still fails the seat.
+const discoveryToolNames = new Set(['list_dir', 'glob_files', 'search_text']);
 class UnknownCoderTool extends Error {
   constructor(name) {
     super(`LLM coder requested an invalid or unavailable tool: ${safeToolName(name)}`);
@@ -71,7 +73,7 @@ function decodeCalls(message, offered, ids, turn) {
       throw new MissingCoderToolName('Coder tool call requires a nonempty function name');
     }
     if (call && call.type === 'function' && typeof name === 'string' && !offered.has(name) &&
-        !rosterToolNames.has(name) && offered.size) {
+        (!rosterToolNames.has(name) || discoveryToolNames.has(name)) && offered.size) {
       throw new UnknownCoderTool(name);
     }
     if (!call || call.type !== 'function' || !offered.has(name) ||

@@ -191,6 +191,29 @@ test('a hallucinated tool gets one correction and a reused gateway call id is re
   assert.match(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), /## Status/);
 });
 
+test('a scope-withheld discovery tool gets one correction instead of failing the seat', async (context) => {
+  const options = fixture(context);
+  const looser = parseConfig(example.replace('base_url: ""', 'base_url: http://localhost:3456/v1')
+    .replace('model: ""', 'model: local-model'));
+  const without = { ...looser, seat: { ...looser.seat, tools: looser.seat.tools.filter((name) => name !== 'list_dir') } };
+  let calls = 0;
+  const result = await runCoder({ ...options, config: without, env: {}, fetchImpl: withResearch(async (_url, request) => {
+    const body = JSON.parse(request.body);
+    calls += 1;
+    if (calls === 1) {
+      return response('tool_calls', { role: 'assistant', content: null, tool_calls: [{ id: 'call_0', type: 'function',
+        function: { name: 'list_dir', arguments: JSON.stringify({ path: '.' }) } }] });
+    }
+    if (calls === 2) {
+      assert.match(body.messages.at(-1).content, /Tool list_dir does not exist\. Offered tools: .*write_file/);
+      return response('tool_calls', { role: 'assistant', content: null, tool_calls: [writeCall()] });
+    }
+    return response('stop', { role: 'assistant', content: 'Updated README.' });
+  }) });
+  assert.equal(result.error, undefined);
+  assert.match(readFileSync(path.join(options.worktree, 'README.md'), 'utf8'), /## Status/);
+});
+
 test('a second hallucinated tool still fails the seat and names the tool', async (context) => {
   const options = fixture(context);
   await assert.rejects(runCoder({ ...options, env: {}, fetchImpl: withResearch(async () =>

@@ -102,7 +102,7 @@ test('repeated missing names and withheld tools remain terminal without dispatch
       },
       verify: () => ({ pass: true, reasons: [] }),
     });
-    assert.equal(turns, name ? 1 : 2);
+    assert.equal(turns, 2, 'one correction, then the repeated call is terminal');
     assert.ok(result.error);
   }
 });
