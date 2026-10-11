@@ -183,6 +183,27 @@ function plannerPlanText(content) {
   return content.match(/```(?:json)?\s*([\s\S]*?)```/)?.[1]?.trim() || content.trim();
 }
 
+// Models sometimes append stray prose after a complete JSON object; accept only the leading balanced object.
+export function parseLeadingJsonObject(text) {
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    if (!text.startsWith('{')) throw error;
+    let depth = 0;
+    let inString = false;
+    for (let i = 0; i < text.length; i += 1) {
+      const c = text[i];
+      if (inString) {
+        if (c === '\\') i += 1;
+        else if (c === '"') inString = false;
+      } else if (c === '"') inString = true;
+      else if (c === '{') depth += 1;
+      else if (c === '}' && --depth === 0) return JSON.parse(text.slice(0, i + 1));
+    }
+    throw error;
+  }
+}
+
 export async function planAsk(ask, {
   config, reference = 'local:draft', title, fetchImpl, env, vault, memory = [], learningRoot, metadata, lockedModel,
   onResponse, tools, onEvent, retryCommand, signal, grounding, criticFeedback,
@@ -487,7 +508,7 @@ export async function planAsk(ask, {
       }
     } else {
       try {
-        plan = normalizePlannerPlan(JSON.parse(planText));
+        plan = normalizePlannerPlan(parseLeadingJsonObject(planText));
       } catch {
         failure = 'LLM planner returned invalid JSON';
       }

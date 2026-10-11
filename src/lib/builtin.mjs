@@ -8,6 +8,7 @@ import { buildPublishEnv, buildRun, resolvePublishModel, RUN_ENV_NAMES } from '.
 import { cleanAskText, renderAssignment, taskFilesAllowed } from '../planner/stub.mjs';
 import { assertSeatCovers, parseRecipe } from './recipe.mjs';
 import { taskSkillNames } from '../runtime/skills.mjs';
+import { appendMemory, seatMemoryPath } from '../runtime/memory.mjs';
 import { runCoder } from '../seats/coder.mjs';
 import { acceptPlannerPlan, preparePlannerHandoff, readPlannerHandoff, readPlannerTask, readPreviousReview, runPlanner } from '../seats/planner.mjs';
 import { requirePassingReview, runReviewer } from '../seats/reviewer.mjs';
@@ -1365,6 +1366,15 @@ async function executeBuiltinAssignment(issueNumber, {
         task: prepared.task, env,
       }) : null;
       await recordSeat(sessions.reviewer, reviewerRun, undefined, reviewConfig, { review });
+      // The next Ask's planner sees how this one ended; best-effort so memory can never fail a run.
+      try {
+        await appendMemory({
+          file: seatMemoryPath({ repoRoot: prepared.repoRoot, memoryPath: config.paths.memory, seat: 'planner' }),
+          repoRoot: prepared.repoRoot, env, apiKeyEnv: config.llm.api_key_env,
+          record: { task: prepared.task, session: sessions.planner, status: 'outcome',
+            summary: `Review ${review.verdict}${review.completed === false ? ' (incomplete)' : ''}` },
+        });
+      } catch (error) { log(`Planner memory outcome skipped: ${error.message}`); }
       return { review, reviewerRun };
     }
   };

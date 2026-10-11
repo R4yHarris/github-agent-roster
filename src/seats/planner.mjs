@@ -24,6 +24,9 @@ import { runtimeRecipe } from '../planner/stub.mjs';
 import { critiquePlan } from '../planner/critic.mjs';
 import { requireLifecycleHooks } from '../runtime/hooks.mjs';
 
+// Memory keeps only the first line of a value, so a multi-line Ask is flattened and bounded first.
+const oneLineAsk = (text) => String(text).replace(/\s+/g, ' ').trim().slice(0, 300);
+
 export async function critiquePlannerHandoff(plan, {
   worktree, ask, title, reference, learningRoot, config, env, fetchImpl, vault, onEvent,
   retryCommand, signal, lockedModel, session, task,
@@ -322,6 +325,8 @@ export async function runPlanner({
     task, session, status: plan.error ? 'failed' : config.llm.base_url ? 'llm' : 'stub',
     summary: plan.error ? 'Prepared unverified RECIPE.yml and TASK.md stubs after planning failure'
       : kind === 'slice' && !planMode ? 'Prepared RECIPE.yml and TASK.md' : `Prepared ${kind} PLAN.md; no implementation`,
+    ask: oneLineAsk(ask),
+    ...(title ? { title: oneLineAsk(title) } : {}),
     ...(plan.error ? { error: plan.error } : {}),
   } });
   const run = config.llm.base_url ? buildRun({ config, response: lastResponse, task, session, env }) : null;
