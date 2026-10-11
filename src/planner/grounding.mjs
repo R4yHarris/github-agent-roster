@@ -1,4 +1,6 @@
-import { promises as fs } from 'node:fs';
+import * as childProcess from 'node:child_process';
+import * as nodeFs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { isAllowedFile, isForbiddenRead } from '../runtime/tools.mjs';
 import { relatedExports } from './related-exports.mjs';
@@ -10,6 +12,10 @@ const identifier = /^[A-Za-z_$][\w$]*$/;
 const designLabels = { 'extend': 'extend', 'new exports': 'new_exports', 'outline': 'outline', 'edge cases': 'edge_cases',
   'out of scope': 'out_of_scope' };
 const byteLimit = 256 * 1024;
+const fs = nodeFs.promises;
+const runtimeNamespaces = new Map([
+  ['child_process', childProcess], ['fs', nodeFs], ['os', os], ['path', path],
+]);
 
 const codeLike = (name) => identifier.test(name) && !/^[A-Z0-9_]+$/.test(name) &&
   (/[a-z0-9][A-Z]/.test(name) || /^[a-z]+(?:_[a-z0-9]+)+$/.test(name));
@@ -82,14 +88,25 @@ export async function groundingDefinitions(worktree, repositoryFiles, askText, {
 function citations(text) {
   const names = new Set();
   const paths = new Set();
+  const runtimeNames = new Set();
+  const qualifiedNames = new Set();
   for (const [, raw] of String(text ?? '').matchAll(/`([^`\n]+)`/g)) {
     const span = raw.trim();
     if (/^[\w.@-]+(?:\/[\w.@-]+)+\.\w+$/.test(span)) { paths.add(span); continue; }
     const call = span.match(/^([A-Za-z_$][\w$.]*)\s*\(/)?.[1] ?? span;
     if (!/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/.test(call)) continue;
-    for (const part of call.split('.')) if (codeLike(part)) names.add(part);
+    const parts = call.split('.');
+    if (parts.length === 2 && runtimeNamespaces.has(parts[0]) &&
+        Object.hasOwn(runtimeNamespaces.get(parts[0]), parts[1])) {
+      runtimeNames.add(parts[1]);
+      continue;
+    }
+    for (const part of parts) if (codeLike(part)) {
+      names.add(part);
+      if (parts.length > 1) qualifiedNames.add(part);
+    }
   }
-  return { names: [...names], paths: [...paths] };
+  return { names: [...names], paths: [...paths], runtimeNames, qualifiedNames };
 }
 
 function list(value, label, limit, entry = (item) => oneLine(item, label)) {
@@ -149,10 +166,11 @@ export function groundingErrors({ checks = [], design = null, filesAllowed = [],
     if (owner) errors.push(`design.new_exports \`${name}\` already exists in \`${owner}\`; extend that module instead`);
   }
   const text = [...checks, ...(design?.outline ?? []), ...(design?.edge_cases ?? [])].join('\n');
-  const { names, paths } = citations(text);
+  const { names, paths, runtimeNames, qualifiedNames } = citations(text);
   for (const name of names) {
     // Standard runtime globals such as TypeError or JSON are real, citable names that no repository exports.
-    if (index.symbols.has(name) || declared.has(name) || askText.includes(name) || name in globalThis) continue;
+    if (index.symbols.has(name) || declared.has(name) || askText.includes(name) || name in globalThis ||
+        runtimeNames.has(name) && !qualifiedNames.has(name)) continue;
     errors.push(`\`${name}\` does not exist in the repository; cite a real export or declare it in design.new_exports ` +
       `(in TASK.md: a \`## Design\` section with \`New exports:\` then \`- \\\`${name}\\\` in \\\`<file>\\\`\`)`);
   }

@@ -211,7 +211,13 @@ without editing the tracked example or storing credentials.
   reports its 1-based position, normalized character count and excess over the
   240-character limit without echoing its contents. Split the requirement into
   shorter checks (at most eight total), preserving every outcome; checks are never
-  truncated and correction budgets are unchanged. Written tasks and JSON plans
+  truncated and correction budgets are unchanged. Plans may cite actual Node
+  standard-library exports as `child_process.execFile`,
+  `fs.mkdtempSync`, `os.tmpdir` or `path.join`. Grounding verifies members of
+  these explicit namespaces against the runtime; this does not make them
+  repository exports or grant tools or write scope. A bare member reference
+  requires a verified qualified citation in the same checks/design; invented
+  members and unsupported aliases remain rejected. Written tasks and JSON plans
   must both keep the routed model. Failed planning stops the seat chain:
   unverified stubs never start a coder, reviewer, tests, or publisher.
   Feature/initiative planning instead uses tool-free JSON and a PLAN-only
