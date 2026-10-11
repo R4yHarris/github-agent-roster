@@ -271,7 +271,7 @@ test('directory-scoped public coder cannot expand to a harmless outside document
           arguments: JSON.stringify({ path: 'outside.md', content: '# Unauthorized\n' }) },
       }] } }] });
     } }), /not allowed/);
-  assert.equal(coderCalls, 1);
+  assert.ok(coderCalls > 1 && coderCalls <= 9, `bounded repeated denials, got ${coderCalls}`);
   assert.equal(existsSync(path.join(worktree, 'outside.md')), false);
 });
 

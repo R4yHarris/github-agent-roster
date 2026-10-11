@@ -668,9 +668,18 @@ export async function createTools({
           'diff and the final node --test output after the loop. Change code or tests instead; RESULT.md evidence ' +
           'is regenerated from the next verified run');
       }
+      const denied = `Writing ${normalized} is not allowed by TASK.md or worktree policy`;
+      // An unplanned but ordinary path is a misdirected write: refuse it with the planned files; a repeat is still terminal.
+      if (seat === 'coder' && !isForbiddenWrite(normalized) && !isForbiddenRead(normalized) &&
+          !(memoryPath && path.relative(file, path.resolve(memoryPath)) === '')) {
+        const planned = scopedFiles();
+        throw new ToolUsageError(planned.length
+          ? `${denied}\nWrite only these planned files: ${planned.slice(0, 12).join(', ')}`
+          : denied);
+      }
       throw new ToolAccessError(seat === 'planner'
         ? `Planner write_file allows only root ${plannerArtifacts.join(', ').replace(/, ([^,]+)$/, ', and $1')}`
-        : `Writing ${normalized} is not allowed by TASK.md or worktree policy`);
+        : denied);
     }
     if (!write && !mapRead && isForbiddenRead(normalized)) {
       throw new ToolAccessError('Tool access to secrets, Git metadata, policy, workflows, contracts, or debug logs is refused');
