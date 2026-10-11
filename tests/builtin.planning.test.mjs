@@ -96,10 +96,14 @@ test('README one-liner runs the sequential slice seats with minimum pack even at
   assert.equal(result.result.stages.includes('research'), false);
   assert.equal(existsSync(path.join(result.worktreePath, 'RESEARCH.md')), false);
   const pack = readFileSync(result.result.contextPath, 'utf8');
-  assert.ok(pack.length < 3500, `Slice minimum pack grew to ${pack.length} characters`);
+  const requiredConduct = pack.split('## Issue Ask')[0].length;
+  assert.ok(pack.length - requiredConduct < 3500,
+    `Compact task context grew to ${pack.length - requiredConduct} characters`);
   assert.match(pack, /## Issue Ask[\s\S]*# Outcome:/);
   assert.match(pack, /read-before-write[\s\S]*small-diff/);
-  assert.doesNotMatch(pack, /## Principal|## AGENTS|implement-task/);
+  assert.match(pack, /## Principal coder:/);
+  assert.match(pack, /## AGENTS\.md/);
+  assert.doesNotMatch(pack, /implement-task/);
   assert.match(pack, /## Seat memory/);
   assert.equal(existsSync(path.join(result.worktreePath, 'PLAN.md')), false);
 });

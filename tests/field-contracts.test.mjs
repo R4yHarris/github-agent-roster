@@ -11,6 +11,8 @@ function fixture(context) {
   const repoRoot = mkdtempSync(path.join(tmpdir(), 'roster-fields-'));
   context.after(() => rmSync(repoRoot, { recursive: true, force: true }));
   const worktree = path.join(repoRoot, 'worktree');
+  mkdirSync(path.join(repoRoot, 'principals'));
+  writeFileSync(path.join(repoRoot, 'principals', 'coder.md'), '# Conduct\nStay within task scope.\n');
   mkdirSync(path.join(worktree, 'src'), { recursive: true });
   writeFileSync(path.join(worktree, 'src', 'schema.mjs'), [
     'export function validate(record) {',

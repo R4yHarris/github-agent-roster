@@ -47,7 +47,7 @@ test('standalone slice stub uses minimum stages without a planner, source diff, 
     runTestCommand: () => assert.fail('Stub must not run tests'),
   });
   assert.equal(result.askKind, 'slice');
-  assert.deepEqual(result.result.stages, ['context', 'skills', 'tool_loop', 'memory', 'excellence', 'result']);
+  assert.deepEqual(result.result.stages, ['principal', 'context', 'skills', 'tool_loop', 'memory', 'excellence', 'result']);
   assert.equal(result.result.mode, 'stub');
   assert.equal(result.result.excellence.pass, false);
   assert.equal(readFileSync(path.join(options.worktree, 'TASK.md'), 'utf8'), options.taskText);
@@ -61,7 +61,7 @@ test('standalone slice stub uses minimum stages without a planner, source diff, 
   assert.equal(result.review.verdict, 'fail');
   assert.match(readFileSync(result.review.reviewPath, 'utf8'), /Verdict: fail/);
   assert.match(readFileSync(result.result.resultPath, 'utf8'), /Add a Status section/);
-  assert.match(readFileSync(result.result.resultPath, 'utf8'), /Stages: context -> skills -> tool_loop -> memory -> excellence -> result/);
+  assert.match(readFileSync(result.result.resultPath, 'utf8'), /Stages: principal -> context -> skills -> tool_loop -> memory -> excellence -> result/);
   assert.equal(existsSync(path.join(options.repoRoot, '.roster', 'memory', 'planner.jsonl')), false);
 });
 

@@ -42,6 +42,17 @@ it. Planner memory is not read by the coder. This introduces no new store,
 shared raw history, model-learning claim or autonomous permission grant.
 These boundaries implement FEATURE_SPEC sections 5.2, 5.4 and 5.6.
 
+Both ordinary minimum and full coder packs include the complete configured
+[coder principal](../principals/coder.md) and root repository coding rules.
+The existing rules filter still omits harness-only publication, credentials
+and metadata instructions; conduct does not grant model tools or authority.
+Rules and principal text are redacted before packing. Missing optional root
+`AGENTS.md` in an ordinary consumer is explicitly identified in the context;
+malformed or symlinked rules and missing principal files fail before inference.
+Required conduct, rules, task and feedback cannot be dropped to fit the
+configured context budget. Optional recent memory remains budgeted. This does
+not switch an ordinary slice to research, widen its scope, or run docs tests.
+
 ## Opt-in parallel child waves
 
 ```sh
