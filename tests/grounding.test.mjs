@@ -165,3 +165,10 @@ test('the coder Design gate refuses a stale Design and accepts a valid one', asy
     repositoryFiles }), []);
   assert.ok((await symbolIndex(dir, repositoryFiles)).symbols.has('openStore'));
 });
+
+test('standard runtime globals in checks are grounded while unknown names are still rejected', () => {
+  const index = { files: new Set(), symbols: new Set(), exportsByFile: new Map() };
+  const errors = groundingErrors({ checks: ['parseCsv throws a `SyntaxError` and `TypeError`, never `FabricatedThing`'], index });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /FabricatedThing/);
+});
