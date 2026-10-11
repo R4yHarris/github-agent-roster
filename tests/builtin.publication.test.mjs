@@ -511,7 +511,7 @@ test('planner and coder use an environment key before the vault and fall back to
   }
 });
 
-test('planner reads its last 20 lines; slice coder omits memory input and both append separately', async (context) => {
+test('planner and slice coder read their own last 20 lines and append separately', async (context) => {
   const options = multiFileFixture(context);
   const directory = path.join(options.repoRoot, '.roster', 'memory');
   mkdirSync(directory, { recursive: true });
@@ -535,7 +535,10 @@ test('planner reads its last 20 lines; slice coder omits memory input and both a
         }),
       } }] }) };
     }
-    assert.doesNotMatch(context, /"seat":"(?:planner|coder)"|## Seat memory/);
+    assert.doesNotMatch(context, /"seat":"planner"/);
+    assert.match(context, /"seat":"coder","index":5/);
+    assert.match(context, /"seat":"coder","index":24/);
+    assert.doesNotMatch(context, /"seat":"coder","index":4,/);
     return { status: 200, json: async () => ({ choices: [{
       finish_reason: 'stop', message: { role: 'assistant', content: 'Done.' },
     }] }) };

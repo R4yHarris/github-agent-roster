@@ -99,7 +99,8 @@ test('README one-liner runs the sequential slice seats with minimum pack even at
   assert.ok(pack.length < 3500, `Slice minimum pack grew to ${pack.length} characters`);
   assert.match(pack, /## Issue Ask[\s\S]*# Outcome:/);
   assert.match(pack, /read-before-write[\s\S]*small-diff/);
-  assert.doesNotMatch(pack, /## Principal|## AGENTS|## Seat memory|## Prior feedback|implement-task/);
+  assert.doesNotMatch(pack, /## Principal|## AGENTS|implement-task/);
+  assert.match(pack, /## Seat memory/);
   assert.equal(existsSync(path.join(result.worktreePath, 'PLAN.md')), false);
 });
 

@@ -146,6 +146,40 @@ test('prior feedback is required context, redacted, and never silently omitted t
   /prior feedback.*exceed seat.context_chars/);
 });
 
+test('ordinary slice keeps prior feedback and newest supplied coder memory without reading planner memory', async (context) => {
+  const options = fixture(context);
+  for (const name of ['read-before-write', 'small-diff']) {
+    mkdirSync(path.join(options.repoRoot, 'skills', name), { recursive: true });
+    writeFileSync(path.join(options.repoRoot, 'skills', name, 'SKILL.md'), `# ${name}\nStay scoped.\n`);
+  }
+  const taskPath = path.join(options.worktree, 'TASK.md');
+  writeFileSync(taskPath, readFileSync(taskPath, 'utf8').replace('difficulty: 4', 'difficulty: 1'));
+  for (let index = 0; index < 25; index += 1) {
+    await appendMemory({ file: options.memoryPath, repoRoot: options.repoRoot, record: { index } });
+  }
+  writeFileSync(path.join(path.dirname(options.memoryPath), 'planner.jsonl'), '{"summary":"planner-only-entry"}\n');
+  const result = await loadContext({ ...options, askKind: 'slice', priorFeedback: 'Use the real public operation.',
+    config: { seat: { context_chars: 8000 } } });
+  assert.equal(result.minimalDocs, true);
+  assert.equal(result.priorFeedbackIncluded, true);
+  assert.match(result.pack, /## Prior feedback\n\nUse the real public operation\./);
+  assert.equal(result.memory.length, 20);
+  assert.equal(JSON.parse(result.memory[0]).index, 5);
+  assert.match(result.pack, /"index":24/);
+  assert.doesNotMatch(result.pack, /planner-only-entry/);
+  rmSync(result.contextPath);
+  const bounded = await loadContext({ ...options, askKind: 'slice', priorFeedback: 'Use the real public operation.',
+    config: { seat: { context_chars: result.pack.length - 100 } } });
+  assert.ok(bounded.pack.length <= result.pack.length - 100);
+  assert.equal(bounded.truncated, true);
+  assert.match(bounded.pack, /"index":24/);
+  assert.doesNotMatch(bounded.pack, /"index":5,/);
+  assert.match(bounded.pack, /Use the real public operation\./);
+  rmSync(bounded.contextPath);
+  await assert.rejects(loadContext({ ...options, askKind: 'slice', priorFeedback: 'Required feedback '.repeat(1000),
+    config: { seat: { context_chars: 8000 } } }), /exceed seat.context_chars/);
+});
+
 test('task skill names support inline and block frontmatter without accepting paths', () => {
   assert.deepEqual(taskSkillNames('---\nskills: [implement-task, "run-tests"]\n---\n# Task'), [
     'implement-task', 'run-tests',

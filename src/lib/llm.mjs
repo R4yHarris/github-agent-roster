@@ -4,6 +4,7 @@ import { modelCapabilityPrior } from './capabilities.mjs';
 import { UnsupportedFinishReasonError } from '../llm/finish-reason.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
 import * as admission from '../runtime/admission.mjs';
+import { withEngineeringBaseline } from '../runtime/engineering-baseline.mjs';
 
 const maxLengthRetries = 3;
 const maxReasoningCap = 32_768;
@@ -56,7 +57,7 @@ export function createBuiltinChat(config, {
   let lastAttempts = 0;
   let lastUsage = null;
   const chat = async (request, { signal: requestSignal = signal } = {}) => {
-    let current = { ...request, max_tokens: docsSlice
+    let current = { ...request, messages: withEngineeringBaseline(request.messages), max_tokens: docsSlice
       ? Math.max(request.max_tokens ?? completionCap, completionCap)
       : request.max_tokens ?? completionCap,
       ...(stream ? { stream: request.stream ?? true } : {}),

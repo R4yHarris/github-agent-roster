@@ -80,7 +80,7 @@ test('the first stub task is a baseline and one human acceptance seeds the next 
   });
   assert.equal(result.mode, 'stub');
   const context = readFileSync(join(next.worktree, 'CONTEXT.md'), 'utf8');
-  assert.doesNotMatch(context, /## Prior feedback|Last human verdict|insufficient data for a capacity recommendation/);
+  assert.match(context, /## Prior feedback[\s\S]*Last human verdict/);
   assert.match(context, /## Issue Ask[\s\S]*# Outcome:/);
   assert.deepEqual(readFileSync(options.evalsFile), before);
 });

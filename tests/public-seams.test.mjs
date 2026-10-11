@@ -33,7 +33,7 @@ test('earlier-wave modules render as a required reuse section in the coder conte
     '## Files allowed\n\n- `src/lib/api.mjs`\n\n## Acceptance checks\n\n- `node --test` exits 0.\n');
   writeFileSync(join(root, 'AGENTS.md'), '# Agents\n');
   const { pack } = await loadContext({ worktree: root, repoRoot: process.cwd(), config: { seat: { context_chars: 40000 }, llm: {} },
-    env: {}, askKind: 'slice', principal: { id: 'p', content: 'principal' }, memoryPath: join(root, 'memory.jsonl'),
+    env: {}, askKind: 'slice', principal: { id: 'p', content: 'principal' },
     priorWaveFiles: ['src/lib/store.mjs'] });
   assert.match(pack, /## Earlier waves delivered\n\nEarlier slices of this plan already merged these modules\. Import and extend them/);
   assert.match(pack, /- export function openStore\(root, options = \{\}\)/);
@@ -48,7 +48,7 @@ test('a Windows test slice tells the coder to prove link escapes with junctions,
   const load = (platform) => {
     rmSync(join(root, 'CONTEXT.md'), { force: true });
     return loadContext({ worktree: root, repoRoot: process.cwd(), config: { seat: { context_chars: 40000 }, llm: {} },
-      env: {}, askKind: 'slice', principal: { id: 'p', content: 'principal' }, memoryPath: join(root, 'memory.jsonl'), platform });
+      env: {}, askKind: 'slice', principal: { id: 'p', content: 'principal' }, platform });
   };
   assert.match((await load('win32')).pack, /## Test host\n\n.*skipped test is not evidence.*'junction'/);
   assert.doesNotMatch((await load('linux')).pack, /## Test host/);
