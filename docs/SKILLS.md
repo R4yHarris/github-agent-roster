@@ -16,8 +16,14 @@ FEATURE_SPEC **5.2** category packets are also installed: [research](../skills/r
 [implement](../skills/implement/SKILL.md), [test](../skills/test/SKILL.md),
 [review](../skills/review/SKILL.md), [incident](../skills/incident/SKILL.md), and
 [docs](../skills/docs/SKILL.md). Select a category explicitly in TASK frontmatter
-when its bounded procedure is needed. This is staffing/context guidance, not
-primary question/incident execution, internet access or a principal change.
+when its bounded procedure is needed. A recognized bounded incident/regression
+Ask with an explicit fix, repair, triage, diagnose, investigate, reproduce or
+resolve directive also selects the existing incident packet automatically.
+Selection uses the preserved TASK Ask, not urgency or a generated task title.
+An incident label, question or documentation mention alone does not select it.
+Unbounded incidents still clarify or split before coding. This is ordinary
+coder context specialization (FEATURE_SPEC **5.2/5.3/5.4**), not a separate
+incident runtime, internet access or a principal change.
 A coder receiving the review packet is not the independent reviewer.
 
 The [TASK template](../templates/sdlc/TASK.md) requests all five. A task can
@@ -30,7 +36,8 @@ skills: [read-before-write, implement-task, run-tests]
 ```
 
 An indented two-space list under `skills:` is also supported. Empty or absent
-skills mean none are requested; there is no implicit directory-wide loading.
+skills mean no explicit packets are requested; the bounded incident rule above
+still applies. There is no implicit directory-wide loading.
 Names must be distinct lowercase letters/digits/hyphens, starting with a letter.
 Paths, duplicate fields/names, and malformed lists fail clearly.
 
@@ -43,7 +50,7 @@ Each skill file must be a regular UTF-8 Markdown file of at most 64 KiB.
 
 The [context pack](CONTEXT.md) includes names and the first 40 lines per selected
 skill within its budget. Minimum coder contexts retain the existing two baseline
-packets (read-before-write/small-diff), plus every explicitly selected spec
+packets (read-before-write/small-diff), plus every selected spec
 category in task order. Their category procedures are required context, not
 silently discarded by the minimum policy. Full contexts retain existing task
 selection, and a category-containing skill section is required rather than
@@ -54,6 +61,13 @@ selection and default context budgets remain unchanged. Unselected packets are
 not read; selected missing/malformed/symlink packets fail through the existing
 loader. Category packets are under 40 lines, so their stop/boundary guidance is
 part of the actual delivered preview. The full files remain available as documentation.
+Automatic incident selection preserves TASK.md, the original failing evidence,
+allowed files and acceptance checks. Skill-bounded coder recipes must cover
+the incident category; an explicit skill restriction is never widened.
+Cancellation, policy denials, review and publication gates remain unchanged
+(FEATURE_SPEC **5.1/5.5**, principles **3**, non-goals **7**). An investigation
+directive only supplies guidance; it does not authorize a repair not already
+permitted by the task.
 Estimation preserves the frontmatter and still derives difficulty, class,
 model, and minutes from the task header/history. Skills cannot override the
 [principal](PRINCIPALS.md), allowed paths, tool set, or publication policy.
