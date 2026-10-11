@@ -8,7 +8,7 @@ export const commands = Object.freeze([
   page('status', 'Session', '/status [N] [--offline]', 'Show cached session fields without a model or GitHub request.', '/status',
     ['--offline: use local cached evidence only']),
   page('history', 'Session', '/history', 'Show the last 20 stored safe commands.', '/history'),
-  page('resume', 'Session', '/resume [N]', 'List local issue runs with no argument; resume an isolated worktree and reuse a valid TASK/recipe.', '/resume 108'),
+  page('resume', 'Session', '/resume [N] [--green]', 'List local issue runs with no argument or resume a valid TASK. --green restores last verified product state, preserves later edits in a checkpoint, and pauses before execution.', '/resume 108'),
   page('worktrees', 'Session', '/worktrees', 'List registered issue worktree path, isolated branch, last known seat and dirty/clean Git state.', '/worktrees'),
   page('batch', 'Session', '/batch', 'Refused: One seat at a time. Worktrees are isolated. No parallel execution is started.', '/batch'),
   page('recap', 'Session', '/recap', 'Print one human metadata line: outcome, files, last test, review and finish reason. No completion body.', '/recap'),

@@ -595,3 +595,15 @@ this does not fetch it or grant internet access. Link-only vague asks use the
 existing durable clarification checkpoint; no coder or publication runs until
 real bounded scope is supplied. Explicit protected/outside paths remain denied
 (sections 3 and 7).
+
+## Explicit last-green product recovery
+
+Spec §§5.4/5.8 recovery uses the existing issue worktree and Git-tree checkpoints,
+not a second task queue. After real passing tests and coder excellence, a verified
+product snapshot binds task/recipe/assignment, scope, HEAD, branch and owner.
+Use `/resume N --green` (or `roster resume N --green --yes`) to restore it;
+later edits are backed up, and stale generated result/review evidence is archived.
+Restoration is refused for changed/unknown identity, linked storage, an active
+writer or a published PR. It pauses before execution. Human confirmation and
+fresh tests/review remain required (§5.5); test-green is not human acceptance.
+Docs-only/skipped checks have no test-green checkpoint. See [shell](REPL.md).

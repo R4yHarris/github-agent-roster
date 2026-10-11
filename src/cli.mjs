@@ -22,6 +22,7 @@ const help = `Usage:
   roster fleet remove ID
   roster ask --pending | --cancel | --resume ["TEXT"]
   roster ask "..."
+  roster resume N --green --yes (restore last verified product state; pause before execution)
   roster run --issue N [--runtime builtin] [--auto-model] [--seats planner,coder,reviewer] [--parallel K] [--attempts K] [--saved] [--publish] [--skip-review] [--confirm] [--plan] [--base trunk|current|REF] [--no-fetch]
   roster run --seat coder --runtime builtin
   roster prepare --issue N
@@ -161,6 +162,25 @@ async function main(args) {
         : `Worktree: ${demo.worktreePath}\n` + (demo.planPath ? `PLAN: ${demo.planPath}\n`
           : `RECIPE: ${demo.recipePath}\nTASK: ${demo.taskPath}\nRESULT: ${demo.resultPath}\nREVIEW: ${demo.reviewPath}\n`)) +
       `Mode: ${demo.mode}\n`);
+  } else if (args[0] === 'resume') {
+    if (args.length !== 4 || !/^[1-9]\d*$/.test(args[1]) || args[2] !== '--green' || args[3] !== '--yes') {
+      throw new TypeError('Use roster resume N --green --yes; explicit --yes authorizes product restore, not execution.');
+    }
+    const { loadConfig } = await import('./lib/config.mjs');
+    const { readLocalRun } = await import('./lib/local-runs.mjs');
+    const { restoreVerifiedCheckpoint } = await import('./lib/checkpoints.mjs');
+    const { taskFilesAllowed } = await import('./planner/task.mjs');
+    const { readPlannerTask } = await import('./seats/planner.mjs');
+    const { runBuiltinIssue } = await import('./lib/builtin.mjs');
+    const config = loadConfig({ repoRoot: rosterRoot, cwd: process.cwd() });
+    const prepared = await readLocalRun({ number: Number(args[1]), config });
+    const task = await readPlannerTask(prepared.worktreePath);
+    if (prepared.planMode || task === null) throw new Error('Green resume requires an executable TASK.md');
+    const checkpoint = await restoreVerifiedCheckpoint({ worktree: prepared.worktreePath, task: prepared.task,
+      allowedFiles: taskFilesAllowed(task), apiKeyEnv: config.llm.api_key_env });
+    process.stdout.write('Restored verified checkpoint ' + checkpoint.number + '; later edits preserved in a new checkpoint. Fresh checks/review required.\n');
+    const result = await runBuiltinIssue(args[1], { repoRoot: rosterRoot, config, preparedRun: prepared, confirm: true, debug });
+    if (result.failed) process.exitCode = 1;
   } else if (args[0] === 'run') {
     const { runBuiltinIssue, runBuiltinTask } = await import('./lib/builtin.mjs');
     const { validateStartBase } = await import('./lib/start.mjs');

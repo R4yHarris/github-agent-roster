@@ -29,7 +29,7 @@ import { createTranscript } from './shell/transcript.mjs';
 import { createEventSink, createShellPainter } from './shell/events.mjs';
 import { canonicalCommand, completeCommand, formatHelp } from './shell/commands.mjs';
 import { createHistory, safeHistoryLine } from './shell/history.mjs';
-import { isRunCancelled, RunCancelledError } from './runtime/cancel.mjs';
+import { isRunCancelled, RunCancelledError, throwIfCancelled } from './runtime/cancel.mjs';
 import { formatSessionStatus } from './shell/status.mjs';
 import { getFleetProfile, loadFleet, withFleetProfile } from './lib/fleet.mjs';
 import { runFleet } from './lib/fleet-cli.mjs';
@@ -40,7 +40,7 @@ import { formatIssueSummary, listOpenIssues, readDiffNames } from './lib/board.m
 import { checkDoctor, formatDoctor, warmDoctor } from './lib/doctor.mjs';
 import { configSetting, privateConfigPath, publicConfig } from './shell/settings.mjs';
 import { parseShellEvaluationArgs } from './shell/evaluation.mjs';
-import { listCheckpoints, rewindCheckpoint } from './lib/checkpoints.mjs';
+import { listCheckpoints, rewindCheckpoint, restoreVerifiedCheckpoint } from './lib/checkpoints.mjs';
 import { readPlannerTask } from './seats/planner.mjs';
 import { taskAndRepairFiles } from './runtime/tools.mjs';
 import { taskFilesAllowed } from './planner/task.mjs';
@@ -116,7 +116,7 @@ const defaultServices = {
   getFleetProfile, loadFleet, withFleetProfile, runFleet, probeModelDetails,
   formatIssueSummary, listOpenIssues, readDiffNames,
   checkDoctor, formatDoctor, warmDoctor, privateConfigPath, publicConfig,
-  listCheckpoints, rewindCheckpoint, readPlannerTask,
+  listCheckpoints, rewindCheckpoint, restoreVerifiedCheckpoint, readPlannerTask,
   listLocalRuns, readLocalRun, recapRun,
   askSideQuestion,
   listIssueWorktrees,
@@ -607,13 +607,33 @@ export function createDispatcher({
             `#${run.issue.number} | ${run.issue.title.replace(/[\x00-\x1f\x7f]/g, '?')} | ${run.seat} | ${run.state} | ${run.task}\n`);
           return true;
         }
-        if (!/^[1-9]\d*$/.test(args) || !Number.isSafeInteger(Number(args))) throw new TypeError('Use /resume [N].');
-        const prepared = await api.readLocalRun({ number: Number(args), cwd: currentRoot(), config: state.config, env });
-        if (prepared.planMode) {
-          const request = { kind: 'run', issue: args, options: { planMode: true }, prepared };
-          return executeRun(async () => prepared, { issue: Number(args), planMode: true }, request);
+        const parts = splitArguments(args);
+        const green = parts.length === 2 && parts[1] === '--green';
+        const number = parts[0];
+        if ((!green && parts.length !== 1) || !/^[1-9]\d*$/.test(number) || !Number.isSafeInteger(Number(number))) throw new TypeError('Use /resume [N] [--green].');
+        if (green && state.controller !== null) throw new Error('Stop the active seat before restoring a green checkpoint.');
+        const prepared = await api.readLocalRun({ number: Number(number), cwd: currentRoot(), config: state.config, env });
+        if (green) {
+          if (prepared.planMode) throw new Error('Green resume requires an executable TASK.md, not a plan');
+          const task = await api.readPlannerTask(prepared.worktreePath);
+          if (task === null) throw new Error('Green resume requires the current TASK.md');
+          const controller = new AbortController();
+          state.controller = controller;
+          let checkpoint;
+          try {
+            checkpoint = await api.restoreVerifiedCheckpoint({ worktree: prepared.worktreePath, task: prepared.task,
+              allowedFiles: taskFilesAllowed(task), env, apiKeyEnv: state.config.llm.api_key_env, signal: controller.signal });
+            throwIfCancelled(controller.signal);
+          } finally { state.controller = null; }
+          state.display.review = null;
+          output.write(`Restored verified checkpoint ${checkpoint.number}; later product edits preserved in a new checkpoint. Fresh checks/review required.\n`);
+          return runRequest({ kind: 'run', issue: number, options: { confirm: true }, prepared }, { retry: true });
         }
-        return runRequest({ kind: 'run', issue: args, options: {}, prepared }, { retry: true });
+        if (prepared.planMode) {
+          const request = { kind: 'run', issue: number, options: { planMode: true }, prepared };
+          return executeRun(async () => prepared, { issue: Number(number), planMode: true }, request);
+        }
+        return runRequest({ kind: 'run', issue: number, options: {}, prepared }, { retry: true });
       }
       case 'recap':
         if (args) throw new TypeError('Use /recap.');
