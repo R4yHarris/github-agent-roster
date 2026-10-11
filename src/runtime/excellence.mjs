@@ -208,11 +208,23 @@ export function declaredTestNames(text) {
 // A large suite's head is unrelated tests: quote the totals and every result line from the changed test files.
 export function testEvidence(tests, changedTests = []) {
   const output = [tests.stdout, tests.stderr].filter((part) => typeof part === 'string' && part.trim()).join('\n').trim();
-  const lines = output.split(/\r?\n/);
-  const totals = lines.filter((line) => /^ℹ (tests|suites|pass|fail|cancelled|skipped|todo) \d+$/.test(line.trim()));
+  let diagnostic = false;
+  const lines = output.split(/\r?\n/).filter((line) => {
+    if (/^\s+---\s*$/.test(line)) diagnostic = true;
+    if (!diagnostic) return true;
+    if (/^\s+\.\.\.\s*$/.test(line)) diagnostic = false;
+    return false;
+  });
+  const totals = lines.filter((line) =>
+    /^ℹ (tests|suites|pass|fail|cancelled|skipped|todo) \d+$/.test(line.trim()) ||
+    /^# (tests|suites|pass|fail|cancelled|skipped|todo) \d+$/.test(line));
   const changed = changedTests.map(({ file, names }) => {
-    const results = lines.map((line) => line.trim()).filter((line) => /^[✔✖﹣] /.test(line) &&
-      names.some((name) => line.slice(2).startsWith(`${name} (`) || line.slice(2) === name));
+    const results = lines.map((line) => line.trim()).filter((line) => {
+      const tap = /^(?:not )?ok \d+ - (.+?)(?: # (?:SKIP|TODO)\b.*)?$/i.exec(line);
+      if (tap) return names.includes(tap[1]);
+      return /^[✔✖﹣] /.test(line) &&
+        names.some((name) => line.slice(2).startsWith(`${name} (`) || line.slice(2) === name);
+    });
     return `${file}: ${results.length} of ${names.length} declared tests reported\n` +
       [...new Set(results)].slice(0, 40).map((line) => `  ${line}`).join('\n');
   }).join('\n').slice(0, 4000);

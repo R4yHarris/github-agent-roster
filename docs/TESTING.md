@@ -73,6 +73,12 @@ Normal passing, failing, blocked, timed-out, and docs-only results keep their
 existing reporting, and RESULT.md still passes through the standard secret
 redaction.
 
+Full-suite evidence quotes observed totals and named changed-test results from
+both Node's spec reporter and the Node 20 non-TTY TAP reporter. TAP `not ok`,
+`SKIP`, and `TODO` outcomes remain explicit. Missing totals or named results
+remain missing; diagnostic blocks and nested suite totals are not counted as
+full-suite evidence. The command's actual exit code remains authoritative.
+
 Scoped verification uses existing explicitly planned test shards instead of
 expanding that module into every sibling shard. Without a present planned
 shard, it retains the whole module's test family. Final full-suite verification
