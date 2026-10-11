@@ -495,3 +495,34 @@ test('test evidence quotes suite totals and every result from changed test files
   assert.match(evidence, /Output:\n✔ unrelated test 0/);
   assert.doesNotMatch(testEvidence({ exit_code: 0, stdout: 'ok', stderr: '' }), /Changed test files|Totals/);
 });
+
+test('test evidence retains Node20 TAP totals and named outcomes beyond the output head', () => {
+  const stdout = 'TAP version 13\n' +
+    Array.from({ length: 100 }, (_, index) => `ok ${index + 1} - unrelated ${index}`).join('\n') +
+    '\n# Subtest: validates bounds\nok 101 - validates bounds\n' +
+    '# Subtest: rejects invalid input\nnot ok 102 - rejects invalid input\n' +
+    '  ---\n  message: |\n    ok 999 - diagnostic impostor\n    # tests 999\n  ...\n' +
+    'ok 103 - optional test # SKIP unavailable\nnot ok 104 - future test # TODO pending\n' +
+    '# ok 105 - commented impostor\n1..104\n' +
+    '# tests 104\n# suites 0\n# pass 101\n# fail 1\n# cancelled 0\n# skipped 1\n# todo 1\n';
+  const evidence = testEvidence({ exit_code: 1, stdout, stderr: '' }, [{
+    file: 'tests/bounds.test.mjs',
+    names: ['validates bounds', 'rejects invalid input', 'optional test', 'future test',
+      'diagnostic impostor', 'commented impostor', 'validates'],
+  }]);
+  assert.match(evidence, /node --test exited 1/);
+  assert.match(evidence, /Totals:\n  # tests 104\n  # suites 0\n  # pass 101\n  # fail 1\n  # cancelled 0\n  # skipped 1\n  # todo 1/);
+  assert.match(evidence, /tests\/bounds\.test\.mjs: 4 of 7 declared tests reported\n  ok 101 - validates bounds\n  not ok 102 - rejects invalid input\n  ok 103 - optional test # SKIP unavailable\n  not ok 104 - future test # TODO pending/);
+  assert.match(evidence, /Output:\nTAP version 13\nok 1 - unrelated 0/);
+  assert.doesNotMatch(evidence, /# tests 999|  ok 999 - diagnostic impostor|  # ok 105 - commented impostor/);
+});
+
+test('test evidence matches nested TAP results without inventing missing totals or consuming nested totals', () => {
+  const stdout = 'TAP version 13\n# Subtest: suite\n' +
+    '    # Subtest: nested case\n    ok 1 - nested case\n    1..1\n' +
+    '    # tests 1\nok 1 - suite\n1..1\n';
+  const evidence = testEvidence({ exit_code: 0, stdout, stderr: '' },
+    [{ file: 'tests/nested.test.mjs', names: ['nested case', 'suite', 'missing'] }]);
+  assert.match(evidence, /2 of 3 declared tests reported\n  ok 1 - nested case\n  ok 1 - suite/);
+  assert.doesNotMatch(evidence, /Totals:/);
+});
