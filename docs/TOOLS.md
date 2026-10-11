@@ -148,6 +148,9 @@ post-write checks are already green. Other task
 classes/difficulties/scopes retain the existing behavior below.
 
 Malformed coder tool-call arrays/JSON arguments get exactly one tool-only repair.
+Absent or blank function names use that protocol correction without guessing or
+dispatching a tool; a repeated missing name stops the seat. Known but withheld
+Roster tools remain immediate authority failures (FEATURE_SPEC sections 5.4 and 5.5).
 If repair is still malformed, a deterministic edit is available only for an
 explicit Status task whose application scope is exactly README.md and whose
 read/write tools are enabled. It adds `## Status` and one neutral body line
