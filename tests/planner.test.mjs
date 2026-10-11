@@ -357,6 +357,30 @@ test('directory documentation guides the planner away from observed operational 
   assert.deepEqual(taskFilesAllowed(result.task), ['easy-git-guide/guide.md']);
 });
 
+test('code-directory planning retains scope guidance without introducing documentation obligations', async () => {
+  const ask = 'Create a tiny Node 20 ESM utility exporting clamp(value, min, max). ' +
+    'Accept only finite numbers and min <= max; otherwise throw TypeError. Include Node built-in tests. ' +
+    'No dependencies, network or publication. Output it in a new "easy-clamp" directory';
+  const files = ['easy-clamp/package.json', 'easy-clamp/clamp.js', 'easy-clamp/clamp.test.js'];
+  let guidance;
+  const result = await planAsk(ask, { config: llmConfig, env: {},
+    fetchImpl: async (_url, request) => {
+      guidance = JSON.parse(request.body).messages[0].content;
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+        content: JSON.stringify({ title: 'Clamp utility',
+          acceptance_checks: ['clamp exports a function validating finite inputs and ordered bounds',
+            'node --test exits 0'], files_allowed: files }),
+      } }] });
+    },
+  });
+  assert.match(guidance, /human grants only the output directory "easy-clamp"/);
+  assert.match(guidance, /Choose concrete files beneath it, never a wildcard or an outside file/);
+  assert.doesNotMatch(guidance, /Markdown guide|document-content acceptance|For document intent|The guide states/);
+  assert.equal(result.error, undefined);
+  assert.deepEqual(taskFilesAllowed(result.task), files);
+  assert.ok(result.task.includes(ask));
+});
+
 test('documentation planner repairs a nine-check TASK at the final normal turn without losing requirements', async (t) => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'roster-planner-doc-checks-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));

@@ -228,7 +228,8 @@ export async function planAsk(ask, {
       'Stay within the human Ask paths. Work toward a complete executable handoff. ' +
       (requirements.outputDirectory ? `The human grants only the output directory "${requirements.outputDirectory}". ` +
         'Choose concrete files beneath it, never a wildcard or an outside file. Preserve Original Ask exactly, including spelling. ' +
-        'Declare new paths under ## New files when writing TASK.md; JSON plans are declared by the harness. ' +
+        'Declare new paths under ## New files when writing TASK.md; JSON plans are declared by the harness. ' : '') +
+      (isDirectoryDocumentAsk(cleanAsk) ?
         'Design/setup documentation requests authorize documents only, not purchases, accounts, deployment, network or publication. ' +
         'For document intent, choose only Markdown files and checks describing document contents, never action-success checks. ' +
         'Use document-content acceptance checks for documentation, not installation/deployment commands. ' +
