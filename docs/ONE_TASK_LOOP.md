@@ -95,6 +95,10 @@ skipped rather than executing installation/deployment instructions. Such
 document intent also rejects checks asserting installation, deployment,
 publication, network, purchase or account actions succeeded; checks must
 describe document contents.
+Content checks may describe, contrast, compare, define, present or show
+documented material; these verbs never waive the action-success restrictions.
+Validation identifies the rejected check number so a planner can correct
+the actual defect without repeating an unchanged plan.
 For example, planner checks say the output directory contains a Markdown
 guide and the guide states examples are illustrative, rather than claiming
 directory creation or command execution. Negative execution assertions are

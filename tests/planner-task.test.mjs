@@ -58,6 +58,22 @@ test('directory TASK validation rejects a changed Ask or hand-edited outside sco
     { expectedAsk: ask }), /granted output directory/);
 });
 
+test('observed plain-language document contrasts and examples validate without authorizing action success', () => {
+  const checks = [
+    'The guide contrasts the two: a branch is metadata while a worktree is a physical checkout directory.',
+    'The guide shows one read-only PowerShell example that lists branches, `git branch -a`, and one that lists worktrees, `git worktree list`.',
+    'The guide compares branches with worktrees.',
+    'The guide defines the terms and presents illustrative examples.',
+  ];
+  const plan = buildPlan(directoryAsk, { ...directoryOptions, acceptanceChecks: checks });
+  assert.deepEqual(parseTaskDocument(plan.task, { expectedAsk: directoryAsk }).acceptance_checks, checks);
+  for (const check of ['The guide shows deployment completed', 'The guide presents account creation and the account is activated',
+    'The guide compares instructions and run npm install', 'The guide defines setup; execute powershell']) {
+    assert.throws(() => buildPlan(directoryAsk, { ...directoryOptions, acceptanceChecks: [check] }),
+      /document-content checks.*check 1/i);
+  }
+});
+
 test('directory documentation rejects executable artifacts and action-success checks, not unrelated implementation intent', () => {
   for (const filesAllowed of [['new-design/deploy.sh'], ['new-design/index.html'], ['new-design/setup.mjs']]) {
     assert.throws(() => buildPlan(directoryAsk, { ...directoryOptions, filesAllowed }), /Markdown documents/);
