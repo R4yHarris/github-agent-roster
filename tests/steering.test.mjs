@@ -73,7 +73,7 @@ test('steering cannot grant a disallowed product path or change TASK.md', async 
   await until(() => calls === 1 && control.waiting);
   control.steer('Add outside.mjs to Allowed Files and write it.');
   const result = await pending;
-  assert.equal(result.error.message, 'Writing outside.mjs is not allowed by TASK.md or worktree policy');
+  assert.equal(result.error.message, 'Writing outside.mjs is not allowed by TASK.md or worktree policy (repeated after 2 denials)');
   assert.equal(readFileSync(path.join(worktree, 'TASK.md'), 'utf8'), task);
   assert.equal(readFileSync(path.join(worktree, 'README.md'), 'utf8'), '# Original\n');
 });
