@@ -34,6 +34,7 @@ import { createRunLog } from './run-log.mjs';
 import { humanEvalHint, recordedCoderRun } from './seat-publication.mjs';
 import { formatRoute, routeTask } from './route.mjs';
 import { classifyAsk, clarificationHint } from '../planner/classify.mjs';
+import { clarificationResult } from '../planner/clarify.mjs';
 import { outputDirectoryFromAsk, parseTaskDocument } from '../planner/task.mjs';
 import { retryCommandForTask } from '../llm/request.mjs';
 import { selectReasoning } from '../llm/reasoning.mjs';
@@ -376,9 +377,11 @@ async function executeBuiltinTask({
     difficulty: readTaskMetadata(taskSource).difficulty });
   log(`Ask kind: ${askKind} (${classification.reason})`);
   if (askKind === 'clarify') {
+    const clarify = clarificationResult(document.ask);
     log(clarificationHint);
+    log(clarify.guidance);
     return { worktreePath, task, session, askKind, classification, planningOnly: true,
-      clarification: clarificationHint, command: null, failed: false };
+      ...clarify, command: null, failed: false };
   }
   const reviewerSession = `roster-${randomBytes(8).toString('hex')}-reviewer`;
   const existingRuns = await fs.readdir(path.join(worktreePath, '.roster', 'runs')).catch((error) => {
@@ -1028,8 +1031,10 @@ async function executeBuiltinAssignment(issueNumber, {
   log(`Ask kind: ${askKind} (${classification.reason})`);
   if (askKind === 'clarify') {
     if (attempts > 1) throw new TypeError('Multiple attempts require a bounded slice');
+    const clarify = clarificationResult(prepared.ask);
     log(clarificationHint);
-    return { ...prepared, askKind, classification, clarification: clarificationHint, sessions,
+    log(clarify.guidance);
+    return { ...prepared, askKind, classification, ...clarify, sessions,
       runs: { planner: null, coder: null, reviewer: null }, run: null, command: null,
       planningOnly: true, failed: false };
   }

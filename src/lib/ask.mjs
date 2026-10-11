@@ -10,7 +10,8 @@ import { ensureLocalPath } from './paths.mjs';
 import { askRequirements, cleanAskText, planAsk } from '../planner/stub.mjs';
 import { readTaskMetadata } from '../runtime/estimate.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
-import { classifyAsk, clarificationHint } from '../planner/classify.mjs';
+import { classifyAsk } from '../planner/classify.mjs';
+import { clarificationResult } from '../planner/clarify.mjs';
 import { planOutline } from '../planner/plan.mjs';
 import { createTools, planArtifactFiles } from '../runtime/tools.mjs';
 
@@ -36,7 +37,7 @@ export async function writeAsk(ask, {
     throw new TypeError('Ask ID must be an opaque local identifier');
   }
   const askKind = classifyAsk(ask).kind;
-  if (askKind === 'clarify') return { mode: 'clarify', askKind, clarification: clarificationHint };
+  if (askKind === 'clarify') return { mode: 'clarify', askKind, ...clarificationResult(ask) };
   const options = { config, reference: `local:${id}`, fetchImpl, env, vault };
   const plan = askKind === 'slice' ? await planAsk(ask, { ...options, learningRoot: repoRoot })
     : await planOutline(ask, { ...options, kind: askKind });
@@ -67,7 +68,7 @@ export async function writeAsk(ask, {
 
 export function formatAsk(result) {
   const kind = `Ask kind: ${result.askKind ?? 'slice'}\n`;
-  if (result.mode === 'clarify') return kind + `${result.clarification}\n`;
+  if (result.mode === 'clarify') return kind + `${result.clarification}\n${result.guidance ?? ''}${result.guidance ? '\n' : ''}`;
   if (result.mode === 'issue') return kind + `Issue: ${result.url}\n`;
   return kind + `Ask: ${result.askPath}\n` +
     (result.planPath ? `PLAN: ${result.planPath}\n`
@@ -90,7 +91,7 @@ export async function submitAsk(ask, {
   if (title.length > 240) throw new TypeError('Issue title must be at most 240 characters');
   const body = renderIssueBody(text);
   const askKind = classifyAsk(text).kind;
-  if (askKind === 'clarify') return { mode: 'clarify', askKind, clarification: clarificationHint };
+  if (askKind === 'clarify') return { mode: 'clarify', askKind, ...clarificationResult(ask) };
   if (askKind === 'slice') askRequirements(text);
   const commandEnv = { ...env, GH_PROMPT_DISABLED: '1' };
   try {
