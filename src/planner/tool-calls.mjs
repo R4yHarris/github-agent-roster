@@ -56,7 +56,14 @@ export function parsePlannerToolCalls(message, { turn = 1, usedIds = new Set() }
     payload = parsed.value;
   }
   if (isObject(payload) && Object.hasOwn(payload, 'tool_calls')) payload = payload.tool_calls;
-  const entries = Array.isArray(payload) ? payload : isObject(payload) ? [payload] : null;
+  const raw = Array.isArray(payload) ? payload : isObject(payload) ? [payload] : null;
+  // Gateways can interleave an inert call whose arguments never arrive; it carries no request, so drop it
+  // when real sibling calls exist instead of rejecting the whole response.
+  const inert = (entry) => isObject(entry) && isObject(entry.function) &&
+    (entry.function.arguments === '' || entry.function.arguments === undefined) &&
+    !Object.hasOwn(entry.function, 'path');
+  const real = raw?.filter((entry) => !inert(entry));
+  const entries = raw && real.length && real.length < raw.length ? real : raw;
   if (!entries || entries.length > 3) return { error: 'Planner must emit at most three function tool calls' };
   const ids = new Set(usedIds);
   const calls = [];
