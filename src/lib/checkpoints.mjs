@@ -295,6 +295,7 @@ export async function rewindCheckpoint({
       throwIfCancelled(signal);
       changed.push(file);
       await replace(file, restored.get(file));
+      throwIfCancelled(signal);
     }
   } catch (error) {
     try { for (const file of changed.reverse()) await replace(file, previous.get(file)); }

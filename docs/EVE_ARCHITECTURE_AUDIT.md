@@ -217,6 +217,29 @@ metadata, unknown green and secret backup material fail closed. Later product
 edits remain recoverable; stale RESULT/REVIEW is archived. No claim of live
 cross-platform/hardware acceptance, human rating or unattended context replay.
 
+Child #555 adds interruption controls for multi-file restoration. Cancellation
+after any replacement, including the final write or deletion, enters the
+existing rollback path instead of returning a successful checkpoint. Failed
+restoration preserves exact prior product bytes and file absence, retains the
+before-write backup for manual recovery, and releases the issue writer lock.
+A rollback I/O failure remains an explicit error requiring product inspection;
+the retained backup is recoverable, not a claim that rollback succeeded.
+Interrupted shell restoration must not launch a seat or publisher. These are
+bounded recovery controls, not unattended replay or human acceptance.
+
+Windows Node20 verification for #555: inherited interruption controls reproduced
+six passes and two failures before repair (final-write/final-delete cancellation
+returned success). After integrating reviewed #552 merge `6de6d358`, combined
+interruption/checkpoint/identity controls passed **39/39**, zero failures/skips;
+separate fresh CLI/shell green-resume and builtin publication safeguards passed
+**20/20**, zero failures/skips. No full-local-suite, new remote CI, publication,
+independent acceptance or model-quality result is implied by these local checks.
+
+The parent development-review continuation integrated main `bfdb9aa9` and
+replayed interruption, checkpoint, identity, green-resume, builtin resume and
+publication controls: **72/72** passed on Windows Node20, zero failures/skips.
+This is additional offline verification, not human acceptance or a live task result.
+
 ## Bounded repository question implementation evidence
 
 Tracked before resumed implementation as child #550 / Build In progress. Scope
