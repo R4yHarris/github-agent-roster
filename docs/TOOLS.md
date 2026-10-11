@@ -151,6 +151,11 @@ Malformed coder tool-call arrays/JSON arguments get exactly one tool-only repair
 Absent or blank function names use that protocol correction without guessing or
 dispatching a tool; a repeated missing name stops the seat. Known but withheld
 Roster tools remain immediate authority failures (FEATURE_SPEC sections 5.4 and 5.5).
+A mixed gateway batch may contain an inert function placeholder with both name
+and argument text empty. When an offered sibling has an actual payload, the
+placeholder is reported as denied and excluded; all remaining calls still
+undergo normal validation before dispatch. Standalone empty calls, nonempty
+malformed payloads and withheld tools retain their existing failure behavior.
 If repair is still malformed, a deterministic edit is available only for an
 explicit Status task whose application scope is exactly README.md and whose
 read/write tools are enabled. It adds `## Status` and one neutral body line

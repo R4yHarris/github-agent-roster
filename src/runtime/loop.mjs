@@ -437,10 +437,22 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       usages.push(response.usage);
       progress.usage = mergeUsage(...usages);
     }
-    const { message, finish_reason: finishReason } = response;
+    let { message } = response;
+    const { finish_reason: finishReason } = response;
     if (!message || typeof message !== 'object' || !['stop', 'tool_calls', undefined, null]
       .includes(finishReason)) {
       throw new Error('LLM coder returned an unsupported chat response');
+    }
+    if (Array.isArray(message.tool_calls) && message.tool_calls.some((call) =>
+      call?.type === 'function' && offeredTools.has(call.function?.name) &&
+      typeof call.function?.arguments === 'string' && call.function.arguments.trim())) {
+      const kept = [];
+      for (const call of message.tool_calls) {
+        if (call?.type === 'function' && call.function?.name === '' && call.function?.arguments === '') {
+          await onEvent?.({ type: 'tool-result', name: 'empty-gateway-placeholder', status: 'denied' });
+        } else kept.push(call);
+      }
+      message = { ...message, tool_calls: kept };
     }
     if (finalSummaryOnly && !checksPassedAfterWrite && (finishReason === 'tool_calls' ||
         message.tool_calls !== undefined && (!Array.isArray(message.tool_calls) || message.tool_calls.length) ||
