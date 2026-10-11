@@ -340,8 +340,11 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       `Repair ${progress.testRepairs} of ${repairBudget}` +
       (repairBudget < testRepairCap ? ' (each repair that changes the failure without adding failing tests earns another)' : '') +
       '. Repair only TASK-allowed files' +
-      (progress.repairFiles.length ? `: ${progress.repairFiles.join(', ')}` : '') +
-      '. ' + (repeated ? 'This failure already occurred after an earlier repair, so that approach did not work. ' +
+      '. ' + (progress.repairFiles.length
+        ? `Failing test paths (evidence, not the complete edit scope): ${progress.repairFiles.join(', ')}. ` : '') +
+      'For a test-first failure caused by a missing required module, implement that module at its TASK-allowed product path; ' +
+      'do not rewrite tests to hide the missing implementation or create an imported module outside Allowed Files. ' +
+      (repeated ? 'This failure already occurred after an earlier repair, so that approach did not work. ' +
         'Take a materially different approach; one more repeat stops this context. ' : '') +
       (regressions.length ? `These tests pass at the base commit, so this change broke them: ${regressions.join(', ')}. ` +
         'Decide from TASK.md whether the new behavior is intended (update the test to it) or the implementation ' +

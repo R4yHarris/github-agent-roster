@@ -58,3 +58,47 @@ test('explicit unclassified evidence overrides conflicting baseline claims', asy
   assert.match(feedback, /Repair 1 of/);
   assert.doesNotMatch(feedback, /are pre-existing|Report it as pre-existing/);
 });
+
+test('test-first missing-module repair retains planned product scope instead of limiting edits to failing tests', async () => {
+  const task = planStub('Create src/parser.mjs and tests/parser.test.mjs.').task;
+  let turns = 0;
+  let runs = 0;
+  const writes = [];
+  const result = await runLoop({
+    config: llmConfig, context: { task, pack: task }, env: {},
+    tools: {
+      run_test: async () => ++runs === 1
+        ? { exit_code: 1, stdout: "ERR_MODULE_NOT_FOUND: Cannot find module 'src/parser.mjs'",
+          stderr: '', failing_files: ['tests/parser.test.mjs'] }
+        : { exit_code: 0, stdout: '# pass 1\n# fail 0', stderr: '' },
+      write_file: async ({ path }) => {
+        writes.push(path);
+        return { path, bytes: 1 };
+      },
+    },
+    fetchImpl: async (_url, request) => {
+      turns += 1;
+      if (turns === 2) {
+        const feedback = JSON.parse(request.body).messages.at(-1).content;
+        assert.match(feedback, /Failing test paths \(evidence, not the complete edit scope\): tests\/parser.test.mjs/);
+        assert.match(feedback, /missing required module.*implement.*TASK-allowed product path/);
+        assert.doesNotMatch(feedback, /Repair only TASK-allowed files: tests\/parser.test.mjs/);
+        return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant', tool_calls: [{ id: 'implementation', type: 'function', function: {
+            name: 'write_file', arguments: JSON.stringify({ path: 'src/parser.mjs', content: 'export const parse = () => [];' }),
+          } }],
+        } }] });
+      }
+      return Response.json({ choices: [{ finish_reason: turns === 1 ? 'tool_calls' : 'stop', message: {
+        role: 'assistant', ...(turns === 1 ? { tool_calls: [{ id: 'red', type: 'function', function: {
+          name: 'run_test', arguments: '{}',
+        } }] } : { content: 'Implemented the missing planned module and tests pass.' }),
+      } }] });
+    },
+    verify: () => ({ pass: true, reasons: [] }),
+  });
+  assert.equal(result.error, undefined);
+  assert.deepEqual(writes, ['src/parser.mjs']);
+  assert.equal(result.testRepairs, 1);
+  assert.equal(result.tests.exit_code, 0);
+});
