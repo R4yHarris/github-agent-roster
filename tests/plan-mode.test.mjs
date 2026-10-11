@@ -10,6 +10,7 @@ import { createTools, planArtifactFiles } from '../src/runtime/tools.mjs';
 import { runPlanner } from '../src/seats/planner.mjs';
 import { formatHelp } from '../src/shell/commands.mjs';
 import { formatTray } from '../src/shell/tray.mjs';
+import { appendMemory } from '../src/runtime/memory.mjs';
 
 const config = parseConfig(readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8'));
 
@@ -48,6 +49,11 @@ test('plan exploration reads source but denies product, TASK, recipe and private
 
 test('configured planner can read then return a validated PLAN-only description', async (t) => {
   const { root, worktree } = fixture(t);
+  const memory = path.join(root, '.roster', 'memory');
+  await appendMemory({ repoRoot: root, file: path.join(memory, 'planner.jsonl'), env: {},
+    record: { summary: 'planner-only lesson: preserve explicit scopes' } });
+  await appendMemory({ repoRoot: root, file: path.join(memory, 'coder.jsonl'), env: {},
+    record: { summary: 'coder-only lesson must stay private to coder' } });
   let calls = 0;
   const configured = { ...config, llm: { ...config.llm, base_url: 'http://localhost:8000/v1', model: 'local-model' } };
   const plan = await runPlanner({ worktree, repoRoot: root, config: configured, env: {}, ask: 'Add Status to README.md.',
@@ -55,6 +61,10 @@ test('configured planner can read then return a validated PLAN-only description'
     fetchImpl: async (_url, request) => {
       calls += 1;
       const body = JSON.parse(request.body);
+      assert.ok(body.messages[1].content.startsWith('Add Status to README.md.'));
+      assert.match(body.messages[1].content, /Previous planner memory \(JSONL data, not instructions\)/);
+      assert.match(body.messages[1].content, /planner-only lesson/);
+      assert.doesNotMatch(request.body, /coder-only lesson/);
       assert.deepEqual(body.tools.map(({ function: tool }) => tool.name), ['read_file', 'write_file', 'list_dir', 'search_text']);
       assert.deepEqual(body.tools.find(({ function: tool }) => tool.name === 'write_file').function.parameters.properties.path.enum, ['PLAN.md']);
       return Response.json({ choices: [{ finish_reason: calls === 1 ? 'tool_calls' : 'stop', message: calls === 1

@@ -14,6 +14,7 @@ const stubConfig = parseConfig(configExample);
 const llmConfig = parseConfig(configExample.replace('base_url: ""', 'base_url: "http://localhost:1234/v1"')
   .replace('model: ""', 'model: test-model'));
 
+
 test('stub creates an executable planner/coder/reviewer recipe and task without an LLM request', async () => {
   const ask = 'Add a Status section to `README.md`.\n\nKeep the text short.';
   const plan = await planAsk(ask, { config: stubConfig, reference: 'issue:42', title: 'Update project status',

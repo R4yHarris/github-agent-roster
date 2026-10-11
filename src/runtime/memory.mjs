@@ -6,6 +6,38 @@ import { buildCompactionRecord } from '../lib/provenance-api.mjs';
 
 export const DEFAULT_COMPACTION_LIMIT = 50;
 
+export function plannerMemoryText(memory = [], { env, apiKeyEnv } = {}) {
+  if (!Array.isArray(memory) || memory.some((line) => typeof line !== 'string' || /[\r\n]/.test(line))) {
+    throw new TypeError('Planner memory must contain single-line JSONL data');
+  }
+  for (const line of memory) {
+    let record;
+    try {
+      record = JSON.parse(line);
+    } catch (error) {
+      throw new TypeError('Planner memory must contain JSON objects', { cause: error });
+    }
+    if (!record || typeof record !== 'object' || Array.isArray(record)) {
+      throw new TypeError('Planner memory must contain JSON objects');
+    }
+  }
+  const limit = 4000;
+  const lines = [];
+  let used = 0;
+  let omitted = memory.length > 20;
+  for (const line of memory.slice(-20).reverse()) {
+    const safe = redactSecrets(line, { env, apiKeyEnv });
+    if (used + safe.length + 1 > limit - 40) {
+      omitted = true;
+      break;
+    }
+    lines.unshift(safe);
+    used += safe.length + 1;
+  }
+  if (omitted) lines.unshift('[Older planner memory omitted by budget]');
+  return lines.join('\n');
+}
+
 export function seatMemoryPath({ repoRoot, memoryPath, seat }) {
   if (isForbiddenRead(memoryPath)) throw new Error('Seat memory must not use a protected or secret path');
   const coder = path.join(repoRoot, memoryPath);
