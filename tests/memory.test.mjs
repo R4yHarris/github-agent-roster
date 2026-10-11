@@ -4,13 +4,31 @@ import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from '
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { appendMemory, coderMemoryRecord, readMemory } from '../src/runtime/memory.mjs';
+import { appendMemory, coderMemoryRecord, plannerMemoryText, readMemory } from '../src/runtime/memory.mjs';
 
 function fixture(context) {
   const repoRoot = mkdtempSync(path.join(tmpdir(), 'roster-memory-'));
   context.after(() => rmSync(repoRoot, { recursive: true, force: true }));
   return { repoRoot, file: path.join(repoRoot, '.roster', 'memory', 'coder.jsonl'), env: {} };
 }
+
+test('planner memory rendering is bounded, redacted and keeps complete newest records', () => {
+  const entries = Array.from({ length: 25 }, (_, index) =>
+    JSON.stringify({ index, summary: 'x'.repeat(300) }));
+  entries[24] = JSON.stringify({ index: 24, summary: 'recent test-only-planner-key' });
+  const rendered = plannerMemoryText(entries, { env: { ROSTER_API_KEY: 'test-only-planner-key' } });
+  assert.ok(rendered.length <= 4000);
+  assert.match(rendered, /Older planner memory omitted/);
+  assert.match(rendered, /"index":24/);
+  assert.doesNotMatch(rendered, /test-only-planner-key|"index":0,/);
+  const records = rendered.split('\n').filter((line) => line.startsWith('{')).map(JSON.parse);
+  assert.equal(records.at(-1).index, 24);
+  assert.deepEqual(plannerMemoryText([]), '');
+  assert.throws(() => plannerMemoryText('not an array'), /single-line JSONL/);
+  assert.throws(() => plannerMemoryText([null]), /single-line JSONL/);
+  assert.throws(() => plannerMemoryText(['line\nanother']), /single-line JSONL/);
+  assert.ok(plannerMemoryText(['x'.repeat(10000)]).length <= 4000);
+});
 
 test('appending twice preserves every old byte and tail returns both notebook records', async (context) => {
   const options = fixture(context);

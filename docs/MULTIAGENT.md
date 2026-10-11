@@ -53,6 +53,14 @@ Required conduct, rules, task and feedback cannot be dropped to fit the
 configured context budget. Optional recent memory remains budgeted. This does
 not switch an ordinary slice to research, widen its scope, or run docs tests.
 
+Normal slice planning, read-only plan mode, and feature/initiative outlines
+receive the same existing own-seat planner-memory tail as data, not instructions
+or file-scope authority. A shared renderer redacts values and retains at most
+20 newest complete JSONL lines within 4000 characters, explicitly marking
+older omitted records. It does not read coder history or add a storage layer.
+Planning-only modes still cannot implement, publish, or grant capabilities.
+These boundaries implement FEATURE_SPEC sections 5.3 and 5.6.
+
 ## Opt-in parallel child waves
 
 ```sh

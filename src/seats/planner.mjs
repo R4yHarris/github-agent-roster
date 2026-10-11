@@ -282,7 +282,7 @@ export async function runPlanner({
     const tools = await createTools({ worktree, seat: 'planner', env, apiKeyEnv: config.llm.api_key_env, onEvent,
       signal, ...(planMode || kind !== 'slice' ? { plannerArtifacts: planArtifactFiles } : {}),
       plannerReads: planMode && kind === 'slice' });
-    const options = { config, reference, title, fetchImpl, env, vault, onEvent, retryCommand, signal,
+    const options = { config, reference, title, fetchImpl, env, vault, onEvent, retryCommand, signal, memory,
       onResponse: (response) => { lastResponse = response; } };
     if (planMode && kind === 'slice') {
       plan = await planSlice(ask, { ...options, metadata, lockedModel, tools });
@@ -291,7 +291,7 @@ export async function runPlanner({
     } else if (kind === 'slice') {
       const grounding = config.llm.base_url ? await sliceGrounding(worktree, `${title ?? ''}\n${ask}`) : undefined;
       plan = await planAsk(ask, {
-        ...options, memory, learningRoot, metadata, lockedModel, tools, grounding,
+        ...options, learningRoot, metadata, lockedModel, tools, grounding,
       });
       if (grounding && !plan.error) plan = { ...plan, task: ensureDesign(plan.task, grounding, `${title ?? ''}\n${ask}`) };
       await validateDirectoryHandoff(plan.task, ask, worktree, title);
