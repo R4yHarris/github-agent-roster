@@ -1,5 +1,23 @@
 # One-task loop
 
+## Whole-task budget
+
+Set optional `seat.task_timeout_ms` to a positive integer in milliseconds (at
+most `2147483647`) to cap one builtin assignment across planning, coding,
+repairs, review and publication preparation. Unset preserves existing uncapped
+behavior; this is separate from the endpoint's request timeout. Each scheduled
+child issue has its own budget; it does not abort healthy siblings.
+
+Expiry cancels the assignment with `ROSTER_TASK_TIMEOUT`, preserves existing
+work and failure evidence, and prevents subsequent review or publication.
+Issue and local Ask lifecycle history records a `timed_out` cancellation, not
+completion or human acceptance. Ownership is released only after cooperative
+operation cleanup, never by racing a still-running writer against a timer.
+An already-started publisher may have performed remote actions before
+cancellation: inspect the PR before retrying; cancellation is not rollback.
+
+## Default path
+
 The default builtin path is `roster run --issue N` ([SDLC](SDLC.md)).
 `--runtime builtin` remains accepted for agents and CI. A run reads the
 existing issue, creates one worktree, runs a

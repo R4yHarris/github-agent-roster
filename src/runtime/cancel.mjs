@@ -7,7 +7,10 @@ export class RunCancelledError extends Error {
 }
 
 export function throwIfCancelled(signal) {
-  if (signal?.aborted) throw new RunCancelledError();
+  if (signal?.aborted) {
+    if (signal.reason?.code === 'ROSTER_TASK_TIMEOUT') throw signal.reason;
+    throw new RunCancelledError();
+  }
 }
 
 export function isRunCancelled(error) {

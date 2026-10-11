@@ -48,6 +48,7 @@ import { routeFailure } from '../llm/openai.mjs';
 import { acquireRepoLock } from './repo-locks.mjs';
 import { parallelLimit, runReadyWaves } from './wave-scheduler.mjs';
 import { attemptLimit, attemptSummary, runPlanAttempts } from './attempts.mjs';
+import { withTaskDeadline, TaskTimeoutError } from '../runtime/task-deadline.mjs';
 
 const execFileAsync = promisify(execFile);
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -332,7 +333,14 @@ export async function prepareBuiltinPublication(run, {
   return { contractsPath, worktreePath: run.worktreePath, publishEnv, model: publishEnv.AI_MODEL };
 }
 
-export async function runBuiltinTask({
+export async function runBuiltinTask(options = {}) {
+  const config = options.config ?? loadConfig({ repoRoot: options.repoRoot ?? rosterRoot, cwd: options.cwd ?? process.cwd() });
+  return withTaskDeadline((signal) => executeBuiltinTask({ ...options, config, signal }), {
+    timeoutMs: config.seat.task_timeout_ms, signal: options.signal,
+  });
+}
+
+async function executeBuiltinTask({
   cwd = process.cwd(), repoRoot = rosterRoot, config = loadConfig({ repoRoot, cwd }), env = process.env,
   task = env.AI_TASK || `local-${randomBytes(8).toString('hex')}`,
   session = env.AI_SESSION || `roster-${randomBytes(8).toString('hex')}-coder`,
@@ -444,6 +452,7 @@ export async function runBuiltinTask({
     throw error;
   }
   await record(result);
+  throwIfCancelled(signal);
   let { review, reviewRun } = await reviewSeat(result);
   const boundedTask = taskFilesAllowed(taskSource).length === 1;
   const docsOnly = boundedTask && taskFilesAllowed(taskSource).every((file) => file.endsWith('.md'));
@@ -455,8 +464,10 @@ export async function runBuiltinTask({
     });
     result = await coderSeat(review.content);
     await record(result);
+    throwIfCancelled(signal);
     ({ review, reviewRun } = await reviewSeat(result));
   }
+  throwIfCancelled(signal);
   log(`Worktree: ${worktreePath}\nTASK: ${path.join(worktreePath, 'TASK.md')}\n` +
     `Live log: ${liveLog.path}\n` +
     `CONTEXT: ${result.contextPath}\n` + (result.researchPath ? `RESEARCH: ${result.researchPath}\n` : '') +
@@ -617,7 +628,8 @@ async function runTrackedAssignment(issueNumber, options) {
       }
     } });
   } catch (error) {
-    await post('blocked', [options.signal?.aborted ? 'The run was cancelled by the operator.'
+    await post('blocked', [options.signal?.reason instanceof TaskTimeoutError ? options.signal.reason.message
+      : options.signal?.aborted ? 'The run was cancelled by the operator.'
       : `Run stopped: ${redact(String(error?.message ?? error))}`]);
     throw error;
   }
@@ -735,6 +747,13 @@ async function openWaves({ worktree, cwd, env, apiKeyEnv, runCommand, log }) {
 }
 
 async function runBuiltinAssignment(issueNumber, options = {}) {
+  const config = options.config ?? loadConfig({ repoRoot: options.repoRoot ?? rosterRoot, cwd: options.cwd ?? process.cwd() });
+  return withTaskDeadline((signal) => executeRecordedAssignment(issueNumber, { ...options, config, signal }), {
+    timeoutMs: config.seat.task_timeout_ms, signal: options.signal,
+  });
+}
+
+async function executeRecordedAssignment(issueNumber, options) {
   const { env = process.env, log = console.log, onPrepared } = options;
   const lifecycle = { runId: `run-${randomBytes(8).toString('hex')}`, store: null, prepared: null,
     repository: { remote: '', commit: '' },
@@ -793,8 +812,11 @@ async function runBuiltinAssignment(issueNumber, options = {}) {
         await onPrepared?.(prepared);
       },
     });
+    throwIfCancelled(options.signal);
   } catch (error) {
-    await capture(isRunCancelled(error) || options.signal?.aborted ? 'cancellation' : 'failure');
+    const timeout = options.signal?.reason instanceof TaskTimeoutError ? options.signal.reason : null;
+    await capture(isRunCancelled(error) || options.signal?.aborted ? 'cancellation' : 'failure',
+      timeout ? { outcome: 'timed_out', reason: timeout.message, task_timeout_ms: timeout.timeoutMs } : {});
     throw error;
   }
   await capture(result.failed ? 'failure' : result.planningOnly || result.confirmedPause
@@ -1302,6 +1324,7 @@ async function executeBuiltinAssignment(issueNumber, {
           coderResult, fetchImpl, env, vault, onEvent, askKind, retryCommand, signal, previousFindings, priorWaveFiles,
         }));
       } catch (error) {
+        throwIfCancelled(signal);
         const failure = independent ? routeFailure(error) : null;
         if (failure) {
           // The independent reviewer's endpoint failed: record it as route evidence and try the next
@@ -1415,6 +1438,7 @@ async function executeBuiltinAssignment(issueNumber, {
         await recordSeat(sessions.coder, error.result.run, error.result.excellence, coderConfig,
           { coder: error.result });
       }
+      if (signal?.aborted) throw error;
       const failedProfile = route?.profile.id;
       if (await recoverRoute('coder', error)) {
         coderConfig = buildCoderConfig(activeConfig.llm.model);
@@ -1613,16 +1637,18 @@ async function executeBuiltinAssignment(issueNumber, {
   });
 
   async function publishCompleted(completed, coderConfig, publishMessage) {
+    throwIfCancelled(signal);
     const { worktreePath, runs: { coder: coderRun } } = completed;
     const { contractsPath, publishEnv, model: publishModel } = await prepareBuiltinPublication(completed, {
       cwd, config: coderConfig, env, skipReview, signal,
     });
     let stdout;
     try {
+      throwIfCancelled(signal);
       ({ stdout } = await publisher(process.execPath,
         [path.join(contractsPath, 'scripts', 'agent-pr.mjs'),
           '--message', publishMessage, '--model', publishModel, '--merge-when-green'],
-        { cwd: worktreePath, env: publishEnv, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }));
+        { cwd: worktreePath, env: publishEnv, signal, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 }));
     } catch (error) {
       if (String(error.stderr ?? error.message).includes('HTTP 422')) {
         throw new Error('Checks permission is not accepted on the installation.', { cause: error });
