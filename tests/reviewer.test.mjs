@@ -101,8 +101,8 @@ test('a re-review judges the previous findings and is bound by TASK.md constrain
         role: 'assistant', content: passingReview(body) } }] }) };
     } });
   assert.equal((await reviewer()).verdict, 'pass');
-  assert.match(seen[0][0].content, /TASK\.md Constraints, which bind you too/);
-  assert.match(seen[0][0].content, /never require something TASK\.md forbids/);
+  assert.match(seen[0][0].content, /TASK\.md Constraints only when they are consistent with the Original Ask/);
+  assert.match(seen[0][0].content, /do not add unrelated conditions, execute forbidden actions/);
   assert.doesNotMatch(seen[0][0].content, /re-review/);
   assert.doesNotMatch(seen[0][1].content, /Previous review findings/);
   rmSync(path.join(options.worktree, 'REVIEW.md'));

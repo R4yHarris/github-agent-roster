@@ -17,15 +17,37 @@ RESULT.md output. A `pass` that omits any check gets one corrective retry,
 then fails. Any `met: false` turns the verdict to `fail` with
 `Check N unmet: …` reasons, whatever the model's summary says. REVIEW.md lists
 each judged check under `## Acceptance checks`.
-Separately from checks, the reviewer probes the changed code for four defect
+The Original Ask remains authoritative: planner checks or Design cannot
+weaken, contradict, or omit its requested outcomes. Missing requested
+deliverables fail with an Ask-citing reason even when the listed checks pass.
+Writing future setup/deployment instructions is not executing them; a request
+for public-serving instructions is not satisfied by localhost preview alone.
+The reviewer must not invent unrelated requirements or silently rewrite checks.
+
+For directory-scoped Asks, a separate bounded, read-only review first sees only
+the Original Ask and delivered diff, not the planner checklist or coder prose.
+It judges whether all requested deliverables are usable and semantically
+correct. Its failure overrides a later checklist pass and is recorded as
+`Original Ask audit` reasons. Its verdict and evidence are recorded in a
+separate report section, including successful audits. Unchanged allowed
+deliverables are read into the bounded evidence rather than treated as absent.
+Both calls use the same configured reviewer model; their returned usage is
+combined, with missing counts remaining unknown. Invalid audit output gets one
+bounded corrective reply, then fails explicitly as incomplete review, not
+approval. This is an independent evidence pass
+within the same reviewer seat, not a new worker or authority grant.
+
+Separately from checks, the reviewer probes the changed code for five defect
 classes: destructive or permissive defaults for missing input, data that
 bypasses redaction, identifiers that collide for distinct records, and
-resources not released on every path or releasable by the wrong holder. It
+resources not released on every path or releasable by the wrong holder, and
+incorrect observable results contrary to the requested operation or an
+established mathematical invariant (even when generated tests expect them). It
 reports each as an optional `defects` entry `{file, symbol, input, outcome}`
 naming a changed file. Any defect turns the verdict to `fail` with a
 `Defect in <file> <symbol>: <input> -> <outcome>` reason, even when every check
 is met, so review repair sends it back to the coder. Checks never permit
-defects; style and missing features are not defects.
+defects; style and unrequested features are not defects.
 The evidence also lists `## Unchanged existing files`: allowed files and
 relative imports of changed files that exist at the base but are not in the
 diff, so an unchanged module is not judged missing.
@@ -44,8 +66,11 @@ example, an endpoint failure) archived that review without writing a new one,
 the newest archived REVIEW.md is used instead.
 
 The reviewer judges each check by its own words under the TASK.md
-Constraints, which bind the reviewer too: it may not add unstated conditions
-or require something the task forbids. A re-review after a repair, including
+Constraints when consistent with the Original Ask: it may not add unrelated
+conditions or execute forbidden actions. A planner constraint cannot omit
+requested documentation. Original Ask authority is supplied separately from
+the checklist so a matching checklist cannot override the requested outcome.
+A re-review after a repair, including
 the first review of a rerun that carried findings, receives the previous
 findings and judges whether the diff resolves each. A new finding must cite
 check or TASK.md wording the change violates, and a check met before stays met

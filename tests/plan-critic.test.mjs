@@ -28,6 +28,22 @@ test('deterministic critic flags an already-covered check and an undeclared miss
   assert.match(defects[1].problem, /already-existing/);
 });
 
+test('critic requests Ask/check/design consistency and does not mistake written instructions for executed actions', async () => {
+  const task = draft(['Document setup instructions'], ['README.md']);
+  const defect = { check: 1, problem: 'Setup lacks requested public-serving steps.',
+    fix: 'Describe future public hosting steps without executing them.' };
+  const result = await critiquePlan(task, {
+    chat: async ({ messages }) => {
+      assert.match(messages[0].content, /contradict.*Ask.*Design/);
+      assert.match(messages[0].content, /worked examples.*expected results/);
+      assert.match(messages[0].content, /written instructions.*not.*execute/);
+      return { message: { content: JSON.stringify({ defects: [defect] }) } };
+    },
+  });
+  assert.deepEqual(result.defects, [defect]);
+  assert.equal(parseTaskDocument(result.task).ask, parseTaskDocument(task).ask);
+});
+
 test('one failing planner revision proceeds with reviewer-visible notes, preserving Ask and scope', async () => {
   const task = draft();
   let attempts = 0;

@@ -226,11 +226,16 @@ export async function planAsk(ask, {
       'Optional fields: difficulty (1-5), estimate_min, task_class (feat|fix|docs|test), model, steps, notes. ' +
       (lockedModel ? `Keep model ${lockedModel}; do not choose another model. ` : '') +
       'Stay within the human Ask paths. Work toward a complete executable handoff. ' +
+      'Preserve every requested outcome: checks and Design must agree with the unchanged Ask and with each other. ' +
+      'Validate worked examples and expected results against the operation\'s ordinary semantics; do not invent exceptions. ' +
       (requirements.outputDirectory ? `The human grants only the output directory "${requirements.outputDirectory}". ` +
         'Choose concrete files beneath it, never a wildcard or an outside file. Preserve Original Ask exactly, including spelling. ' +
         'Declare new paths under ## New files when writing TASK.md; JSON plans are declared by the harness. ' : '') +
       (isDirectoryDocumentAsk(cleanAsk) ?
         'Design/setup documentation requests authorize documents only, not purchases, accounts, deployment, network or publication. ' +
+        'Writing complete setup/deployment instructions for the reader to follow later is authorized; executing them is not. ' +
+        'When the Ask requests serving a page to market a business, include actionable public-serving steps, ' +
+        'not just localhost preview or advice to choose a host later. Describe commands as examples without running them. ' +
         'For document intent, choose only Markdown files and checks describing document contents, never action-success checks. ' +
         'Use document-content acceptance checks for documentation, not installation/deployment commands. ' +
         'For artifact presence use "The directory contains a Markdown guide", not "A directory is created". ' +

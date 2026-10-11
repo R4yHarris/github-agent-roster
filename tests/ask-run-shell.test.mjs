@@ -77,8 +77,8 @@ test('the exact human prompt executes the public local shell planner→coder→r
       assert.ok(body.messages[1].content.startsWith(directoryAsk));
       return reply(JSON.stringify(directoryPlan));
     }
-    if (system.startsWith('You are the builtin reviewer seat.')) {
-      seats.push('reviewer');
+    if (system.includes('independent Original Ask audit') || system.startsWith('You are the builtin reviewer seat.')) {
+      seats.push(system.includes('independent Original Ask audit') ? 'reviewer-ask-audit' : 'reviewer');
       return reply(passingReview(body));
     }
     assert.doesNotMatch(system, /critic|research/i);
@@ -104,7 +104,7 @@ test('the exact human prompt executes the public local shell planner→coder→r
     } });
   await instance.dispatch(directoryAsk);
   const result = instance.state.lastRun;
-  assert.deepEqual(seats, ['planner', 'coder', 'reviewer']);
+  assert.deepEqual(seats, ['planner', 'coder', 'reviewer-ask-audit', 'reviewer']);
   assert.equal(result.local, true);
   assert.equal(result.failed, false);
   assert.equal(result.review.verdict, 'pass');
