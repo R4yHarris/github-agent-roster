@@ -71,7 +71,7 @@ export async function runCoder({
     throwIfCancelled(signal);
     context = await loadContext({ worktree, memoryPath, repoRoot, config, env, priorFeedback, askKind, continuation, acceptanceContinuation,
       priorWaveFiles });
-    if (!context.minimalDocs) stages.push('principal');
+    stages.push('principal');
     stages.push('context');
     const skipsTests = taskSkipsTests(context.task);
     if (config.llm.base_url && !skipsTests && config.tools?.run_test === false) {

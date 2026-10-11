@@ -24,11 +24,12 @@ test('research and implement-task are opt-in by feat difficulty4+; docs and ordi
   }
 });
 
-test('ordinary team pack is short, includes Ask/outcome/scope/checks, and does not load extra context', async (t) => {
+test('ordinary team pack keeps compact task context plus required full conduct and rules', async (t) => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'roster-team-pack-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
   const worktree = join(repoRoot, 'worktree');
   mkdirSync(worktree);
+  cpSync(join(root, 'principals'), join(repoRoot, 'principals'), { recursive: true });
   for (const name of ['read-before-write', 'small-diff']) {
     cpSync(join(root, 'skills', name), join(repoRoot, 'skills', name), { recursive: true });
   }
@@ -38,9 +39,13 @@ test('ordinary team pack is short, includes Ask/outcome/scope/checks, and does n
   assert.equal(context.contextPolicy.minimum, true);
   assert.deepEqual(context.skills.map(({ name }) => name), ['read-before-write', 'small-diff']);
   assert.match(context.pack, /## Issue Ask[\s\S]*# Outcome:[\s\S]*## Allowed files[\s\S]*## Checks/);
-  assert.doesNotMatch(context.pack, /skills: \[|## Principal|## AGENTS|## Prior feedback/);
+  assert.doesNotMatch(context.pack, /skills: \[|## Prior feedback/);
+  assert.match(context.pack, /## Principal coder:/);
+  assert.match(context.pack, /## AGENTS\.md/);
   assert.match(context.pack, /## Seat memory[\s\S]*no previous entries/);
-  assert.ok(context.pack.length < 3500, `Minimum pack grew to ${context.pack.length} characters`);
+  const requiredConduct = context.pack.split('## Issue Ask')[0].length;
+  assert.ok(context.pack.length - requiredConduct < 3500,
+    `Compact task context grew to ${context.pack.length - requiredConduct} characters`);
 });
 
 test('planner scope comes from the human Ask and absent scope cannot become an invented wildcard', async () => {

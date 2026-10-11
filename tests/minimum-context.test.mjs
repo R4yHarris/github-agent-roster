@@ -23,6 +23,7 @@ function fixture(t, metadata = { task_class: 'docs', difficulty: 1 }) {
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
   const worktree = join(repoRoot, 'worktree');
   mkdirSync(worktree);
+  cpSync(join(sourceRoot, 'principals'), join(repoRoot, 'principals'), { recursive: true });
   for (const name of ['read-before-write', 'small-diff']) {
     cpSync(join(sourceRoot, 'skills', name), join(repoRoot, 'skills', name), { recursive: true });
   }
@@ -312,9 +313,10 @@ test('an uninitialized contracts worktree writes blocked result and review witho
   assert.ok(!events.some(({ type }) => type === 'test-repair'));
 });
 
-test('difficulty1 docs includes scoped memory and feedback without principal or research loads', async (t) => {
+test('difficulty1 docs retains full principal, coding rules, memory and feedback without research loads', async (t) => {
   const options = fixture(t);
-  writeFileSync(join(options.worktree, 'AGENTS.md'), 'UNNEEDED_AGENTS_MARKER');
+  writeFileSync(join(options.worktree, 'AGENTS.md'), '# Coding rules\nREQUIRED_CODING_RULE\n\n' +
+    '## Publication\nGITHUB_APP_ID HARNESS_ONLY_MARKER\n');
   writeFileSync(join(options.worktree, 'RESEARCH.md'), 'UNNEEDED_RESEARCH_MARKER');
   mkdirSync(join(options.repoRoot, '.roster', 'memory'), { recursive: true });
   writeFileSync(join(options.repoRoot, '.roster', 'memory', 'coder.jsonl'), '{"summary":"recent coder lesson"}\n');
@@ -324,15 +326,41 @@ test('difficulty1 docs includes scoped memory and feedback without principal or 
   assert.deepEqual(context.skillNames, ['read-before-write', 'small-diff']);
   assert.deepEqual(context.skills.map(({ name }) => name), context.skillNames);
   assert.deepEqual(context.memory, ['{"summary":"recent coder lesson"}']);
-  assert.equal(context.agents, null);
+  assert.match(context.agents, /REQUIRED_CODING_RULE/);
   assert.match(context.pack, /## Issue Ask\n\nAdd a one-line Status section to README.md/);
   assert.match(context.pack, /## TASK.md\n\n# Outcome:/);
   assert.deepEqual(context.skills.map(({ name }) => name), ['read-before-write', 'small-diff']);
   assert.doesNotMatch(context.pack, /skills: \[|difficulty:|estimate_min:/);
-  assert.doesNotMatch(context.pack, /UNNEEDED_|## Principal|## Task skills/);
+  assert.doesNotMatch(context.pack, /UNNEEDED_RESEARCH|HARNESS_ONLY_MARKER|## Task skills/);
+  assert.ok(context.pack.includes(readFileSync(join(options.repoRoot, 'principals', 'coder.md'), 'utf8').trim()));
+  assert.match(context.pack, /## AGENTS\.md[\s\S]*REQUIRED_CODING_RULE/);
   assert.match(context.pack, /## Seat memory[\s\S]*recent coder lesson/);
   assert.match(context.pack, /## Prior feedback[\s\S]*REQUIRED_FEEDBACK_MARKER/);
-  assert.equal(existsSync(join(options.repoRoot, 'principals')), false);
+  assert.equal(existsSync(join(options.repoRoot, 'principals')), true);
+});
+
+test('ordinary code slice retains conduct and rules without expanding its research policy', async (t) => {
+  const options = fixture(t, { task_class: 'feat', difficulty: 2 });
+  writeFileSync(join(options.worktree, 'AGENTS.md'), '# Rules\nPreserve public exports.\n');
+  const context = await loadContext(options);
+  assert.equal(context.minimalDocs, true);
+  assert.equal(context.contextPolicy.research, false);
+  assert.match(context.pack, /## Principal coder:/);
+  assert.match(context.pack, /Preserve public exports/);
+  assert.ok(context.pack.length <= config.seat.context_chars);
+});
+
+test('minimum context reports absent consumer rules and refuses missing principal or undersized conduct budget', async (t) => {
+  const options = fixture(t);
+  const context = await loadContext(options);
+  assert.equal(context.agents, null);
+  assert.match(context.pack, /No root AGENTS\.md in this worktree/);
+  rmSync(context.contextPath);
+  await assert.rejects(loadContext({ ...options, config: { ...config, seat: { ...config.seat, context_chars: 1000 } } }),
+    /conduct.*rules.*exceed seat\.context_chars/);
+  assert.equal(existsSync(context.contextPath), false);
+  rmSync(join(options.repoRoot, 'principals', 'coder.md'));
+  await assert.rejects(loadContext(options), /Missing coder principal/);
 });
 
 test('minimum docs coder makes no research request and skips tests while checking scope and secrets', async (t) => {
@@ -346,7 +374,8 @@ test('minimum docs coder makes no research request and skips tests while checkin
       const body = JSON.parse(request.body);
       assert.equal(body.reasoning_effort, 'none');
       assert.equal(body.max_tokens, 8192);
-      assert.doesNotMatch(body.messages[0].content, /builtin research step|## Principal/);
+      assert.doesNotMatch(body.messages[0].content, /builtin research step/);
+      assert.match(body.messages[0].content, /## Principal coder:/);
       assert.deepEqual(body.tools.map(({ function: tool }) => tool.name), calls === 1
         ? ['read_file', 'write_file', 'edit_file'] : []);
       return Response.json({ choices: [calls === 1 ? { finish_reason: 'tool_calls', message: {
@@ -364,7 +393,7 @@ test('minimum docs coder makes no research request and skips tests while checkin
   assert.equal(result.packBudgetChars, 200000);
   assert.equal(result.excellence.pass, true);
   assert.deepEqual(result.excellence.files, ['README.md']);
-  assert.deepEqual(result.stages, ['context', 'skills', 'tool_loop', 'memory', 'excellence', 'result']);
+  assert.deepEqual(result.stages, ['principal', 'context', 'skills', 'tool_loop', 'memory', 'excellence', 'result']);
   assert.equal(result.research, undefined);
   assert.equal(result.researchPath, undefined);
   assert.equal(existsSync(join(options.worktree, 'RESEARCH.md')), false);
@@ -779,6 +808,7 @@ test('only difficulty4+ feat may load the normal research and implementation pat
 
 test('minimum docs reviewer stays read-only without loading a principal file', async (t) => {
   const options = fixture(t);
+  rmSync(join(options.repoRoot, 'principals'), { recursive: true });
   const resultPath = join(options.worktree, 'RESULT.md');
   writeFileSync(resultPath, '# Result\nChecks: FAIL\n');
   const review = await runReviewer({ ...options, coderResult: { resultPath, mode: 'stub', excellence: { pass: false, files: [] } },

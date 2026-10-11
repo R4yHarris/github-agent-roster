@@ -19,6 +19,7 @@ function fixture(t, taskClass = 'feat', difficulty = 4) {
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const worktree = path.join(root, 'worktree');
   mkdirSync(worktree);
+  cpSync(path.join(sourceRoot, 'principals'), path.join(root, 'principals'), { recursive: true });
   for (const name of ['read-before-write', 'small-diff']) {
     cpSync(path.join(sourceRoot, 'skills', name), path.join(root, 'skills', name), { recursive: true });
   }

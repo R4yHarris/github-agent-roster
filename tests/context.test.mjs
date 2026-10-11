@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -18,6 +18,10 @@ function fixture(context) {
   const worktree = path.join(repoRoot, 'worktree');
   mkdirSync(worktree);
   mkdirSync(path.join(repoRoot, 'principals'));
+  for (const name of ['read-before-write', 'small-diff']) {
+    mkdirSync(path.join(repoRoot, 'skills', name), { recursive: true });
+    writeFileSync(path.join(repoRoot, 'skills', name, 'SKILL.md'), `# ${name}\n`);
+  }
   writeFileSync(path.join(repoRoot, 'principals', 'coder.md'), '# Conduct\nStay within scope.\n');
   writeFileSync(path.join(worktree, 'TASK.md'),
     planStub('Update README.md.', { reference: 'issue:4', metadata: { task_class: 'feat', difficulty: 4 } }).task.replace(/^skills:.*$/m, 'skills: []'));
@@ -193,4 +197,31 @@ test('task skill names support inline and block frontmatter without accepting pa
     'skills: []\nskills: [x]', 'skills: not-a-list']) {
     assert.throws(() => taskSkillNames(`---\n${source}\n---\n# Task`), /TASK\.md/);
   }
+});
+
+test('ordinary coder conduct and repository coding rules are redacted without dropping required text', async (context) => {
+  const options = fixture(context);
+  const secret = 'test-only-conduct-secret';
+  writeFileSync(path.join(options.repoRoot, 'principals', 'coder.md'), `# Conduct\nPreserve invariants. Key ${secret}\n`);
+  writeFileSync(path.join(options.worktree, 'AGENTS.md'), `# Rules\nKeep public exports stable. Key ${secret}\n` +
+    '\n## Publication\nUse git push HARNESS_ONLY.\n');
+  const result = await loadContext({ ...options, askKind: 'slice', env: { ROSTER_API_KEY: secret },
+    config: { llm: { api_key_env: 'ROSTER_API_KEY' }, seat: { context_chars: 8000 } } });
+  assert.match(result.pack, /Preserve invariants/);
+  assert.match(result.pack, /Keep public exports stable/);
+  assert.doesNotMatch(result.pack, /test-only-conduct-secret|HARNESS_ONLY/);
+  assert.match(result.pack, /redacted/i);
+});
+
+test('ordinary context rejects malformed and symlinked repository rules rather than treating them as absent', async (context) => {
+  const options = fixture(context);
+  const rules = path.join(options.worktree, 'AGENTS.md');
+  rmSync(rules);
+  mkdirSync(rules);
+  await assert.rejects(loadContext({ ...options, askKind: 'slice' }), /regular file/);
+  rmSync(rules, { recursive: true });
+  const target = path.join(options.repoRoot, 'rules-target');
+  mkdirSync(target);
+  symlinkSync(target, rules, process.platform === 'win32' ? 'junction' : 'dir');
+  await assert.rejects(loadContext({ ...options, askKind: 'slice' }), /symlink/);
 });
