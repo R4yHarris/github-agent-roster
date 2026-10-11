@@ -264,7 +264,9 @@ export async function runCoder({
             evidence.reasons.push(...selfReviewReasons(selfReview));
           }
         }
-        if (evidence.pass) verifiedSnapshot = evidence.snapshot;
+        if (evidence.pass) {
+          verifiedSnapshot = evidence.snapshot;
+        }
         return evidence;
       },
     });
@@ -335,6 +337,16 @@ export async function runCoder({
       outcome: signal?.aborted ? 'cancelled' : excellence.pass ? 'verified' : 'failed',
       env, apiKeyEnv: config.llm.api_key_env,
     });
+  }
+  if (excellence.pass && result.tests?.exit_code === 0 && result.tests.skipped !== true && lstatSync(path.join(worktree, '.git'), { throwIfNoEntry: false })) {
+    try {
+      const checkpoint = await captureCheckpoint({ worktree, task, allowedFiles: taskFilesAllowed(context.task),
+        env, apiKeyEnv: config.llm.api_key_env, signal, verified: true, tests: result.tests, expectedSnapshot: verifiedSnapshot });
+      await onEvent?.({ type: 'checkpoint', status: 'verified', number: checkpoint.number });
+    } catch (error) {
+      throwIfCancelled(signal);
+      await onEvent?.({ type: 'checkpoint', status: 'unavailable' });
+    }
   }
   const resultPath = await writeResult({
     worktree, result, excellence, run, env, apiKeyEnv: config.llm.api_key_env,

@@ -22,7 +22,7 @@ and existing merged-PR evidence. No comparator marketing claims are needed.
 | Fleet, routing and admission (5.2) | `lib/fleet.mjs`, `route.mjs`, `llm.mjs`, `runtime/admission.mjs`; eval history before priors, hardware/cost ranking, FIFO slots and abort release | Admission is per profile in one process, as FLEET documents; not distributed admission. Ordinary saved-default runs without a fleet profile are not admission-limited. Registered hardware experiments and cross-process resource guarantees are not proven by unit tests. Custom default key-name reload defect was reproduced and repaired in #540. |
 | Issue/Project queue and dependencies (5.3/5.7) | `lib/issue-board.mjs` labels/status comments/optional Project projection; `waves.mjs` issue dependency and earlier-wave closure checks; `wave-scheduler.mjs` | GitHub is canonical. Project access is installation-permission-dependent; local state is evidence/recovery, not an independent Kanban DB. Child closure does not invent human acceptance. |
 | Worktree lifecycle and liveness (5.4/5.8) | `lib/start.mjs` fresh base; issue preparation and reuse; `repo-locks.mjs` explicit death proof; `worktrees.mjs`, `local-runs.mjs`, `clean-ops.mjs` | #487/#491 repair lock takeover; age/unknown liveness is not death. Merged #541 moves generated task environment metadata under worktree Git storage and preserves any existing product `.env`. Literal branch naming also diverges: spec 5.4 says `agents/<issue>`; builtin preparation/board publication use `issue-N`. A coordinated compatibility migration is needed, not an isolated namespace rename. |
-| Checkpoints/recovery (5.4/5.8) | `lib/checkpoints.mjs` guarded before-write Git tree snapshots and explicit rewind; validated handoff/worktree reuse; whole-task deadline and durable terminal evidence | Pre-write snapshots/manual rewind are not proof of automatic last-green-step model/context replay. Automatic green-step recovery remains partial; never silently restore stale product state. #539 adds safe durable ambiguous-intake continuation, not a claim to implement the entire recovery lifecycle. |
+| Checkpoints/recovery (5.4/5.8) | `lib/checkpoints.mjs` guarded before-write Git tree snapshots and explicit rewind; validated handoff/worktree reuse; whole-task deadline and durable terminal evidence | Pre-write snapshots/manual rewind are not proof of automatic last-green-step model/context replay. Explicit identity-bound test-green restoration/resume is now implemented; unattended model/context replay remains partial; never silently restore stale product state. #539 adds safe durable ambiguous-intake continuation, not a claim to implement the entire recovery lifecycle. |
 | Human CLI/shell and vague asks (5.7/5.8) | `cli.mjs`, `repl.mjs`, shell tray/history/context; #536 interpretation/questions; #539 private project intake checkpoint | Original redacted Ask, bounded guidance and validated explicit reply survive restart; `/clarify continue` / `ask --resume` reuse the reply. Shell resumes behind `--confirm`; cancellation revokes Enter/retry. No coding/publication from a vague ask, inferred confidence score, or silent override of original constraints. |
 | Operations/provenance (5.8) | `task-deadline.mjs`, `run-log.mjs`, `local-runs.mjs`, typed machine history/provenance, `stranded.mjs`, vault, safe cleanup | Local logs/history and unknown-aware usage are implemented. Optional OpenTelemetry export is not wired. Cloud `cost_usd` schema exists, but no priced producer ledger is wired; hardware ranking is not a measured-dollar ledger. This needs authoritative provider-reported cost or human-owned rates, not guessed prices/energy. |
 
@@ -161,11 +161,13 @@ does not claim cross-platform live acceptance from unit tests.
   incident procedure; actual repair/review/publication stays the ordinary gated
   loop. No emergency production or workflow access. Category delivery is a
   foundation, not incident-specific execution acceptance.
-- **Ungated recovery increment:** restart must identify a recorded last-green
-  checkpoint, validate task/scope/revision/owner identity and preserve subsequent
-  edits; stale/tampered/unknown state must block. Explicit inspect/resume through
-  existing checkpoint helpers is implementable; destructive automatic restore
-  or resuming an unconfirmed task is not authorized by missing evidence.
+- **Delivered bounded recovery increment:** explicit CLI/shell green resume
+  validates recorded task/scope/revision/owner identity, preserves later edits,
+  retires stale passing evidence and pauses for confirmation. Real coder capture
+  and separate CLI/default-shell process restart controls cover restoration,
+  changed identity/ref, active lock, linked/malformed state and secret backups.
+  Unattended model-context replay is not this acceptance condition and remains
+  an explicit product/policy boundary, never inferred execution permission.
 - **Ungated branch compatibility increment:** creation, lookup, reused legacy
   `issue-N` branches, issue status and publisher claims must agree after adopting
   `agents/<issue>`; no orphaned legacy trees, lock collisions or implicit branch
@@ -181,3 +183,20 @@ does not claim cross-platform live acceptance from unit tests.
   original timeout and unchanged successful minimal-consumer evidence, never
   disable verification to pass. #439 workflow source binding is human-owned;
   #368 publisher recovery is contracts-owned, never a vendor edit here.
+
+## Verified last-green recovery evidence
+
+Spec §§5.4/5.8, honoring §§3/5.5/7: existing checkpoint trees and local issue
+registration now provide an explicit last-green product restore/resume path.
+No contracts, workflow, policy, installed checkout or queue changes. This is
+actual product restoration, not printed guidance or intake-only continuity.
+
+Node 20 targeted checkpoint/resume/CLI/REPL/coder scope coverage: **83 tests,
+83 pass, zero skips/failures**. Reviewer/publication gate controls: **43/43 pass**. Twelve initial checkpoint identity/green controls
+failed old code; new real coder checks capture checked products, and fresh
+CLI/default-shell processes restore them behind confirmation. Failed/skipped
+or absent evidence, post-check modifications, changed assignment/task/recipe/
+HEAD/branch/scope/ref, active lock, cancellation, malformed/hardlinked/junction
+metadata, unknown green and secret backup material fail closed. Later product
+edits remain recoverable; stale RESULT/REVIEW is archived. No claim of live
+cross-platform/hardware acceptance, human rating or unattended context replay.

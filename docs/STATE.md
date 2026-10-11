@@ -486,3 +486,15 @@ document first.
 
 Every artifact above maps to exactly one scope. Anything found persisted that is not in this
 table is, by definition, a bug.
+
+### Verified product checkpoints
+
+The existing issue-local checkpoint metadata and Git refs can also mark an
+actual test-green coder product snapshot. Metadata binds the unchanged
+TASK/recipe/assignment, scope, canonical worktree, branch and HEAD. Explicit
+`resume N --green` restores only that validated product scope under the issue
+writer lock, saves later edits as a new before-write checkpoint and moves stale
+run evidence to the existing common-dir artifact archive. No new queue/storage
+service or metrics are introduced. Missing/malformed/linked state fails closed;
+no secrets are accepted in products or backup snapshots. Confirmation before
+fresh coding/review is separate from restore approval (spec §§5.4/5.5/5.8).

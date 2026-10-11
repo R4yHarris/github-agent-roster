@@ -147,7 +147,7 @@ Without a configured endpoint the stub does not implement or claim delivery.
 | `/steer TEXT` | Interrupt only a drafting coder model call, discard its stale response/tool calls, and send queued lines plus this text as the next human instruction. It cannot modify TASK or widen Allowed Files. Planner/reviewer/test phases cannot be steered. The shell says `Steering the coder.`; Ctrl+C still cancels the run without an instruction. |
 | `/status [N] [--offline]` | With no number, show cached issue, branch, seat, state, model, host, effort, last finish reason, last test name, and review. Current and previously run issue snapshots use no model/GitHub request. An uncached explicit issue uses the existing status reader; `--offline` prohibits GitHub. |
 | `/history` | Show the last 20 stored safe commands, without vault or secret lines. |
-| `/resume` or `/resume N` | List registered local issue runs (number, title, last seat/state, branch), or reconstruct the assignment locally and continue in that exact worktree. A valid TASK/recipe skips planner; no new worktree or GitHub issue lookup is required. It attaches local artifacts, not a foreign running process. |
+| `/resume` or `/resume N [--green]` | List registered local issue runs (number, title, last seat/state, branch), or reconstruct the assignment locally and continue in that exact worktree. A valid TASK/recipe skips planner; no new worktree or GitHub issue lookup is required. It attaches local artifacts, not a foreign running process. `--green` explicitly restores the last verified product snapshot, preserves later edits in a checkpoint, and pauses before coding; Enter confirms, `/stop` cancels execution. |
 | `/worktrees` | List registered issue worktree path, branch, last known seat and Git dirty/clean state. Duplicate issue branch registration is refused; missing seat evidence stays `-`. Creation initializes contracts recursively before tests. |
 | `/batch` | Refuse with `One seat at a time. Worktrees are isolated.`; no parallel seat or second board is started. |
 | `/recap` | Print one human metadata line with TASK outcome/files, last test exit, review and finish reason. Never print RESULT completion text. |
@@ -204,6 +204,23 @@ into a Git tree and a `refs/roster/checkpoints/<task>/<n>` ref. It uses neither
 stash nor human-authored commits and does not change the main index or HEAD.
 Ignored, protected metadata lives under `.roster/checkpoints/<issue>/<n>`.
 Secrets, managed artifacts, symlinks and hard links are not captured as products.
+An actual non-skipped passing test run plus a passing coder excellence gate
+also records a `verified` product checkpoint. This is not reviewer or human
+acceptance. Product bytes must match the checked snapshot. Docs-only/skipped
+checks do not fabricate green evidence.
+
+`/resume N --green` and CLI `roster resume N --green --yes` explicitly restore
+that last-green product state. CLI `--yes` authorizes restoration only: the
+prepared task pauses at confirmation; use the shell to inspect and continue.
+The unchanged task/recipe/assignment, exact scope, branch, HEAD and canonical
+worktree identity must match. A published PR, active issue lock, unavailable
+PR check, malformed/private linked state or absent green record blocks restore.
+Later scoped edits are backed up as a before-write checkpoint, while old
+RESULT/REVIEW and other generated run evidence are archived, not reused as
+publication authority. TASK, recipe, PLAN and estimate remain intact. Resuming
+reruns checks and review through normal policy/dependency gates; there is no
+unattended model-context replay or execution/publication grant.
+
 Standalone filesystem-only seat fixtures have no Git checkpoint capability;
 that unavailable capability is reported without a user-facing Git-failure line.
 
