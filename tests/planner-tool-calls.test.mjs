@@ -44,3 +44,15 @@ test('unavailable tools and duplicate IDs remain rejected while ordinary plan JS
   assert.deepEqual(parsePlannerToolCalls({ content: '{"title":"Plan","acceptance_checks":["node --test exits 0"],"files_allowed":["README.md"]}' }),
     { calls: [], fromText: false });
 });
+
+test('an inert empty-argument call is dropped beside real writes but never hides a lone or oversized batch', () => {
+  const write = (id, path) => ({ id, type: 'function', function: { name: 'write_file',
+    arguments: JSON.stringify({ path, content: 'x' }) } });
+  const inert = { id: 'blank', type: 'function', function: { name: 'write_file', arguments: '' } };
+  const decoded = parsePlannerToolCalls({ tool_calls: [write('a', 'RECIPE.yml'), inert,
+    write('b', 'ESTIMATE.md'), write('c', 'TASK.md')] });
+  assert.deepEqual(decoded.calls.map(({ args }) => args.path), ['RECIPE.yml', 'ESTIMATE.md', 'TASK.md']);
+  assert.match(parsePlannerToolCalls({ tool_calls: [inert] }).error, /JSON|arguments/);
+  assert.match(parsePlannerToolCalls({ tool_calls: [1, 2, 3, 4].map((n) => write('w' + n, 'f' + n)) }).error,
+    /at most three/);
+});
