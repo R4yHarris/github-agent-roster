@@ -58,6 +58,8 @@ receive the same existing own-seat planner-memory tail as data, not instructions
 or file-scope authority. A shared renderer redacts values and retains at most
 20 newest complete JSONL lines within 4000 characters, explicitly marking
 older omitted records. It does not read coder history or add a storage layer.
+Invalid or non-object JSONL records fail before inference. Validation corrections
+retain the same redacted memory and original Ask rather than dropping context.
 Planning-only modes still cannot implement, publish, or grant capabilities.
 These boundaries implement FEATURE_SPEC sections 5.3 and 5.6.
 

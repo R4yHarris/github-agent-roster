@@ -27,7 +27,10 @@ test('planner memory rendering is bounded, redacted and keeps complete newest re
   assert.throws(() => plannerMemoryText('not an array'), /single-line JSONL/);
   assert.throws(() => plannerMemoryText([null]), /single-line JSONL/);
   assert.throws(() => plannerMemoryText(['line\nanother']), /single-line JSONL/);
-  assert.ok(plannerMemoryText(['x'.repeat(10000)]).length <= 4000);
+  for (const invalid of ['', 'not-json', 'null', '[]', '42', '"text"']) {
+    assert.throws(() => plannerMemoryText([invalid]), /JSON objects/);
+  }
+  assert.ok(plannerMemoryText([JSON.stringify({ summary: 'x'.repeat(10000) })]).length <= 4000);
 });
 
 test('appending twice preserves every old byte and tail returns both notebook records', async (context) => {

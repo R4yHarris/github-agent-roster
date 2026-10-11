@@ -10,6 +10,17 @@ export function plannerMemoryText(memory = [], { env, apiKeyEnv } = {}) {
   if (!Array.isArray(memory) || memory.some((line) => typeof line !== 'string' || /[\r\n]/.test(line))) {
     throw new TypeError('Planner memory must contain single-line JSONL data');
   }
+  for (const line of memory) {
+    let record;
+    try {
+      record = JSON.parse(line);
+    } catch (error) {
+      throw new TypeError('Planner memory must contain JSON objects', { cause: error });
+    }
+    if (!record || typeof record !== 'object' || Array.isArray(record)) {
+      throw new TypeError('Planner memory must contain JSON objects');
+    }
+  }
   const limit = 4000;
   const lines = [];
   let used = 0;

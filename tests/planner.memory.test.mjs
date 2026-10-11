@@ -22,19 +22,26 @@ for (const kind of ['feature', 'initiative']) {
     }
     await appendMemory({ repoRoot, file: join(repoRoot, '.roster', 'memory', 'coder.jsonl'), env: {},
       record: { summary: 'coder-only-private-lesson' } });
+    await appendMemory({ repoRoot, file: join(repoRoot, '.roster', 'memory', 'planner.jsonl'), env: {},
+      record: { summary: 'planner test-only-feedback-value' } });
     const ask = 'Plan updates to README.md as independent bounded tasks.';
-    const plan = await runPlanner({ repoRoot, worktree, ask, askKind: kind, config: llmConfig, env: {},
+    let calls = 0;
+    const plan = await runPlanner({ repoRoot, worktree, ask, askKind: kind, config: llmConfig,
+      env: { ROSTER_API_KEY: 'test-only-feedback-value' },
       reference: 'local:memory', task: 'local-memory', session: 'planner-memory',
       fetchImpl: async (_url, request) => {
         const body = JSON.parse(request.body);
+        calls += 1;
         const data = JSON.parse(body.messages[1].content);
         assert.equal(data.ask, ask);
         assert.match(data.planner_memory, /planner-lesson-24/);
         assert.doesNotMatch(data.planner_memory, /planner-lesson-0"|coder-only-private/);
+        assert.doesNotMatch(request.body, /test-only-feedback-value/);
+        assert.match(data.planner_memory, /redacted/);
         assert.deepEqual(data.human_files_allowed, ['README.md']);
         assert.equal(body.tools, undefined);
         return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
-          content: JSON.stringify({ outcomes: ['Update documentation'], issues: [
+          content: calls === 1 ? '{}' : JSON.stringify({ outcomes: ['Update documentation'], issues: [
             { title: 'Add overview', outcome: 'Overview explains the project', acceptance_checks: ['Overview is present'],
               files_allowed: ['README.md'], wave: 1 },
             { title: 'Add setup', outcome: 'Setup explains local use', acceptance_checks: ['Setup is present'],
@@ -43,6 +50,7 @@ for (const kind of ['feature', 'initiative']) {
         } }] });
       } });
     assert.equal(plan.planningOnly, true);
+    assert.equal(calls, 2);
     assert.equal(existsSync(join(worktree, 'TASK.md')), false);
     assert.equal(existsSync(join(worktree, 'RECIPE.yml')), false);
   });
