@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { withoutReferenceUrls } from './references.mjs';
 import { parseRecipe } from '../lib/recipe.mjs';
 import { mergeUsage } from '../metrics/run.mjs';
 import { inferTaskClass } from '../lib/learn.mjs';
@@ -63,7 +64,7 @@ export function askRequirements(ask, { allowMissing = false } = {}) {
   const explicitFiles = listInAsk(cleanAsk, '(?:Files allowed|Allowed files|files_allowed|allowed_files)');
   const outputDirectory = outputDirectoryFromAsk(cleanAsk);
   const files = explicitFiles ? checkedList(explicitFiles, 'Files allowed', allowedFile, 32)
-    : [...new Set((cleanAsk.match(filename) ?? []).filter((file) => {
+    : [...new Set((withoutReferenceUrls(cleanAsk).match(filename) ?? []).filter((file) => {
       try { allowedFile(file); return true; } catch { return false; }
     }))].filter((file) => file !== outputDirectory &&
       !new RegExp(`node --test(?:\\s+\\S+)*\\s+${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(cleanAsk))

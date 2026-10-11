@@ -36,12 +36,15 @@ and existing merged-PR evidence. No comparator marketing claims are needed.
    prior writes or unclassified status override it. Node20 targeted gate: 88
    tests, 87 pass, one existing Windows symlink skip, zero failures. Original
    administrative closure and failed model attempts remain historical evidence.
-2. **#452, still real:** offline reproduction on baseline main:
-   `classifyAsk('Improve the product using https://example.invalid/reference/guide.md as reference.')`
-   returns `slice`; `askRequirements` yields
-   `['example.invalid/reference/guide.md']`. A reference URL is not product file
-   authority. The filename extractor in `planner/stub.mjs` still needs a bounded
-   URL-aware scope regression/repair; planner files belong to the live-repair thread.
+2. **#452, repaired after explicit ownership handoff:** reference URLs no longer
+   produce inferred local file/directory authority. Scheme/protocol-relative/www
+   references, paths, quoted queries/fragments and remote Markdown link labels
+   are excluded, including balanced nested and malformed inline links. Original
+   Ask evidence is retained, with no fetch or internet grant. Explicit human
+   scope, ordinary local mentions and validated output directories still bound
+   planning. Link-only vague asks clarify instead of entering a coder. Node20
+   targeted planner/intake/checkpoint/public Ask gate: 144 tests, 143 pass, one
+   existing skip, zero failures. Historical failure/closure is not acceptance.
 3. **#442, repaired in merged #541:** the fresh-consumer regression proved that
    preparation itself introduced a protected product `.env`. Generated task IDs
    now live under worktree Git metadata via the existing PER_WORKTREE scoped-state
@@ -81,7 +84,7 @@ acceptance debt. Historical issue closure was administrative and remains so.
 | #464 Node20 TAP totals/named results | Present: evidence parser and typed verification records; #504/#505. Missing counts remain unknown. |
 | #457 actual syntax preflight | Present: `tools.mjs` syntax check with separate actual-result coverage in `tools.syntax-preflight.test.mjs`; no claim of an unstarted suite. |
 | #453 syntax/module-load repair excerpts | `testFailureEvidence` in `tools.mjs` retains bounded failure excerpts; original failing-case replay remains acceptance debt, not discharged by existence of a helper. |
-| #452 URL-derived product scope | **Confirmed unresolved**, exact offline reproduction above. Parent-owned planner fix needed. |
+| #452 URL-derived product scope | **Repaired after handoff**, URLs and remote link labels excluded from inferred authority; explicit/local/directory scope and original reference evidence preserved, 143 targeted Node20 passes/one existing skip. |
 | #451 reviewer full-gate claims | Read-only reviewer/e2e evidence exists; review/provenance records distinguish executed checks. Original full-gate claim case still needs replay; scoped prose alone is not full-suite evidence. |
 | #450 preservation controls plus red-green proof | `red-green.mjs` has actual base/candidate test evidence; original preservation-control scenario remains to replay against unchanged expectations. |
 | #449 scoped regression/unavailable baseline | **Repaired after handoff**, unavailable/capped/interrupted comparisons retain unknown status; full and scoped real candidate/base controls, strict loop exemptions and prior-write overrides pass. |
