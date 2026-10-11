@@ -60,6 +60,12 @@ sections 5.3-5.5; neither the original Ask nor its safety obligations are waived
 Directory-document checks also recognize content phrasing such as "covering",
 "gives instructions" and "indexes"; operation-success assertions stay denied.
 
+The coder test-substance gate recognizes app calls through dynamic imports and
+named `node:util`/`util` `promisify` imports wrapping child-process functions,
+including local CLI helpers. An unused import or function reference alone is
+not coverage; tests that only assert on values they construct remain rejected.
+This implements FEATURE_SPEC sections 5.4-5.5 without weakening acceptance checks.
+
 Both ordinary minimum and full coder packs include the complete configured
 [coder principal](../principals/coder.md) and root repository coding rules.
 The existing rules filter still omits harness-only publication, credentials

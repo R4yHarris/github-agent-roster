@@ -182,3 +182,39 @@ const { parseCsv } = await import(pathToFileURL('/work/parse-csv.mjs'));
   assert.equal(reasons.length, 1);
   assert.match(reasons[0], /never calls imported app code/);
 });
+
+test('promisified child-process calls count through CLI helpers but unused aliases do not', () => {
+  for (const util of ["import { promisify } from 'node:util';", "import { promisify as toPromise } from 'util';"]) {
+    const wrapper = util.includes('toPromise') ? 'toPromise' : 'promisify';
+    const base = `import assert from 'node:assert/strict';
+import test from 'node:test';
+import { execFile as exec } from 'node:child_process';
+${util}
+const run = ${wrapper}(exec);
+const runBin = (...args) =>
+  run(process.execPath, ['csv2json.mjs', ...args], { encoding: 'utf8' });
+`;
+    assert.deepEqual(analyze(`test('CLI output', async () => {
+  const { stdout } = await runBin('sample.csv');
+  assert.deepEqual(JSON.parse(stdout), [{ a: '1' }]);
+});`, base), []);
+    assert.equal(analyze(`test('only built values', () => {
+  assert.deepEqual([{ a: '1' }], [{ a: '1' }]);
+});`, base).length, 1);
+    assert.equal(analyze(`test('function reference only', () => {
+  assert.equal(typeof run, 'function');
+});`, base).length, 1);
+  }
+});
+
+test('an unrelated wrapper named promisify does not count as calling app code', () => {
+  const base = `import test from 'node:test';
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+const promisify = () => () => 'fake';
+const run = promisify(execFile);
+`;
+  assert.equal(analyze(`test('fake wrapper', () => {
+  assert.equal(run(), 'fake');
+});`, base).length, 1);
+});
