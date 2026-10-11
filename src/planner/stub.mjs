@@ -66,7 +66,9 @@ export function askRequirements(ask, { allowMissing = false } = {}) {
     : [...new Set((cleanAsk.match(filename) ?? []).filter((file) => {
       try { allowedFile(file); return true; } catch { return false; }
     }))].filter((file) => file !== outputDirectory &&
-      !new RegExp(`node --test(?:\\s+\\S+)*\\s+${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(cleanAsk));
+      !new RegExp(`node --test(?:\\s+\\S+)*\\s+${file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(cleanAsk))
+      // A granted output directory bounds scope; a bare filename in the prose does not widen it.
+      .filter((file) => !outputDirectory || file.startsWith(`${outputDirectory}/`));
   if (!files.length && !outputDirectory && !allowMissing) {
     throw new TypeError('Ask must name or declare allowed files before TASK can validate; no file scope will be invented');
   }

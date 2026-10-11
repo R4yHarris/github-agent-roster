@@ -292,3 +292,10 @@ test('planning-only writer can write PLAN.md, never TASK/recipe/app code, and co
   assert.equal(isForbiddenWrite('PLAN.md'), true);
   await assert.rejects(createTools({ worktree, seat: 'planner', plannerArtifacts: ['README.md'] }), /known root/);
 });
+
+test('a bare filename in a directory-granted Ask does not become a required root file', () => {
+  const ask = 'Create a CLI with a bin script csv2json.mjs. Output it in a new "medium-csv" directory';
+  const requirements = askRequirements(ask);
+  assert.deepEqual(requirements.files, []);
+  assert.equal(requirements.outputDirectory, 'medium-csv');
+});
