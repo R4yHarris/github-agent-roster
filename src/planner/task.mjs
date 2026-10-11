@@ -67,12 +67,13 @@ export function validateDirectoryDocumentPlan(ask, files, checks) {
   const commands = /\b(?:npm|npx|pnpm|yarn|pip|apt|docker|kubectl|terraform|curl|wget|ssh|bash|powershell|Invoke-WebRequest)\b|\b(?:git\s+(?:push|clone)|gh\s+(?:pr|release)|node\s+--test)\b/i;
   const action = /\b(?:install(?:ation|ed|s)?|deploy(?:ment|ed|s)?|publish(?:ed|es|ing)?|purchase(?:d|s)?|buy|account|network|request|fetch|download(?:ed|s)?|upload(?:ed|s)?|serve(?:d|s)?|hosting)\b/i;
   const assertion = /\b(?:run|execute|succeeds?|successful(?:ly)?|exits?|passes?|created|activated|completed|live|reachable)\b|\b(?:is|are|was|were)\s+(?:installed|deployed|published|purchased|serving|running)\b/i;
-  const content = /\b(?:documents?|describes?|explains?|outlines?|contains?|includes?|covers?|lists?|mentions?|states?|warns?)\b/i;
+  const content = /\b(?:documents?|describes?|explains?|outlines?|contains?|includes?|covers?|lists?|mentions?|states?|warns?|contrasts?|shows?|compares?|defines?|presents?)\b/i;
   const activeClause = /(?:[;:]|\b(?:and|then))\s+(?:run|execute|install|deploy|publish|purchase|buy|register|create an? account|fetch|download|upload|request)(?:s|ed)?\b/i;
-  for (const check of checks) {
+  for (const [index, check] of checks.entries()) {
     if (!content.test(check) || activeClause.test(check) || commands.test(check) && assertion.test(check) ||
         action.test(check) && assertion.test(check)) {
-      throw new TypeError('Directory documentation requires document-content checks, not installation, deployment, publication, network, purchase or account actions');
+      throw new TypeError('Directory documentation requires document-content checks, not installation, deployment, publication, network, purchase or account actions' +
+        ` (rejected check ${index + 1}). Use a document-content verb and remove operation-success assertions.`);
     }
   }
 }
