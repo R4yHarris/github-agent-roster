@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { parseConfig } from '../src/lib/config.mjs';
-import { groundingErrors, renderDesign } from '../src/planner/grounding.mjs';
+import { groundingErrors, normalizeDesign, parseDesign, renderDesign } from '../src/planner/grounding.mjs';
 import { buildPlan, planAsk, planFromTask, planStub, taskFilesAllowed } from '../src/planner/stub.mjs';
 import { runPlanner, sliceGrounding } from '../src/seats/planner.mjs';
 
@@ -78,10 +78,12 @@ test('a planner that writes TASK.md with a Design declaring new exports finishes
   const { repoRoot, dir } = worktree(t);
   const task = taskWith(renderDesign(design));
   let calls = 0;
+  let guidance;
   const result = await runPlanner({
     worktree: dir, repoRoot, issue: { number: 277, title, body }, config, env: {},
-    fetchImpl: async () => {
+    fetchImpl: async (_url, request) => {
       calls += 1;
+      guidance = JSON.parse(request.body).messages[0].content;
       return Response.json({ choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant',
         tool_calls: Object.entries({ 'RECIPE.yml': planStub(body, { reference: 'issue:277', title }).recipe,
           'TASK.md': task, 'ESTIMATE.md': '# Estimate\n' }).map(([path, content], index) => ({
@@ -91,5 +93,31 @@ test('a planner that writes TASK.md with a Design declaring new exports finishes
   });
   assert.equal(result.error, undefined);
   assert.equal(calls, 1);
+  assert.match(guidance, /standalone labels exactly: Extend:, New exports:, Outline:, Edge cases:, Out of scope:/);
+  assert.match(guidance, /extend <= 8.*new_exports <= 12.*outline <= 10.*edge_cases <= 8.*out_of_scope <= 6/);
+  assert.match(guidance, /extend entry.*exports <= 12/);
+  assert.match(guidance, /Do not append explanations to labels or put list content on a label line/);
   assert.match(result.task, /New exports:\n- `planCleanOps` in `src\/lib\/clean-ops\.mjs`/);
+});
+
+test('canonical Markdown Design lists round trip at their limits and reject one extra entry', () => {
+  const parsed = (value) => parseDesign(`# Task\n\n${renderDesign(value)}`);
+  const bounded = {
+    extend: Array.from({ length: 8 }, (_, i) => ({ file: `src/existing${i}.mjs`,
+      exports: Array.from({ length: 12 }, (_, j) => `existing${j}`) })),
+    new_exports: Array.from({ length: 12 }, (_, i) => ({ file: 'src/new.mjs', name: `newExport${i}` })),
+    outline: Array.from({ length: 10 }, (_, i) => `Step ${i}`),
+    edge_cases: Array.from({ length: 8 }, (_, i) => `Case ${i}`),
+    out_of_scope: Array.from({ length: 6 }, (_, i) => `Excluded ${i}`),
+  };
+  assert.deepEqual(normalizeDesign(parsed(bounded)), bounded);
+  for (const key of Object.keys(bounded)) {
+    const excess = { ...bounded, [key]: [...bounded[key], bounded[key][0]] };
+    assert.throws(() => normalizeDesign(parsed(excess)),
+      new RegExp(`design\\.${key} must be a list of at most`));
+  }
+  const excessExports = { ...bounded, extend: [{ file: 'src/existing.mjs',
+    exports: [...bounded.extend[0].exports, 'extraExport'] }] };
+  assert.throws(() => normalizeDesign(parsed(excessExports)),
+    /design.extend exports must be a list of at most 12 entries/);
 });

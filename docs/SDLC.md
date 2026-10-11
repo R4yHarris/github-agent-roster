@@ -217,7 +217,14 @@ without editing the tracked example or storing credentials.
   these explicit namespaces against the runtime; this does not make them
   repository exports or grant tools or write scope. A bare member reference
   requires a verified qualified citation in the same checks/design; invented
-  members and unsupported aliases remain rejected. Written tasks and JSON plans
+  members and unsupported aliases remain rejected. Grounded planners receive the
+  existing Design list caps upfront: extend 8 (12 exports per entry), new exports
+  12, outline 10, edge cases 8, and out of scope 6. Markdown uses `## Design`
+  with exact standalone labels `Extend:`, `New exports:`, `Outline:`,
+  `Edge cases:`, and `Out of scope:`, followed by list entries; omit empty lists.
+  Descriptive label suffixes or inline list content do not follow this grammar.
+  Related cases may be grouped without dropping Ask requirements; the parser,
+  list caps, scope and correction budgets are unchanged. Written tasks and JSON plans
   must both keep the routed model. Failed planning stops the seat chain:
   unverified stubs never start a coder, reviewer, tests, or publisher.
   Feature/initiative planning instead uses tool-free JSON and a PLAN-only

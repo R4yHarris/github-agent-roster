@@ -274,7 +274,13 @@ export async function planAsk(ask, {
         '(for example `openStore`) instead of concepts; the harness rejects backticked names that do not exist. ' +
         'For a code task add design: {extend:[{file,exports}], new_exports:[{file,name}], outline:[steps], ' +
         'edge_cases:[cases mapped to checks], out_of_scope:[items]}. extend lists existing modules and the exports you ' +
-        'reuse; every new export must sit in files_allowed and must not duplicate an existing export. ' : '') +
+        'reuse; every new export must sit in files_allowed and must not duplicate an existing export. ' +
+        'Design list limits: extend <= 8, new_exports <= 12, outline <= 10, edge_cases <= 8, out_of_scope <= 6; ' +
+        'each extend entry has exports <= 12. Group related requirements without dropping any to fit these limits. ' +
+        'When writing TASK.md, use a ## Design section with standalone labels exactly: ' +
+        'Extend:, New exports:, Outline:, Edge cases:, Out of scope:. ' +
+        'Do not append explanations to labels or put list content on a label line; put entries on subsequent list lines. ' +
+        'Omit empty lists. Extend entries are - `file`: `export`; New exports entries are - `name` in `file`. ' : '') +
       'Use validation feedback to change the plan rather than repeating an invalid answer.' },
     { role: 'user', content: cleanAsk +
       (criticFeedback ? `\n\nPlan critic revision (keep the Ask and file scope unchanged):\n${JSON.stringify(criticFeedback)}` : '') +
