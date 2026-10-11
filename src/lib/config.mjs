@@ -7,6 +7,7 @@ import { ensureLocalPath, resolveProjectRoot, RETENTION_POLICIES } from './paths
 import { STATE_SCOPES, resolveStateDir } from './repo-state.mjs';
 import { validateRequestTimeout } from '../llm/request.mjs';
 import { START_SYNCS, validateStartBase } from './start.mjs';
+import { validateTaskTimeout } from '../runtime/task-deadline.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
 const profileNames = ['vllm-local', 'ollama', 'lmstudio', 'openai'];
@@ -21,7 +22,7 @@ const defaultProfiles = {
 const fields = {
   llm: ['base_url', 'model', 'api_key_env', 'effort', 'effort_override', 'context_max', 'profile', 'api_key_optional', 'provider', 'request_timeout_ms', 'served_model_label', 'max_requests'],
   planner: ['turn_budget', 'critic_profile'],
-  seat: ['id', 'principal', 'turn_budget', 'tools', 'context_chars', 'scope_expansion', 'max_attempts', 'evidence_workspace'],
+  seat: ['id', 'principal', 'turn_budget', 'tools', 'context_chars', 'scope_expansion', 'max_attempts', 'evidence_workspace', 'task_timeout_ms'],
   paths: ['memory', 'skills', 'asks', 'worktrees'],
   publish: ['enabled'],
   tools: ['internet', 'run_test'],
@@ -172,7 +173,7 @@ export function parseConfig(source) {
       ['llm', 'seat', 'paths'].some((name) =>
         !roots.has(name) || fields[name].some((field) =>
           !(name === 'llm' && ['profile', 'api_key_optional', 'provider', 'request_timeout_ms', 'effort_override', 'served_model_label', 'max_requests'].includes(field)) &&
-          !(name === 'seat' && ['context_chars', 'scope_expansion', 'max_attempts', 'evidence_workspace'].includes(field)) && !Object.hasOwn(config[name], field))) ||
+          !(name === 'seat' && ['context_chars', 'scope_expansion', 'max_attempts', 'evidence_workspace', 'task_timeout_ms'].includes(field)) && !Object.hasOwn(config[name], field))) ||
       (roots.has('planner') && !Object.hasOwn(config.planner, 'turn_budget'))) {
     invalid('schema, llm, seat, paths, and optional planner must contain every documented field');
   }
@@ -294,6 +295,11 @@ export function parseConfig(source) {
   }
   seat.max_attempts = seat.max_attempts === undefined ? 3 : integerValue(seat.max_attempts, 'seat.max_attempts');
   if (seat.max_attempts < 1 || seat.max_attempts > 16) invalid('seat.max_attempts must be between 1 and 16');
+  if (seat.task_timeout_ms !== undefined) {
+    seat.task_timeout_ms = integerValue(seat.task_timeout_ms, 'seat.task_timeout_ms');
+    try { validateTaskTimeout(seat.task_timeout_ms); }
+    catch (error) { invalid(error.message); }
+  }
   if (roots.has('context')) {
     config.context.budget = integerValue(config.context.budget, 'context.budget');
     if (config.context.budget < 1) invalid('context.budget must be positive');

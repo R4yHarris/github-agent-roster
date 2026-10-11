@@ -28,6 +28,7 @@ profiles:
 planner:
   turn_budget: 32        # maximum planner responses; no file tools
 seat:
+  # task_timeout_ms: 3600000  # opt-in whole-task cap; unset leaves existing behavior unchanged
   id: coder
   principal: coder      # contracts role; no merge, no deploy
   max_attempts: 3        # opt-in --attempts cap; normal runs still use one
