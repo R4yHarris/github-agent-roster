@@ -12,13 +12,14 @@ import { STATE_SCOPES, statePaths, LEGACY_STATE_DIRNAME } from './repo-state.mjs
  */
 
 const defaultIsAlive = (pid) => {
-  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
   try {
     process.kill(pid, 0);
     return true;
   } catch (error) {
     // EPERM means the process exists but is not ours; it is alive.
-    return error.code === 'EPERM';
+    if (error.code === 'EPERM') return true;
+    if (error.code === 'ESRCH') return false;
+    throw error;
   }
 };
 
@@ -38,8 +39,10 @@ export class RepoLockError extends Error {
  *
  * - `name` must be a filesystem-safe opaque lock identifier.
  * - `repoRoot`/`worktreeRoot` resolve the per-worktree lock directory.
- * - `staleMs` bounds how old a lock may be before its holder is probed for
- *   liveness; a lock whose holder is provably dead is taken over.
+ * - `staleMs` remains accepted for compatibility; age never proves death.
+ *   Only a positive safe-integer PID with an explicit `false` liveness
+ *   result permits takeover, regardless of its timestamp. Unknown ownership
+ *   or liveness preserves the lock; probe errors surface as `E_LOCK_PROBE`.
  * - `lockRoot` may be supplied directly (test seam) to anchor the lock files
  *   in an explicit directory; otherwise the per-worktree state directory is
  *   resolved through `statePaths` with the legacy state layout directory name.
@@ -102,15 +105,18 @@ export async function acquireRepoLock(name, {
         }
       }
       const existingHolder = existing && typeof existing.holder === 'string' ? existing.holder : null;
-      const acquiredAt = existing && typeof existing.acquiredAt === 'string' ? existing.acquiredAt : null;
-      const age = acquiredAt !== null && Number.isFinite(Date.parse(acquiredAt))
-        ? clock() - Date.parse(acquiredAt)
-        : null;
       const pid = existing && Number.isSafeInteger(existing.pid) && existing.pid > 0 ? existing.pid : null;
-      // Stale-lock policy: a lock whose recorded holder is provably dead, or
-      // that has exceeded the stale bound with no live holder, is taken over.
-      const stale = (pid !== null && !isAlive(pid)) ||
-        (age !== null && age > staleMs && (pid === null || !isAlive(pid)));
+      // Age and a falsey/unknown probe result are not proof of owner death.
+      let stale = false;
+      if (pid !== null) {
+        try {
+          stale = isAlive(pid) === false;
+        } catch (probeError) {
+          throw new RepoLockError(
+            `lock "${name}" cannot be taken over: liveness probe failed for pid ${pid}; the lock is left untouched.`,
+            { code: 'E_LOCK_PROBE', lock: name, holder: existingHolder, cause: probeError });
+        }
+      }
       if (!stale) {
         if (clock() >= deadline) {
           throw new RepoLockError(

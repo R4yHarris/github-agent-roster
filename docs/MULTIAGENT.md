@@ -53,8 +53,18 @@ lookup errors fail closed. There is no persistent scheduler or task database.
 Each child has prefixed live output, its own log and shell status-rail row.
 An exclusive repository-common claim lock prevents another local invocation
 writing that issue, including ordinary single-issue runs. Locks are released
-on success/error/cancellation; existing dead-owner recovery applies after a
-process crash. GitHub status uses the existing App labels/comments.
+on success/error/cancellation. Crash recovery requires a recorded positive
+safe-integer PID and a liveness probe returning explicit `false`; lock age,
+including exceeding `staleMs`, never authorizes takeover. Missing/invalid PIDs,
+malformed records, and nonboolean probe results remain protected with
+`E_LOCK_HELD` and unchanged lock bytes. The default process probe treats
+`ESRCH` as dead and `EPERM` as alive; other probe errors refuse immediately
+with `E_LOCK_PROBE`, retaining the cause and lock/holder metadata without
+changing the lock. Valid dead owners can recover even with fresh, future,
+missing, or invalid timestamps. This enforces the one-writer principle and
+crash-recovery intent in FEATURE_SPEC sections 3, 5.4, and 5.8; `staleMs`
+remains an accepted compatibility option, not permission to steal a lock.
+GitHub status uses the existing App labels/comments.
 One child failure preserves sibling results and later independent children;
 the aggregate returns `children`, refreshed `waves`, the effective `parallel`
 limit and a failing outcome. Board-refresh failures retain completed evidence.

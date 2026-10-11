@@ -150,7 +150,7 @@ test('stale lock with a dead recorded pid is reclaimed deterministically', async
   assert.equal(result2.recordId, 'after-stale-2');
 });
 
-test('stale lock by old timestamp with no usable pid is reclaimed', async (t) => {
+test('old timestamp with no usable PID preserves the lock and refuses append', async (t) => {
   const root = await makeStoreRoot();
   t.after(() => cleanup(root));
   const store = openProvenanceStore(root, { staleMs: 1000 });
@@ -158,11 +158,12 @@ test('stale lock by old timestamp with no usable pid is reclaimed', async (t) =>
   const lockPath = join(root, 'locks', 'provenance-store.lock');
   await fs.mkdir(dirname(lockPath), { recursive: true });
   const old = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-  await fs.writeFile(lockPath, `${JSON.stringify({ holder: 'old-writer', pid: null, acquiredAt: old })}\n`, 'utf8');
-
-  // A lock older than staleMs with no live holder is taken over.
-  const result = await store.appendRecord(record('after-old'));
-  assert.equal(result.recordId, 'after-old');
+  const bytes = Buffer.from(`${JSON.stringify({ holder: 'old-writer', pid: null, acquiredAt: old })}\n`);
+  await fs.writeFile(lockPath, bytes);
+  await assert.rejects(store.appendRecord(record('after-old')),
+    (error) => error instanceof RepoLockError && error.code === 'E_LOCK_HELD' && error.holder === 'old-writer');
+  assert.deepEqual(await fs.readFile(lockPath), bytes);
+  assert.equal((await store.readAll()).records.length, 0);
 });
 
 test('live lock with recent timestamp is never stolen', async (t) => {
