@@ -18,7 +18,7 @@ and existing merged-PR evidence. No comparator marketing claims are needed.
 | Planner → coder → reviewer seats (5.2–5.5) | `seats/planner.mjs`, `coder.mjs`, `reviewer.mjs`; sequential orchestration, cache/retry/repairs in `lib/builtin.mjs` | Implemented, not absent. Same process/worktree by default; opt-in isolated child/attempt trees are not a new runtime or task board. Stable Eve worker identity independent of seats/models is a later #477 outcome, not delivered by these names. |
 | Ask taxonomy/specialization (5.3) | `planner/classify.mjs` produces question/incident `specKind` metadata; execution still uses clarify/slice/feature/initiative; `/btw` is a bounded read-only task side-question | `specKind` is not otherwise consumed by runtime code. Top-level question/incident-specialized execution remains partial; do not equate metadata labels or `/btw` with a full primary Ask handler. |
 | Planner memory and continuity (5.6) | Planner reads at most 20 redacted seat-scoped records; writes Ask/title records; builtin appends review outcome; `runtime/memory.mjs`; merged #520/#523 | Advisory bounded memory, not full conversational replay or a global mind. Coder memory is separate and included in ordinary minimum packs (#515). |
-| Skills/conduct/learning (5.2/5.6) | `runtime/context.mjs`, `skills.mjs`, `engineering-baseline.mjs`; `lib/learn.mjs` eval joins/ceilings; `failure-proposals.mjs` human-reviewed drafts | Only five generic skill packets are shipped (`implement-task`, `read-before-write`, `result-report`, `run-tests`, `small-diff`), not all the research/review/incident/docs-specific packets listed in 5.2. Curated record/compaction primitives exist (`provenance-api.mjs`, `curateMemory`), but source-invalidating, seat-scoped promotion/retrieval/unpromotion is not an integrated Eve learning loop. This is explicit #477 work gated by #476. Proposals are not automatically installed principals or fabricated human accepts. |
+| Skills/conduct/learning (5.2/5.6) | `runtime/context.mjs`, `skills.mjs`, `engineering-baseline.mjs`; `lib/learn.mjs` eval joins/ceilings; `failure-proposals.mjs` human-reviewed drafts | The five baseline packets remain; six installed spec category packets (`research`, `implement`, `test`, `review`, `incident`, `docs`) now reach explicitly selected minimum/full coder contexts. A required category cannot be budget-omitted; missing/malformed/junction packets stop preparation. Default baseline selection is unchanged. This does not make a coder an independent reviewer or implement a primary incident/question handler. Curated record/compaction primitives exist (`provenance-api.mjs`, `curateMemory`), but source-invalidating, seat-scoped promotion/retrieval/unpromotion is not an integrated Eve learning loop. This is explicit #477 work gated by #476. Proposals are not automatically installed principals or fabricated human accepts. |
 | Fleet, routing and admission (5.2) | `lib/fleet.mjs`, `route.mjs`, `llm.mjs`, `runtime/admission.mjs`; eval history before priors, hardware/cost ranking, FIFO slots and abort release | Admission is per profile in one process, as FLEET documents; not distributed admission. Ordinary saved-default runs without a fleet profile are not admission-limited. Registered hardware experiments and cross-process resource guarantees are not proven by unit tests. Custom default key-name reload defect was reproduced and repaired in #540. |
 | Issue/Project queue and dependencies (5.3/5.7) | `lib/issue-board.mjs` labels/status comments/optional Project projection; `waves.mjs` issue dependency and earlier-wave closure checks; `wave-scheduler.mjs` | GitHub is canonical. Project access is installation-permission-dependent; local state is evidence/recovery, not an independent Kanban DB. Child closure does not invent human acceptance. |
 | Worktree lifecycle and liveness (5.4/5.8) | `lib/start.mjs` fresh base; issue preparation and reuse; `repo-locks.mjs` explicit death proof; `worktrees.mjs`, `local-runs.mjs`, `clean-ops.mjs` | #487/#491 repair lock takeover; age/unknown liveness is not death. Merged #541 moves generated task environment metadata under worktree Git storage and preserves any existing product `.env`. Literal branch naming also diverges: spec 5.4 says `agents/<issue>`; builtin preparation/board publication use `issue-N`. A coordinated compatibility migration is needed, not an isolated namespace rename. |
@@ -58,11 +58,10 @@ and existing merged-PR evidence. No comparator marketing claims are needed.
    legacy named presets, runtime profile metadata and policy remain intact.
 5. **#439:** human workflow source-pinning decision/repair required (5.5 and 3).
 6. **#368:** contracts publisher recovery; outside this repo's editable boundary.
-7. **Partial core interfaces:** primary question/incident specialization, the complete
-   class-specific skill packet set, automatic last-green-step recovery, and
+7. **Partial core interfaces:** primary question/incident execution, automatic last-green-step recovery, and
    literal branch namespace compatibility need separately bounded designs. These
    are not delivered by the basic seat loop or by naming a `specKind`; planner/
-   tool/loop integration overlaps the concurrent live-repair ownership. Do not
+   tool/loop integration needs bounded public-path tests; the #449/#452 ownership handoff is already completed. Do not
    grant permissions, restore product state or rename published branch claims
    speculatively. Optional telemetry and priced cloud ledger need explicit
    collector/pricing input; unavailable measurements must stay unknown.
@@ -133,3 +132,52 @@ and deadline foundations. Original candidates/history remain available.
 - #414–#438 remain an acceptance campaign, not automatically completed by unit
   regressions or M3 development diagnostics. Cross-platform, actual hardware,
   integrated delivery and genuine human evaluation still require real evidence.
+
+## Category packet delivery verification
+
+Explicit Windows Node20 targeted gate: specialized packet/context tests, skills,
+minimum context, recipe bounds, coder scope, builtin publication, repo locks and
+clarification checkpoints: **157 tests, 156 pass, one existing Windows symlink
+skip, zero failures**. Six minimum-context/category controls and the full-context
+loader failed against old code. Green includes actual coder HTTP delivery,
+missing/empty/oversized packet refusal before inference, junction defense,
+required full/minimum budget refusal, unselected packet isolation and unavailable
+internet tool refusal. No human quality/acceptance, hardware or full suite claim.
+
+## Next bounded acceptance conditions after category packet delivery
+
+The death-proof lock acquisition and durable clarification/session intake are
+already implemented, not blank acceptance gaps. Existing lock tests preserve
+live/unknown owners and take over only explicitly dead positive PIDs. This audit
+does not claim cross-platform live acceptance from unit tests.
+
+- **Ungated primary question path:** a bounded question must return source-backed
+  useful output through the CLI/shell with only existing read-only tools, no
+  product writes or publication; retain scope/path/internet gates, original Ask,
+  cancellation and honest unknown evidence. Reuse task side-question helpers;
+  do not add a general chatbot crew. Existing taxonomy metadata alone is not it.
+- **Ungated incident specialization:** explicitly authorized incident tasks must
+  retain failing observations and unchanged scope/checks while selecting the
+  incident procedure; actual repair/review/publication stays the ordinary gated
+  loop. No emergency production or workflow access. Category delivery is a
+  foundation, not incident-specific execution acceptance.
+- **Ungated recovery increment:** restart must identify a recorded last-green
+  checkpoint, validate task/scope/revision/owner identity and preserve subsequent
+  edits; stale/tampered/unknown state must block. Explicit inspect/resume through
+  existing checkpoint helpers is implementable; destructive automatic restore
+  or resuming an unconfirmed task is not authorized by missing evidence.
+- **Ungated branch compatibility increment:** creation, lookup, reused legacy
+  `issue-N` branches, issue status and publisher claims must agree after adopting
+  `agents/<issue>`; no orphaned legacy trees, lock collisions or implicit branch
+  ownership changes. Requires coordinated callers, not just one rename.
+- **Input-gated optional operations:** no guessed priced producer ledger without
+  authoritative returned cost or human-owned pricing input. Optional telemetry
+  export is not a current delivery prerequisite and needs an explicit collector
+  configuration; no new runtime dependency was added.
+- **Human/dependency gates:** #477 depends on #476, which explicitly prohibits
+  execution until #474/#475 are human-evaluated and closed. Then bounded linked
+  slices and actual measured resource/council evidence are required. #499 is
+  specifically human diagnosis/scope review, not that dependency chain: preserve
+  original timeout and unchanged successful minimal-consumer evidence, never
+  disable verification to pass. #439 workflow source binding is human-owned;
+  #368 publisher recovery is contracts-owned, never a vendor edit here.

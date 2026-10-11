@@ -75,8 +75,11 @@ Each seat may declare `skills: [implement-task, run-tests]`,
 The difficulty ceiling is an integer from 1 to 5. Skills accept the packet
 names `implement-task`, `read-before-write`, `result-report`, `run-tests`, and
 `small-diff`, plus the spec categories `research`, `implement`, `test`, `review`,
-`incident`, and `docs`. Categories describe coverage; selecting a category in
-TASK.md still requires a corresponding installed skill packet. Tools accept
+`incident`, and `docs`. The six category packets are installed in the Roster skills directory. Selecting
+a category in TASK.md loads its bounded procedure into minimum/full coder
+context without granting role or tool authority; insufficient category context
+budget fails before implementation (see [skills](SKILLS.md)). Categories still
+describe coverage: a recipe must explicitly cover each selected task skill. Tools accept
 only the runtime's named tools: `read_file`, `write_file`, `edit_file`,
 `glob_files`, `run_command`, `list_dir`, `run_test`, `search_text`, `web_search`,
 and `web_fetch`. Lists must be inline, unquoted, distinct known names.

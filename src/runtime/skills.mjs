@@ -2,6 +2,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { ensureLocalPath } from '../lib/paths.mjs';
 
+export const skillCategories = Object.freeze(['research', 'implement', 'test', 'review', 'incident', 'docs']);
+
 export function splitTaskFrontmatter(task) {
   if (typeof task !== 'string') throw new TypeError('TASK.md must be text');
   const text = task.replace(/\r\n/g, '\n');
