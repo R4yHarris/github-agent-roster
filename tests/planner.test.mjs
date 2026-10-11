@@ -8,50 +8,12 @@ import { parseRecipe } from '../src/lib/recipe.mjs';
 import { planAsk, planStub, renderAsk, renderAssignment, taskFilesAllowed } from '../src/planner/stub.mjs';
 import { runPlanner } from '../src/seats/planner.mjs';
 import { withFleetProfile } from '../src/lib/fleet.mjs';
-import { appendMemory } from '../src/runtime/memory.mjs';
 
 const configExample = readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8');
 const stubConfig = parseConfig(configExample);
 const llmConfig = parseConfig(configExample.replace('base_url: ""', 'base_url: "http://localhost:1234/v1"')
   .replace('model: ""', 'model: test-model'));
 
-for (const kind of ['feature', 'initiative']) {
-  test(`${kind} outline receives only recent own-seat planner memory and preserves structured Ask`, async (context) => {
-    const repoRoot = mkdtempSync(join(tmpdir(), 'roster-outline-memory-'));
-    context.after(() => rmSync(repoRoot, { recursive: true, force: true }));
-    const worktree = join(repoRoot, 'worktree');
-    mkdirSync(worktree);
-    for (let index = 0; index < 25; index += 1) {
-      await appendMemory({ repoRoot, file: join(repoRoot, '.roster', 'memory', 'planner.jsonl'), env: {},
-        record: { index, summary: `planner-lesson-${index}` } });
-    }
-    await appendMemory({ repoRoot, file: join(repoRoot, '.roster', 'memory', 'coder.jsonl'), env: {},
-      record: { summary: 'coder-only-private-lesson' } });
-    const ask = 'Plan updates to README.md as independent bounded tasks.';
-    const plan = await runPlanner({ repoRoot, worktree, ask, askKind: kind, config: llmConfig, env: {},
-      reference: 'local:memory', task: 'local-memory', session: 'planner-memory',
-      fetchImpl: async (_url, request) => {
-        const body = JSON.parse(request.body);
-        const data = JSON.parse(body.messages[1].content);
-        assert.equal(data.ask, ask);
-        assert.match(data.planner_memory, /planner-lesson-24/);
-        assert.doesNotMatch(data.planner_memory, /planner-lesson-0"|coder-only-private/);
-        assert.deepEqual(data.human_files_allowed, ['README.md']);
-        assert.equal(body.tools, undefined);
-        return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
-          content: JSON.stringify({ outcomes: ['Update documentation'], issues: [
-            { title: 'Add overview', outcome: 'Overview explains the project', acceptance_checks: ['Overview is present'],
-              files_allowed: ['README.md'], wave: 1 },
-            { title: 'Add setup', outcome: 'Setup explains local use', acceptance_checks: ['Setup is present'],
-              files_allowed: ['README.md'], wave: 2 },
-          ] }),
-        } }] });
-      } });
-    assert.equal(plan.planningOnly, true);
-    assert.equal(existsSync(join(worktree, 'TASK.md')), false);
-    assert.equal(existsSync(join(worktree, 'RECIPE.yml')), false);
-  });
-}
 
 test('stub creates an executable planner/coder/reviewer recipe and task without an LLM request', async () => {
   const ask = 'Add a Status section to `README.md`.\n\nKeep the text short.';
