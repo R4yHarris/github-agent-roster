@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createTools, expandTestShards, fullTestTimeoutMs, isAllowedFile, isForbiddenRead, isForbiddenWrite, taskAndRepairFiles, testCommandFor, testFailureEvidence, toolDefinitions } from '../src/runtime/tools.mjs';
+import { createTools, expandTestShards, fullTestTimeoutMs, isAllowedFile, isForbiddenRead, isForbiddenWrite, taskAndRepairFiles, testCommandFor, testFailureEvidence, ToolAccessError, ToolUsageError, toolDefinitions } from '../src/runtime/tools.mjs';
 
 function fixture(context) {
   const worktree = mkdtempSync(path.join(tmpdir(), 'roster-tools-'));
@@ -655,4 +655,15 @@ test('a coder write to a harness report is a recoverable usage denial; handoff t
   }
   await assert.rejects(tools.write_file({ path: 'TASK.md', content: 'forged' }), (error) =>
     error.constructor.name === 'ToolAccessError' && /Writing TASK\.md is not allowed/.test(error.message));
+});
+
+test('an unplanned ordinary coder write is a recoverable denial that names the planned files', async (t) => {
+  const worktree = mkdtempSync(path.join(tmpdir(), 'roster-scope-guidance-'));
+  t.after(() => rmSync(worktree, { recursive: true, force: true }));
+  const tools = await createTools({ worktree, allowedFiles: ['out/lib/parse-csv.mjs'] });
+  await assert.rejects(tools.write_file({ path: 'out/parseCsv.mjs', content: 'x' }),
+    (error) => error instanceof ToolUsageError && /^Writing out\/parseCsv\.mjs is not allowed by TASK\.md or worktree policy\nWrite only these planned files: out\/lib\/parse-csv\.mjs/.test(error.message));
+  await assert.rejects(tools.write_file({ path: '.github/workflows/x.yml', content: 'x' }),
+    (error) => error instanceof ToolAccessError && !(error instanceof ToolUsageError));
+  assert.equal(existsSync(path.join(worktree, 'out', 'parseCsv.mjs')), false);
 });
