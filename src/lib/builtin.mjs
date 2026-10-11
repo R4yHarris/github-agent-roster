@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { buildPublishEnv, buildRun, resolvePublishModel, RUN_ENV_NAMES } from '../metrics/run.mjs';
 import { cleanAskText, renderAssignment, taskFilesAllowed } from '../planner/stub.mjs';
 import { assertSeatCovers, parseRecipe } from './recipe.mjs';
-import { taskSkillNames } from '../runtime/skills.mjs';
+import { coderTaskSkillNames } from '../runtime/context-policy.mjs';
 import { appendMemory, seatMemoryPath } from '../runtime/memory.mjs';
 import { runCoder } from '../seats/coder.mjs';
 import { acceptPlannerPlan, preparePlannerHandoff, readPlannerHandoff, readPlannerTask, readPreviousReview, runPlanner } from '../seats/planner.mjs';
@@ -1396,7 +1396,7 @@ async function executeBuiltinAssignment(issueNumber, {
     { initialBaseline, initialScopeFiles, initialRepairFiles, continuation, acceptanceContinuation, priorWrites } = {}) => {
     assertSeatCovers(recipeCoder, {
       ...(recipeCoder.max_difficulty === undefined ? {} : { difficulty: readTaskMetadata(planner.task).difficulty }),
-      ...(recipeCoder.skills === undefined ? {} : { skills: taskSkillNames(planner.task) }),
+      ...(recipeCoder.skills === undefined ? {} : { skills: coderTaskSkillNames(planner.task) }),
     });
     return liveLog.seat('coder', sessions.coder, coderConfig, (onEvent) => runCoder({
       worktree: worktreePath, repoRoot, config: coderConfig, task: prepared.task, session: sessions.coder,
