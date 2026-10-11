@@ -792,6 +792,36 @@ test('malformed calls use only one repair even with a one-turn configured budget
   assert.equal(JSON.parse(readFileSync(join(repoRoot, '.roster', 'memory', 'planner.jsonl'), 'utf8')).status, 'failed');
 });
 
+for (const boundTools of [false, true]) {
+  test(`protocol repair accepts a validated JSON plan with tools ${boundTools ? 'available' : 'unavailable'}`, async (t) => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'roster-planner-json-repair-'));
+    t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+    const worktree = join(repoRoot, 'worktree');
+    mkdirSync(worktree);
+    let calls = 0;
+    const options = {
+      config: { ...llmConfig, planner: { turn_budget: 1 } }, env: {},
+      fetchImpl: async () => {
+        calls += 1;
+        if (calls === 1) return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant', tool_calls: [{ function: { name: 'write_file', arguments: 'garbage' } }],
+        } }] });
+        return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+          content: JSON.stringify({ title: 'Update README', acceptance_checks: ['README describes branches'],
+            files_allowed: ['README.md'] }),
+        } }] });
+      },
+    };
+    const result = boundTools
+      ? await runPlanner({ ...options, worktree, repoRoot,
+        issue: { number: 42, title: 'Update README', body: 'Update README.md.' } })
+      : await planAsk('Update README.md.', options);
+    assert.equal(calls, 2);
+    assert.equal(result.error, undefined);
+    assert.deepEqual(taskFilesAllowed(result.task), ['README.md']);
+  });
+}
+
 test('written TASK validation rejects a changed Ask and protected paths', async (t) => {
   const ask = 'Update README.md.';
   const task = planStub(ask, { reference: 'issue:42', title: 'Update README' }).task;

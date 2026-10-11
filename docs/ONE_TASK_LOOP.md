@@ -15,7 +15,11 @@ skip the planner; invalid handoffs are archived and replanned. Archived outputs
 must be untracked and safe; no app code is archived or replaced.
 Complete tool-written tasks finish without a second model turn and accept the
 case-insensitive section aliases described in [tools](TOOLS.md).
-Malformed planner tool calls receive one repair attempt; failure writes a clear
+Malformed planner tool calls receive one repair attempt. The correction may
+return a complete JSON plan through the normal task validation, or valid
+artifact tool calls when tools are available; a no-tool critic revision is
+never instructed to call unavailable tools (spec sections 5.3 and 5.4).
+Failure writes a clear
 unverified planning stub and disables coding/publication. The standalone CLI
 returns a failed exit status, while the REPL stays open for another command.
 
