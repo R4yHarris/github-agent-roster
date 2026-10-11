@@ -248,6 +248,7 @@ export async function planAsk(ask, {
       'Each acceptance check must be at most 240 characters; for a long requirement write several shorter checks (up to 8) instead of one long one, without dropping requirements. ' +
       'A code task needs acceptance_checks including node --test exits 0 and files_allowed. ' +
       'Optional fields: difficulty (1-5), estimate_min, task_class (feat|fix|docs|test), model, steps, notes. ' +
+      'Do not include new_files in JSON; the harness generates New files from the validated files_allowed. ' +
       (lockedModel ? `Keep model ${lockedModel}; do not choose another model. ` : '') +
       'Stay within the human Ask paths. Work toward a complete executable handoff. ' +
       'Preserve every requested outcome: checks and Design must agree with the unchanged Ask and with each other. ' +
@@ -524,7 +525,10 @@ export async function planAsk(ask, {
       continue;
     }
     if (!failure && !plan) {
-      failure = 'LLM planner returned an unsupported task plan';
+      failure = 'LLM planner returned an unsupported task plan. Use only title (or matching task alias), ' +
+        'acceptance_checks, files_allowed, difficulty, estimate_min, task_class, model, steps, notes, design. ' +
+        'title, acceptance_checks and files_allowed are required. ' +
+        'Do not include new_files; the harness generates New files from validated files_allowed.';
     }
     if (!failure && lockedModel && plan.model && plan.model !== lockedModel) {
       failure = 'The routed planner must keep the selected fleet model';
