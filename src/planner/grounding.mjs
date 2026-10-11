@@ -151,7 +151,8 @@ export function groundingErrors({ checks = [], design = null, filesAllowed = [],
   const text = [...checks, ...(design?.outline ?? []), ...(design?.edge_cases ?? [])].join('\n');
   const { names, paths } = citations(text);
   for (const name of names) {
-    if (index.symbols.has(name) || declared.has(name) || askText.includes(name)) continue;
+    // Standard runtime globals such as TypeError or JSON are real, citable names that no repository exports.
+    if (index.symbols.has(name) || declared.has(name) || askText.includes(name) || name in globalThis) continue;
     errors.push(`\`${name}\` does not exist in the repository; cite a real export or declare it in design.new_exports ` +
       `(in TASK.md: a \`## Design\` section with \`New exports:\` then \`- \\\`${name}\\\` in \\\`<file>\\\`\`)`);
   }
