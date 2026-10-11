@@ -45,9 +45,11 @@ a second scheduling service. An issue number identifies one human Ask.
    when satisfied. The coder and App never invent that evaluation or close
    an issue on the human's behalf.
 
-`roster status --issue N` reads the issue and its open `issue-N` branch PR
+`roster status --issue N` reads the issue and its open `agents/N` or legacy
+`issue-N` branch PR, refusing ambiguous dual-namespace PR ownership,
 from GitHub and reports the local worktree path. `--offline` reads only the
-cached assignment and filesystem: it reports PR state as **unknown**, not
+cached assignment, filesystem and local Git refs/registration (no fetch):
+it reports PR state as **unknown**, not
 `none`. The interactive shell offers the same behavior via `/status`.
 
 When a local run row exists, status also shows its **recorded gate**
@@ -62,12 +64,12 @@ At most five distinct recorded defect/report reasons are displayed, each
 redacted before truncation to 240 characters, with excess reasons counted.
 Terminal controls are removed and whitespace is collapsed into one line.
 Malformed report reasons fail explicitly. No file/body inference, fleet probe,
-command, state write, or recovery attempt is added to offline status. These
+network command, state write, or recovery attempt is added to offline status. These
 diagnostics implement FEATURE_SPEC sections 5.5, 5.7, and 5.8 while honoring
 sections 3 and 7.
 
 For an open assigned issue, online status also reports **work health**
-(FEATURE_SPEC.md section 5.8): **stranded** means no local `issue-N` branch
+(FEATURE_SPEC.md sections 5.4/5.8): **stranded** means no local `agents/N` or legacy `issue-N` branch
 or worktree, **stale** means a claim exists but no run-log heartbeat has been
 seen within 30 minutes, and **healthy** means the latest heartbeat is within
 that threshold (inclusive). Run-log timestamps are activity evidence, not

@@ -1,3 +1,5 @@
+import { issueBranches, selectIssueBranch } from './issue-branches.mjs';
+
 export const defaultStaleThresholdMs = 30 * 60 * 1000;
 
 function timestamp(value, name) {
@@ -43,9 +45,9 @@ export function classifyStrandedWork({
       throw new TypeError('Issue must have a positive safe number, open/closed state, and assignees');
     }
     if (issue.state.toLowerCase() !== 'open' || !issue.assignees.length) continue;
-    const branch = `issue-${issue.number}`;
+    const branch = selectIssueBranch(issue.number, [...claims]);
     const lastHeartbeat = latest.get(issue.number) ?? null;
-    const status = !claims.has(branch) ? 'stranded'
+    const status = !issueBranches(issue.number).some((name) => claims.has(name)) ? 'stranded'
       : lastHeartbeat === null || current - lastHeartbeat > thresholdMs ? 'stale' : 'healthy';
     results.push({ issue, branch, status, lastHeartbeat });
   }

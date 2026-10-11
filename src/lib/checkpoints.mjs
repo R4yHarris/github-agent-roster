@@ -14,6 +14,7 @@ import { archiveRunArtifacts } from './run-artifacts.mjs';
 import { acquireRepoLock } from './repo-locks.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
 import { parseRecipe } from './recipe.mjs';
+import { parseIssueBranch } from './issue-branches.mjs';
 
 const execute = promisify(execFile);
 const oid = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/;
@@ -307,7 +308,9 @@ export async function restoreVerifiedCheckpoint({ worktree, task, allowedFiles, 
   throwIfCancelled(signal);
   if (!/^issue-[1-9]\d*$/.test(task)) throw new Error('Verified resume requires an isolated issue task');
   const validation = await verifiedIdentity(worktree, env, task);
-  if (validation.branch !== task && !new RegExp('^' + task + '-a[1-3]$').test(validation.branch)) {
+  const branchIdentity = parseIssueBranch(validation.branch);
+  if (!branchIdentity || branchIdentity.number !== Number(task.slice(6)) ||
+      branchIdentity.attempt !== null && branchIdentity.attempt > 3) {
     throw new Error('Verified resume requires the unchanged isolated task branch');
   }
   const common = (await git(worktree, ['rev-parse', '--git-common-dir'], env)).trim();

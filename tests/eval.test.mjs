@@ -266,12 +266,40 @@ test('a bot identity cannot post AI-Eval comments', async (t) => {
       if (program === 'git') return args[0] === 'rev-parse' ? cwd : 'https://github.com/example/project.git\n';
       if (args[0] === '--version') return 'gh version test\n';
       if (args[0] === 'api') return 'Bot\n';
+      if (args[args.indexOf('--head') + 1] === 'agents/42') return '[]';
       assert.deepEqual(args, ['pr', 'list', '--repo', 'example/project', '--head', 'issue-42',
         '--state', 'all', '--limit', '2', '--json', 'number']);
       return '[{"number":12}]';
     },
   }), /human GitHub identity/);
   assert.equal(loadLearning({ cwd }).evaluations.length, 1);
+});
+
+test('human evaluation lookup accepts either namespace and refuses two matching heads before posting', async (t) => {
+  for (const heads of [['agents/42'], ['issue-42'], ['agents/42', 'issue-42']]) {
+    const { cwd, options } = fixture(t);
+    const posted = [];
+    const request = recordEvaluation('roster-42-coder', 'reject', '3', 'n', {
+      ...options, commenter: undefined,
+      run(program, args) {
+        if (program === 'git') return args[0] === 'rev-parse' ? cwd : 'https://github.com/example/project.git\n';
+        if (args[0] === '--version') return 'gh fixture\n';
+        if (args[0] === 'api') return 'User\n';
+        if (args[1] === 'list') return heads.includes(args[args.indexOf('--head') + 1])
+          ? JSON.stringify([{ number: args[args.indexOf('--head') + 1] === 'agents/42' ? 7 : 8 }]) : '[]';
+        posted.push(args);
+        return '';
+      },
+    });
+    if (heads.length === 2) {
+      await assert.rejects(request, /Multiple PRs match/);
+      assert.equal(posted.length, 0);
+    } else {
+      await request;
+      assert.equal(posted.length, 1);
+      assert.equal(posted[0][2], heads[0] === 'agents/42' ? '7' : '8');
+    }
+  }
 });
 
 test('human evaluations retain an explicitly recorded seat for later ceiling derivation', async (t) => {
@@ -504,12 +532,12 @@ test('recovered canonical task directs the existing human PR commenter for an op
       githubCalls.push(args);
       if (args[0] === '--version') return 'gh fixture\n';
       if (args[0] === 'api') return 'User\n';
-      if (args[1] === 'list') return '[{"number":42}]';
+      if (args[1] === 'list') return args[args.indexOf('--head') + 1] === 'agents/42' ? '[{"number":42}]' : '[]';
       return '';
     },
   });
   assert.deepEqual(githubCalls.find((args) => args[1] === 'list'), [
-    'pr', 'list', '--repo', 'example/evaluation', '--head', 'issue-42', '--state', 'all', '--limit', '2', '--json', 'number',
+    'pr', 'list', '--repo', 'example/evaluation', '--head', 'agents/42', '--state', 'all', '--limit', '2', '--json', 'number',
   ]);
   assert.deepEqual(githubCalls.find((args) => args[1] === 'comment'), [
     'pr', 'comment', '42', '--repo', 'example/evaluation', '--body', 'AI-Eval: 1|reject|3|n',

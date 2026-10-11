@@ -278,12 +278,13 @@ it does not rewrite `.roster/config.yml`. Insufficient data, an unknown
 task class, or no configured endpoint leaves the run in stub mode.
 
 Use `roster status --issue 42` to read the issue, its open
-`issue-42` branch PR, and the local worktree path. Add `--offline` to read
-only the cached assignment and filesystem; an unavailable PR is shown as
+`agents/42` or legacy `issue-42` branch PR, and the local worktree path. Add `--offline` to read
+only the cached assignment, filesystem and local Git registration/refs; an unavailable PR is shown as
 unknown, not absent. See the [interactive shell](REPL.md) for `/status`.
 
 `roster run` uses the current Git repository's GitHub origin, authenticated
-`gh issue view`, and branch `issue-42` in `.worktrees/issue-42`. It writes
+`gh issue view`, and new branch `agents/42` in `.worktrees/issue-42`
+(FEATURE_SPEC **5.4**; existing legacy branches are reused without renaming). It writes
 `ASSIGNMENT.md`, `RECIPE.yml`, `TASK.md`, and a private Git-metadata task environment containing
 `AI_TASK` and the coder's `AI_SESSION`. The planner writes only `RECIPE.yml`
 and `TASK.md`; the coder reads that worktree's `AGENTS.md`, `TASK.md`, this

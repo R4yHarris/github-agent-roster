@@ -21,6 +21,7 @@ import { requireLifecycleHooks } from '../runtime/hooks.mjs';
 import { isReviewRequired, loadConfig, requirePublicationEnabled, withoutLlmKeys } from './config.mjs';
 import { loadFleet, withFleetProfile } from './fleet.mjs';
 import { runIssue, validateIssueNumber } from './issue.mjs';
+import { parseWorktreeInventory, resolveIssueBranch } from './issue-branches.mjs';
 import {
   commentMergedIssue, mergedPullNumber, mergedPullNumberFromFailure, setIssueRunStatus,
 } from './issue-board.mjs';
@@ -621,7 +622,7 @@ async function runTrackedAssignment(issueNumber, options) {
     result = await runBuiltinAssignment(issueNumber, { ...options, async onPrepared(ready) {
       prepared = ready;
       await onPrepared?.(ready);
-      const posted = await post('in-progress', [`Branch: ${ready.task}`,
+      const posted = await post('in-progress', [`Branch: ${ready.branch ?? ready.task}`,
         ready.start ? formatStart(ready.start, ready.drift) : null,
         `Seats: ${options.seats ?? 'planner,coder,reviewer'}`,
         options.autoModel ? 'Model routing: auto' : null].filter(Boolean));
@@ -687,8 +688,8 @@ async function reusePreparedAssignment(run, { cwd, config, runCommand, ask, issu
       selected.attempt.index !== run.attempt.index)) {
     throw new Error('Retry must use the recorded selected attempt, not a losing worktree');
   }
-  const branch = selected ? `${run.task}-a${selected.attempt.index}` : run.task;
-  const expectedPath = path.resolve(root, config.paths.worktrees, branch);
+  const directoryName = selected ? `${run.task}-a${selected.attempt.index}` : run.task;
+  const expectedPath = path.resolve(root, config.paths.worktrees, directoryName);
   const same = (left, right) => process.platform === 'win32'
     ? path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase()
     : path.resolve(left) === path.resolve(right);
@@ -697,11 +698,15 @@ async function reusePreparedAssignment(run, { cwd, config, runCommand, ask, issu
   }
   await ensureLocalPath(expectedPath, root);
   const inventory = await runCommand('git', ['worktree', 'list', '--porcelain', '-z'], root);
-  const registered = inventory.split('\0\0').some((record) => {
-    const fields = record.split('\0');
-    const worktree = fields.find((field) => field.startsWith('worktree '))?.slice(9);
-    return worktree && same(worktree, expectedPath) && fields.includes(`branch refs/heads/${branch}`);
-  });
+  const worktrees = parseWorktreeInventory(inventory);
+  const branch = run.local ? run.task : (await resolveIssueBranch({
+    number: issueNumber, repoRoot: root, runCommand, worktrees, attempt: selected?.attempt.index,
+  })).branch;
+  if (run.branch !== undefined && run.branch !== branch) {
+    throw new Error('Retry worktree registration or branch changed; refusing a second worktree');
+  }
+  const registered = worktrees.some((entry) => entry.path &&
+    same(entry.path, expectedPath) && entry.branch === branch);
   if (!registered) throw new Error('Retry worktree registration or branch changed; refusing a second worktree');
   const file = path.join(expectedPath, 'ASSIGNMENT.md');
   await ensureLocalPath(file, root);
@@ -714,7 +719,7 @@ async function reusePreparedAssignment(run, { cwd, config, runCommand, ask, issu
     throw new Error('Retry assignment changed; refusing to replace the prepared Ask');
   }
   await initializeWorktreeSubmodules(expectedPath, runCommand);
-  return { repoRoot: root, worktreePath: expectedPath, task: run.task, ask: run.ask, issue: run.issue,
+  return { repoRoot: root, worktreePath: expectedPath, task: run.task, branch, ask: run.ask, issue: run.issue,
     session: run.session, assignmentPath: file, envPath: run.envPath, metadata: run.metadata,
     local: run.local, reused: true, ...(run.attempt ? { attempt: run.attempt } : {}) };
 }

@@ -9,6 +9,7 @@ import { isManagedFile } from '../runtime/tools.mjs';
 import { throwIfCancelled } from '../runtime/cancel.mjs';
 import { redactEvidence } from '../runtime/excellence.mjs';
 import { renderAssignment } from '../planner/stub.mjs';
+import { issueBranch, issueTask, resolveIssueBranch } from './issue-branches.mjs';
 
 export function attemptLimit(value = 1, maximum = 3) {
   if (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 16 ||
@@ -116,8 +117,13 @@ export async function runPlanAttempts({
   try {
     for (let index = 1; index <= count; index += 1) {
       throwIfCancelled(signal);
-      const branch = `issue-${prepared.issue.number}-a${index}`;
-      const worktreePath = path.join(path.dirname(prepared.worktreePath), branch);
+      const branch = issueBranch(prepared.issue.number, index);
+      const worktreePath = path.join(path.dirname(prepared.worktreePath), `${issueTask(prepared.issue.number)}-a${index}`);
+      const existingBranch = await resolveIssueBranch({ number: prepared.issue.number,
+        repoRoot: prepared.repoRoot, runCommand: command, attempt: index });
+      if (existingBranch.known || existingBranch.worktree) {
+        throw new Error('Attempt branch already exists; refusing to adopt or duplicate it');
+      }
       await ensureLocalPath(worktreePath, prepared.repoRoot);
       const entry = await fs.lstat(worktreePath).catch((error) => {
         if (error.code === 'ENOENT') return null;
@@ -135,7 +141,7 @@ export async function runPlanAttempts({
       }
       const session = `roster-${prepared.issue.number}-a${index}-${randomBytes(4).toString('hex')}-coder`;
       attempt.session = session;
-      const attemptPrepared = { ...prepared, worktreePath, session, reused: false,
+      const attemptPrepared = { ...prepared, branch, worktreePath, session, reused: false,
         assignmentPath: path.join(worktreePath, 'ASSIGNMENT.md') };
       const attemptPlanner = { ...planner, reused: false, critic: undefined,
         taskPath: path.join(worktreePath, 'TASK.md'), recipePath: path.join(worktreePath, 'RECIPE.yml'),

@@ -35,7 +35,8 @@ function fixture(t) {
       issues.push(issue);
       return `https://github.com/example/project/issues/${issue.number}\n`;
     }
-    if (args[0] === 'pr') return JSON.stringify(review ? [{ number: 3 }] : []);
+    if (args[0] === 'pr') return JSON.stringify(review &&
+      args[args.indexOf('--head') + 1].startsWith('agents/') ? [{ number: 3 }] : []);
     throw new Error('Unexpected wave fixture command');
   };
   return { worktree, cwd: worktree, source, plan, issues, calls, runCommand, env: {}, setReview() { review = true; } };
@@ -71,6 +72,21 @@ test('explicit open creates only existing drafts, is idempotent and derives stat
   assert.equal((await waveBoard(options))[1].state, 'review');
   assert.equal((await waveBoard({ ...options, activeIssue: options.issues[1].number, activeState: 'drafting' }))[1].state, 'running');
   await assert.rejects(waveBoard({ ...options, open: true, env: { ROSTER_SEAT: 'coder' } }), /explicit human command/);
+});
+
+test('wave publication detection accepts legacy head and refuses duplicate namespace PRs', async (t) => {
+  const options = fixture(t);
+  await waveBoard({ ...options, open: true });
+  options.issues[0].state = 'CLOSED';
+  const command = options.runCommand;
+  for (const heads of [['issue-101'], ['agents/101', 'issue-101']]) {
+    const request = waveBoard({ ...options, runCommand: (program, args, cwd) =>
+      program === 'gh' && args[0] === 'pr'
+        ? JSON.stringify(heads.includes(args[args.indexOf('--head') + 1]) ? [{ number: 7 }] : [])
+        : command(program, args, cwd) });
+    if (heads.length === 2) await assert.rejects(request, /Ambiguous wave PR namespaces/);
+    else assert.equal((await request)[1].state, 'review');
+  }
 });
 
 test('opened child issues are runnable slices linked to their parent issue', async (t) => {

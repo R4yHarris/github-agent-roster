@@ -105,7 +105,7 @@ test('parallel feature runs real coder seats in separate Git worktrees with over
   assert.equal(new Set(paths).size, 2);
   for (const child of result.children) {
     assert.equal(child.result.review.verdict, 'pass');
-    assert.equal(git(child.result.worktreePath, 'branch', '--show-current'), `issue-${child.issue}`);
+    assert.equal(git(child.result.worktreePath, 'branch', '--show-current'), `agents/${child.issue}`);
     assert.match(readFileSync(path.join(child.result.worktreePath, 'README.md'), 'utf8'), /## Profile/);
     assert.ok(logs.some((text) => text.startsWith(`[issue-${child.issue}] `)));
   }

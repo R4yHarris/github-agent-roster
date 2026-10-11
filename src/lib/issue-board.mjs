@@ -7,6 +7,7 @@ import { resolveContractsPath } from './paths.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
 export { issueMergeMessage } from './issue-reference.mjs';
+import { issueBranches } from './issue-branches.mjs';
 
 function positiveNumber(value, name) {
   if (!/^[1-9]\d*$/.test(String(value)) || !Number.isSafeInteger(Number(value))) {
@@ -78,7 +79,7 @@ export async function commentMergedIssue({
     capabilities: [['coder', 'comment'], ['merger', 'merge']], purpose: 'Issue comment',
   }, async ({ token, slug, repoPath }) => {
     const pr = await request(`${repoPath}/pulls/${pull}`, token, { fetchImpl });
-    if (pr?.merged !== true || pr.state !== 'closed' || pr.head?.ref !== `issue-${number}` ||
+    if (pr?.merged !== true || pr.state !== 'closed' || !issueBranches(number).includes(pr.head?.ref) ||
         pr.head?.repo?.full_name?.toLowerCase() !== slug.toLowerCase() ||
         pr.base?.repo?.full_name?.toLowerCase() !== slug.toLowerCase() ||
         typeof pr.html_url !== 'string' ||

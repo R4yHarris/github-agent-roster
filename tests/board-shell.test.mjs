@@ -30,7 +30,7 @@ test('open issue listing requests numbers and titles only and never prints token
   await shell.dispatch('/issue 108');
   assert.doesNotMatch(text, /token-test-marker|PRIVATE_BODY/);
   assert.match(text, /#108 \[redacted\]/);
-  assert.match(text, /State: OPEN\nBranch: issue-108\nPR: \(not cached\)/);
+  assert.match(text, /State: OPEN\nBranch: agents\/108\nPR: \(not cached\)/);
 });
 
 test('issue metadata is fetched once then read from cache', async () => {

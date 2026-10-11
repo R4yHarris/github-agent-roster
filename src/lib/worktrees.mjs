@@ -3,11 +3,13 @@ import { promisify } from 'node:util';
 import { repositoryRoot } from './learn.mjs';
 import { registeredWorktrees } from './local-runs.mjs';
 import { readIssueLogs } from './run-log.mjs';
+import { parseIssueBranch } from './issue-branches.mjs';
 
 const execute = promisify(execFile);
 
 export function assertIsolatedIssueBranches(worktrees) {
-  const branches = worktrees.filter((entry) => /^issue-[1-9]\d*(?:-a(?:[1-9]|1[0-6]))?$/.test(entry.branch ?? '')).map(({ branch }) => branch);
+  const branches = worktrees.map((entry) => parseIssueBranch(entry.branch)).filter(Boolean)
+    .map(({ number, attempt }) => `${number}:${attempt ?? 'base'}`);
   if (new Set(branches).size !== branches.length) {
     throw new Error('Two issues cannot share a worktree branch; isolation is refused.');
   }
@@ -18,9 +20,9 @@ export async function listIssueWorktrees({ cwd = process.cwd(), env = process.en
   const inventory = await registeredWorktrees(root);
   assertIsolatedIssueBranches(inventory);
   const results = [];
-  for (const entry of inventory.filter((item) => /^issue-[1-9]\d*(?:-a(?:[1-9]|1[0-6]))?$/.test(item.branch ?? ''))) {
+  for (const entry of inventory.filter((item) => parseIssueBranch(item.branch))) {
     if (typeof entry.path !== 'string') throw new Error('Registered issue worktree has no path');
-    const number = Number(/^issue-([1-9]\d*)/.exec(entry.branch)[1]);
+    const { number } = parseIssueBranch(entry.branch);
     const logs = await readIssueLogs({ repoRoot: root, issue: number, env });
     const last = logs.sort((left, right) => left.lastLine.localeCompare(right.lastLine)).at(-1);
     let status;
