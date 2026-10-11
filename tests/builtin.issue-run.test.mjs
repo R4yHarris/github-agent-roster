@@ -122,6 +122,8 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
     '.roster', 'memory', 'planner.jsonl'), 'utf8')), {
     task: 'issue-42', session: 'roster-42-planner', status: 'stub',
     summary: 'Prepared RECIPE.yml and TASK.md',
+    ask: 'Add a Status section to README.md. ## Acceptance checks - node --test exits 0 - README has a Status section ## Files allowed - `README.md`',
+    title: 'Add Status to README',
   });
   const journal = loadLearning({ cwd: options.target }).runs;
   assert.deepEqual(journal.map(({ seat, delivery, ...record }) => record), [
@@ -227,6 +229,9 @@ test('a valid existing issue-92 RECIPE/TASK skips the planner and starts the sco
   assert.equal(result.runs.planner, null);
   assert.equal(result.result.excellence.pass, true);
   assert.equal(result.review.verdict, 'pass');
+  const outcome = readFileSync(path.join(result.repoRoot, '.roster', 'memory', 'planner.jsonl'), 'utf8')
+    .trim().split('\n').map((line) => JSON.parse(line)).at(-1);
+  assert.deepEqual([outcome.task, outcome.status, outcome.summary], ['issue-92', 'outcome', 'Review pass']);
   assert.equal(readFileSync(result.taskPath, 'utf8'), task);
   assert.equal(parseRecipe(readFileSync(result.recipePath, 'utf8')).ask, 'issue:92');
   assert.equal(readFileSync(path.join(result.archivePath, 'RECIPE.yml'), 'utf8'), recipe);

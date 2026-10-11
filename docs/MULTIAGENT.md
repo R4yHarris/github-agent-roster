@@ -38,7 +38,11 @@ Ordinary slice coder packs include the existing recent coder-memory tail
 as larger tasks. Memory is optional budgeted data; newest complete records
 survive truncation. Supplied prior feedback is required redacted context in
 both minimum and full packs; an undersized budget fails rather than dropping
-it. Planner memory is not read by the coder. This introduces no new store,
+it. Planner memory is not read by the coder. Each planner record carries the
+redacted one-line Ask (at most 300 characters) and title, and the reviewed
+verdict is appended as an `outcome` record, so the next Ask in the repository
+can build on the previous one. This is advisory data, not authority or a chat
+transcript. This introduces no new store,
 shared raw history, model-learning claim or autonomous permission grant.
 These boundaries implement FEATURE_SPEC sections 5.2, 5.4 and 5.6.
 
