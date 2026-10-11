@@ -221,6 +221,7 @@ export async function planAsk(ask, {
         'passed through the app code under test; never sk-, ghp_, or github_pat_ shaped values, which the secret gate rejects. '
         : 'You have no tools in this draft-only planning context. ') +
       'Plan one software task. JSON shape: {"title":"Task title","acceptance_checks":["check"],"files_allowed":["path"]}. ' +
+      'Use 1-8 acceptance checks in JSON or TASK.md; group related checks without dropping requirements. ' +
       'A code task needs acceptance_checks including node --test exits 0 and files_allowed. ' +
       'Optional fields: difficulty (1-5), estimate_min, task_class (feat|fix|docs|test), model, steps, notes. ' +
       (lockedModel ? `Keep model ${lockedModel}; do not choose another model. ` : '') +
@@ -413,8 +414,11 @@ export async function planAsk(ask, {
         } catch (error) {
           if (!(error instanceof Error)) throw error;
           if (!/^[{\[]/.test(plannerPlanText(message.content)) && turn >= budget + Number(repairUsed)) {
-            if (repairUsed) return fallback(error.message, turn);
-            throw new Error(`Planner turn budget (${budget}) exhausted: ${error.message}`);
+            if (validationRepairUsed) return fallback(error.message, turn);
+            if (!/^Acceptance checks must contain 1-8 entries/.test(error.message)) {
+              if (repairUsed) return fallback(error.message, turn);
+              throw new Error(`Planner turn budget (${budget}) exhausted: ${error.message}`);
+            }
           }
         }
         if (validated) {

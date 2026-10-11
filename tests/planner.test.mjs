@@ -320,6 +320,83 @@ test('planner gives the model another turn after writing an incomplete TASK.md',
   assert.match(result.task, /## Files allowed/);
 });
 
+test('documentation planner repairs a nine-check TASK at the final normal turn without losing requirements', async (t) => {
+  const repoRoot = mkdtempSync(join(tmpdir(), 'roster-planner-doc-checks-'));
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+  const worktree = join(repoRoot, 'worktree');
+  mkdirSync(worktree);
+  const ask = 'Write me a one page design of a simple marketing web page for a Security and Risk Analaysis consulting ' +
+    'business and setup instructions for obtaining a web page and serving the web page to market the business. ' +
+    'Output it in a new "new-design" directory';
+  const checks = Array.from({ length: 9 }, (_, index) => `The document describes requirement ${index + 1}`);
+  let calls = 0;
+  const result = await runPlanner({
+    worktree, repoRoot, issue: { number: 42, title: 'Design and setup', body: ask },
+    config: { ...llmConfig, planner: { turn_budget: 1 } }, env: {},
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      calls += 1;
+      assert.match(body.messages[0].content, /1-8 acceptance checks.*without dropping requirements/);
+      if (calls === 1) return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+        role: 'assistant', tool_calls: [{ id: 'draft', type: 'function', function: {
+          name: 'write_file', arguments: JSON.stringify({ path: 'TASK.md',
+            content: '# Task: Design and setup\n\n## Acceptance checks\n' +
+              checks.map((check) => `- ${check}`).join('\n') +
+              '\n\n## Files allowed\n- new-design/README.md\n\n## New files\n- new-design/README.md\n\n## Ask\n' + ask,
+          }),
+        } }],
+      } }] });
+      assert.match(body.messages.at(-1).content, /1-8 entries \(got 9/);
+      return Response.json({ choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant', content: JSON.stringify({ title: 'Design and setup',
+          acceptance_checks: [...checks.slice(0, 7), `${checks[7]}; ${checks[8]}`],
+          files_allowed: ['new-design/README.md'],
+        }),
+      } }] });
+    },
+  });
+  assert.equal(calls, 2);
+  assert.notEqual(result.mode, 'stub');
+  for (const check of checks) assert.ok(result.task.includes(check));
+  assert.ok(result.task.includes(ask));
+  assert.deepEqual(taskFilesAllowed(result.task), ['new-design/README.md']);
+});
+
+for (const outside of [false, true]) {
+  test(`final-turn documentation correction rejects ${outside ? 'outside files' : 'nine checks'} within its budget`, async (t) => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'roster-planner-doc-invalid-'));
+    t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
+    const worktree = join(repoRoot, 'worktree');
+    mkdirSync(worktree);
+    const ask = 'Write design instructions. Output it in a new "new-design" directory';
+    const checks = Array.from({ length: 9 }, (_, index) => `The document describes requirement ${index + 1}`);
+    let calls = 0;
+    const result = await runPlanner({
+      worktree, repoRoot, issue: { number: 42, title: 'Design', body: ask },
+      config: { ...llmConfig, planner: { turn_budget: 1 } }, env: {},
+      fetchImpl: async () => {
+        calls += 1;
+        if (calls === 1) return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+          role: 'assistant', tool_calls: [{ id: 'draft', type: 'function', function: {
+            name: 'write_file', arguments: JSON.stringify({ path: 'TASK.md',
+              content: '# Task: Design\n\n## Acceptance checks\n' + checks.map((check) => `- ${check}`).join('\n') +
+                '\n\n## Files allowed\n- new-design/README.md\n\n## New files\n- new-design/README.md\n\n## Ask\n' + ask,
+            }),
+          } }],
+        } }] });
+        return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+          content: JSON.stringify({ title: 'Design', acceptance_checks: outside ? [checks[0]] : checks,
+            files_allowed: [outside ? 'README.md' : 'new-design/README.md'] }),
+        } }] });
+      },
+    });
+    assert.equal(calls, 2);
+    assert.equal(result.mode, 'stub');
+    assert.match(result.error, outside ? /inside the granted output directory/ : /1-8 entries \(got 9/);
+    assert.match(readFileSync(join(worktree, 'TASK.md'), 'utf8'), /## Planning failure/);
+  });
+}
+
 test('planner stops after one no-progress correction for an invalid written TASK', async (t) => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'roster-planner-no-progress-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
