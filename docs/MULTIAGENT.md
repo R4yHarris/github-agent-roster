@@ -55,6 +55,9 @@ Model validation feedback requests concise complete wording within the existing
 turn budget. Oversized written checks receive the single validation correction
 immediately, rather than repeating rewrites until the general budget expires.
 A still-invalid correction stops before coding and publication.
+JSON-only critic revisions use the same single validation correction rather
+than repeatedly requesting an invalid revision until the general turn budget
+expires. A failed revision remains unverified and cannot start the coder.
 Title shortening is unchanged. This implements FEATURE_SPEC
 sections 5.3-5.5; neither the original Ask nor its safety obligations are waived.
 Directory-document checks also recognize content phrasing such as "covering",

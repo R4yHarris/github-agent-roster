@@ -108,3 +108,24 @@ test('slice JSON correction retains the original Ask and does not accept a trunc
   assert.equal(parsed.ask, ask);
   assert.deepEqual(parsed.acceptance_checks, [concise]);
 });
+
+test('critic JSON revision stops after one invalid correction even with a large planner turn budget', async () => {
+  const config = parseConfig(readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8')
+    .replace('base_url: ""', 'base_url: "http://localhost:1234/v1"').replace('model: ""', 'model: test-model'));
+  const task = buildPlan(ask, { ...options, acceptanceChecks: ['The guide includes the requested setup steps'] }).task;
+  let calls = 0;
+  await assert.rejects(planAsk(ask, {
+    config: { ...config, seat: { ...config.seat, max_turns: 60 } },
+    env: {}, criticFeedback: { task, defects: [{ problem: 'Missing requirement check' }] },
+    fetchImpl: async () => {
+      calls += 1;
+      return Response.json({ choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant', content: JSON.stringify({
+          title: 'Guide', acceptance_checks: [check(241)], files_allowed: options.filesAllowed,
+        }),
+      } }] });
+    },
+  }), /Plan critic revision failed after one correction:.*240.*split/);
+  assert.equal(calls, 2);
+  assert.equal(parseTaskDocument(task, { expectedAsk: ask }).ask, ask);
+});
