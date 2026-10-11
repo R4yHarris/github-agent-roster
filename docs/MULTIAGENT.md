@@ -50,6 +50,8 @@ long checks, so source-validated acceptance continuation remains compatible.
 Model validation feedback requests concise complete wording within the existing
 turn budget. Title shortening is unchanged. This implements FEATURE_SPEC
 sections 5.3-5.5; neither the original Ask nor its safety obligations are waived.
+Directory-document checks also recognize content phrasing such as "covering",
+"gives instructions" and "indexes"; operation-success assertions stay denied.
 
 Both ordinary minimum and full coder packs include the complete configured
 [coder principal](../principals/coder.md) and root repository coding rules.

@@ -64,11 +64,15 @@ test('observed plain-language document contrasts and examples validate without a
     'The guide shows one read-only PowerShell example that lists branches, `git branch -a`, and one that lists worktrees, `git worktree list`.',
     'The guide compares branches with worktrees.',
     'The guide defines the terms and presents illustrative examples.',
+    'The design is a one-page design covering layout, sample copy and visual style.',
+    'SETUP gives step-by-step instructions for obtaining a domain and serving the page publicly.',
+    'README indexes the two documents and describes their purpose.',
   ];
   const plan = buildPlan(directoryAsk, { ...directoryOptions, acceptanceChecks: checks });
   assert.deepEqual(parseTaskDocument(plan.task, { expectedAsk: directoryAsk }).acceptance_checks, checks);
   for (const check of ['The guide shows deployment completed', 'The guide presents account creation and the account is activated',
-    'The guide compares instructions and run npm install', 'The guide defines setup; execute powershell']) {
+    'The guide compares instructions and run npm install', 'The guide defines setup; execute powershell',
+    'The guide gives instructions and run npm install', 'The guide is covering deployment completed']) {
     assert.throws(() => buildPlan(directoryAsk, { ...directoryOptions, acceptanceChecks: [check] }),
       /document-content checks.*check 1/i);
   }
