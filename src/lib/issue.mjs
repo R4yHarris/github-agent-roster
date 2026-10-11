@@ -11,6 +11,8 @@ import { estimateTask } from '../runtime/estimate.mjs';
 import { initializeWorktreeSubmodules } from './contracts.mjs';
 import { githubRepository } from './github-repository.mjs';
 import { branchDrift, formatStart, resolveStart, startOptions } from './start.mjs';
+import { statePaths, STATE_SCOPES } from './repo-state.mjs';
+import { ensureLocalPath } from './paths.mjs';
 export { githubRepository } from './github-repository.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -145,7 +147,6 @@ export async function runIssue(issueNumber, {
   const task = `issue-${number}`;
   const worktreePath = path.join(repoRoot, worktrees, task);
   const assignmentPath = path.join(worktreePath, 'ASSIGNMENT.md');
-  const envPath = path.join(worktreePath, '.env');
   const session = sessionId ?? `roster-${now().toISOString().replace(/[-:.]/g, '')}`;
   const publishEnv = recordPreparation && config.publish?.enabled !== false && env.AI_MODEL
     ? buildPublishEnv({ config, env, task }) : null;
@@ -203,6 +204,23 @@ export async function runIssue(issueNumber, {
   }
   await initializeWorktreeSubmodules(worktreePath, command);
 
+  const directory = (await command('git', ['rev-parse', '--git-dir'], worktreePath)).trim();
+  if (!directory || /[\r\n\x00]/.test(directory)) throw new Error('Task Git metadata directory is unavailable');
+  const gitDirectory = path.resolve(worktreePath, directory);
+  const environment = await statePaths({ scope: STATE_SCOPES.PER_WORKTREE,
+    repoRoot: gitDirectory, worktreeRoot: worktreePath, layoutDirName: 'roster-environment',
+    segments: ['.env'], fileSystem });
+  const envPath = environment.path;
+  for (const directory of [gitDirectory, environment.dir]) {
+    const entry = await (fileSystem.lstat ? fileSystem.lstat(directory) : fileSystem.stat(directory))
+      .catch((error) => { if (error.code === 'ENOENT') return null; throw error; });
+    if (entry && (!entry.isDirectory() || entry.isSymbolicLink?.())) {
+      throw new Error('Task environment metadata directories must be real directories, not symlinks');
+    }
+  }
+  if (fileSystem.realpath) await ensureLocalPath(envPath, gitDirectory);
+  await fileSystem.mkdir(environment.dir, { recursive: true, mode: 0o700 });
+  if (fileSystem.realpath) await ensureLocalPath(envPath, gitDirectory);
   const assignment = renderAssignment(issue);
   const writeAssignment = async (file, content, options) => {
     try {
@@ -210,8 +228,9 @@ export async function runIssue(issueNumber, {
     } catch (error) {
       if (!reused || error.code !== 'EEXIST') throw error;
       const status = await (fileSystem.lstat ? fileSystem.lstat(file) : fileSystem.stat(file));
-      if (!status.isFile() || status.isSymbolicLink?.()) {
-        throw new Error('Existing assignment/environment must be a regular file');
+      if (!status.isFile() || status.isSymbolicLink?.() ||
+          status.nlink !== undefined && status.nlink !== 1) {
+        throw new Error('Existing assignment/environment must be a regular single-link file');
       }
     }
   };
@@ -240,8 +259,8 @@ export async function runIssue(issueNumber, {
 Worktree: ${worktreePath}${reused ? ' (reused)' : ''}
 Assignment: ${assignmentPath}
 Environment: ${envPath}
-After editing inside the worktree, load .env into the worker environment and run:
-${publishEnv ? `For GHCP publication, apply these values after loading .env (empty clears inherited fields):\n` +
+After editing inside the worktree, load the Environment path above (outside product files) into the worker environment and run:
+${publishEnv ? `For GHCP publication, apply these values after loading that Environment file (empty clears inherited fields):\n` +
   formatPublishEnvironment(publishEnv) : ''}
 ${nextCommand ?? (config.publish?.enabled === false
   ? 'Publication unavailable: publishing is disabled by publish.enabled.'

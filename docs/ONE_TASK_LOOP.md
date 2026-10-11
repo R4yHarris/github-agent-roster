@@ -173,7 +173,8 @@ says so and starts from the current HEAD. An existing issue branch is never
 moved: Roster reports how far it is behind the start base and continues. The
 `Start:` line is logged and included in the tracked in-progress comment. The
 function writes `ASSIGNMENT.md` with the issue URL, number, title,
-and unmodified body under **Ask**, and writes an ignored `.env` file:
+and unmodified body under **Ask**, and writes private task metadata at
+`<worktree Git directory>/roster-environment/.env` (not a product `.env`):
 
 ```dotenv
 AI_TASK=issue-N
@@ -190,7 +191,7 @@ human evaluations, and recommendations.
 
 It returns the issue, worktree and file paths, task, session, and `nextCommand`.
 It prints the worktree location and, when a model is configured, a command
-for the worker **after editing inside the worktree and loading `.env` into
+for the worker **after editing inside the worktree and loading the printed **Environment** path into
 its environment**:
 
 ```powershell
@@ -211,7 +212,7 @@ variable syntax, including PowerShell on Windows.
 The explicit agent example above is for this Copilot session; generated
 manual handoffs use the declared GHCP model; completed builtin handoffs use
 the response-backed worker model. Apply the printed metadata assignments after
-loading `.env` so unknown GHCP counts clear stale worker fields.
+loading the printed task environment so unknown GHCP counts clear stale worker fields.
 `roster prepare --issue N` only prepares a coder handoff and
 prints the manual publishing command: it does not
 start a worker, merge, or open additional issues. A later explicit publish
@@ -223,9 +224,17 @@ supplies a non-closing reference but does not run Roster's post-merge
 comment hook.
 The builtin path reuses this issue lookup and assignment
 preparation, rendering `ASSIGNMENT.md` from the SDLC template, but sets the
-ignored `.env` session to `roster-N-coder` and records separate planner/coder
+private task environment session to `roster-N-coder` and records separate planner/coder
 sessions. See [same-session seats](MULTIAGENT.md).
 
 Tests inject `runCommand`, `fileSystem`, `env`, `now`, and `log` into `runIssue` to
 simulate git, gh, file writes, timestamps, and output without a network call.
 Run the focused suite with `node --test tests/issue.test.mjs tests/learn.test.mjs`.
+
+Task environment isolation implements FEATURE_SPEC 5.4/5.8: preparation no longer
+creates a protected product `.env` in a fresh consumer or requires an ignore-file
+workaround. Only task/session identifiers are generated, with private file modes
+and guarded real single-link paths. The existing per-worktree state API resolves
+the Git-metadata layout, which Git removes with its worktree. Existing consumer
+`.env` files are neither read, hidden, overwritten nor deleted; legacy files keep
+their normal protected-surface behavior. Load only the printed Environment path.

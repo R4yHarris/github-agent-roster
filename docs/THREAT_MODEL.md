@@ -55,7 +55,7 @@ including indirect writes through symlinks, renames, or other commands. Enforce
 them with the trusted launcher, tool permissions, and filesystem isolation;
 instructions and `.gitignore` alone are not access controls.
 
-The [one-task bootstrap](ONE_TASK_LOOP.md) currently writes an ignored `.env`
+The [one-task bootstrap](ONE_TASK_LOOP.md) writes a private `roster-environment/.env` in the task worktree Git metadata directory, not a product file
 containing `AI_TASK` and `AI_SESSION`, not credentials. That is trusted setup
 before worker handoff, not permission for worker tools to rewrite environment
 files or add secrets.

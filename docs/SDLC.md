@@ -284,7 +284,7 @@ unknown, not absent. See the [interactive shell](REPL.md) for `/status`.
 
 `roster run` uses the current Git repository's GitHub origin, authenticated
 `gh issue view`, and branch `issue-42` in `.worktrees/issue-42`. It writes
-`ASSIGNMENT.md`, `RECIPE.yml`, `TASK.md`, and an ignored `.env` containing
+`ASSIGNMENT.md`, `RECIPE.yml`, `TASK.md`, and a private Git-metadata task environment containing
 `AI_TASK` and the coder's `AI_SESSION`. The planner writes only `RECIPE.yml`
 and `TASK.md`; the coder reads that worktree's `AGENTS.md`, `TASK.md`, this
 roster's skills, and the last 20 memory JSONL lines. Its
@@ -435,7 +435,7 @@ These expanded forms live in `templates/sdlc/manual/` so human handoff guidance
 does not replace the renderer placeholders or change generated task formats.
 They are not additional CLI inputs. The builtin path above generates its own
 recipe and task and loads these skills; the explicit prepare-only
-[one-task loop](ONE_TASK_LOOP.md) creates an assignment and ignored `.env`
+[one-task loop](ONE_TASK_LOOP.md) creates an assignment and private Git-metadata task environment
 without executing a coder. If a worktree is already assigned, stay there;
 do not run the loop again to create another one.
 

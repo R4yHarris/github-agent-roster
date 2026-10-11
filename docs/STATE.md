@@ -164,7 +164,8 @@ The migration starts from the paths that exist today. “Target” is the owner 
 | `.worktrees/<task>/` | Issue/worktree state | Source checkout and managed `ASSIGNMENT`, `TASK`, `RECIPE`, `ESTIMATE`, `RESULT`, `REVIEW`, `PLAN`, `CONTEXT` artifacts | orchestrator and seats | matching seats/human | issue cleanup / `git worktree remove` |
 | Git common dir `roster-artifacts/<task>/` | Issue/worktree state | Archived generated handoffs for resume/debug | run-artifact archiver | matching run/operator | issue cleanup |
 | `~/.roster/vault/` (legacy/current) | Machine vault, separate from history and memory | Credentials; highest sensitivity | vault API only | secret resolver only | explicit vault delete, never state cleanup |
-| `.env` copied into an issue worktree | Issue/worktree state | Credential-bearing compatibility input; must not enter records | worktree preparation | endpoint process only | issue cleanup |
+| Product/legacy `.env` | Human bootstrap input | Potential credentials; never history input | human/operator | endpoint process only | explicit operator cleanup |
+| Task identifiers in worktree Git `roster-environment/.env` | Issue/worktree state | Task/session metadata only; private, not a product file | worktree preparation | operator bootstrap | Git worktree removal |
 | Git issues, branches, PRs, trailers, checks, comments | Published record on GitHub | Authoritative delivery evidence | App/human policy paths | GitHub participants | GitHub lifecycle, never local cleanup |
 
 Every target artifact carries or is governed by one schema version and one cleanup surface.
@@ -182,7 +183,7 @@ history. Runtime paths must be gitignored before first write and must never be s
 ### 5.2 Issue/worktree scope
 
 The issue worktree owns its managed handoff/result files, checkpoints, map, scratch files,
-and copied `.env`. The Git common directory may hold an archive for that issue because it
+and private task environment metadata (not consumer `.env`). The Git common directory may hold an archive for that issue because it
 survives replacement of generated handoffs, but it remains issue-scoped and cleanup-safe.
 An active-run lock prevents cleanup while a writer owns the worktree. Removing one issue's
 state must not touch another issue, shared repo state, machine history/memory, the vault, or
@@ -479,7 +480,7 @@ document first.
 | Curated memory and drafts | Machine | Medium; explicitly promoted context | Memory promotion and seat-memory APIs | Matching repository/seat context and diagnostics | `roster memory unpromote <id>` / curated-memory reset |
 | Vault entries | Machine vault (separate) | Highest; credentials | Vault API | Secret resolver | Explicit vault deletion only |
 | Private config, fleet/capabilities, schema/migration markers, active indexes/locks | Repository | Low–Medium; no credentials | Repo-state API | Runtime, router, doctor | Previewed repo-state reset |
-| Managed handoffs/results, checkpoints, map, scratch, archive, copied `.env` | Issue/worktree | Low–High depending on `.env`; never history input | Orchestrator and matching seats | Active issue and operator | Previewed issue cleanup / worktree removal |
+| Managed handoffs/results, checkpoints, map, scratch, archive, task environment metadata | Issue/worktree | Low–High depending on `.env`; never history input | Orchestrator and matching seats | Active issue and operator | Previewed issue cleanup / worktree removal |
 | Live process/temporary state | Issue/worktree (ephemeral) | Low–Medium | Active process | Active process | Process exit |
 | Published issue/branch/PR/trailer/check/comment record | GitHub published record | Redacted, reviewed evidence | App or human-owned policy path | GitHub participants | GitHub lifecycle only |
 

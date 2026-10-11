@@ -14,6 +14,9 @@ const issue = {
 };
 
 const trunkSha = 'a'.repeat(40);
+const gitDirectory = path.join(repoRoot, '.git', 'worktrees', 'issue-42');
+const environmentDir = path.join(gitDirectory, 'roster-environment');
+const envPath = path.join(environmentDir, '.env');
 
 function harness(issueResponse = issue) {
   const calls = [];
@@ -21,6 +24,7 @@ function harness(issueResponse = issue) {
   const messages = [];
   const runCommand = async (program, args, cwd) => {
     calls.push({ program, args, cwd });
+    if (program === 'git' && args[0] === 'rev-parse' && args[1] === '--git-dir') return gitDirectory + '\n';
     if (program === 'git' && args[0] === 'rev-parse' && args[1] === '--verify') return `${trunkSha}\n`;
     if (program === 'git' && args[0] === 'rev-parse') return `${repoRoot}\n`;
     if (program === 'git' && args[0] === 'remote') return `${originUrl}\n`;
@@ -76,9 +80,11 @@ test('reads the issue in the current repository and prepares one coder worktree'
     { program: 'git', args: ['worktree', 'list', '--porcelain', '-z'], cwd: repoRoot },
     { program: 'git', args: ['for-each-ref', '--format=%(refname)', 'refs/heads/issue-42'], cwd: repoRoot },
     { program: 'git', args: ['worktree', 'add', '-b', 'issue-42', worktreePath, 'origin/main'], cwd: repoRoot },
+    { program: 'git', args: ['rev-parse', '--git-dir'], cwd: worktreePath },
   ]);
   assert.deepEqual(writes, [
     { directory: path.join(repoRoot, '.worktrees'), options: { recursive: true } },
+    { directory: environmentDir, options: { recursive: true, mode: 0o700 } },
     {
       file: path.join(worktreePath, 'ASSIGNMENT.md'),
       content: `# Assignment
@@ -94,7 +100,7 @@ ${issue.body}
       options: { encoding: 'utf8', flag: 'wx' },
     },
     {
-      file: path.join(worktreePath, '.env'),
+      file: envPath,
       content: 'AI_TASK=issue-42\nAI_SESSION=roster-20260928T222550149Z\n',
       options: { encoding: 'utf8', flag: 'wx', mode: 0o600 },
     },
@@ -106,7 +112,7 @@ ${issue.body}
     repoRoot,
     worktreePath,
     assignmentPath: path.join(worktreePath, 'ASSIGNMENT.md'),
-    envPath: path.join(worktreePath, '.env'),
+    envPath,
     task: 'issue-42',
     session: 'roster-20260928T222550149Z',
     nextCommand,
@@ -115,7 +121,7 @@ ${issue.body}
     drift: null,
   });
   assert.equal(messages.length, 1);
-  assert.match(messages[0], /After editing inside the worktree, load \.env/);
+  assert.match(messages[0], /load the Environment path above/);
   assert.match(messages[0], /AI_PROVIDER=github-copilot\n/);
   assert.match(messages[0], /AI_CONTEXT_USED=\n/);
   assert.match(messages[0], /AI_CONTEXT_OUT=\n/);
@@ -131,7 +137,7 @@ test('an existing registered issue worktree is reused without add or overwriting
     ? `worktree ${worktreePath}\0HEAD abc\0branch refs/heads/issue-42\0\0`
     : original(program, args, cwd);
   options.fileSystem.stat = async (file) => {
-    if (![worktreePath, path.join(worktreePath, 'ASSIGNMENT.md'), path.join(worktreePath, '.env')].includes(file)) {
+    if (![worktreePath, path.join(worktreePath, 'ASSIGNMENT.md'), envPath].includes(file)) {
       throw Object.assign(new Error('missing'), { code: 'ENOENT' });
     }
     return { isDirectory: () => file === worktreePath, isFile: () => file !== worktreePath };
@@ -141,7 +147,7 @@ test('an existing registered issue worktree is reused without add or overwriting
   assert.equal(result.reused, true);
   assert.equal(result.worktreePath, worktreePath);
   assert.equal(calls.some(({ args }) => args[0] === 'worktree' && args[1] === 'add'), false);
-  assert.deepEqual(writes, []);
+  assert.deepEqual(writes.filter((write) => write.file), []);
   assert.match(messages[0], /\(reused\)/);
 });
 
@@ -167,7 +173,7 @@ test('a conflicting registered worktree branch is refused before any writes', as
     ? `worktree ${path.join(repoRoot, '.worktrees', 'issue-42')}\0branch refs/heads/other\0\0`
     : original(program, args, cwd);
   await assert.rejects(runIssue(42, options), /different branch/);
-  assert.deepEqual(writes, []);
+  assert.deepEqual(writes.filter((write) => write.file), []);
 });
 
 test('issue metadata round-trips without leaking the metadata section into the planner Ask', async () => {
@@ -198,7 +204,7 @@ test('invalid or ambiguous issue metadata fails before creating a worktree', asy
     const { options, calls, writes } = harness({ ...issue, body });
     await assert.rejects(runIssue(42, options), /Task metadata|estimate_min/);
     assert.deepEqual(calls.map(({ program }) => program), ['git', 'git', 'gh']);
-    assert.deepEqual(writes, []);
+    assert.deepEqual(writes.filter((write) => write.file), []);
   }
   assert.throws(() => renderIssueBody('Fix README.\n\n## Task metadata\n\nfake'),
     /reserved Task metadata/);
@@ -278,7 +284,7 @@ test('rejects a non-GitHub origin before reading an issue', async () => {
   };
   await assert.rejects(runIssue(42, options), /origin must be a GitHub HTTPS or SSH repository URL/);
   assert.deepEqual(calls.map(({ program }) => program), ['git', 'git']);
-  assert.deepEqual(writes, []);
+  assert.deepEqual(writes.filter((write) => write.file), []);
 });
 
 test('does not create a worktree when gh issue view fails', async () => {
@@ -291,7 +297,7 @@ test('does not create a worktree when gh issue view fails', async () => {
 
   await assert.rejects(runIssue(42, options), /gh issue view 42 .*failed.*issue not found/);
   assert.deepEqual(calls.map(({ program }) => program), ['git', 'git', 'gh']);
-  assert.deepEqual(writes, []);
+  assert.deepEqual(writes.filter((write) => write.file), []);
   assert.deepEqual(messages, []);
 });
 
@@ -305,7 +311,7 @@ test('rejects unusable issue details before creating a worktree', async () => {
     const { calls, writes, options } = harness(response);
     await assert.rejects(runIssue(42, options), message);
     assert.deepEqual(calls.map(({ program }) => program), ['git', 'git', 'gh']);
-    assert.deepEqual(writes, []);
+    assert.deepEqual(writes.filter((write) => write.file), []);
   }
 });
 
@@ -317,7 +323,7 @@ test('reports malformed gh JSON without creating a worktree', async () => {
   };
   await assert.rejects(runIssue(42, options), /gh issue view 42 returned invalid JSON/);
   assert.deepEqual(calls.map(({ program }) => program), ['git', 'git', 'gh']);
-  assert.deepEqual(writes, []);
+  assert.deepEqual(writes.filter((write) => write.file), []);
 });
 
 test('surfaces worktree errors without writing assignment files', async () => {
@@ -339,7 +345,7 @@ test('a closed issue is refused before fetching or creating a worktree', async (
   const { calls, writes, options } = harness({ ...issue, state: 'CLOSED' });
   await assert.rejects(runIssue(42, options), /Issue #42 is closed; reopen it before starting work/);
   assert.deepEqual(calls.map(({ program }) => program), ['git', 'git', 'gh']);
-  assert.deepEqual(writes, []);
+  assert.deepEqual(writes.filter((write) => write.file), []);
 });
 
 test('an open issue state is accepted', async () => {
@@ -360,7 +366,7 @@ test('a reused issue branch is never moved and reports drift from the fresh trun
     return original(program, args, cwd);
   };
   options.fileSystem.stat = async (file) => {
-    if (![worktreePath, path.join(worktreePath, 'ASSIGNMENT.md'), path.join(worktreePath, '.env')].includes(file)) {
+    if (![worktreePath, path.join(worktreePath, 'ASSIGNMENT.md'), envPath].includes(file)) {
       throw Object.assign(new Error('missing'), { code: 'ENOENT' });
     }
     return { isDirectory: () => file === worktreePath, isFile: () => file !== worktreePath };
