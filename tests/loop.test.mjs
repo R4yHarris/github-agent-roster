@@ -37,6 +37,55 @@ for (const name of [undefined, '', '   ']) {
   });
 }
 
+test('inert mixed-batch gateway placeholder is denied visibly without losing valid siblings', async () => {
+  const task = planStub('Update README.md and smoke.test.mjs.').task;
+  let turns = 0;
+  let dispatched = 0;
+  const events = [];
+  const result = await runLoop({
+    config, context: { task, pack: task }, env: {}, onEvent: (event) => events.push(event),
+    tools: {
+      read_file: async () => { dispatched += 1; return { content: 'Existing text' }; },
+      run_test: async () => ({ exit_code: 0, stdout: '', stderr: '' }),
+    },
+    fetchImpl: async () => {
+      turns += 1;
+      return Response.json({ choices: [{ finish_reason: turns === 1 ? 'tool_calls' : 'stop',
+        message: turns === 1 ? { role: 'assistant', tool_calls: [
+          { id: 'inert', type: 'function', function: { name: '', arguments: '' } },
+          { id: 'read', type: 'function', function: { name: 'read_file', arguments: '{"path":"README.md"}' } },
+        ] } : { role: 'assistant', content: 'Read the existing file.' } }] });
+    },
+    verify: () => ({ pass: true, reasons: [] }),
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(turns, 2);
+  assert.equal(dispatched, 1);
+  assert.ok(events.some((event) => event.type === 'tool-result' &&
+    event.name === 'empty-gateway-placeholder' && event.status === 'denied'));
+});
+
+test('a mixed missing-name call carrying arguments is never discarded or dispatched', async () => {
+  const task = planStub('Update README.md and smoke.test.mjs.').task;
+  let turns = 0;
+  const result = await runLoop({
+    config, context: { task, pack: task }, env: {},
+    tools: { read_file: async () => assert.fail('Invalid batch dispatched a sibling') },
+    fetchImpl: async () => {
+      turns += 1;
+      return Response.json({ choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant',
+        tool_calls: [
+          { id: 'bad', type: 'function', function: { name: '', arguments: '{"path":"README.md"}' } },
+          { id: 'read', type: 'function', function: { name: 'read_file', arguments: '{"path":"README.md"}' } },
+        ],
+      } }] });
+    },
+    verify: () => ({ pass: true, reasons: [] }),
+  });
+  assert.equal(turns, 2);
+  assert.match(result.error.message, /nonempty function name/);
+});
+
 test('repeated missing names and withheld tools remain terminal without dispatch', async () => {
   const task = planStub('Update README.md and smoke.test.mjs.').task;
   for (const name of ['', 'list_dir']) {
