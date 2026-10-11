@@ -123,7 +123,7 @@ test('a second docs length passes review when the required Status section is alr
   assert.doesNotMatch(readFileSync(result.resultPath, 'utf8') + review.content, /PRIVATE_BODY/);
 });
 
-test('a README-only docs slice offers no list_dir and a directory walk fails the seat', async (t) => {
+test('a README-only docs slice offers no list_dir and a repeated directory walk fails the seat', async (t) => {
   const options = fixture(t);
   let calls = 0;
   await assert.rejects(runCoder({ ...options, fetchImpl: async (_url, request) => {
@@ -139,7 +139,7 @@ test('a README-only docs slice offers no list_dir and a directory walk fails the
         name: 'list_dir', arguments: JSON.stringify({ path: '.' }) } }] } }] });
   }, runTestCommand: () => assert.fail('A refused directory walk must not run tests') }),
   /invalid or unavailable tool/);
-  assert.equal(calls, 1);
+  assert.equal(calls, 2, 'one correction, then a repeated directory walk fails the seat');
   assert.equal(readFileSync(join(options.worktree, 'README.md'), 'utf8'), '# Project\n');
 });
 
