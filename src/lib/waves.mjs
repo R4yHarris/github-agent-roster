@@ -8,6 +8,7 @@ import { ensureLocalPath } from './paths.mjs';
 import { parsePlanDocument } from '../planner/plan-document.mjs';
 import { redactEvidence } from '../runtime/excellence.mjs';
 import { issueWave } from './wave-labels.mjs';
+import { issueBranches } from './issue-branches.mjs';
 export { issueWave } from './wave-labels.mjs';
 
 const execute = promisify(execFile);
@@ -219,14 +220,19 @@ export async function waveBoard({
       // Another agent's claim is shared through the board, so it is not offered as the next wave slice.
       : hasLabel(issue, 'in-progress') ? 'running' : 'todo';
     if (issue && state === 'todo') {
-      let pulls;
-      try { pulls = JSON.parse(await runCommand('gh', ['pr', 'list', '--repo', repository, '--head',
-        `issue-${issue.number}`, '--state', 'all', '--limit', '1', '--json', 'number'], cwd)); }
-      catch (error) { throw new Error('Wave PR state is unavailable.', { cause: error }); }
-      if (!Array.isArray(pulls) || pulls.length > 1 ||
-          pulls.some((pull) => !Number.isSafeInteger(pull?.number) || pull.number < 1)) {
-        throw new Error('Wave PR metadata is invalid');
+      const pulls = [];
+      for (const branch of issueBranches(issue.number)) {
+        let found;
+        try { found = JSON.parse(await runCommand('gh', ['pr', 'list', '--repo', repository, '--head',
+          branch, '--state', 'all', '--limit', '2', '--json', 'number'], cwd)); }
+        catch (error) { throw new Error('Wave PR state is unavailable.', { cause: error }); }
+        if (!Array.isArray(found) || found.length > 1 ||
+            found.some((pull) => !Number.isSafeInteger(pull?.number) || pull.number < 1)) {
+          throw new Error('Wave PR metadata is invalid');
+        }
+        pulls.push(...found);
       }
+      if (pulls.length > 1) throw new Error('Ambiguous wave PR namespaces; resolve ownership explicitly');
       if (pulls.length) state = 'review';
     }
     rows.push({ wave: draft.wave, title: draft.title, state, issue: issue?.number ?? null });

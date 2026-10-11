@@ -9,6 +9,7 @@ import { githubRepository } from './issue.mjs';
 import { loadAvailableMetrics } from './metrics.mjs';
 import { splitArguments } from './arguments.mjs';
 import { provenanceOptOut, provenanceStoreForRun } from './local-runs.mjs';
+import { issueBranches, parseIssueBranch } from './issue-branches.mjs';
 
 const usage = 'Use eval <sha-or-session> <accept|reject|rework> <1-5> <y|n> [--minutes N] [--comment "TEXT"].';
 
@@ -38,8 +39,8 @@ export function parseEvaluationArgs(input) {
 
 async function commentEvaluation({ evaluation, record, cwd, run, env, log }) {
   const issue = /^roster-([1-9]\d*)-coder$/.exec(evaluation.session ?? '')?.[1];
-  const branch = /^issue-[1-9]\d*$/.test(record?.task ?? '') ? record.task : issue && `issue-${issue}`;
-  if (!evaluation.sha && !branch) return;
+  const number = parseIssueBranch(record?.task)?.number ?? (issue && Number(issue));
+  if (!evaluation.sha && !number) return;
   const command = (program, args) => run(program, args, {
     cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -59,10 +60,14 @@ async function commentEvaluation({ evaluation, record, cwd, run, env, log }) {
     return;
   }
   const repository = githubRepository(origin);
-  const pulls = JSON.parse(evaluation.sha
-    ? command('gh', ['api', `repos/${repository}/commits/${evaluation.sha}/pulls?per_page=2`])
-    : command('gh', ['pr', 'list', '--repo', repository, '--head', branch, '--state', 'all',
-      '--limit', '2', '--json', 'number']));
+  const pulls = evaluation.sha
+    ? JSON.parse(command('gh', ['api', `repos/${repository}/commits/${evaluation.sha}/pulls?per_page=2`]))
+    : issueBranches(number).flatMap((branch) => {
+      const found = JSON.parse(command('gh', ['pr', 'list', '--repo', repository, '--head', branch,
+        '--state', 'all', '--limit', '2', '--json', 'number']));
+      if (!Array.isArray(found)) throw new Error('GitHub returned invalid matching PR data');
+      return found;
+    });
   if (!Array.isArray(pulls) || pulls.some((pull) => !Number.isSafeInteger(pull.number) || pull.number < 1)) {
     throw new Error('GitHub returned invalid matching PR data');
   }

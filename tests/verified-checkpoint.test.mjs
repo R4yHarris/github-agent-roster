@@ -44,6 +44,30 @@ test('verified checkpoint survives restart and restores last green rather than l
   assert.equal(readFileSync(path.join(options.worktree, 'app.mjs'), 'utf8'), 'export const value = 999;\n');
 });
 
+for (const branch of ['agents/108', 'agents/108-a3', 'issue-108-a3']) {
+  test('verified restore preserves stable task identity on compatible branch ' + branch, async (t) => {
+    const options = fixture(t);
+    options.git('checkout', '-qb', branch);
+    writeFileSync(path.join(options.worktree, 'app.mjs'), 'export const value = 2;\n');
+    await green(options);
+    writeFileSync(path.join(options.worktree, 'app.mjs'), 'export const value = 999;\n');
+    await checkpoints.restoreVerifiedCheckpoint(options);
+    assert.equal(readFileSync(path.join(options.worktree, 'app.mjs'), 'utf8'), 'export const value = 2;\n');
+    assert.equal(options.git('branch', '--show-current').trim(), branch);
+  });
+}
+
+for (const branch of ['agents/109', 'agents/108-a4', 'agents/108-extra', 'human-work']) {
+  test('verified restore refuses foreign or unsupported branch ' + branch, async (t) => {
+    const options = fixture(t);
+    options.git('checkout', '-qb', branch);
+    await green(options);
+    writeFileSync(path.join(options.worktree, 'app.mjs'), 'export const value = 999;\n');
+    await assert.rejects(checkpoints.restoreVerifiedCheckpoint(options), /unchanged isolated task branch/);
+    assert.equal(readFileSync(path.join(options.worktree, 'app.mjs'), 'utf8'), 'export const value = 999;\n');
+  });
+}
+
 for (const tests of [{ exit_code: 1 }, { exit_code: 0, skipped: true }, undefined]) {
   test('failed/skipped/absent evidence cannot produce green checkpoint: ' + JSON.stringify(tests), async (t) => {
     const options = fixture(t);

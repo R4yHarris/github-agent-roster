@@ -165,14 +165,14 @@ test('best-of-N runs real configured seats and one shared planner with fake flee
   assert.equal(readFileSync(path.join(options.target, '.worktrees', 'issue-42', 'README.md'), 'utf8').replaceAll('\r\n', '\n'), '# Example\n');
   const offline = await readStatus({ issue: 42, offline: true, cwd: options.target, repoRoot: options.target,
     config: llmConfig, env: options.env });
-  assert.equal(offline.branch, 'issue-42-a2');
+  assert.equal(offline.branch, 'agents/42-a2');
   assert.match(formatStatus(offline), /Attempt: 2\/2 winner=2/);
   const resumed = await readLocalRun({ number: 42, cwd: options.target, root: options.target,
     config: llmConfig, env: options.env });
   assert.equal(resumed.worktreePath, result.worktreePath);
   assert.equal(resumed.session, result.session);
   const worktrees = await listIssueWorktrees({ cwd: options.target, env: options.env });
-  assert.ok(worktrees.some(({ branch }) => branch === 'issue-42-a2'));
+  assert.ok(worktrees.some(({ branch }) => branch === 'agents/42-a2'));
 });
 
 test('preflight refuses too few profiles and dirty baselines without starting a coder', async (t) => {

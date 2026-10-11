@@ -621,7 +621,7 @@ async function runTrackedAssignment(issueNumber, options) {
     result = await runBuiltinAssignment(issueNumber, { ...options, async onPrepared(ready) {
       prepared = ready;
       await onPrepared?.(ready);
-      const posted = await post('in-progress', [`Branch: ${ready.task}`,
+      const posted = await post('in-progress', [`Branch: ${ready.branch ?? ready.task}`,
         ready.start ? formatStart(ready.start, ready.drift) : null,
         `Seats: ${options.seats ?? 'planner,coder,reviewer'}`,
         options.autoModel ? 'Model routing: auto' : null].filter(Boolean));

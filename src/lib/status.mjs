@@ -10,6 +10,7 @@ import { ensureLocalPath } from './paths.mjs';
 import { readIssueLogs } from './run-log.mjs';
 import { classifyStrandedWork, defaultStaleThresholdMs } from './stranded.mjs';
 import { redactSecrets } from '../runtime/memory.mjs';
+import { issueBranch, issueBranches, issueTask, parseIssueBranch, resolveIssueBranch } from './issue-branches.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../../', import.meta.url));
 const execFileAsync = promisify(execFile);
@@ -87,8 +88,8 @@ export async function readStatus({
   let number;
   if (requestedIssue === undefined) {
     const branch = (await runCommand('git', ['branch', '--show-current'], root)).trim();
-    const match = /^issue-([1-9]\d*)(?:-a(?:[1-9]|1[0-6]))?$/.exec(branch);
-    if (match) number = issueNumber(match[1]);
+    const match = parseIssueBranch(branch);
+    if (match) number = issueNumber(match.number);
     else {
       let entries;
       try {
@@ -108,15 +109,39 @@ export async function readStatus({
   }
   const runs = loadLearning({ cwd: root }).runs;
   let selected = selectedAttemptRecord(runs, `issue-${number}`);
-  let branch = selected ? `issue-${number}-a${selected.attempt.index}` : `issue-${number}`;
-  let worktreePath = path.join(root, config.paths.worktrees, branch);
+  let branch = selected ? `issue-${number}-a${selected.attempt.index}` : issueBranch(number);
+  let worktreePath = path.join(root, config.paths.worktrees,
+    `${issueTask(number)}${selected ? `-a${selected.attempt.index}` : ''}`);
   if (selected && !await fs.lstat(worktreePath).catch((error) => {
     if (error.code === 'ENOENT') return null;
     throw error;
   })) {
     selected = null;
-    branch = `issue-${number}`;
-    worktreePath = path.join(root, config.paths.worktrees, branch);
+    branch = issueBranch(number);
+    worktreePath = path.join(root, config.paths.worktrees, issueTask(number));
+  }
+  const gitEntry = await fs.lstat(path.join(root, '.git')).catch((error) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (gitEntry) {
+    const resolved = await resolveIssueBranch({ number, repoRoot: root, runCommand,
+      attempt: selected?.attempt.index });
+    branch = resolved.branch;
+    const normalizePath = (value) => process.platform === 'win32'
+      ? path.resolve(value).toLowerCase() : path.resolve(value);
+    if (resolved.worktree?.path && normalizePath(resolved.worktree.path) !== normalizePath(worktreePath)) {
+      throw new Error('Issue branch is already checked out in another worktree; refusing to use it');
+    }
+    const occupying = resolved.worktrees.find((entry) => entry.path &&
+      normalizePath(entry.path) === normalizePath(worktreePath));
+    if (occupying && occupying.branch !== branch) throw new Error('Existing issue worktree is on a different branch');
+  } else if (await fs.lstat(worktreePath).catch((error) => {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  })) {
+    // Legacy offline caches without Git metadata retain their historical display.
+    branch = `${issueTask(number)}${selected ? `-a${selected.attempt.index}` : ''}`;
   }
   await ensureLocalPath(worktreePath, root);
   let worktreeExists = false;
@@ -178,28 +203,34 @@ export async function readStatus({
       issue.url.toLowerCase() !== `https://github.com/${repository}/issues/${number}`.toLowerCase()) {
     throw new Error(`gh issue view ${number} returned incomplete issue details`);
   }
-  const rawPrs = await runCommand('gh', [
-    'pr', 'list', '--repo', repository, '--state', 'open', '--head', `issue-${number}`,
+  const prs = [];
+  for (const candidate of [...issueBranches(number),
+    ...(selected ? issueBranches(number, selected.attempt.index) : [])]) {
+    const rawPrs = await runCommand('gh', [
+    'pr', 'list', '--repo', repository, '--state', 'open', '--head', candidate,
     '--limit', '2', '--json', 'number,title,url,headRefName',
-  ], root);
-  let prs;
-  try {
-    prs = JSON.parse(rawPrs);
-  } catch {
-    throw new Error('gh pr list returned invalid JSON');
-  }
-  if (!Array.isArray(prs) || prs.length > 1 || prs.some((pr) =>
+    ], root);
+    let found;
+    try {
+      found = JSON.parse(rawPrs);
+    } catch {
+      throw new Error('gh pr list returned invalid JSON');
+    }
+    if (!Array.isArray(found) || found.length > 1 || found.some((pr) =>
     !Number.isSafeInteger(pr?.number) || pr.number <= 0 ||
     typeof pr.title !== 'string' || !pr.title ||
-    pr.headRefName !== `issue-${number}` ||
+    pr.headRefName !== candidate ||
     typeof pr.url !== 'string' ||
     pr.url.toLowerCase() !== `https://github.com/${repository}/pull/${pr.number}`.toLowerCase())) {
-    throw new Error(`gh pr list returned invalid open PRs for issue #${number}`);
+      throw new Error(`gh pr list returned invalid open PRs for issue #${number}`);
+    }
+    prs.push(...found);
   }
+  if (prs.length > 1) throw new Error(`Ambiguous open PR namespaces for issue #${number}; resolve ownership explicitly`);
   let workHealth;
   if (issue.state === 'OPEN' && issue.assignees.length) {
     const branches = (await runCommand('git', [
-      'for-each-ref', '--format=%(refname:short)', `refs/heads/issue-${number}`,
+      'for-each-ref', '--format=%(refname:short)', ...issueBranches(number).map((name) => `refs/heads/${name}`),
     ], root)).trim().split(/\r?\n/).filter(Boolean);
     [workHealth] = classifyStrandedWork({
       issues: [issue], branches,
@@ -223,7 +254,7 @@ export function formatStatus(status) {
   const pr = status.offline ? 'unknown (offline)' : status.openPr
     ? `#${status.openPr.number} ${status.openPr.title} ${status.openPr.url}` : 'none';
   return `Issue: ${issue}\nOpen PR: ${pr}\n` +
-    `Branch: ${status.branch ?? `issue-${status.issue.number}`}\n` +
+    `Branch: ${status.branch ?? issueBranch(status.issue.number)}\n` +
     `Worktree: ${status.worktreePath} (${status.worktreeExists ? 'present' : 'missing'})\n` +
     (status.attempt ? `Attempt: ${status.attempt.index}/${status.attempt.count} winner=${status.attempt.winner || 'none'} ` +
       `profile=${status.attempt.profile} hardware=${status.attempt.hardware}\n` : '') +

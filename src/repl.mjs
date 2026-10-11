@@ -50,6 +50,7 @@ import { askSideQuestion } from './lib/side-question.mjs';
 import { formatContext } from './shell/context.mjs';
 import { formatUsage } from './shell/usage.mjs';
 import { listIssueWorktrees } from './lib/worktrees.mjs';
+import { issueBranch, parseIssueBranch } from './lib/issue-branches.mjs';
 import { runOnlyReview } from './lib/review.mjs';
 import { waveBoard } from './lib/waves.mjs';
 import { writeRepoMap } from './lib/repo-map.mjs';
@@ -356,7 +357,7 @@ export function createDispatcher({
     state.lastRun = { planningOnly: true, failed: true, askKind: 'clarify', command: null };
     state.published = false;
     Object.assign(state.display, { issue: options.issue ?? null,
-      branch: options.issue ? `issue-${options.issue}` : state.display.branch,
+      branch: options.issue ? issueBranch(options.issue) : state.display.branch,
       seat: 'planner', state: 'planning', busy: true, startedAt: Date.now(), contextUsed: undefined,
       lastFinishReason: null, lastTestName: null, review: null });
     state.display.mode = options.planMode ? 'plan' : null;
@@ -690,7 +691,7 @@ export function createDispatcher({
         for (const issue of issues) {
           const cached = state.issueCache.get(issue.number);
           state.issueCache.set(issue.number, { ...cached, issue: { ...cached?.issue, ...issue },
-            branch: cached?.branch ?? `issue-${issue.number}` });
+            branch: cached?.branch ?? issueBranch(issue.number) });
           safeWrite(`#${issue.number} ${issue.title.replace(/[\x00-\x1f\x7f]/g, '?')}\n`);
         }
         if (issues.length === 100) output.write('Showing the first 100 open issues; use GitHub for the remaining board.\n');
@@ -710,7 +711,7 @@ export function createDispatcher({
       case 'diff': {
         if (args) throw new TypeError('Use /diff.');
         const worktree = state.lastRun?.worktreePath ??
-          (/^issue-[1-9]\d*$/.test(state.display.branch) ? currentRoot() : null);
+          (parseIssueBranch(state.display.branch)?.attempt === null ? currentRoot() : null);
         if (!worktree) throw new Error('No current issue worktree; run an Ask or /run N before /diff.');
         const names = await api.readDiffNames({ cwd: worktree, env });
         safeWrite(names.length ? `${names.map((name) => name.replace(/[\x00-\x1f\x7f]/g, '?')).join('\n')}\n` : 'No tracked diff.\n');
