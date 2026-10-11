@@ -124,10 +124,13 @@ test('defects must name a changed file and carry exactly four one-line fields', 
   assert.throws(() => parseDefects({}, ['src/app.mjs']), /at most 8/);
 });
 
+const transferStep = 'In Netlify choose manual deploy and drop the folder containing index.html into the upload area.';
+
 function directoryFixture(context) {
   const options = fixture(context);
   mkdirSync(path.join(options.worktree, 'new-design'));
-  writeFileSync(path.join(options.worktree, 'new-design', 'guide.md'), '# Preview\nUse localhost for local preview.\n');
+  writeFileSync(path.join(options.worktree, 'new-design', 'guide.md'),
+    `# Preview\nUse localhost for local preview.\n\n${transferStep}\n`);
   options.coderResult.excellence.files = ['new-design/guide.md'];
   writeFileSync(path.join(options.worktree, 'TASK.md'), '# Task: Marketing setup\n\n' +
     'difficulty: 1\ntask_class: docs\n\n## Acceptance checks\n- The guide explains local preview\n\n' +
@@ -149,8 +152,17 @@ test('directory Ask audit is independent of planner checks and a failed audit ov
         assert.doesNotMatch(body.messages[1].content, /The guide explains local preview/);
         assert.match(body.messages[1].content, /serving a public web page/);
         return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
-          content: JSON.stringify({ verdict: 'fail', reasons: ['Public hosting steps required by the Ask are absent.'],
-            security_notes: [], checks: [{ id: 1, met: false, evidence: 'new-design/guide.md supplies no public hosting steps.' }] }),
+          content: JSON.stringify({ verdict: 'pass', reasons: [], security_notes: [],
+            checks: [{ id: 1, met: true, evidence: 'The guide describes a design and hosting terminology.' }] }),
+        } }] });
+      }
+      if (requests === 2) {
+        assert.match(body.messages[0].content, /focused ONLY on the written transition/);
+        assert.doesNotMatch(body.messages[1].content, /The guide explains local preview/);
+        return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+          content: JSON.stringify({ verdict: 'pass', reasons: [], security_notes: [],
+            operation: { kind: 'missing', controls: [] },
+            checks: [{ id: 1, met: false, evidence: 'Public hosting steps required by the Ask are absent in new-design/guide.md.' }] }),
         } }] });
       }
       assert.match(body.messages[1].content, /The guide explains local preview/);
@@ -160,14 +172,20 @@ test('directory Ask audit is independent of planner checks and a failed audit ov
       } }] });
     },
   });
-  assert.equal(requests, 2);
+  assert.equal(requests, 3);
   assert.equal(result.verdict, 'fail');
   assert.match(result.content, /Original Ask audit.*Public hosting/);
 });
 
-for (const scenario of ['pass', 'corrected', 'invalid', 'unknown-usage']) {
+for (const scenario of ['pass', 'formatted-transfer', 'corrected', 'missing-procedure-check', 'invented-transfer',
+  'invalid-transfer', 'invalid', 'unknown-usage']) {
   test(`directory Ask audit handles ${scenario} with bounded calls and measured usage`, async (context) => {
     const options = directoryFixture(context);
+    if (scenario === 'formatted-transfer') {
+      const guide = path.join(options.worktree, 'new-design', 'guide.md');
+      writeFileSync(guide, readFileSync(guide, 'utf8').replace(transferStep,
+        transferStep.replace('Netlify', '**Netlify**').replace('index.html', '`index.html`').replace('and drop', 'and\ndrop')));
+    }
     let requests = 0;
     const result = await runReviewer({ ...options, config, env: {}, askKind: 'slice',
       fetchImpl: async (_url, request) => {
@@ -175,29 +193,96 @@ for (const scenario of ['pass', 'corrected', 'invalid', 'unknown-usage']) {
         const body = JSON.parse(request.body);
         assert.equal(body.tools, undefined);
         const isAudit = body.messages[0].content.includes('independent Original Ask audit');
-        if (isAudit) {
+        const isTransition = body.messages[0].content.includes('focused ONLY on the written transition');
+        if (isAudit && !isTransition) {
           assert.match(body.messages[0].content, /Markdown design and instructions are the authorized/);
           assert.match(body.messages[0].content, /not merely ask the reader/);
+          assert.match(body.messages[0].content, /trace.*initial artifact.*requested end state/);
+          assert.match(body.messages[0].content, /provider names.*not.*procedure/);
+          assert.match(body.messages[0].content, /prepared page may be an explicit prerequisite/);
         }
 
         const invalid = scenario === 'invalid' || scenario === 'corrected' && requests === 1;
         const content = invalid ? '{}' : JSON.stringify({ verdict: 'pass', reasons: [], security_notes: [],
-          checks: [{ id: 1, met: true, evidence: 'new-design/guide.md fulfills the requested written procedure.' }] });
-        if (scenario === 'corrected' && requests === 2) {
+          ...(isTransition ? { operation: { kind: 'ui', controls: ['upload area'] } } : {}),
+          checks: (isTransition && scenario === 'missing-procedure-check' && requests === 2 ? [] : [1]).map((id) =>
+            ({ id, met: true, evidence: isTransition ? (scenario === 'invalid-transfer' ||
+              scenario === 'invented-transfer' && requests === 2 ? 'Run git push to publish the site.' : transferStep) :
+              'new-design/guide.md fulfills the requested written procedure.' })) });
+        if (scenario === 'corrected' && requests === 2 ||
+            ['missing-procedure-check', 'invented-transfer', 'invalid-transfer'].includes(scenario) && requests === 3) {
           assert.match(body.messages.at(-1).content, /Invalid audit JSON/);
+          assert.match(body.messages.at(-1).content, /exactly one \{id:1/);
         }
         return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content } }],
           model: 'actual-review-model', ...(scenario === 'unknown-usage' && requests === 1 ? {} :
             { usage: { prompt_tokens: 7, completion_tokens: 2 } }) });
       },
     });
-    assert.equal(requests, scenario === 'corrected' ? 3 : 2);
-    assert.equal(result.verdict, scenario === 'invalid' ? 'fail' : 'pass', result.content);
-    assert.equal(result.completed, scenario !== 'invalid');
-    if (scenario !== 'invalid') assert.match(result.content, /## Original Ask audit\n\nVerdict: pass/);
-    if (scenario === 'invalid') assert.match(result.content, /Reviewer could not complete/);
+    const incomplete = ['invalid', 'invalid-transfer'].includes(scenario);
+    assert.equal(requests, scenario === 'invalid' ? 2 :
+      ['corrected', 'missing-procedure-check', 'invented-transfer'].includes(scenario) ? 4 : 3);
+    assert.equal(result.verdict, incomplete ? 'fail' : 'pass', result.content);
+    assert.equal(result.completed, !incomplete);
+    if (!incomplete) assert.match(result.content, /## Original Ask audit\n\nVerdict: pass/);
+    if (incomplete) assert.match(result.content, /Reviewer could not complete/);
     else assert.deepEqual(result.usage, scenario === 'unknown-usage' ? {} :
       { prompt_tokens: requests * 7, completion_tokens: requests * 2 });
+  });
+}
+
+test('a directory design Ask without setup keeps one audit check and does not demand an artifact transition', async (context) => {
+  const options = directoryFixture(context);
+  const taskPath = path.join(options.worktree, 'TASK.md');
+  writeFileSync(taskPath, readFileSync(taskPath, 'utf8').replace(
+    'Write setup instructions for obtaining and serving a public web page to market a business.',
+    'Write a Markdown layout and sample copy for a marketing page; do not implement it.'));
+  let requests = 0;
+  const result = await runReviewer({ ...options, config, env: {}, askKind: 'slice',
+    fetchImpl: async (_url, request) => {
+      requests += 1;
+      const body = JSON.parse(request.body);
+      if (requests === 1) assert.doesNotMatch(body.messages[1].content, /2\. The written setup procedure/);
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+        content: JSON.stringify({ verdict: 'pass', reasons: [], security_notes: [],
+          checks: [{ id: 1, met: true, evidence: 'new-design/guide.md supplies the requested written design.' }] }),
+      } }] });
+    },
+  });
+  assert.equal(requests, 2);
+  assert.equal(result.verdict, 'pass', result.content);
+});
+
+for (const scenario of ['command', 'prose-command', 'ungrounded-command', 'missing-control', 'missing-operation']) {
+  test(`transition extraction grounds ${scenario} before accepting a claimed pass`, async (context) => {
+    const options = directoryFixture(context);
+    const command = 'scp index.html user@example.invalid:/var/www/html/';
+    const step = scenario === 'command' || scenario === 'prose-command' ? command : transferStep;
+    if (scenario === 'command' || scenario === 'prose-command') {
+      writeFileSync(path.join(options.worktree, 'new-design', 'guide.md'),
+        scenario === 'command' ? `# Upload\n\`\`\`sh\n${command}\n\`\`\`\n` : `# Upload\n${command}\n`);
+    }
+    let requests = 0;
+    const result = await runReviewer({ ...options, config, env: {}, askKind: 'slice',
+      fetchImpl: async (_url, request) => {
+        requests += 1;
+        const body = JSON.parse(request.body);
+        const transition = body.messages[0].content.includes('focused ONLY on the written transition');
+        return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+          content: JSON.stringify({ verdict: 'pass', reasons: [], security_notes: [],
+            ...(transition ? { operation: { kind: scenario === 'missing-operation' ? 'missing' :
+              scenario === 'missing-control' ? 'ui' : 'command',
+            controls: scenario === 'missing-control' ? ['Undocumented deploy button'] :
+              scenario === 'missing-operation' ? [] : scenario === 'ungrounded-command' ? ['git push'] : ['scp'] } } : {}),
+            checks: [{ id: 1, met: true, evidence: transition ? step : 'new-design/guide.md fulfills the Ask.' }] }),
+        } }] });
+      },
+    });
+    assert.equal(requests, 3);
+    assert.equal(result.completed, true);
+    const passes = ['command', 'prose-command'].includes(scenario);
+    assert.equal(result.verdict, passes ? 'pass' : 'fail', result.content);
+    if (!passes) assert.match(result.content, /No source-grounded operational command or named UI control/);
   });
 }
 
@@ -221,10 +306,11 @@ test('directory audit sees unchanged allowed deliverables instead of treating a 
       }
       return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
         content: JSON.stringify({ verdict: 'pass', reasons: [], security_notes: [],
-          checks: [{ id: 1, met: true, evidence: 'The unchanged guide is available for judgment.' }] }),
+          ...(requests === 2 ? { operation: { kind: 'ui', controls: ['upload area'] } } : {}),
+          checks: [{ id: 1, met: true, evidence: requests === 2 ? transferStep : 'The unchanged guide is available for judgment.' }] }),
       } }] });
     },
   });
-  assert.equal(requests, 2);
+  assert.equal(requests, 3);
   assert.equal(result.verdict, 'pass', result.content);
 });

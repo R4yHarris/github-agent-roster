@@ -31,11 +31,39 @@ correct. Its failure overrides a later checklist pass and is recorded as
 `Original Ask audit` reasons. Its verdict and evidence are recorded in a
 separate report section, including successful audits. Unchanged allowed
 deliverables are read into the bounded evidence rather than treated as absent.
-Both calls use the same configured reviewer model; their returned usage is
-combined, with missing counts remaining unknown. Invalid audit output gets one
+Audit and checklist calls use the same configured reviewer model; their returned
+usage is combined, with missing counts remaining unknown. Invalid audit output gets one
 bounded corrective reply, then fails explicitly as incomplete review, not
 approval. This is an independent evidence pass
 within the same reviewer seat, not a new worker or authority grant.
+
+For setup-documentation Asks, the audit traces one written path from the
+initial artifact through concrete transition steps to the requested observable
+end state. A separate bounded call focuses only on the transition from the
+stated prerequisites into the usable destination, without the broad verdict or
+planner checklist. It is recorded as the second numbered audit check. Its
+unmet verdict overrides a summary pass, using the existing per-check gate.
+Provider names or DNS/TLS terminology alone do not prove the missing upload/publishing procedure.
+One usable dashboard or command path suffices; multiple providers and
+deployment execution are not required. A prepared page may be a prerequisite
+when the Ask requests design and instructions rather than implementation.
+Passing transition evidence must quote an operational step from the delivered
+evidence, rather than paraphrase a recommendation into a command that was
+never written. The harness checks that excerpt after redaction, whitespace
+normalization, and removal of Markdown backticks/bold markers; an invented
+excerpt gets the same bounded correction and explicit incomplete-review failure
+as other invalid audit output. This
+source check is not a keyword-based proof of procedural completeness or a
+replacement for semantic review and human acceptance.
+The focused response also extracts the operation kind: an explicit tool
+invocation, a named UI/upload control, or a missing mechanism. An invocation/subcommand or
+UI control absent from the cited step, or an explicitly missing
+mechanism fails the numbered check even when the model's summary says pass.
+Full allowed artifacts are read through the existing guarded text reader for
+this extraction, so a small diff does not hide operational steps or prerequisites.
+This adds one reviewer call for setup/installation/deployment/hosting
+documentation, plus at most one corrective reply for invalid output; all
+calls remain within the same seat, task deadline, and per-context budget.
 
 Separately from checks, the reviewer probes the changed code for five defect
 classes: destructive or permissive defaults for missing input, data that
