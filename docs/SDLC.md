@@ -584,3 +584,14 @@ gate; protected paths and existing scope controls remain unchanged (3/7).
 Temporary comparison trees are created beneath a private randomly named
 `.roster-baseline-*` directory in the task worktree and removed after comparison;
 they are recovery evidence, not another queue or product artifact.
+
+### Reference evidence is not file authority
+
+FEATURE_SPEC 5.3/5.4 scope comes from validated human file declarations, local
+named paths or a validated relative output directory, never a reference URL.
+URL paths, queries, fragments and remote Markdown link labels are excluded from
+inferred file/directory scope. The original Ask keeps its reference evidence;
+this does not fetch it or grant internet access. Link-only vague asks use the
+existing durable clarification checkpoint; no coder or publication runs until
+real bounded scope is supplied. Explicit protected/outside paths remain denied
+(sections 3 and 7).

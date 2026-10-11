@@ -1,4 +1,5 @@
 import { splitTaskFrontmatter } from '../runtime/skills.mjs';
+import { withoutReferenceUrls } from './references.mjs';
 import { isForbiddenWrite, planArtifactFiles, plannerArtifactFiles } from '../runtime/tools.mjs';
 
 function normalizedLine(value, label) {
@@ -34,7 +35,7 @@ export function outputDirectoryFromAsk(ask) {
     return undefined;
   }
   const directive = /(?:^|[.!?\n]\s*)(?:output|save|put|place)\s+(?:(?:it|them|the (?:output|documents|files))\s+)?(?:in|into|to)\s+(?:(?:a|an|the)\s+)?(?:new\s+)?(?:"([^"\n]+)"|'([^'\n]+)'|`([^`\n]+)`|([^\s"'`]+))\s+directory\b/gi;
-  const text = String(ask ?? '').replace(/<!--[\s\S]*?-->/g, '')
+  const text = withoutReferenceUrls(String(ask ?? '')).replace(/<!--[\s\S]*?-->/g, '')
     .replace(/^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ {0,3}\1[ \t]*$/gm, '')
     .replace(/^[ \t]*>.*$/gm, '')
     .replace(/(["'`])((?:(?!\1)[^\n])*)\1/g, (span, _quote, content) =>
