@@ -66,8 +66,12 @@ Planner → coder → read-only reviewer run sequentially in one isolated
 (CRLF line endings normalized, captured leading/trailing whitespace retained),
 chooses concrete files beneath `new-design`,
 declares new files for the critic and writes the normal TASK/RECIPE/ESTIMATE
-handoff. Invalid checks, malformed file lists or paths outside the grant fail
-before coder. Public `runBuiltinAsk` preserves those captured bytes; the shell
+handoff. Tasks allow 1-8 acceptance checks; planner guidance asks for related
+checks to be grouped without dropping requirements. A written TASK that exceeds
+the check-count limit gets one bounded JSON correction, including at the last
+normal planner turn. Invalid corrections still stop before coder; the harness never
+truncates checks or relaxes file authority (spec sections 5.3 and 5.4).
+Public `runBuiltinAsk` preserves those captured bytes; the shell
 retains its existing command-boundary trimming before capture, and named-file
 intake retains its existing trimming behavior. The documents are at
 `<repository>/.worktrees/local-<id>/new-design/` (for example `DESIGN.md` and
