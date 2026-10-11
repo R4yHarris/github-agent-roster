@@ -114,7 +114,7 @@ export function withFleetProfile(config, profile) {
   const { served_model_label: _inherited, ...llm } = config.llm;
   return {
     ...config, llm: {
-      ...llm, profile: 'vllm-local', base_url: selected.base_url, model: selected.model,
+      ...llm, profile: '', base_url: selected.base_url, model: selected.model,
       fleet_profile: selected.id, concurrency: selected.concurrency,
       hardware: selected.hardware,
       provider: selected.provider, context_max: selected.context_max,

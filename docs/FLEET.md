@@ -108,6 +108,12 @@ and the active default config together. If none is reported, the existing
 declared limit remains and the command reminds you to recheck it. These server
 declarations are not capacity benchmarks.
 
+Fleet selections are explicit endpoint settings, not the built-in `vllm-local` preset:
+`withFleetProfile` clears `llm.profile` so config serialization/reload preserves the
+selected `api_key_env` **name**, endpoint, model and context (FEATURE_SPEC 5.2/5.8).
+Switching defaults never reads a key value or changes publication/reviewer policy.
+Legacy named-profile selection (including OpenAI's `OPENAI_API_KEY`) is unchanged.
+
 `default ID` explicitly updates the project's configured endpoint/model,
 provider and context limit without modifying permission choices. `remove`
 refuses the last profile and the currently configured endpoint; choose
