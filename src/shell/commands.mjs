@@ -27,6 +27,7 @@ export const commands = Object.freeze([
   page('quit', 'Session', '/quit', 'Exit with code 0; bare exit is also accepted.', '/q', [], ['q']),
   page('ask', 'Ask', '/ask TEXT', 'Run a local Ask through planner, coder and reviewer without creating a GitHub issue.',
     '/ask Add a Status section to README.md.'),
+  page('clarify', 'Ask', '/clarify [show|cancel|continue|TEXT]', 'Inspect private pending intake after a restart; resume with explicit Allowed Files or a relative output directory. Never infers scope.', '/clarify show'),
   page('plan', 'Ask', '/plan TEXT', 'Explore read-only and write PLAN.md only; Enter accepts a slice and /stop keeps it without coding.',
     '/plan Add a Status section to README.md.', ['--plan: use /run N --plan for the same gate on an issue']),
   page('run', 'Ask', '/run N [--parallel K] [--attempts K] [--confirm|--plan] [--auto-model]', 'Run an existing issue in builtin seats.', '/run 108 --confirm',

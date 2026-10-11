@@ -300,6 +300,8 @@ function shell(services) {
 function clarificationFixture(t) {
   const root = mkdtempSync(path.join(process.cwd(), '.clarification-test-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));
+  execFileSync('git', ['init', '--quiet'], { cwd: root });
+  writeFileSync(path.join(root, '.gitignore'), '.roster/asks/\n');
   const readme = '# Unchanged product\n';
   const events = [];
   const prepared = [];

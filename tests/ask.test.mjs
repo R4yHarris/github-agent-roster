@@ -120,7 +120,7 @@ test('online broad asks create only the parent issue; clarify does not contact G
   assert.equal(clarify.mode, 'clarify');
   assert.equal(clarify.askKind, 'clarify');
   assert.match(clarify.clarification, /one concrete outcome[\s\S]*allowed files/);
-  assert.equal(existsSync(join(repoRoot, '.roster', 'asks')), false);
+  assert.equal(existsSync(join(repoRoot, '.roster', 'asks', 'clarification.json')), true);
 });
 
 test('gh creation errors and unexpected URLs are not disguised as offline drafts', async (t) => {

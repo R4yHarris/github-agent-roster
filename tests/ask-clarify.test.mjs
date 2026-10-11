@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { classifyAsk, clarificationHint } from '../src/planner/classify.mjs';
 import { clarificationResult, interpretAmbiguousAsk } from '../src/planner/clarify.mjs';
+import { parseConfig } from '../src/lib/config.mjs';
 import { formatAsk, submitAsk } from '../src/lib/ask.mjs';
 
 test('a vague ask gets an interpretation, stated assumptions and a short question set', () => {
@@ -26,9 +29,11 @@ test('the ready-to-fill template is rejected until files are named, then plans a
   assert.equal(classifyAsk(filled).kind, 'slice');
 });
 
-test('roster ask never dead-ends on a vague ask and never contacts GitHub or guesses scope', async () => {
+test('roster ask never dead-ends on a vague ask and never contacts GitHub or guesses scope', async (t) => {
+  const repoRoot = mkdtempSync(join(process.cwd(), '.clarify-test-'));
+  t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
   const result = await submitAsk('Improve things.', {
-    env: {}, runCommand: () => assert.fail('Clarify must not contact GitHub'),
+    repoRoot, config: parseConfig(readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8')), env: {}, runCommand: () => assert.fail('Clarify must not contact GitHub'),
   });
   assert.equal(result.mode, 'clarify');
   assert.equal(result.clarification, clarificationHint);
