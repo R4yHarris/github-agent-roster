@@ -273,7 +273,8 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
     }
     // Regressions this change caused outside Allowed Files are repairable; only proven non-regressions are excused.
     const excused = (file) => !parsedTask.files_allowed.includes(file) && !progress.regressionFiles.includes(file) &&
-      !sessionWrites.has(file);
+      !sessionWrites.has(file) && (tests.preexisting_files ?? []).includes(file) &&
+      !(tests.unclassified_files ?? []).includes(file);
     progress.repairFiles = failingFiles.filter((file) => !excused(file));
     const outside = failingFiles.filter(excused);
     const regressions = progress.repairFiles.filter((file) => progress.regressionFiles.includes(file));
@@ -345,7 +346,8 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       (regressions.length ? `These tests pass at the base commit, so this change broke them: ${regressions.join(', ')}. ` +
         'Decide from TASK.md whether the new behavior is intended (update the test to it) or the implementation ' +
         'regressed (fix the implementation). ' : '') +
-      'Do not edit any other failing test outside Allowed Files. Report it as pre-existing. ' +
+      'Do not edit any other failing test outside Allowed Files. Without measured baseline evidence, ' +
+      'report its status as unknown/unclassified, not pre-existing. ' +
       'Fix the exact reported root cause and ensure every identifier introduced by the change is defined in its scope. ' +
       (progress.testRepairs > 1 ? 'Earlier repairs did not make the suite pass, so change strategy: decide from TASK.md ' +
         'whether the failing assertion or the implementation is wrong and change only that side; do not alternate ' +

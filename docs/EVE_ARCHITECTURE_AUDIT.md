@@ -28,13 +28,14 @@ and existing merged-PR evidence. No comparator marketing claims are needed.
 
 ## Concrete debt and ownership
 
-1. **#449, still real:** `runtime/tools.mjs` baseline-classification catch returns
-   `regression_files: []` and puts non-transient failures in `preexisting_files`
-   when the baseline check is unavailable. `runtime/loop.mjs` then excuses
-   out-of-scope non-regressions as pre-existing. An unavailable baseline is not
-   proof of non-regression. Preserve unknown evidence and fail/review explicitly;
-   add the unavailable-baseline regression before changing this gate. These
-   files are owned by the concurrent live-repair thread and were not edited here.
+1. **#449, repaired after explicit ownership handoff:** full and scoped runs now
+   compare outside failures against the unchanged base. Only measured base
+   failures enter `preexisting_files`; unavailable/infrastructure/interrupted
+   comparisons and the eight-file cap retain `unclassified_files` plus a bounded
+   diagnostic. Loop excuses require explicit measured pre-existing evidence;
+   prior writes or unclassified status override it. Node20 targeted gate: 88
+   tests, 87 pass, one existing Windows symlink skip, zero failures. Original
+   administrative closure and failed model attempts remain historical evidence.
 2. **#452, still real:** offline reproduction on baseline main:
    `classifyAsk('Improve the product using https://example.invalid/reference/guide.md as reference.')`
    returns `slice`; `askRequirements` yields
@@ -83,7 +84,7 @@ acceptance debt. Historical issue closure was administrative and remains so.
 | #452 URL-derived product scope | **Confirmed unresolved**, exact offline reproduction above. Parent-owned planner fix needed. |
 | #451 reviewer full-gate claims | Read-only reviewer/e2e evidence exists; review/provenance records distinguish executed checks. Original full-gate claim case still needs replay; scoped prose alone is not full-suite evidence. |
 | #450 preservation controls plus red-green proof | `red-green.mjs` has actual base/candidate test evidence; original preservation-control scenario remains to replay against unchanged expectations. |
-| #449 scoped regression/unavailable baseline | **Confirmed unresolved**, unsafe unavailable-baseline classification above. Parent-owned tools/loop repair needed. |
+| #449 scoped regression/unavailable baseline | **Repaired after handoff**, unavailable/capped/interrupted comparisons retain unknown status; full and scoped real candidate/base controls, strict loop exemptions and prior-write overrides pass. |
 | #448 green repair summary handoff | `loop.mjs` tracks tests and summary-only continuations; original tool-free handoff replay remains acceptance debt. |
 | #447 Ask-first reasoned planning | Ask-preserving planning/critic/design/grounding paths plus #512/#515/#531/#538; original integrated delivery cases are not replaced by planner artifacts. |
 | #446 redacted indexed/assignment syntax | Dedicated redaction/evidence routines exist; original redaction regression must remain an explicit check, not a claim of semantic preservation from a green CI badge. |
