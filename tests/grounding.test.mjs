@@ -79,6 +79,23 @@ test('nonexistent exports, missing modules, and duplicate new exports are reject
     /outside files_allowed/);
 });
 
+test('qualified standard-library members are grounded without granting repository exports or writes', async (t) => {
+  const { grounding } = await grounded(t);
+  const checks = [
+    'Tests use `child_process.execFile` and `fs.mkdtempSync` with `path.join` and `os.tmpdir`.',
+    'The CLI tests call `execFile` and `mkdtempSync` with temporary fixtures.',
+  ];
+  assert.deepEqual(groundingErrors({ checks, index: grounding.index }), []);
+  for (const citation of ['child_process.fakeExport', 'fs.fakeRead', 'app.execFile', 'execFile']) {
+    const errors = groundingErrors({ checks: [`Tests use \`${citation}\`.`], index: grounding.index });
+    assert.ok(errors.length > 0, citation);
+  }
+  assert.ok(groundingErrors({ checks: [...checks, 'Tests call `app.execFile`.'], index: grounding.index }).length > 0);
+  assert.ok(groundingErrors({ checks: ['Tests use `child_process.execFile`.'],
+    design: { extend: [{ file: 'node:child_process', exports: ['execFile'] }] },
+    index: grounding.index }).some((error) => error.includes('not a tracked file')));
+});
+
 test('a declared new export may be cited; docs-only and ungrounded slices get no Design', async (t) => {
   const { grounding } = await grounded(t);
   assert.doesNotThrow(() => plan(grounding, { acceptanceChecks: ['`listProvenance` returns rows'],
