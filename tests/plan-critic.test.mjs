@@ -75,16 +75,87 @@ test('critic profile configuration is explicit and rejects unsafe identifiers', 
   assert.throws(() => parseConfig(configured.replace('critic-fixture', '../escape')), /critic_profile/);
 });
 
-test('critic refuses scope expansion, Ask changes, cancellation, and malformed model output', async () => {
+test('critic retains a valid original after an Ask-changing or scope-widening revision', async () => {
+  const task = draft(['README documents the changed behavior'], ['README.md']);
+  const advisory = { check: 1, problem: 'Clarify the documented outcome.', fix: 'Name the changed behavior.' };
+  for (const changed of [
+    task.replace('- `README.md`', '- `README.md`\n- `new.md`'),
+    task.replace('Improve documented behavior', 'Replace documented behavior'),
+  ]) {
+    let inspections = 0;
+    let revisions = 0;
+    const result = await critiquePlan(task, { index,
+      chat: async () => {
+        inspections += 1;
+        return { message: { content: JSON.stringify({ defects: [advisory] }) } };
+      },
+      revise: async ({ task: original, defects }) => {
+        revisions += 1;
+        assert.equal(original, task);
+        assert.deepEqual(defects, [advisory]);
+        return changed;
+      },
+    });
+    assert.equal(inspections, 1, 'Never inspect or accept the rejected proposal');
+    assert.equal(revisions, 1);
+    assert.equal(result.revised, false);
+    assert.deepEqual(parseTaskDocument(result.task), parseTaskDocument(task));
+    assert.deepEqual(deterministicPlanDefects(result.task, { index }), []);
+    assert.deepEqual(result.defects[0], advisory);
+    assert.equal(result.defects.length, 2);
+    assert.equal(result.defects[1].check, null);
+    assert.match(result.defects[1].problem, /Rejected critic revision.*Ask.*file allow-list/);
+    for (const key of ['problem', 'fix']) assert.ok(result.defects[1][key].length <= 240);
+    assert.match(result.task, /## Critic notes[\s\S]*Rejected critic revision/);
+    assert.equal(result.task.replace(/## Critic notes\n[\s\S]*?(?=## Files allowed)/, ''), task);
+  }
+});
+
+test('critic still refuses boundary-changing revisions when the original has deterministic defects', async () => {
   for (const changed of [draft(['Behavior changed'], ['README.md', 'new.md']),
     draft(['Behavior changed']).replace('Improve documented behavior in README.md and missing.md.', 'A different Ask.')]) {
     await assert.rejects(critiquePlan(draft(), { index, revise: async () => changed }), /Ask|widen/);
   }
+});
+
+test('critic propagates cancellation, transport, schema, and parse failures instead of retaining a plan', async () => {
+  const task = draft(['README documents the changed behavior'], ['README.md']);
+  const advisory = { check: 1, problem: 'Clarify the outcome.', fix: 'Name the changed behavior.' };
+  const chat = async () => ({ message: { content: JSON.stringify({ defects: [advisory] }) } });
+  const failure = new Error('fixture transport failed');
+  await assert.rejects(critiquePlan(task, { index, chat: async () => { throw failure; } }),
+    (error) => error === failure);
+  await assert.rejects(critiquePlan(task, { index, chat, revise: async () => { throw failure; } }),
+    (error) => error === failure);
+  await assert.rejects(critiquePlan(task, { index, chat, revise: async () => '# Invalid task\n' }), /Ask/);
+  const controller = new AbortController();
+  await assert.rejects(critiquePlan(task, { index, signal: controller.signal,
+    chat: async () => { controller.abort(); return chat(); },
+    revise: () => assert.fail('Cancelled critique must not start a revision'),
+  }), { code: 'ROSTER_CANCELLED' });
+  const revisionController = new AbortController();
+  await assert.rejects(critiquePlan(task, { index, chat, signal: revisionController.signal,
+    revise: async () => { revisionController.abort(); return task.replace('Improve', 'Replace'); },
+  }), { code: 'ROSTER_CANCELLED' });
   for (const content of ['not JSON', '{"defects":[{"check":99,"problem":"bad","fix":"bad"}]}',
     '{"defects":[],"scope":["src"]}', '{"defects":[{"check":1,"problem":"bad"}]}']) {
-    await assert.rejects(critiquePlan(draft(), { index, chat: async () => ({ message: { content } }) }));
+    await assert.rejects(critiquePlan(task, { index, chat: async () => ({ message: { content } }) }));
   }
-  await assert.rejects(critiquePlan(draft(), { signal: AbortSignal.abort() }));
+  await assert.rejects(critiquePlan(task, { signal: AbortSignal.abort() }), { code: 'ROSTER_CANCELLED' });
+  let inspections = 0;
+  await assert.rejects(critiquePlan(task, { index, revise: async () => task, chat: async () => ({
+    message: { content: ++inspections === 1 ? JSON.stringify({ defects: [advisory] }) : 'not JSON' },
+  }) }), SyntaxError);
+});
+
+test('critic propagates cancellation after a clean response with no revision', async () => {
+  const controller = new AbortController();
+  await assert.rejects(critiquePlan(draft(['Changed documentation'], ['README.md']), { index,
+    signal: controller.signal, chat: async () => {
+      controller.abort();
+      return { message: { content: '{"defects":[]}' } };
+    },
+  }), { code: 'ROSTER_CANCELLED' });
 });
 
 test('optional model critic has no tools, a 600-token cap and grounded input', async () => {

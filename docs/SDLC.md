@@ -66,6 +66,28 @@ standalone TASK execution. Empty endpoints remain deterministic stubs.
 Prior generated PLAN/task/run files are archived when reusing an issue
 worktree; application edits and assignment/environment are preserved.
 
+### Bounded plan critique
+
+Before coder entry, a builtin slice handoff runs deterministic plan critique
+and, when `planner.critic_profile` is configured, a read-only model critic.
+That critic has no tools and reports at most eight bounded findings. One
+planner revision may address them; an accepted revision is inspected again.
+Remaining findings appear in TASK.md's `Critic notes` for downstream review.
+
+A parseable revision that changes the original Ask or widens its file allow-list
+is rejected. If the original has no deterministic defects, critique retains
+that original's Ask, checks, Design and scope, marks `revised: false`, and
+adds an explicit rejected-revision advisory alongside the original findings.
+An original with deterministic defects cannot use this fallback. Malformed
+tasks or reports, transport failures and cancellation still stop planning;
+they are not advisory findings. The builtin revision planner also validates
+the proposal before returning it: an upstream validation error remains an
+error, not an accepted or silently discarded revision.
+
+This implements FEATURE_SPEC sections **5.3, 5.4 and 5.5**: bounded breakdown,
+stop at a valid plan, and visible review findings without weakened checks.
+It adds no seat, runtime or task board (sections 3 and 7).
+
 ## Deterministic lifecycle regression fixtures
 
 [Lifecycle replay tests](../tests/builtin.replay.test.mjs) run the public

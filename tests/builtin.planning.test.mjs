@@ -20,6 +20,7 @@ import { resolveContractsPath } from '../src/lib/paths.mjs';
 import { buildPublishMessage } from '../src/lib/publication.mjs';
 import { parseRecipe } from '../src/lib/recipe.mjs';
 import { planStub } from '../src/planner/stub.mjs';
+import { parseTaskDocument } from '../src/planner/task.mjs';
 import { renderIssueBody } from '../src/lib/issue.mjs';
 import { formatFleet } from '../src/lib/fleet.mjs';
 import { LlmTimeoutError } from '../src/llm/request.mjs';
@@ -479,4 +480,126 @@ test('a rerun never archives or overwrites tracked run artifacts', async (contex
   await assert.rejects(runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {} }),
     /Refusing to replace tracked planning\/run artifacts/);
   assert.equal(readFileSync(initial.taskPath, 'utf8'), before);
+});
+
+test('configured builtin critique keeps advisory findings visible through coder and reviewer', async (context) => {
+  const options = fixture(context);
+  mkdirSync(path.join(options.target, '.roster'), { recursive: true });
+  writeFileSync(path.join(options.target, '.roster', 'fleet.yml'), formatFleet({ profiles: [{
+    id: 'critic-fixture', base_url: 'http://fixture.invalid/v1', model: 'critic-model', provider: 'vllm',
+    context_max: 32768, concurrency: 1, hardware: 'fixture-only', notes: '',
+  }] }));
+  let originalTask;
+  let criticCalls = 0;
+  let revisionCalls = 0;
+  let coderCalls = 0;
+  let reviewCalls = 0;
+  const result = await runBuiltinIssue(42, { ...options, log: () => {},
+    config: { ...llmConfig, planner: { ...llmConfig.planner, critic_profile: 'critic-fixture' } },
+    vault: { get: async () => undefined },
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      const system = body.messages[0].content;
+      const answer = (content) => Response.json({ model: body.model,
+        choices: [{ finish_reason: 'stop', message: { role: 'assistant', content } }] });
+      if (body.model === 'critic-model') {
+        criticCalls += 1;
+        assert.equal(body.tools, undefined);
+        assert.equal(body.max_tokens, 600);
+        originalTask ??= JSON.parse(body.messages[1].content).task;
+        return answer(JSON.stringify({ defects: [{ check: 1,
+          problem: 'Clarify the requested Status evidence.', fix: 'Name the Status heading in the check.' }] }));
+      }
+      if (/Plan critic revision/.test(body.messages[1].content)) {
+        revisionCalls += 1;
+        assert.equal(body.tools, undefined);
+        return answer(JSON.stringify({ title: options.issue.title,
+          acceptance_checks: ['README has a Status section'], files_allowed: ['README.md'] }));
+      }
+      if (system.startsWith('You are the builtin planner seat.')) {
+        return answer(JSON.stringify({ title: options.issue.title,
+          acceptance_checks: ['README has a Status section'], files_allowed: ['README.md'] }));
+      }
+      if (system.startsWith('You are the builtin reviewer seat.')) {
+        reviewCalls += 1;
+        return answer(passingReview(body));
+      }
+      coderCalls += 1;
+      const task = readFileSync(path.join(options.target, '.worktrees', 'issue-42', 'TASK.md'), 'utf8');
+      assert.match(task, /## Critic notes[\s\S]*Clarify the requested Status evidence/);
+      assert.deepEqual(parseTaskDocument(task), parseTaskDocument(originalTask));
+      return coderCalls === 1 ? Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+        role: 'assistant', tool_calls: [
+          { id: 'readme-read', type: 'function', function: {
+            name: 'read_file', arguments: JSON.stringify({ path: 'README.md' }),
+          } },
+          { id: 'readme-write', type: 'function', function: {
+            name: 'write_file', arguments: JSON.stringify({ path: 'README.md', content: '# Example\n\n## Status\nReady.\n' }),
+          } },
+        ],
+      } }] }) : answer('Added the requested Status section.');
+    },
+    runTestCommand: () => assert.fail('Documentation-only changes must not run a test campaign'),
+    publisher: () => assert.fail('No publication was requested'),
+  });
+  assert.equal(criticCalls, 2);
+  assert.equal(revisionCalls, 1);
+  assert.equal(coderCalls, 2);
+  assert.equal(reviewCalls, 0, 'The minimal README slice uses the harness docs reviewer');
+  assert.equal(result.planner.critic.revised, true);
+  assert.equal(result.planner.critic.defects.length, 1);
+  assert.equal(result.failed, false);
+  assert.equal(result.review.verdict, 'pass');
+  assert.deepEqual(parseTaskDocument(readFileSync(result.taskPath, 'utf8')), parseTaskDocument(originalTask));
+  assert.equal(git(result.worktreePath, 'diff', '--name-only'), 'README.md');
+});
+
+test('configured builtin critique fails closed on malformed reports, cancellation, and invalid upstream revisions', async (context) => {
+  for (const scenario of ['parse', 'schema', 'cancel', 'revision-scope']) {
+    await context.test(scenario, async (t) => {
+      const options = fixture(t);
+      mkdirSync(path.join(options.target, '.roster'), { recursive: true });
+      writeFileSync(path.join(options.target, '.roster', 'fleet.yml'), formatFleet({ profiles: [{
+        id: 'critic-fixture', base_url: 'http://fixture.invalid/v1', model: 'critic-model', provider: 'vllm',
+        context_max: 32768, concurrency: 1, hardware: 'fixture-only', notes: '',
+      }] }));
+      const controller = new AbortController();
+      let originalTask;
+      let revisionCalls = 0;
+      const operation = runBuiltinIssue(42, { ...options, log: () => {}, signal: controller.signal,
+        config: { ...llmConfig, planner: { turn_budget: 1, critic_profile: 'critic-fixture' } },
+        vault: { get: async () => undefined },
+        fetchImpl: async (_url, request) => {
+          const body = JSON.parse(request.body);
+          let content;
+          if (body.model === 'critic-model') {
+            originalTask = JSON.parse(body.messages[1].content).task;
+            if (scenario === 'cancel') controller.abort();
+            content = scenario === 'parse' ? 'not JSON' : scenario === 'schema' ? '{"defects":[],"extra":true}'
+              : JSON.stringify({ defects: [{ check: 1, problem: 'Clarify Status evidence.', fix: 'Name the Status heading.' }] });
+          } else {
+            const revision = /Plan critic revision/.test(body.messages[1].content);
+            if (revision) revisionCalls += 1;
+            else assert.match(body.messages[0].content, /builtin planner seat/);
+            content = JSON.stringify({ title: options.issue.title,
+              acceptance_checks: ['README has a Status section'],
+              files_allowed: revision ? ['README.md', 'new.md'] : ['README.md'] });
+          }
+          return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content } }] });
+        },
+        runTestCommand: () => assert.fail('Failed critique must not run tests'),
+        publisher: () => assert.fail('Failed critique must not publish'),
+      });
+      if (scenario === 'cancel') await assert.rejects(operation, { code: 'ROSTER_CANCELLED' });
+      else await assert.rejects(operation, scenario === 'parse' ? SyntaxError
+        : scenario === 'schema' ? /defects array/ : /cannot invent extra files/);
+      assert.equal(revisionCalls, scenario === 'revision-scope' ? 1 : 0);
+      const worktree = path.join(options.target, '.worktrees', 'issue-42');
+      assert.equal(readFileSync(path.join(worktree, 'TASK.md'), 'utf8').replace(/\r\n/g, '\n'), originalTask);
+      assert.equal(readFileSync(path.join(worktree, 'README.md'), 'utf8').replace(/\r\n/g, '\n'), '# Example\n');
+      assert.equal(git(worktree, 'diff', '--name-only'), '');
+      assert.equal(existsSync(path.join(worktree, 'RESULT.md')), false);
+      assert.equal(existsSync(path.join(worktree, 'REVIEW.md')), false);
+    });
+  }
 });
