@@ -667,3 +667,12 @@ test('an unplanned ordinary coder write is a recoverable denial that names the p
     (error) => error instanceof ToolAccessError && !(error instanceof ToolUsageError));
   assert.equal(existsSync(path.join(worktree, 'out', 'parseCsv.mjs')), false);
 });
+
+test('a garbled model path is a recoverable denial and never touches the filesystem', async (t) => {
+  const worktree = mkdtempSync(path.join(tmpdir(), 'roster-garbled-path-'));
+  t.after(() => rmSync(worktree, { recursive: true, force: true }));
+  const tools = await createTools({ worktree, allowedFiles: ['out/a.mjs'] });
+  await assert.rejects(tools.write_file({ path: 'out/a.mjs invalid:', content: 'x' }),
+    (error) => error instanceof ToolUsageError && /ambiguous Windows components/.test(error.message));
+  assert.equal(existsSync(path.join(worktree, 'out')), false);
+});

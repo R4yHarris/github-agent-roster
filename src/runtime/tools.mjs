@@ -629,7 +629,8 @@ export async function createTools({
       throw new ToolAccessError('Tool path must be relative to the worktree');
     }
     if (hasAmbiguousComponents(input)) {
-      throw new ToolAccessError('Tool path must not contain ambiguous Windows components or alternate data streams');
+      // The path is still refused; ToolUsageError lets the loop return the denial once so a garbled model path can be retried.
+      throw new ToolUsageError('Tool path must not contain ambiguous Windows components or alternate data streams');
     }
     const file = path.resolve(root, input);
     const relative = path.relative(root, file);
