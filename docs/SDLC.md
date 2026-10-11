@@ -569,3 +569,18 @@ the blocker without claiming a PR was opened.
 Repository review and branch protections control whether the SDK can merge;
 the human posts `AI-Eval:` on the PR. The coder does not call `git merge`,
 deploy, open extra issues, or fabricate a human evaluation.
+
+### Measured baseline evidence for outside-test failures
+
+FEATURE_SPEC 5.4/5.5 verification compares outside-scope test failures against
+the unchanged Git base on full runs and scoped retries. Only an actual failing
+base test is labeled pre-existing; a passing base identifies a regression.
+Unavailable Git/dependencies, interrupted or infrastructure-only checks and files
+beyond the eight-file comparison cap stay explicitly unclassified with a bounded
+diagnostic. Unavailability never proves non-regression. Prior coder writes or
+explicit unclassified evidence override a pre-existing claim. Unresolved failures
+stay in repair/report handling and cannot authorize publication as a passing
+gate; protected paths and existing scope controls remain unchanged (3/7).
+Temporary comparison trees are created beneath a private randomly named
+`.roster-baseline-*` directory in the task worktree and removed after comparison;
+they are recovery evidence, not another queue or product artifact.

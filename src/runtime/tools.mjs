@@ -745,27 +745,46 @@ export async function createTools({
     }
   }
 
-  // Splits full-suite failures outside the planned files into regressions this change caused (they pass
-  // at the base commit) and failures it did not cause (flaky when rerun alone, or failing at base too).
+  // Outside failures require measured base evidence, including on scoped retries.
   async function classifyOutsideFailures(files, testEnv) {
-    const fileArgs = (file) => ['--test', `--test-timeout=${fullTestPerTestTimeoutMs}`, file];
-    const passes = (cwd, file, env) => runCommand(process.execPath, fileArgs(file), {
-      cwd, timeout: fullTestPerTestTimeoutMs * 2, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024, env, signal,
-    }).then(() => true, () => { throwIfCancelled(signal); return false; });
-    const checked = files.slice(0, 8);
-    const preexisting = files.slice(8);
+    const regression_files = [];
+    const preexisting_files = [];
+    const transient_files = [];
+    const unclassified_files = files.slice(8);
+    const diagnostics = unclassified_files.length ? ['Baseline comparison cap: only eight files can be checked.'] : [];
+    const result = () => ({ regression_files, preexisting_files, transient_files, unclassified_files: files.filter((file) => unclassified_files.includes(file)),
+      ...(diagnostics.length ? { baseline_diagnostic: diagnostics.join(' ') } : {}) });
+    const unavailable = async () => {
+      diagnostics.push('Baseline comparison unavailable; unclassified failures are not proven pre-existing.');
+      await onEvent?.({ type: 'baseline-unavailable', reason: diagnostics.at(-1) });
+    };
+    const check = async (cwd, file, env) => {
+      try {
+        await runCommand(process.execPath, ['--test', '--test-timeout=' + fullTestPerTestTimeoutMs, file], {
+          cwd, timeout: fullTestPerTestTimeoutMs * 2, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024, env, signal,
+        });
+        return 'pass';
+      } catch (error) {
+        throwIfCancelled(signal);
+        if (Number.isInteger(error.code) && error.code > 0 && !error.killed && !error.signal &&
+            failingTestPaths((error.stdout ?? '') + '\n' + (error.stderr ?? ''), cwd).includes(file)) return 'fail';
+        return 'unknown';
+      }
+    };
     const persistent = [];
-    // Passing alone means full-suite load or timing failed it: transient, not a pre-existing failure.
-    const transient = [];
-    for (const file of checked) {
-      if (await passes(root, file, testEnv)) transient.push(file);
-      else persistent.push(file);
+    for (const file of files.slice(0, 8)) {
+      const status = await check(root, file, testEnv);
+      if (status === 'pass') transient_files.push(file);
+      else if (status === 'fail') persistent.push(file);
+      else unclassified_files.push(file);
     }
-    if (!persistent.length) return { regression_files: [], preexisting_files: preexisting, transient_files: transient };
-    const temp = await fs.mkdtemp(path.join(os.tmpdir(), 'roster-base-'));
-    const base = path.join(temp, 'base');
-    const regressions = [];
+    if (unclassified_files.some((file) => files.slice(0, 8).includes(file))) await unavailable();
+    if (!persistent.length) return result();
+    let scratch;
+    let base;
     try {
+      scratch = await fs.mkdtemp(path.join(root, '.roster-baseline-'));
+      base = path.join(scratch, 'base');
       await runCommand('git', ['worktree', 'add', '--detach', base, 'HEAD'], {
         cwd: root, timeout: 120_000, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024, signal,
       });
@@ -774,21 +793,24 @@ export async function createTools({
       const baseEnv = { ...testEnv, ...(existsSync(path.join(vendor, 'scripts', 'agent-pr.mjs'))
         ? { GITHUB_AGENT_CONTRACTS: vendor } : {}) };
       for (const file of persistent) {
-        if (await passes(base, file, baseEnv)) regressions.push(file);
-        else preexisting.push(file);
+        const status = await check(base, file, baseEnv);
+        if (status === 'pass') regression_files.push(file);
+        else if (status === 'fail') preexisting_files.push(file);
+        else { unclassified_files.push(file); await unavailable(); }
       }
     } catch (error) {
       throwIfCancelled(signal);
-      await onEvent?.({ type: 'baseline-unavailable', reason: String(error.message ?? error).slice(0, 200) });
-      return { regression_files: [], preexisting_files: files.filter((file) => !transient.includes(file)),
-        transient_files: transient };
+      for (const file of persistent) {
+        if (![...regression_files, ...preexisting_files, ...unclassified_files].includes(file)) unclassified_files.push(file);
+      }
+      await unavailable();
     } finally {
-      await runCommand('git', ['worktree', 'remove', '--force', base], {
+      if (base) await runCommand('git', ['worktree', 'remove', '--force', base], {
         cwd: root, timeout: 120_000, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
       }).catch(() => {});
-      await fs.rm(temp, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
+      if (scratch) await fs.rm(scratch, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
     }
-    return { regression_files: regressions, preexisting_files: preexisting, transient_files: transient };
+    return result();
   }
 
   const plannerWrites = new Map();
@@ -1240,7 +1262,7 @@ export async function createTools({
             repairFiles.add(file);
             failing.push(file);
           }
-          const outside = full && seat === 'coder'
+          const outside = seat === 'coder'
             ? failing.filter((file) => !isAllowedFile(file, [...allowedFiles, ...scopeFiles])) : [];
           const classified = outside.length ? await classifyOutsideFailures(outside, testEnv) : {};
           if (failing.length && classified.transient_files?.length === failing.length) {
