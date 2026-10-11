@@ -200,7 +200,11 @@ without editing the tracked example or storing credentials.
   validates and finalizes those files. Tool replies and repairs consume turns.
   Prefer one final JSON object with `title`, `acceptance_checks`, and
   `files_allowed`; the harness can also normalize `task` as a title alias and
-  accept `steps`/`notes` hints without granting extra scope. A complete validated
+  accept `steps`/`notes` hints without granting extra scope. Plans must omit
+  unsupported JSON keys such as `new_files`; the harness generates
+  the New files section from validated scope. Schema rejection names the accepted
+  fields for the existing bounded correction, rather than accepting extra authority.
+  A complete validated
   JSON plan accompanying an incomplete artifact draft is finalized without an
   extra model call. Invalid drafts return their validation error to the planner,
   rather than a misleading successful write alone. An oversized acceptance check

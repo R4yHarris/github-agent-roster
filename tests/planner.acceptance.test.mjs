@@ -197,3 +197,54 @@ test('critic JSON revision stops after one invalid correction even with a large 
   assert.equal(calls, 2);
   assert.equal(parseTaskDocument(task, { expectedAsk: ask }).ask, ask);
 });
+
+test('critic correction removes unsupported new_files using schema guidance without expanding authority', async () => {
+  const config = parseConfig(readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8')
+    .replace('base_url: ""', 'base_url: "http://localhost:1234/v1"').replace('model: ""', 'model: test-model'));
+  const checks = ['The guide contains setup instructions'];
+  const task = buildPlan(ask, { ...options, acceptanceChecks: checks }).task;
+  let calls = 0;
+  const result = await planAsk(ask, { config, env: {},
+    criticFeedback: { task, defects: [{ problem: 'Missing requirement check' }] },
+    fetchImpl: async (_url, request) => {
+      calls += 1;
+      const body = JSON.parse(request.body);
+      if (calls === 2) {
+        assert.match(body.messages.at(-1).content, /Use only.*title.*acceptance_checks.*files_allowed/);
+        assert.match(body.messages.at(-1).content, /Do not include new_files/);
+      }
+      return Response.json({ choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant', content: JSON.stringify({
+          title: 'Guide', acceptance_checks: checks, files_allowed: options.filesAllowed,
+          ...(calls === 1 ? { new_files: ['outside.mjs'] } : {}),
+        }),
+      } }] });
+    } });
+  assert.equal(calls, 2);
+  const parsed = parseTaskDocument(result.task, { expectedAsk: ask });
+  assert.deepEqual(parsed.acceptance_checks, checks);
+  assert.deepEqual(parsed.files_allowed, options.filesAllowed);
+  assert.equal(parsed.ask, ask);
+  assert.ok(!result.task.includes('outside.mjs'));
+});
+
+test('persistently unsupported critic fields remain denied after one correction', async () => {
+  const config = parseConfig(readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8')
+    .replace('base_url: ""', 'base_url: "http://localhost:1234/v1"').replace('model: ""', 'model: test-model'));
+  const task = buildPlan(ask, { ...options, acceptanceChecks: ['The guide contains setup instructions'] }).task;
+  let calls = 0;
+  await assert.rejects(planAsk(ask, {
+    config: { ...config, planner: { ...config.planner, turn_budget: 60 } }, env: {},
+    criticFeedback: { task, defects: [{ problem: 'Missing check' }] },
+    fetchImpl: async () => {
+      calls += 1;
+      return Response.json({ choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant', content: JSON.stringify({
+          title: 'Guide', acceptance_checks: ['The guide contains setup instructions'],
+          files_allowed: options.filesAllowed, new_files: ['outside.mjs'],
+        }),
+      } }] });
+    },
+  }), /Plan critic revision failed after one correction:.*unsupported task plan.*Use only/);
+  assert.equal(calls, 2);
+});
