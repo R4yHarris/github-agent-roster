@@ -544,8 +544,14 @@ export async function planAsk(ask, {
       }
       if (built) return finish({ ...built, usage: mergeUsage(...usages), turns: turn, response: lastResponse });
     }
-    if (tools && taskDraft !== undefined) {
-      if (validationRepairUsed) return fallback(failure, turn);
+    if ((tools && taskDraft !== undefined) || criticFeedback) {
+      if (criticFeedback && turn >= budget) {
+        throw new Error(`Planner turn budget (${budget}) exhausted: ${failure}`);
+      }
+      if (validationRepairUsed) {
+        if (criticFeedback) throw new Error(`Plan critic revision failed after one correction: ${failure}`);
+        return fallback(failure, turn);
+      }
       validationRepairUsed = true;
       messages.push(
         { role: 'assistant', content: message.content },
