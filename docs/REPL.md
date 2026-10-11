@@ -273,7 +273,7 @@ An ambiguous Ask prints `Ask kind: clarify` with its reason and exactly one
 clarification notice from the builtin run's shared log. The shell returns to
 idle without claiming successful implementation or offering publication;
 `/help` and the next Ask remain available. Direct builtin callers retain that
-log and the structured clarification result, with no completed seat.
+log and the structured clarification result, with no completed seat. The same log adds the best-effort reading, assumptions, up to three questions, and a ready-to-fill Ask template (never repeating the notice).
 
 The slice senior-team default uses Ask, TASK outcome/scope/checks, two small
 skills, final tests/excellence, read-only review, and a human eval hint.

@@ -25,7 +25,11 @@ more than five declared outcomes, or a whole-system/multi-wave initiative is
 an initiative. Merely mentioning
 these words in documentation or acceptance checks does not change the kind.
 Missing executable scope or unclear planning intent yields `clarify`, never
-an invented file allowlist. A validated existing TASK can supply slice scope,
+an invented file allowlist. A `clarify` is not a dead end (spec 3, 5.3, 5.7): the
+result adds a deterministic, offline best-effort reading, stated assumptions, up to
+three clarifying questions, and a ready-to-fill Ask template (`src/planner/clarify.mjs`).
+It creates no files or issues, runs no seat, and the template is rejected until real
+allowed files replace its placeholder. A validated existing TASK can supply slice scope,
 but cannot turn a feature or initiative into a coder run.
 
 ```text
