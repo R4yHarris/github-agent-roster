@@ -1,9 +1,8 @@
-import { execFile } from 'node:child_process';
+import { execute } from './exec.mjs';
 import { constants } from 'node:fs';
 import { existsSync, promises as fs, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { redactSecrets } from './memory.mjs';
 import { assertContractsInitialized, ContractsSubmoduleError, onlyMissingContractsScripts } from '../lib/contracts.mjs';
@@ -11,7 +10,6 @@ import { throwIfCancelled } from './cancel.mjs';
 import { readTaskMetadata } from './estimate.mjs';
 import { statusSectionPresent } from './readme-status.mjs';
 
-const execute = promisify(execFile);
 const managedFiles = new Set(['assignment.md', 'task.md', 'recipe.yml', 'plan.md', 'context.md', 'research.md', 'result.md', 'review.md', 'estimate.md']);
 export class ToolAccessError extends Error {
   code = 'ROSTER_TOOL_DENIED';

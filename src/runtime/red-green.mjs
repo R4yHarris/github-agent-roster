@@ -1,13 +1,11 @@
 // Spec §4.7, §5.5: a new acceptance test must fail against the base revision's product files and pass on the candidate.
-import { execFile } from 'node:child_process';
+import { execute } from './exec.mjs';
 import { existsSync, promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { promisify } from 'node:util';
 import { throwIfCancelled } from './cancel.mjs';
 import { fullTestPerTestTimeoutMs, mirrorInitializedSubmodules } from './tools.mjs';
 
-const execute = promisify(execFile);
 const isTestFile = (file) => /(^|\/)[^/]+\.test\.[cm]?js$/.test(file);
 const isProductCode = (file) => /\.[cm]?[jt]sx?$/.test(file) && !isTestFile(file) && !file.startsWith('tests/');
 const unquote = (text) => text.replace(/\\(.)/g, '$1');

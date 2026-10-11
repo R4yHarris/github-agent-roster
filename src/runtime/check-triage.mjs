@@ -1,12 +1,10 @@
 // Spec §4.2, §5.5: before coding, confirm deterministically which acceptance checks already hold.
-import { execFile } from 'node:child_process';
+import { execute } from './exec.mjs';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { promisify } from 'node:util';
 import { throwIfCancelled } from './cancel.mjs';
 import { fullTestPerTestTimeoutMs } from './tools.mjs';
 
-const execute = promisify(execFile);
 const testCommand = /`node --test((?:\s+[^`\s]+\.test\.[cm]?js)+)\s*`/;
 const commandOnly = /^`node --test[^`]*`\s+(?:exits|exit with|returns)\s+(?:code\s+)?0\.?$/i;
 const exportReference = /`([A-Za-z_$][\w$]*)`\s+(?:is exported\s+)?(?:from|in)\s+`([^`]+\.[cm]?js)`/g;
