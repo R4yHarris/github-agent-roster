@@ -54,11 +54,17 @@ export function outputDirectoryFromAsk(ask) {
 
 export function validateDirectoryFiles(files, directory) {
   const fold = (value) => process.platform === 'win32' ? value.toLowerCase() : value;
-  if (files.some((file) => {
+  const invalid = files.find((file) => {
     allowedFile(file);
     return file.includes('*') || !fold(file).startsWith(`${fold(directory)}/`) ||
       file.split('/').some((part) => part.startsWith('.') || part.toLowerCase() === 'vendor');
-  })) throw new TypeError('Planner must choose concrete, unprotected files inside the granted output directory');
+  });
+  if (invalid !== undefined) {
+    throw new TypeError('Planner must choose concrete, unprotected files inside the granted output directory: ' +
+      `"${invalid}" is not permitted beneath "${directory}". Use exact file paths; no wildcards, ` +
+      'hidden path components (including .gitignore), vendor paths, or outside files. ' +
+      'Keep test scratch fixtures in the OS temporary directory, not in files_allowed.');
+  }
 }
 
 export function isDirectoryDocumentAsk(ask) {

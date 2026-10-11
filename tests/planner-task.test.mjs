@@ -6,7 +6,7 @@ import test from 'node:test';
 import { parseConfig } from '../src/lib/config.mjs';
 import { buildPlan, cleanAskText, planAsk, planFromTask, planStub } from '../src/planner/stub.mjs';
 import { deterministicPlanDefects } from '../src/planner/critic.mjs';
-import { ensureAllowedFiles, parseTaskDocument, taskFilesAllowed } from '../src/planner/task.mjs';
+import { ensureAllowedFiles, parseTaskDocument, taskFilesAllowed, validateDirectoryFiles } from '../src/planner/task.mjs';
 import { readTaskMetadata, updateTaskMetadata } from '../src/runtime/estimate.mjs';
 import { runPlanner } from '../src/seats/planner.mjs';
 
@@ -290,4 +290,17 @@ test('a bare filename in a directory-scoped Ask never widens the allowed files b
   assert.equal(ensureAllowedFiles(task, ask), task);
   assert.match(ensureAllowedFiles(task, 'Edit medium-csv/a.mjs. Output it in a new "medium-csv" directory'),
     /- medium-csv\/a\.mjs/);
+});
+
+test('directory scope feedback identifies the forbidden path and gives actionable correction without expanding scope', () => {
+  for (const file of ['medium-csv/.gitignore', 'medium-csv/**', 'medium-csv/vendor/a.mjs', 'outside.mjs']) {
+    assert.throws(() => validateDirectoryFiles(['medium-csv/a.mjs', file], 'medium-csv'), (error) => {
+      assert.ok(error instanceof TypeError);
+      assert.ok(error.message.includes(`"${file}"`));
+      assert.match(error.message, /hidden path components \(including \.gitignore\)/);
+      assert.match(error.message, /OS temporary directory/);
+      return true;
+    });
+  }
+  assert.doesNotThrow(() => validateDirectoryFiles(['medium-csv/a.mjs', 'medium-csv/a.test.mjs'], 'medium-csv'));
 });
