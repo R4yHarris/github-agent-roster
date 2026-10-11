@@ -145,6 +145,7 @@ export function planStub(ask, { reference = 'local:draft', title, metadata } = {
 
 export function planFromTask(task, ask, { issueTitle, issueBody } = {}) {
   const { title, acceptance_checks, files_allowed } = parseTaskDocument(task, { expectedAsk: ask, issueTitle, issueBody });
+  acceptance_checks.forEach(acceptanceCheck);
   checkAskScope(files_allowed, askRequirements(issueTitle ? `${issueTitle}\n${ask}` : ask, { allowMissing: true }));
   const { difficulty, estimate_min, task_class, model } = readTaskMetadata(task);
   return { title, acceptance_checks, files_allowed, difficulty, estimate_min, task_class, model, design: parseDesign(task) };

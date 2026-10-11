@@ -50,7 +50,7 @@ const keysAre = (value, keys) => value && typeof value === 'object' && !Array.is
   Object.keys(value).sort().join(',') === keys.split(',').sort().join(',');
 const hash = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 
-// The planner's display parser caps each check at 240 characters; continuity must not lose obligations.
+// Existing task checks are authoritative data; continuity must not lose obligations.
 export function authoritativeAcceptanceChecks(task) {
   const parsed = parseTaskDocument(task);
   const content = taskSections(task).sections.find(({ name }) => name === 'acceptance checks').content;

@@ -4,7 +4,7 @@ import test from 'node:test';
 import { parseConfig } from '../src/lib/config.mjs';
 import { validatePlan } from '../src/planner/plan.mjs';
 import { validatePlanningReceipt } from '../src/planner/receipt.mjs';
-import { buildPlan, planAsk } from '../src/planner/stub.mjs';
+import { buildPlan, planAsk, planFromTask } from '../src/planner/stub.mjs';
 import { parseTaskDocument } from '../src/planner/task.mjs';
 
 const ask = 'Write a Markdown guide. Output it in a new "guide" directory';
@@ -31,10 +31,11 @@ test('all planner ingress paths reject oversized checks and preserve the exact 2
   const long = check(241);
   for (const operation of [
     () => buildPlan(ask, { ...options, acceptanceChecks: [long] }),
-    () => parseTaskDocument(task.replace(full, long), { expectedAsk: ask }),
+    () => planFromTask(task.replace(full, long), ask),
     () => validatePlan(outline(long), { kind: 'feature', filesAllowed: options.filesAllowed }),
     () => validatePlanningReceipt(receipt(long), parseTaskDocument(task)),
   ]) assert.throws(operation, /Acceptance check.*240.*shorten/i);
+  assert.equal(parseTaskDocument(task.replace(full, long), { expectedAsk: ask }).acceptance_checks[0], long);
 });
 
 test('an oversized written TASK stays invalid until a complete concise JSON correction', async () => {

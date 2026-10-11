@@ -43,8 +43,10 @@ shared raw history, model-learning claim or autonomous permission grant.
 These boundaries implement FEATURE_SPEC sections 5.2, 5.4 and 5.6.
 
 Acceptance checks are bounded to 240 characters after whitespace normalization.
-Slice JSON, written task/plan documents, child outlines and planning receipts
+New slice JSON, written task/plan proposals, child outlines and planning receipts
 reject oversized checks explicitly rather than cutting off requirements.
+Reading existing task documents preserves complete checks, including legacy
+long checks, so source-validated acceptance continuation remains compatible.
 Model validation feedback requests concise complete wording within the existing
 turn budget. Title shortening is unchanged. This implements FEATURE_SPEC
 sections 5.3-5.5; neither the original Ask nor its safety obligations are waived.
