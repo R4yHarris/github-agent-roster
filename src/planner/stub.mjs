@@ -231,7 +231,12 @@ export async function planAsk(ask, {
         'Declare new paths under ## New files when writing TASK.md; JSON plans are declared by the harness. ' +
         'Design/setup documentation requests authorize documents only, not purchases, accounts, deployment, network or publication. ' +
         'For document intent, choose only Markdown files and checks describing document contents, never action-success checks. ' +
-        'Use document-content acceptance checks for documentation, not installation/deployment commands. ' : '') +
+        'Use document-content acceptance checks for documentation, not installation/deployment commands. ' +
+        'For artifact presence use "The directory contains a Markdown guide", not "A directory is created". ' +
+        'For safety use "The guide states the examples are illustrative only". Negative execution claims such as ' +
+        '"no commands run" or "no files modified" are still operational checks, not document contents; ' +
+        'keep the original safety obligations in the Ask and notes, enforced by scope and tools. ' +
+        'Avoid pairing command names with execution assertions even when quoting or negating them. ' : '') +
       (grounding ? 'Existing definitions below are real repository code. In acceptance_checks, name real exports in backticks ' +
         '(for example `openStore`) instead of concepts; the harness rejects backticked names that do not exist. ' +
         'For a code task add design: {extend:[{file,exports}], new_exports:[{file,name}], outline:[steps], ' +

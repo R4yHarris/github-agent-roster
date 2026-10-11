@@ -94,8 +94,14 @@ or production changes. Markdown-only tasks have content checks, with tests
 skipped rather than executing installation/deployment instructions. Such
 document intent also rejects checks asserting installation, deployment,
 publication, network, purchase or account actions succeeded; checks must
-describe document contents. This does not make all directory asks docs-only:
-implementation asks can still plan code files and matching tests. The
+describe document contents.
+For example, planner checks say the output directory contains a Markdown
+guide and the guide states examples are illustrative, rather than claiming
+directory creation or command execution. Negative execution assertions are
+still operational claims; the unchanged Ask, notes and tool authority retain
+the safety obligations (FEATURE_SPEC sections 5.3 and 5.4).
+This does not make all directory asks docs-only: implementation asks can still
+plan code files and matching tests. The
 document gate follows artifact intent regardless of opening verb and fails
 closed unless an implementation artifact is explicitly requested. The
 no-endpoint stub still writes a summary without implementing anything.

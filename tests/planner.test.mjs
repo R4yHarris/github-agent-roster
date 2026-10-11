@@ -320,6 +320,43 @@ test('planner gives the model another turn after writing an incomplete TASK.md',
   assert.match(result.task, /## Files allowed/);
 });
 
+test('directory documentation guides the planner away from observed operational checks and validates its correction', async () => {
+  const ask = 'Write a short Markdown guide explaining the difference between a Git branch and a worktree, ' +
+    'with one safe PowerShell example for listing each. Do not execute the examples or change existing files. ' +
+    'Output it in a new "easy-git-guide" directory';
+  const invalid = [
+    'A new `easy-git-guide` directory is created containing a short Markdown guide file.',
+    'The guide explains what a Git branch is and what a Git worktree is in plain language.',
+    'The guide includes one read-only PowerShell example for listing branches and one for listing worktrees.',
+    'No existing files in the repository are modified or deleted; only the new guide file is added.',
+  ];
+  let calls = 0;
+  let guidance;
+  const result = await planAsk(ask, {
+    config: { ...llmConfig, planner: { turn_budget: 2 } }, env: {},
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      guidance = body.messages[0].content;
+      calls += 1;
+      if (calls === 2) assert.match(body.messages.at(-1).content, /document-content checks/);
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+        content: JSON.stringify({ title: 'Branch and worktree guide',
+          acceptance_checks: calls === 1 ? invalid : [
+            'The directory contains a Markdown guide explaining branches and worktrees.',
+            'The guide contains one read-only PowerShell listing example for each.',
+            'The guide states that examples are illustrative only.',
+          ], files_allowed: ['easy-git-guide/guide.md'] }),
+      } }] });
+    },
+  });
+  assert.match(guidance, /directory contains a Markdown guide/);
+  assert.match(guidance, /Negative execution claims.*still operational checks/);
+  assert.equal(calls, 2);
+  assert.equal(result.error, undefined);
+  assert.ok(result.task.includes(ask));
+  assert.deepEqual(taskFilesAllowed(result.task), ['easy-git-guide/guide.md']);
+});
+
 test('documentation planner repairs a nine-check TASK at the final normal turn without losing requirements', async (t) => {
   const repoRoot = mkdtempSync(join(tmpdir(), 'roster-planner-doc-checks-'));
   t.after(() => rmSync(repoRoot, { recursive: true, force: true }));
