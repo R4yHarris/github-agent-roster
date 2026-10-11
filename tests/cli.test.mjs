@@ -121,7 +121,8 @@ test("ask CLI reports a genuinely ambiguous ask without creating a draft", () =>
   const result = run(["ask", ask]);
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.stdout, `Ask kind: clarify\n${clarificationHint}\n`);
+  assert.ok(result.stdout.startsWith(`Ask kind: clarify\n${clarificationHint}\nBest-effort reading: `), result.stdout);
+  assert.match(result.stdout, /Assumptions[\s\S]*Questions[\s\S]*Ready-to-fill template/);
   assert.doesNotMatch(result.stdout, /Ask:|RECIPE:|TASK:|Next:|RESULT:|REVIEW:/);
 });
 
