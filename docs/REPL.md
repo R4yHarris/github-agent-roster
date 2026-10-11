@@ -275,6 +275,18 @@ idle without claiming successful implementation or offering publication;
 `/help` and the next Ask remain available. Direct builtin callers retain that
 log and the structured clarification result, with no completed seat. The same log adds the best-effort reading, assumptions, up to three questions, and a ready-to-fill Ask template (never repeating the notice).
 
+Local shell Ask intake also saves a private pending checkpoint in the project
+`.roster/asks/clarification.json`. After restarting, `/clarify` shows the original
+redacted Ask and questions. `/clarify Write a Status note. Output it in a new "notes" directory`
+explicitly bounds a follow-up and resumes planning, then pauses at the existing
+confirmation gate before coding. Enter approves; `/stop` keeps the checkpoint.
+`/clarify continue` retries a saved validated reply after a restart; `/clarify cancel`
+discards it without running seats or publication. A failed attempt remains pending.
+The reply supplements rather than overwrites original constraints. CLI equivalents
+are `roster ask --pending`, `roster ask --resume "TEXT"`, `roster ask --resume`,
+and `roster ask --cancel`; CLI resume submits an issue/offline draft, not a coder run.
+This is intake continuity (spec 5.7, 5.8), not another task queue.
+
 The slice senior-team default uses Ask, TASK outcome/scope/checks, two small
 skills, final tests/excellence, read-only review, and a human eval hint.
 Classified slices do not load research/implementation packs, even at

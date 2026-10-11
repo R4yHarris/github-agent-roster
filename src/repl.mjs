@@ -54,6 +54,7 @@ import { waveBoard } from './lib/waves.mjs';
 import { writeRepoMap } from './lib/repo-map.mjs';
 import { createSteeringControl } from './runtime/steering.mjs';
 import { remediationTask, selectRemediationProfile } from './runtime/remediation.mjs';
+import { saveClarification, readClarification, resumeClarification, cancelClarification, formatClarificationCheckpoint } from './lib/clarification-checkpoint.mjs';
 
 const rosterRoot = fileURLToPath(new URL('../', import.meta.url));
 const unknownCommand = 'Unknown command. /help lists commands.\n';
@@ -364,7 +365,7 @@ export function createDispatcher({
     try {
       state.lastRun = await run({
         cwd, repoRoot, config: state.config, env, publish: false, debug: state.debug, ...options,
-        log: (message) => output.write(`${message}\n`), errorOutput,
+        log: (message) => safeWrite(`${message}\n`), errorOutput,
         onRunEvent: receiveEvent,
         signal: controller.signal,
         steeringControl: state.steeringControl,
@@ -388,6 +389,16 @@ export function createDispatcher({
       state.display.busy = false;
       state.controller = null;
       notify();
+    }
+    if (request?.clarificationId && !state.lastRun.failed && !state.lastRun.planningOnly && state.lastRun.askKind !== 'clarify') {
+      await cancelClarification({ repoRoot: resolveProjectRoot(cwd), env, apiKeyEnv: state.config.llm.api_key_env, id: request.clarificationId });
+      delete request.clarificationId;
+      output.write('Clarification resumed; original Ask and explicit scope were preserved.\n');
+    }
+    if (state.lastRun.askKind === 'clarify' && request?.kind === 'ask') {
+      const checkpoint = await saveClarification(request.text, { repoRoot: resolveProjectRoot(cwd), env, apiKeyEnv: state.config.llm.api_key_env });
+      state.lastRun.checkpoint = checkpoint;
+      output.write(`Checkpoint saved privately: ${checkpoint.id}. Use /clarify to inspect, /clarify TEXT with explicit Allowed Files to resume, or /clarify cancel.\n`);
     }
     if (state.lastRun.task) state.display.branch = state.lastRun.task;
     if (request) request.prepared = state.lastRun;
@@ -430,7 +441,13 @@ export function createDispatcher({
     return true;
   }
 
-  function runRequest(request, { retry = false, continueConfirmed = false } = {}) {
+  async function runRequest(request, { retry = false, continueConfirmed = false } = {}) {
+    if (request.clarificationId) {
+      const checkpoint = await readClarification({ repoRoot: resolveProjectRoot(cwd), env, apiKeyEnv: state.config.llm.api_key_env });
+      if (!checkpoint || checkpoint.id !== request.clarificationId) {
+        throw new Error('Clarification checkpoint was cancelled or changed. Inspect /clarify before resuming.');
+      }
+    }
     if (retry && !request.prepared?.worktreePath) {
       throw new Error('No prepared worktree is available to retry; start the Ask or issue run first.');
     }
@@ -478,7 +495,7 @@ export function createDispatcher({
     }
     if (text === '/') { output.write(formatHelp()); return true; }
     if (!text.startsWith('/')) return runRequest({ kind: 'ask', text, options: {} });
-    const match = /^\/([a-z]+)(?:\s+(.*))?$/.exec(text);
+    const match = /^\/([a-z]+)(?:\s+([\s\S]*))?$/.exec(text);
     if (!match) {
       errorOutput.write(unknownCommand);
       return true;
@@ -719,6 +736,23 @@ export function createDispatcher({
           return true;
         }
         queueAsk(args);
+        return true;
+      }
+      case 'clarify': {
+        const options = { repoRoot: resolveProjectRoot(cwd), env, apiKeyEnv: state.config.llm.api_key_env };
+        if (!args || args === 'show') {
+          safeWrite(formatClarificationCheckpoint(await readClarification(options), { shell: true }));
+          return true;
+        }
+        if (args === 'cancel') {
+          if (state.pendingConfirm?.clarificationId || state.controller && state.lastRequest?.clarificationId) cancel();
+          output.write(await cancelClarification(options) ? 'Clarification cancelled. No new execution or publication started.\n' : 'No pending clarification.\n');
+          return true;
+        }
+        if (state.controller !== null) throw new Error('Stop the active run before resuming clarification.');
+        const { ask, record } = await resumeClarification(args === 'continue' ? undefined : args, options);
+        await runRequest({ kind: 'ask', text: ask, options: { confirm: true }, clarificationId: record.id });
+        if (state.lastRun.failed || state.lastRun.planningOnly) output.write('Clarification checkpoint remains pending; inspect /clarify, or /clarify continue after restart. Accept the prepared task with Enter to execute.\n');
         return true;
       }
       case 'ask': {

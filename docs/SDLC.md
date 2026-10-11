@@ -28,8 +28,24 @@ Missing executable scope or unclear planning intent yields `clarify`, never
 an invented file allowlist. A `clarify` is not a dead end (spec 3, 5.3, 5.7): the
 result adds a deterministic, offline best-effort reading, stated assumptions, up to
 three clarifying questions, and a ready-to-fill Ask template (`src/planner/clarify.mjs`).
-It creates no files or issues, runs no seat, and the template is rejected until real
-allowed files replace its placeholder. A validated existing TASK can supply slice scope,
+CLI and shell intake save one private pending checkpoint under the project
+`.roster/asks/clarification.json` (spec 5.7 and 5.8), not a task board. No issue,
+seat or implementation is created. The template is rejected until real allowed
+files replace its placeholder. `roster ask --pending` or `/clarify` reloads the
+original redacted Ask, assumptions and questions after restart. `roster ask --resume
+"TEXT"` or `/clarify TEXT` must explicitly declare Allowed Files or a relative
+output directory. The validated follow-up is saved before the ordinary intake
+path resumes; `roster ask --resume` or `/clarify continue` retries that saved reply.
+The original constraints remain in the Ask, not replaced by the interpretation.
+The shell always pauses at the existing `--confirm` gate before implementation;
+Enter approves the prepared task, `/stop` leaves the checkpoint pending, and
+`/clarify cancel` or `roster ask --cancel` discards only the intake checkpoint.
+A failed/cancelled attempt retains it. CLI resume creates an issue (or project-local
+offline draft), never executes or publishes code. A contradictory follow-up
+is not authority to override the original constraints or policy: review the
+prepared task before approving. No heuristic contradiction/confidence score is used.
+Storage must be untracked/gitignored, bounded, private and single-link; symlinks,
+malformed content, unsafe scope and secret-bearing replies fail without execution. A validated existing TASK can supply slice scope,
 but cannot turn a feature or initiative into a coder run.
 
 ```text

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -22,11 +22,11 @@ function capture() {
   return { write(value) { text += String(value); }, get text() { return text; } };
 }
 
-function dispatcher({ env = {}, services = {}, config: activeConfig = config } = {}) {
+function dispatcher({ env = {}, services = {}, config: activeConfig = config, cwd: project = cwd } = {}) {
   const output = capture();
   const errorOutput = capture();
   const commands = createDispatcher({
-    cwd, repoRoot: root, config: activeConfig, env, output, errorOutput,
+    cwd: project, repoRoot: root, config: activeConfig, env, output, errorOutput,
     services: { repositoryRoot: () => cwd,
       requireLifecycleHooks: async () => ({ pass: true, reasons: [], entries: [] }),
       publicationTask: ({ task, env }) => task || env.AI_TASK || 'feat-ghcp-metadata', ...services },
@@ -439,8 +439,12 @@ test('a local ask publishes from its worktree and does not comment on an issue',
   assert.match(shell.output.text, /Human AI-Eval/);
 });
 
-test('clarification is visible in the shell and never offers publication', async () => {
-  const shell = dispatcher({ services: {
+test('clarification is visible in the shell and never offers publication', async (t) => {
+  const project = mkdtempSync(join(process.cwd(), '.clarification-repl-'));
+  t.after(() => rmSync(project, { recursive: true, force: true }));
+  execFileSync('git', ['init', '--quiet'], { cwd: project });
+  writeFileSync(join(project, '.gitignore'), '.roster/asks/\n');
+  const shell = dispatcher({ cwd: project, services: { repositoryBranch: () => 'main',
     runBuiltinAsk: async (ask, { log }) => {
       log('Ask kind: clarify (the Ask lacks executable file scope)');
       log('Clarify: Name one outcome and allowed files.');

@@ -20,6 +20,7 @@ const help = `Usage:
   roster fleet probe ID [--set-model [MODEL]]
   roster fleet default ID
   roster fleet remove ID
+  roster ask --pending | --cancel | --resume ["TEXT"]
   roster ask "..."
   roster run --issue N [--runtime builtin] [--auto-model] [--seats planner,coder,reviewer] [--parallel K] [--attempts K] [--saved] [--publish] [--skip-review] [--confirm] [--plan] [--base trunk|current|REF] [--no-fetch]
   roster run --seat coder --runtime builtin
@@ -91,10 +92,29 @@ async function main(args) {
   if (args.length === 0) {
     const { startRepl } = await import('./repl.mjs');
     process.exitCode = await startRepl({ repoRoot: rosterRoot, debug });
+  } else if (args[0] === 'ask' && ['--pending', '--cancel', '--resume'].includes(args[1])) {
+    const { resolveProjectRoot } = await import('./lib/paths.mjs');
+    const { readClarification, cancelClarification, resumeClarification, formatClarificationCheckpoint } = await import('./lib/clarification-checkpoint.mjs');
+    const { loadConfig } = await import('./lib/config.mjs');
+    const activeConfig = loadConfig({ repoRoot: rosterRoot, cwd: process.cwd() });
+    const options = { repoRoot: resolveProjectRoot(process.cwd()), env: process.env, apiKeyEnv: activeConfig.llm.api_key_env };
+    if (args[1] === '--pending' && args.length === 2) {
+      process.stdout.write(formatClarificationCheckpoint(await readClarification(options)));
+    } else if (args[1] === '--cancel' && args.length === 2) {
+      process.stdout.write(await cancelClarification(options) ? 'Clarification cancelled. No new execution or publication started.\n' : 'No pending clarification.\n');
+    } else if (args[1] === '--resume' && [2, 3].includes(args.length)) {
+      const { ask, record } = await resumeClarification(args[2], options);
+      const { formatAsk, submitAsk } = await import('./lib/ask.mjs');
+      const result = await submitAsk(ask, { repoRoot: options.repoRoot, checkpointRoot: options.repoRoot,
+        config: activeConfig });
+      await cancelClarification({ ...options, id: record.id });
+      process.stdout.write(formatAsk(result));
+    } else throw new TypeError('Use roster ask --pending, --cancel, or --resume "TEXT".');
   } else if (args.length === 2 && args[0] === 'ask') {
     const { formatAsk, submitAsk } = await import('./lib/ask.mjs');
+    const { resolveProjectRoot } = await import('./lib/paths.mjs');
     const result = await submitAsk(args[1], {
-      repoRoot: rosterRoot,
+      repoRoot: rosterRoot, checkpointRoot: resolveProjectRoot(process.cwd()),
     });
     process.stdout.write(formatAsk(result));
   } else if (args[0] === 'doctor') {

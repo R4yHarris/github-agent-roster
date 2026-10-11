@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawnSync, execFileSync } from "node:child_process";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -114,11 +114,15 @@ test("ask CLI creates an offline draft with a create command when gh is missing"
   }
 });
 
-test("ask CLI reports a genuinely ambiguous ask without creating a draft", () => {
+test("ask CLI reports a genuinely ambiguous ask without creating an executable draft", (t) => {
+  const cwd = mkdtempSync(join(process.cwd(), ".clarification-cli-"));
+  execFileSync("git", ["init", "--quiet"], { cwd });
+  writeFileSync(join(cwd, ".gitignore"), ".roster/asks/\n");
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
   const ask = "Improve the product overall.";
   const classification = classifyAsk(ask);
   assert.equal(classification.kind, "clarify");
-  const result = run(["ask", ask]);
+  const result = run(["ask", ask], process.env, cli, undefined, cwd);
   assert.ifError(result.error);
   assert.equal(result.status, 0, result.stderr);
   assert.ok(result.stdout.startsWith(`Ask kind: clarify\n${clarificationHint}\nBest-effort reading: `), result.stdout);

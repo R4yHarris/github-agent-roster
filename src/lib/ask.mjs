@@ -12,6 +12,7 @@ import { readTaskMetadata } from '../runtime/estimate.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
 import { classifyAsk } from '../planner/classify.mjs';
 import { clarificationResult } from '../planner/clarify.mjs';
+import { saveClarification } from './clarification-checkpoint.mjs';
 import { planOutline } from '../planner/plan.mjs';
 import { createTools, planArtifactFiles } from '../runtime/tools.mjs';
 
@@ -68,7 +69,8 @@ export async function writeAsk(ask, {
 
 export function formatAsk(result) {
   const kind = `Ask kind: ${result.askKind ?? 'slice'}\n`;
-  if (result.mode === 'clarify') return kind + `${result.clarification}\n${result.guidance ?? ''}${result.guidance ? '\n' : ''}`;
+  if (result.mode === 'clarify') return kind + `${result.clarification}\n${result.guidance ?? ''}${result.guidance ? '\n' : ''}` +
+    (result.checkpoint ? `Checkpoint saved privately: ${result.checkpoint.id}\nResume: roster ask --resume "TEXT" (explicit Allowed Files or relative output directory)\nInspect: roster ask --pending; cancel: roster ask --cancel\n` : '');
   if (result.mode === 'issue') return kind + `Issue: ${result.url}\n`;
   return kind + `Ask: ${result.askPath}\n` +
     (result.planPath ? `PLAN: ${result.planPath}\n`
@@ -79,6 +81,7 @@ export function formatAsk(result) {
 export async function submitAsk(ask, {
   cwd = process.cwd(),
   repoRoot = rosterRoot,
+  checkpointRoot = repoRoot,
   config = loadConfig({ repoRoot, cwd }),
   env = process.env,
   id = randomUUID(),
@@ -91,7 +94,10 @@ export async function submitAsk(ask, {
   if (title.length > 240) throw new TypeError('Issue title must be at most 240 characters');
   const body = renderIssueBody(text);
   const askKind = classifyAsk(text).kind;
-  if (askKind === 'clarify') return { mode: 'clarify', askKind, ...clarificationResult(ask) };
+  if (askKind === 'clarify') {
+    const checkpoint = await saveClarification(text, { repoRoot: checkpointRoot, env, apiKeyEnv: config.llm.api_key_env });
+    return { mode: 'clarify', askKind, ...clarificationResult(checkpoint.originalAsk), checkpoint };
+  }
   if (askKind === 'slice') askRequirements(text);
   const commandEnv = { ...env, GH_PROMPT_DISABLED: '1' };
   try {
