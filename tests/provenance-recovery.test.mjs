@@ -148,26 +148,30 @@ async function plantLock(root, record) {
   await fs.writeFile(join(root, 'locks', 'provenance-store.lock'), JSON.stringify(record), 'utf8');
 }
 
-test('stale lock: a held lock is refused until the injected clock passes staleMs, then taken over', async (t) => {
+test('stale lock: missing PID remains protected before and after staleMs', async (t) => {
   const root = await makeStoreRoot();
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const staleMs = 1000;
-  // A pid-less lock from a crashed writer: only the injected clock can make it stale.
-  await plantLock(root, { holder: 'crashed-writer', acquiredAt: new Date(now).toISOString() });
-  const store = openProvenanceStore(root, { holder: 'recovery-writer', staleMs, clock, isAlive: () => true });
+  await plantLock(root, { holder: 'unknown-writer', acquiredAt: new Date(now).toISOString() });
+  const lockPath = join(root, 'locks', 'provenance-store.lock');
+  const bytes = await fs.readFile(lockPath);
+  const store = openProvenanceStore(root, {
+    holder: 'recovery-writer', staleMs, clock,
+    isAlive: () => assert.fail('Missing PID must not be probed'),
+  });
 
   tick(staleMs - 1);
   await assert.rejects(store.appendRecord(makeRecord('blocked-0001')),
-    (error) => error.code === 'E_LOCK_HELD' && error.holder === 'crashed-writer', 'fresh lock refuses a second writer');
+    (error) => error.code === 'E_LOCK_HELD' && error.holder === 'unknown-writer', 'fresh lock refuses a second writer');
   assert.equal((await store.readAll()).records.length, 0, 'the refused append wrote nothing');
+  assert.deepEqual(await fs.readFile(lockPath), bytes);
 
   tick(2);
-  await store.appendRecord(makeRecord('post-stale-0001', { writtenAt: now }));
-  const { records } = await store.readAll();
-  assert.deepEqual(records.map((record) => record.id), ['post-stale-0001'], 'takeover lets the append commit');
-  assert.equal(records[0].payload.writtenAt, T0 + staleMs + 1, 'record stamped by injected clock');
-  await assert.rejects(fs.stat(join(root, 'locks', 'provenance-store.lock')), { code: 'ENOENT' },
-    'the taken-over lock is released after the append');
+  await assert.rejects(store.appendRecord(makeRecord('post-stale-0001')),
+    (error) => error.code === 'E_LOCK_HELD' && error.holder === 'unknown-writer',
+    'age does not authorize takeover without proof of death');
+  assert.equal((await store.readAll()).records.length, 0, 'the old lock still prevents writes');
+  assert.deepEqual(await fs.readFile(lockPath), bytes);
 });
 
 test('stale lock: a live holder is never taken over; a provably dead holder is', async (t) => {
