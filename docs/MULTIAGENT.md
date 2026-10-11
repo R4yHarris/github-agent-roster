@@ -198,11 +198,11 @@ with K > 1. GitHub remains the board; no runtime or task database is added.
 Spec trace: FEATURE_SPEC sections 5.2, 5.4, 5.5, and 5.6.
 
 1. The issue lookup creates `.worktrees/issue-N` once, with `ASSIGNMENT.md`
-   and an ignored `.env` holding `AI_TASK=issue-N` and
+   and a private Git-metadata environment file holding `AI_TASK=issue-N` and
    `AI_SESSION=roster-N-coder`. All three seats use that worktree.
    Repeating `/run N` reuses its registered worktree and branch. An existing
    branch without a worktree is added without `-b`; mismatched registrations
-   are refused. App files, ASSIGNMENT.md, and `.env` are preserved. Previous
+   are refused. App files, ASSIGNMENT.md, and the task environment are preserved. Previous
    untracked generated run artifacts are archived under the repository's Git
    metadata before another attempt, not deleted or mixed into the app diff.
    If existing RECIPE.yml and TASK.md validate for this issue, planning is
