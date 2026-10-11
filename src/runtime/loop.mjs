@@ -15,6 +15,7 @@ import { throwIfCancelled } from './cancel.mjs';
 import { SteeringInterrupt } from './steering.mjs';
 
 class MalformedCoderTools extends Error {}
+class MissingCoderToolName extends MalformedCoderTools {}
 const rosterToolNames = new Set(toolDefinitions.map((tool) => tool.function.name));
 const safeToolName = (name) => String(name).replace(/[^\w.-]/g, '?').slice(0, 64);
 // A hallucinated tool (not a Roster tool at all) gets one correction; a withheld Roster tool still fails the seat.
@@ -66,6 +67,9 @@ function decodeCalls(message, offered, ids, turn) {
   const batchIds = new Set(ids);
   return (message.tool_calls ?? []).map((call, index) => {
     const name = call?.function?.name;
+    if (typeof name !== 'string' || !name.trim()) {
+      throw new MissingCoderToolName('Coder tool call requires a nonempty function name');
+    }
     if (call && call.type === 'function' && typeof name === 'string' && !offered.has(name) &&
         !rosterToolNames.has(name) && offered.size) {
       throw new UnknownCoderTool(name);
@@ -492,6 +496,7 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
         continue;
       }
       if (!(error instanceof MalformedCoderTools)) throw error;
+      if (repaired && error instanceof MissingCoderToolName) throw error;
       if (!repaired) {
         repaired = true;
         needsTools = true;
