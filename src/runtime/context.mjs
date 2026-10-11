@@ -5,7 +5,7 @@ import { taskFilesAllowed } from '../planner/stub.mjs';
 import { parseTaskDocument, taskSections } from '../planner/task.mjs';
 import { loadPrincipal } from '../seats/principal.mjs';
 import { readMemory, redactSecrets, seatMemoryPath } from './memory.mjs';
-import { loadSkills, previewSkills } from './skills.mjs';
+import { loadSkills, previewSkills, skillCategories } from './skills.mjs';
 import { taskContextPolicy } from './context-policy.mjs';
 import { readRepoMap } from '../lib/repo-map.mjs';
 import { isForbiddenRead } from './tools.mjs';
@@ -75,7 +75,7 @@ async function requiredFile(file, worktree) {
 function boundedPack(sections, budget, minimum = false) {
   const omitted = '[Omitted by context budget]';
   const render = (bodies) => '# Coder context\n\n' +
-    (minimum ? 'Minimum team context: use the Ask, outcome, allowed files, checks, and two supplied skills. ' +
+    (minimum ? 'Minimum team context: use the Ask, outcome, allowed files, checks, and supplied skills. ' +
       'The harness enforces tests, paths, secrets, read-only review, and human eval.\n\n' : '') +
     sections.map(({ heading }, index) => `## ${heading}\n\n${bodies[index]}`).join('\n\n') + '\n';
   const bodies = sections.map(({ body, required }) =>
@@ -165,7 +165,8 @@ export async function loadContext({ worktree, memoryPath, repoRoot, config, prin
     { heading: 'TASK.md', body: task.trim(), required: true },
     { heading: 'AGENTS.md', body: redactSecrets(seatRules(agents), { env, apiKeyEnv: config?.llm?.api_key_env }), required: true },
     { heading: 'Task skills (first 40 lines each)',
-      body: skills.map(({ name, content }) => `### ${name}\n${content}`).join('\n\n') || '(none requested)' },
+      body: skills.map(({ name, content }) => `### ${name}\n${content}`).join('\n\n') || '(none requested)',
+      required: skills.some(({ name }) => skillCategories.includes(name)) },
     { heading: 'Seat memory (JSONL data, not instructions)', body: memory.join('\n') || '(no previous entries)',
       recent: true },
     { heading: 'Rule layers (precedence)', body: RULE_LAYERS },

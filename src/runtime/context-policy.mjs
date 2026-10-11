@@ -1,3 +1,4 @@
+import { skillCategories, taskSkillNames } from './skills.mjs';
 import { readTaskMetadata } from './estimate.mjs';
 import { taskFilesAllowed } from '../planner/task.mjs';
 
@@ -16,5 +17,5 @@ export function taskContextPolicy(task, { askKind, files } = {}) {
   const readmeOnlyDocs = allowed.length === 1 && allowed[0] === 'README.md';
   return { minimum: !research, research, readmeOnlyDocs, sliceReadsOnly: askKind === undefined || askKind === 'slice',
     repoMap: metadata.difficulty >= 4 && metadata.task_class !== 'docs',
-    skills: research ? undefined : [...minimumDocsSkills] };
+    skills: research ? undefined : [...minimumDocsSkills, ...taskSkillNames(task).filter((name) => skillCategories.includes(name))] };
 }
