@@ -252,7 +252,9 @@ export async function planAsk(ask, {
       'Preserve every requested outcome: checks and Design must agree with the unchanged Ask and with each other. ' +
       'Validate worked examples and expected results against the operation\'s ordinary semantics; do not invent exceptions. ' +
       (requirements.outputDirectory ? `The human grants only the output directory "${requirements.outputDirectory}". ` +
-        'Choose concrete files beneath it, never a wildcard or an outside file. Preserve Original Ask exactly, including spelling. ' +
+        'Choose concrete files beneath it, never a wildcard or an outside file. ' +
+        'Do not choose hidden path components (including .gitignore) or vendor paths. ' +
+        'Test scratch fixtures belong in the OS temporary directory, not files_allowed. Preserve Original Ask exactly, including spelling. ' +
         'Declare new paths under ## New files when writing TASK.md; JSON plans are declared by the harness. ' : '') +
       (isDirectoryDocumentAsk(cleanAsk) ?
         'Design/setup documentation requests authorize documents only, not purchases, accounts, deployment, network or publication. ' +
