@@ -429,6 +429,16 @@ export async function planAsk(ask, {
           });
         } catch (error) {
           if (!(error instanceof Error)) throw error;
+          if (!/^[{\[]/.test(plannerPlanText(message.content)) &&
+              /^Acceptance check must be at most 240 characters/.test(error.message)) {
+            if (validationRepairUsed) return fallback(error.message, turn);
+            validationRepairUsed = true;
+            messages.push({ role: 'user', content:
+              `The written TASK.md is invalid (${redactSecrets(error.message, { env, apiKeyEnv: config.llm.api_key_env })}). ` +
+              'Use this single validation correction to return the complete required JSON plan. ' +
+              'Keep every requirement and the original Ask; the harness will write the validated artifacts.' });
+            continue;
+          }
           if (!/^[{\[]/.test(plannerPlanText(message.content)) && turn >= budget + Number(repairUsed)) {
             if (validationRepairUsed) return fallback(error.message, turn);
             if (!/^Acceptance checks must contain 1-8 entries/.test(error.message)) {

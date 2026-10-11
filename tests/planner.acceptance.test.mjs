@@ -64,6 +64,28 @@ test('an oversized written TASK stays invalid until a complete concise JSON corr
   assert.deepEqual(parseTaskDocument(result.task, { expectedAsk: ask }).acceptance_checks, [concise]);
 });
 
+test('a repeatedly invalid written TASK stops after one correction even with a large general turn budget', async () => {
+  const config = parseConfig(readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8')
+    .replace('base_url: ""', 'base_url: "http://localhost:1234/v1"').replace('model: ""', 'model: test-model'));
+  const valid = buildPlan(ask, { ...options, acceptanceChecks: ['The guide contains setup instructions'] }).task;
+  const invalid = valid.replace('The guide contains setup instructions', check(241));
+  let calls = 0;
+  const result = await planAsk(ask, { config: { ...config, planner: { ...config.planner, turn_budget: 20 } }, env: {},
+    tools: { write_file: async () => ({ ok: true }) },
+    fetchImpl: async () => {
+      calls += 1;
+      return Response.json({ choices: [{ finish_reason: 'tool_calls', message: {
+        role: 'assistant', tool_calls: [{ id: `invalid-${calls}`, type: 'function', function: {
+          name: 'write_file', arguments: JSON.stringify({ path: 'TASK.md', content: invalid }),
+        } }],
+      } }] });
+    } });
+  assert.equal(calls, 2);
+  assert.equal(result.mode, 'stub');
+  assert.match(result.error, /240.*shorten/);
+  assert.equal(parseTaskDocument(result.task, { expectedAsk: ask }).ask, ask);
+});
+
 test('slice JSON correction retains the original Ask and does not accept a truncated requirement', async () => {
   const config = parseConfig(readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8')
     .replace('base_url: ""', 'base_url: "http://localhost:1234/v1"').replace('model: ""', 'model: test-model'));
