@@ -558,3 +558,43 @@ the REPL, it invokes the SDK through the builtin runner.
 
 See [same-session seats](MULTIAGENT.md), [the contracts dependency](DEPENDENCY.md),
 and [the SDLC](SDLC.md).
+
+### Bounded primary repository questions
+
+Use `/question TEXT` (CLI `roster question TEXT`) for an explicitly read-only
+question, even if it contains words such as “change” or “fix”. Natural Asks whose
+existing classifier identifies a question use this same path; an explicit command
+is preferable when wording might otherwise describe implementation. A human
+Ask with an outcome, declared scope and acceptance checks remains a slice
+whatever its title; only the explicit question command overrides to read-only. No planner,
+coder, tests, issue creation, worktree, memory write or publisher is started.
+This is a repository explanation, not a general chatbot crew (spec §§5.3/5.7/7).
+
+For a single-line shell command, use
+`/question --files src/api.mjs -- How does this work?` (same CLI arguments).
+Comma-separated paths are accepted, and `src/api/**` bounds a directory.
+Alternatively grant source-read scope using the existing multiline Ask heading:
+
+```text
+/question How does the API select its result?
+
+## Files allowed
+- src/api.mjs
+```
+
+A named file, link/URL or model assertion alone grants no source permission.
+A bounded directory uses `- src/api/**`; scope never widens into direct imports.
+Only public regular single-link files are read, at most eight files, 64 KiB each,
+48 lines per excerpt, 128 visited directory entries and 24,000 evidence characters
+within the configured context budget. Private/managed paths, traversal, unsupported
+wildcards, symlinks/junctions/hardlinks and excessive budgets fail closed.
+
+Without a model, the reply provides real line-numbered source excerpts and
+explicitly unknown interpretation. Missing scope returns bounded questions;
+missing files stay unavailable/unknown. With a configured model, one tool-free
+request explains those excerpts, with the evidence displayed separately from
+model interpretation. A response requesting tools is refused. No URL fetching,
+execution or publication is allowed; endpoint keys and output controls are
+redacted. `/stop` cancels a pending answer. Repeating the CLI/shell command after
+restart reads the declared scope afresh; no second conversation queue is stored.
+`/btw` remains a distinct question about current task metadata without source reads.

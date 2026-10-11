@@ -11,6 +11,7 @@ const help = `Usage:
   roster                     Open the interactive shell in a TTY
   roster --debug [COMMAND]   Enable process-only debug JSONL logging
   roster --help
+  roster question TEXT       Read-only scoped repository question; never starts a task
   roster doctor [--warm]
   roster init
   roster onboard [--discover]
@@ -93,6 +94,13 @@ async function main(args) {
   if (args.length === 0) {
     const { startRepl } = await import('./repl.mjs');
     process.exitCode = await startRepl({ repoRoot: rosterRoot, debug });
+  } else if (args[0] === 'question') {
+    if (args.length < 2) throw new TypeError('Use roster question TEXT with an explicit Files allowed section.');
+    const { answerRepositoryQuestion, repositoryQuestionText } = await import('./lib/repository-question.mjs');
+    const { loadConfig } = await import('./lib/config.mjs');
+    const result = await answerRepositoryQuestion(repositoryQuestionText(args.slice(1)), { cwd: process.cwd(),
+      config: loadConfig({ repoRoot: rosterRoot, cwd: process.cwd() }) });
+    process.stdout.write(result.answer + '\n');
   } else if (args[0] === 'ask' && ['--pending', '--cancel', '--resume'].includes(args[1])) {
     const { resolveProjectRoot } = await import('./lib/paths.mjs');
     const { readClarification, cancelClarification, resumeClarification, formatClarificationCheckpoint } = await import('./lib/clarification-checkpoint.mjs');
