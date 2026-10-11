@@ -265,7 +265,9 @@ export async function planAsk(ask, {
   const repair = () => {
     repairUsed = true;
     awaitingRepair = true;
-    messages.push({ role: 'user', content: 'Emit only tool_calls for write_file with JSON string arguments.' });
+    messages.push({ role: 'user', content: tools
+      ? 'Emit only tool_calls for write_file with JSON string arguments, or return the complete required JSON task plan.'
+      : 'Return only the complete required JSON task plan. No tools are available.' });
   };
   for (let turn = 1; turn <= budget + Number(repairUsed) + Number(validationRepairUsed); turn += 1) {
     let response;
@@ -289,7 +291,8 @@ export async function planAsk(ask, {
     let choice = response?.choices?.[0];
     let message = choice?.message;
     const decoded = parsePlannerToolCalls(message, { turn, usedIds: callIds });
-    if (decoded.error || awaitingRepair && !decoded.calls?.length ||
+    if (decoded.error || awaitingRepair && !decoded.calls?.length &&
+        !/^[{\[]/.test(plannerPlanText(message?.content)) ||
         choice?.finish_reason === 'tool_calls' && !decoded.calls?.length) {
       const reason = decoded.error ?? 'Repair did not emit valid tool_calls';
       if (repairUsed) return fallback(reason, turn);
