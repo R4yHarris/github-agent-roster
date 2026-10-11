@@ -14,7 +14,7 @@ export function oneLine(value, label) {
 export function acceptanceCheck(value) {
   const check = normalizedLine(value, 'Acceptance check');
   if (check.length > 240) {
-    throw new TypeError('Acceptance check must be at most 240 characters; shorten it without dropping requirements');
+    throw new TypeError('Acceptance check must be at most 240 characters; split it into several shorter checks (up to 8) without dropping requirements');
   }
   return check;
 }
@@ -234,7 +234,9 @@ export function filesNamedByAsk(ask) {
 
 export function ensureAllowedFiles(task, ask) {
   if (/^## +(?:Allowed Files|Files allowed)\s*$/im.test(task)) return task;
-  const files = filesNamedByAsk(ask);
+  const directory = outputDirectoryFromAsk(ask);
+  // A bare filename in the Ask (such as a bin script) must not widen scope past the granted output directory.
+  const files = filesNamedByAsk(ask).filter((file) => !directory || file.startsWith(`${directory}/`));
   if (!files.length) return task;
   return `${String(task).trim()}\n\n## Allowed Files\n\n${files.map((file) => `- ${file}`).join('\n')}\n`;
 }

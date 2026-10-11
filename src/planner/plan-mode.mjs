@@ -37,7 +37,7 @@ export async function planSlice(ask, {
     { role: 'system', content: 'You are the read-only plan-mode planner. Explore with read_file, list_dir, or search_text. ' +
       'You may write only PLAN.md, never TASK.md, RECIPE.yml, product code, tests, or publishing operations. ' +
       'PLAN.md must contain a title, Original Ask, Acceptance checks, explicit Files allowed, and task metadata. ' +
-      'Each acceptance check is at most 240 characters; shorten wording without dropping requirements. ' +
+      'Each acceptance check is at most 240 characters; for a long requirement write several shorter checks (up to 8) instead of one long one, without dropping requirements. ' +
       'Alternatively return JSON with title, acceptance_checks, files_allowed, and optional difficulty, estimate_min, task_class, model. ' +
       'Stay inside the files named by the human Ask. The human must accept before coding.' },
     { role: 'user', content: ask +

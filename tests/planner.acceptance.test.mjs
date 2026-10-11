@@ -34,7 +34,7 @@ test('all planner ingress paths reject oversized checks and preserve the exact 2
     () => planFromTask(task.replace(full, long), ask),
     () => validatePlan(outline(long), { kind: 'feature', filesAllowed: options.filesAllowed }),
     () => validatePlanningReceipt(receipt(long), parseTaskDocument(task)),
-  ]) assert.throws(operation, /Acceptance check.*240.*shorten/i);
+  ]) assert.throws(operation, /Acceptance check.*240.*split/i);
   assert.equal(parseTaskDocument(task.replace(full, long), { expectedAsk: ask }).acceptance_checks[0], long);
 });
 
@@ -55,7 +55,7 @@ test('an oversized written TASK stays invalid until a complete concise JSON corr
           name: 'write_file', arguments: JSON.stringify({ path: 'TASK.md', content: valid.replace(concise, check(241)) }),
         } }],
       } }] });
-      assert.match(JSON.stringify(body.messages), /240.*shorten/i);
+      assert.match(JSON.stringify(body.messages), /240.*split/i);
       return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
         content: JSON.stringify({ title: 'Guide', acceptance_checks: [concise], files_allowed: options.filesAllowed }),
       } }] });
@@ -82,7 +82,7 @@ test('a repeatedly invalid written TASK stops after one correction even with a l
     } });
   assert.equal(calls, 2);
   assert.equal(result.mode, 'stub');
-  assert.match(result.error, /240.*shorten/);
+  assert.match(result.error, /240.*split/);
   assert.equal(parseTaskDocument(result.task, { expectedAsk: ask }).ask, ask);
 });
 
@@ -96,7 +96,7 @@ test('slice JSON correction retains the original Ask and does not accept a trunc
       calls += 1;
       const body = JSON.parse(request.body);
       assert.equal(body.messages[1].content, ask);
-      if (calls === 2) assert.match(body.messages.at(-1).content, /240.*shorten/i);
+      if (calls === 2) assert.match(body.messages.at(-1).content, /240.*split/i);
       return Response.json({ choices: [{ finish_reason: 'stop', message: {
         role: 'assistant',
         content: JSON.stringify({ title: 'Guide', acceptance_checks: [calls === 1 ? check(241) : concise],
