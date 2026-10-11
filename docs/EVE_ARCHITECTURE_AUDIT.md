@@ -16,9 +16,9 @@ and existing merged-PR evidence. No comparator marketing claims are needed.
 | App identity, role authority and provenance (5.1) | `lib/publication.mjs`, `seat-publication.mjs`, `metrics/run.mjs`; pinned contracts publisher; protected tools | Publishing SDK/merger/deployer authority belongs to contracts/human policy, not a missing model seat. #368 publisher stale-head recovery remains external debt; use single-commit branches, not vendor edits. |
 | Trusted CI/review gates (5.5) | Read-only `seats/reviewer.mjs`, `runtime/review-verify.mjs`, bounded fresh-context review repair in `lib/builtin.mjs` | #439 remains real human-owned workflow debt: checkout does not independently select base-revision action/checker source. A green check alone does not establish that trust property. No workflow edits were made. |
 | Planner → coder → reviewer seats (5.2–5.5) | `seats/planner.mjs`, `coder.mjs`, `reviewer.mjs`; sequential orchestration, cache/retry/repairs in `lib/builtin.mjs` | Implemented, not absent. Same process/worktree by default; opt-in isolated child/attempt trees are not a new runtime or task board. Stable Eve worker identity independent of seats/models is a later #477 outcome, not delivered by these names. |
-| Ask taxonomy/specialization (5.3) | `planner/classify.mjs` produces question/incident `specKind` metadata; execution still uses clarify/slice/feature/initiative; `/btw` is a bounded read-only task side-question. `runtime/context-policy.mjs` consumes bounded incident metadata plus an explicit investigation/repair directive from the preserved TASK Ask to select the existing incident coder packet. | Incident specialization is guidance inside the ordinary gated seats, not a new primary runtime or urgency grant. Ambiguous incidents still clarify/split; questions or documentation mentions alone do not select the packet. Skill-bounded recipes must cover incident. Top-level question execution remains partial; `/btw` is not a full primary Ask handler. |
+| Ask taxonomy/specialization (5.3) | `planner/classify.mjs` produces question/incident `specKind` metadata; execution still uses clarify/slice/feature/initiative; `/btw` is a bounded read-only task side-question. `runtime/context-policy.mjs` consumes bounded incident metadata plus an explicit investigation/repair directive from the preserved TASK Ask to select the existing incident coder packet. | Incident specialization is guidance inside the ordinary gated seats, not a new primary runtime or urgency grant. Ambiguous incidents still clarify/split; questions or documentation mentions alone do not select the packet. Skill-bounded recipes must cover incident. Primary repository questions now use `lib/repository-question.mjs` via explicit CLI/shell and natural-question intake (#550), from human-declared read scope only and without executing a task. `/btw` remains a distinct task-metadata question. |
 | Planner memory and continuity (5.6) | Planner reads at most 20 redacted seat-scoped records; writes Ask/title records; builtin appends review outcome; `runtime/memory.mjs`; merged #520/#523 | Advisory bounded memory, not full conversational replay or a global mind. Coder memory is separate and included in ordinary minimum packs (#515). |
-| Skills/conduct/learning (5.2/5.6) | `runtime/context.mjs`, `skills.mjs`, `engineering-baseline.mjs`; `lib/learn.mjs` eval joins/ceilings; `failure-proposals.mjs` human-reviewed drafts | The five baseline packets remain; six installed spec category packets (`research`, `implement`, `test`, `review`, `incident`, `docs`) now reach explicitly selected minimum/full coder contexts. A required category cannot be budget-omitted; missing/malformed/junction packets stop preparation. Default baseline selection is unchanged. This does not make a coder an independent reviewer or implement a primary incident/question handler. Curated record/compaction primitives exist (`provenance-api.mjs`, `curateMemory`), but source-invalidating, seat-scoped promotion/retrieval/unpromotion is not an integrated Eve learning loop. This is explicit #477 work gated by #476. Proposals are not automatically installed principals or fabricated human accepts. |
+| Skills/conduct/learning (5.2/5.6) | `runtime/context.mjs`, `skills.mjs`, `engineering-baseline.mjs`; `lib/learn.mjs` eval joins/ceilings; `failure-proposals.mjs` human-reviewed drafts | The five baseline packets remain; six installed spec category packets (`research`, `implement`, `test`, `review`, `incident`, `docs`) now reach explicitly selected minimum/full coder contexts. A required category cannot be budget-omitted; missing/malformed/junction packets stop preparation. Default baseline selection is unchanged. This does not make a coder an independent reviewer or by itself implement a primary handler; #550 separately delivers primary repository questions. Curated record/compaction primitives exist (`provenance-api.mjs`, `curateMemory`), but source-invalidating, seat-scoped promotion/retrieval/unpromotion is not an integrated Eve learning loop. This is explicit #477 work gated by #476. Proposals are not automatically installed principals or fabricated human accepts. |
 | Fleet, routing and admission (5.2) | `lib/fleet.mjs`, `route.mjs`, `llm.mjs`, `runtime/admission.mjs`; eval history before priors, hardware/cost ranking, FIFO slots and abort release | Admission is per profile in one process, as FLEET documents; not distributed admission. Ordinary saved-default runs without a fleet profile are not admission-limited. Registered hardware experiments and cross-process resource guarantees are not proven by unit tests. Custom default key-name reload defect was reproduced and repaired in #540. |
 | Issue/Project queue and dependencies (5.3/5.7) | `lib/issue-board.mjs` labels/status comments/optional Project projection; `waves.mjs` issue dependency and earlier-wave closure checks; `wave-scheduler.mjs` | GitHub is canonical. Project access is installation-permission-dependent; local state is evidence/recovery, not an independent Kanban DB. Child closure does not invent human acceptance. |
 | Worktree lifecycle and liveness (5.4/5.8) | `lib/start.mjs` fresh base; issue preparation and reuse; `repo-locks.mjs` explicit death proof; `worktrees.mjs`, `local-runs.mjs`, `clean-ops.mjs` | #487/#491 repair lock takeover; age/unknown liveness is not death. Merged #541 moves generated task environment metadata under worktree Git storage and preserves any existing product `.env`. Literal branch naming also diverges: spec 5.4 says `agents/<issue>`; builtin preparation/board publication use `issue-N`. A coordinated compatibility migration is needed, not an isolated namespace rename. |
@@ -71,7 +71,7 @@ runtime, production permission or human acceptance is claimed.
    legacy named presets, runtime profile metadata and policy remain intact.
 5. **#439:** human workflow source-pinning decision/repair required (5.5 and 3).
 6. **#368:** contracts publisher recovery; outside this repo's editable boundary.
-7. **Partial core interfaces:** primary question/incident execution, automatic last-green-step recovery, and
+7. **Partial core interfaces:** unattended model-context replay, and
    literal branch namespace compatibility need separately bounded designs. These
    are not delivered by the basic seat loop or by naming a `specKind`; planner/
    tool/loop integration needs bounded public-path tests; the #449/#452 ownership handoff is already completed. Do not
@@ -164,11 +164,12 @@ already implemented, not blank acceptance gaps. Existing lock tests preserve
 live/unknown owners and take over only explicitly dead positive PIDs. This audit
 does not claim cross-platform live acceptance from unit tests.
 
-- **Ungated primary question path:** a bounded question must return source-backed
-  useful output through the CLI/shell with only existing read-only tools, no
-  product writes or publication; retain scope/path/internet gates, original Ask,
-  cancellation and honest unknown evidence. Reuse task side-question helpers;
-  do not add a general chatbot crew. Existing taxonomy metadata alone is not it.
+- **Delivered bounded primary question path (#550):** explicit CLI/shell
+  questions and naturally classified question Asks return bounded line-numbered
+  public source evidence from human-declared read scope. Tool-free model
+  interpretation is separate and optional. No product writes, seats, tests,
+  issue creation, publication or implicit URL scope; unavailable evidence stays
+  unknown. This is repository explanation, not a general chatbot crew.
 - **Ungated incident specialization:** explicitly authorized incident tasks must
   retain failing observations and unchanged scope/checks while selecting the
   incident procedure; actual repair/review/publication stays the ordinary gated
@@ -213,3 +214,20 @@ HEAD/branch/scope/ref, active lock, cancellation, malformed/hardlinked/junction
 metadata, unknown green and secret backup material fail closed. Later product
 edits remain recoverable; stale RESULT/REVIEW is archived. No claim of live
 cross-platform/hardware acceptance, human rating or unattended context replay.
+
+## Bounded repository question implementation evidence
+
+Tracked before resumed implementation as child #550 / Build In progress. Scope
+is question helper, Ask routing, CLI/REPL question entrypoints and tests/docs;
+shared lines coordinated with #551/#552 owners, no incident/branch/checkpoint
+changes. Spec §§5.3/5.7, respecting §§3/7. No new runtime dependency/queue.
+
+Offline controls include actual CLI process restart, default shell routing,
+source line attribution, no seat/GitHub/state writes, explicit scope only,
+URL non-authority, key redaction, malformed/private/linked/unavailable source,
+entry/file/byte/context/output caps, model tool-call refusal and cancellation.
+No hardware/human acceptance or autonomous answer correctness is inferred.
+
+Windows Node20 question/intake/CLI/REPL/classification/side-question controls: **104/104 pass, zero skips/failures**. Includes streaming single-line shell across fresh sessions, CLI subprocess restarts and explicit human executable contract precedence; model interpretation is not independently accepted answer correctness.
+
+After integrating reviewed incident main `b14f2eb`, the same question/interface suite plus incident-selection controls passed **126/126**, zero skips/failures. Incident evidence above is retained; no incident selection or branch/recovery ownership change is included in the question slice.

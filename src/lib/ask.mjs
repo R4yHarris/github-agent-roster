@@ -12,6 +12,7 @@ import { readTaskMetadata } from '../runtime/estimate.mjs';
 import { parseTaskDocument } from '../planner/task.mjs';
 import { classifyAsk } from '../planner/classify.mjs';
 import { clarificationResult } from '../planner/clarify.mjs';
+import { answerRepositoryQuestion, isRepositoryQuestionAsk } from './repository-question.mjs';
 import { saveClarification } from './clarification-checkpoint.mjs';
 import { planOutline } from '../planner/plan.mjs';
 import { createTools, planArtifactFiles } from '../runtime/tools.mjs';
@@ -37,7 +38,9 @@ export async function writeAsk(ask, {
   if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) {
     throw new TypeError('Ask ID must be an opaque local identifier');
   }
-  const askKind = classifyAsk(ask).kind;
+  const classification = classifyAsk(ask);
+  if (isRepositoryQuestionAsk(ask)) return answerRepositoryQuestion(ask, { cwd: repoRoot, config, env, vault, fetchImpl });
+  const askKind = classification.kind;
   if (askKind === 'clarify') return { mode: 'clarify', askKind, ...clarificationResult(ask) };
   const options = { config, reference: `local:${id}`, fetchImpl, env, vault };
   const plan = askKind === 'slice' ? await planAsk(ask, { ...options, learningRoot: repoRoot })
@@ -68,6 +71,7 @@ export async function writeAsk(ask, {
 }
 
 export function formatAsk(result) {
+  if (result.mode === 'question') return result.answer + '\n';
   const kind = `Ask kind: ${result.askKind ?? 'slice'}\n`;
   if (result.mode === 'clarify') return kind + `${result.clarification}\n${result.guidance ?? ''}${result.guidance ? '\n' : ''}` +
     (result.checkpoint ? `Checkpoint saved privately: ${result.checkpoint.id}\nResume: roster ask --resume "TEXT" (explicit Allowed Files or relative output directory)\nInspect: roster ask --pending; cancel: roster ask --cancel\n` : '');
@@ -90,6 +94,7 @@ export async function submitAsk(ask, {
   vault,
 } = {}) {
   const text = cleanAskText(ask);
+  if (isRepositoryQuestionAsk(text)) return answerRepositoryQuestion(text, { cwd, config, env, vault, fetchImpl });
   const title = text.split('\n')[0];
   if (title.length > 240) throw new TypeError('Issue title must be at most 240 characters');
   const body = renderIssueBody(text);

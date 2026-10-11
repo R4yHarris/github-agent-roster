@@ -25,6 +25,7 @@ export const commands = Object.freeze([
   page('redraw', 'Session', '/redraw', 'Repaint the tray without clearing scrollback.', '/redraw'),
   page('clear', 'Session', '/clear', 'Clear the screen and repaint the tray.', '/clear'),
   page('quit', 'Session', '/quit', 'Exit with code 0; bare exit is also accepted.', '/q', [], ['q']),
+  page('question', 'Ask', '/question [--files PATH,PATH --] TEXT', 'Answer a bounded repository question from explicitly scoped public source excerpts; no task, tools, tests, writes or publication.', '/question --files src/api.mjs -- How does this work?'),
   page('ask', 'Ask', '/ask TEXT', 'Run a local Ask through planner, coder and reviewer without creating a GitHub issue.',
     '/ask Add a Status section to README.md.'),
   page('clarify', 'Ask', '/clarify [show|cancel|continue|TEXT]', 'Inspect private pending intake after a restart; resume with explicit Allowed Files or a relative output directory. Never infers scope.', '/clarify show'),

@@ -45,6 +45,7 @@ import { readPlannerTask } from './seats/planner.mjs';
 import { taskAndRepairFiles } from './runtime/tools.mjs';
 import { taskFilesAllowed } from './planner/task.mjs';
 import { listLocalRuns, readLocalRun, recapRun } from './lib/local-runs.mjs';
+import { answerRepositoryQuestion, isRepositoryQuestionAsk, repositoryQuestionText } from './lib/repository-question.mjs';
 import { askSideQuestion } from './lib/side-question.mjs';
 import { formatContext } from './shell/context.mjs';
 import { formatUsage } from './shell/usage.mjs';
@@ -118,7 +119,7 @@ const defaultServices = {
   checkDoctor, formatDoctor, warmDoctor, privateConfigPath, publicConfig,
   listCheckpoints, rewindCheckpoint, restoreVerifiedCheckpoint, readPlannerTask,
   listLocalRuns, readLocalRun, recapRun,
-  askSideQuestion,
+  askSideQuestion, answerRepositoryQuestion,
   listIssueWorktrees,
   runOnlyReview,
   waveBoard,
@@ -442,6 +443,17 @@ export function createDispatcher({
   }
 
   async function runRequest(request, { retry = false, continueConfirmed = false } = {}) {
+    if (request.kind === 'question' || request.kind === 'ask' && !request.options?.planMode && isRepositoryQuestionAsk(request.text)) {
+      if (state.controller || state.sideController) throw new Error('Stop the active seat/question before a primary repository question; use /btw for task metadata.');
+      const controller = new AbortController();
+      state.sideController = controller;
+      try {
+        const result = await api.answerRepositoryQuestion(request.text, { cwd: currentRoot(), config: state.config, env, signal: controller.signal });
+        throwIfCancelled(controller.signal);
+        safeWrite(result.answer + '\n');
+      } finally { state.sideController = null; }
+      return true;
+    }
     if (request.clarificationId) {
       const checkpoint = await readClarification({ repoRoot: resolveProjectRoot(cwd), env, apiKeyEnv: state.config.llm.api_key_env });
       if (!checkpoint || checkpoint.id !== request.clarificationId) {
@@ -774,6 +786,10 @@ export function createDispatcher({
         await runRequest({ kind: 'ask', text: ask, options: { confirm: true }, clarificationId: record.id });
         if (state.lastRun.failed || state.lastRun.planningOnly) output.write('Clarification checkpoint remains pending; inspect /clarify, or /clarify continue after restart. Accept the prepared task with Enter to execute.\n');
         return true;
+      }
+      case 'question': {
+        if (!args) throw new TypeError('Use /question TEXT with an explicit Files allowed section.');
+        return runRequest({ kind: 'question', text: /^--files(?:\s|$)/.test(args) ? repositoryQuestionText(splitArguments(args)) : args, options: {} });
       }
       case 'ask': {
         if (!args) throw new TypeError('Use /ask TEXT.');
