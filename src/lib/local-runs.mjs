@@ -12,6 +12,7 @@ import { parseTaskDocument } from '../planner/task.mjs';
 import { redactEvidence } from '../runtime/excellence.mjs';
 import { classifyAsk } from '../planner/classify.mjs';
 import { validatedPlanTask } from '../planner/plan-mode.mjs';
+import { issueTask, parseIssueBranch, parseWorktreeInventory } from './issue-branches.mjs';
 
 const execute = promisify(execFile);
 const samePath = (left, right) => process.platform === 'win32'
@@ -79,11 +80,7 @@ export async function registeredWorktrees(root) {
   const { stdout } = await execute('git', ['worktree', 'list', '--porcelain', '-z'], {
     cwd: root, encoding: 'utf8', timeout: 30000, maxBuffer: 1024 * 1024,
   });
-  return stdout.split('\0\0').filter(Boolean).map((record) => {
-    const fields = record.split('\0');
-    return { path: fields.find((field) => field.startsWith('worktree '))?.slice(9),
-      branch: fields.find((field) => field.startsWith('branch refs/heads/'))?.slice(18) ?? null };
-  });
+  return parseWorktreeInventory(stdout);
 }
 
 async function artifact(worktree, name) {
@@ -132,9 +129,10 @@ export async function listLocalRuns({ cwd = process.cwd(), config, env = process
   const root = repositoryRoot(cwd);
   const runs = [];
   for (const entry of await registeredWorktrees(root)) {
-    const match = /^issue-([1-9]\d*)$/.exec(entry.branch ?? '');
-    if (match && entry.path && samePath(entry.path, path.join(root, config.paths.worktrees, entry.branch))) {
-      runs.push(await readLocalRun({ number: Number(match[1]), root, config, env }));
+    const match = parseIssueBranch(entry.branch);
+    if (match && match.attempt === null && entry.path &&
+        samePath(entry.path, path.join(root, config.paths.worktrees, issueTask(match.number)))) {
+      runs.push(await readLocalRun({ number: match.number, root, config, env }));
     }
   }
   return runs.sort((left, right) => left.issue.number - right.issue.number);

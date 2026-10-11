@@ -21,7 +21,7 @@ and existing merged-PR evidence. No comparator marketing claims are needed.
 | Skills/conduct/learning (5.2/5.6) | `runtime/context.mjs`, `skills.mjs`, `engineering-baseline.mjs`; `lib/learn.mjs` eval joins/ceilings; `failure-proposals.mjs` human-reviewed drafts | The five baseline packets remain; six installed spec category packets (`research`, `implement`, `test`, `review`, `incident`, `docs`) now reach explicitly selected minimum/full coder contexts. A required category cannot be budget-omitted; missing/malformed/junction packets stop preparation. Default baseline selection is unchanged. This does not make a coder an independent reviewer or by itself implement a primary handler; #550 separately delivers primary repository questions. Curated record/compaction primitives exist (`provenance-api.mjs`, `curateMemory`), but source-invalidating, seat-scoped promotion/retrieval/unpromotion is not an integrated Eve learning loop. This is explicit #477 work gated by #476. Proposals are not automatically installed principals or fabricated human accepts. |
 | Fleet, routing and admission (5.2) | `lib/fleet.mjs`, `route.mjs`, `llm.mjs`, `runtime/admission.mjs`; eval history before priors, hardware/cost ranking, FIFO slots and abort release | Admission is per profile in one process, as FLEET documents; not distributed admission. Ordinary saved-default runs without a fleet profile are not admission-limited. Registered hardware experiments and cross-process resource guarantees are not proven by unit tests. Custom default key-name reload defect was reproduced and repaired in #540. |
 | Issue/Project queue and dependencies (5.3/5.7) | `lib/issue-board.mjs` labels/status comments/optional Project projection; `waves.mjs` issue dependency and earlier-wave closure checks; `wave-scheduler.mjs` | GitHub is canonical. Project access is installation-permission-dependent; local state is evidence/recovery, not an independent Kanban DB. Child closure does not invent human acceptance. |
-| Worktree lifecycle and liveness (5.4/5.8) | `lib/start.mjs` fresh base; issue preparation and reuse; `repo-locks.mjs` explicit death proof; `worktrees.mjs`, `local-runs.mjs`, `clean-ops.mjs` | #487/#491 repair lock takeover; age/unknown liveness is not death. Merged #541 moves generated task environment metadata under worktree Git storage and preserves any existing product `.env`. Literal branch naming also diverges: spec 5.4 says `agents/<issue>`; builtin preparation/board publication use `issue-N`. A coordinated compatibility migration is needed, not an isolated namespace rename. |
+| Worktree lifecycle and liveness (5.4/5.8) | `lib/start.mjs` fresh base; issue preparation and reuse; `repo-locks.mjs` explicit death proof; `worktrees.mjs`, `local-runs.mjs`, `clean-ops.mjs` | #487/#491 repair lock takeover; age/unknown liveness is not death. Merged #541 moves generated task environment metadata under worktree Git storage and preserves any existing product `.env`. #552 coordinates the spec 5.4 branch namespace: new `agents/<issue>` branches, exact legacy `issue-N` reuse, stable task/directory/lock identity, dual-namespace refusal and compatible status/publication/checkpoint lookup. No destructive branch/worktree rename or human acceptance is implied. |
 | Checkpoints/recovery (5.4/5.8) | `lib/checkpoints.mjs` guarded before-write Git tree snapshots and explicit rewind; validated handoff/worktree reuse; whole-task deadline and durable terminal evidence | Pre-write snapshots/manual rewind are not proof of automatic last-green-step model/context replay. Explicit identity-bound test-green restoration/resume is now implemented; unattended model/context replay remains partial; never silently restore stale product state. #539 adds safe durable ambiguous-intake continuation, not a claim to implement the entire recovery lifecycle. |
 | Human CLI/shell and vague asks (5.7/5.8) | `cli.mjs`, `repl.mjs`, shell tray/history/context; #536 interpretation/questions; #539 private project intake checkpoint | Original redacted Ask, bounded guidance and validated explicit reply survive restart; `/clarify continue` / `ask --resume` reuse the reply. Shell resumes behind `--confirm`; cancellation revokes Enter/retry. No coding/publication from a vague ask, inferred confidence score, or silent override of original constraints. |
 | Operations/provenance (5.8) | `task-deadline.mjs`, `run-log.mjs`, `local-runs.mjs`, typed machine history/provenance, `stranded.mjs`, vault, safe cleanup | Local logs/history and unknown-aware usage are implemented. Optional OpenTelemetry export is not wired. Cloud `cost_usd` schema exists, but no priced producer ledger is wired; hardware ranking is not a measured-dollar ledger. This needs authoritative provider-reported cost or human-owned rates, not guessed prices/energy. |
@@ -71,8 +71,9 @@ runtime, production permission or human acceptance is claimed.
    legacy named presets, runtime profile metadata and policy remain intact.
 5. **#439:** human workflow source-pinning decision/repair required (5.5 and 3).
 6. **#368:** contracts publisher recovery; outside this repo's editable boundary.
-7. **Partial core interfaces:** unattended model-context replay, and
-   literal branch namespace compatibility need separately bounded designs. These
+7. **Partial core interfaces:** unattended model-context replay needs a separately
+   bounded design. Branch namespace compatibility is
+   implemented by the bounded #552 increment, not an isolated rename. These
    are not delivered by the basic seat loop or by naming a `specKind`; planner/
    tool/loop integration needs bounded public-path tests; the #449/#452 ownership handoff is already completed. Do not
    grant permissions, restore product state or rename published branch claims
@@ -182,10 +183,11 @@ does not claim cross-platform live acceptance from unit tests.
   changed identity/ref, active lock, linked/malformed state and secret backups.
   Unattended model-context replay is not this acceptance condition and remains
   an explicit product/policy boundary, never inferred execution permission.
-- **Ungated branch compatibility increment:** creation, lookup, reused legacy
-  `issue-N` branches, issue status and publisher claims must agree after adopting
-  `agents/<issue>`; no orphaned legacy trees, lock collisions or implicit branch
-  ownership changes. Requires coordinated callers, not just one rename.
+- **Branch compatibility increment (#552):** coordinated creation, lookup, reused
+  legacy `issue-N` branches, issue status and publisher claims adopt `agents/<issue>`
+  without renaming trees. Offline Git fixtures cover namespace ambiguity, stable
+  lock/task identity, actual checkpoint restoration and publication lookup refusal.
+  This is implementation evidence, not human acceptance or permission to move claims.
 - **Input-gated optional operations:** no guessed priced producer ledger without
   authoritative returned cost or human-owned pricing input. Optional telemetry
   export is not a current delivery prerequisite and needs an explicit collector

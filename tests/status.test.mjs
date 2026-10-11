@@ -54,7 +54,8 @@ test('online status fetches the issue and its open branch PR from the current or
     runCommand: async (program, args, cwd) => {
       calls.push({ program, args, cwd });
       if (program === 'git') return 'https://github.com/example/project.git\n';
-      return args[0] === 'issue' ? JSON.stringify(issue) : JSON.stringify([pr]);
+      return args[0] === 'issue' ? JSON.stringify(issue)
+        : args[args.indexOf('--head') + 1] === 'issue-42' ? JSON.stringify([pr]) : '[]';
     },
   });
   assert.deepEqual(status, { issue, openPr: pr, worktreePath, worktreeExists: true, offline: false,
@@ -64,6 +65,8 @@ test('online status fetches the issue and its open branch PR from the current or
     { program: 'git', args: ['remote', 'get-url', 'origin'], cwd: repoRoot },
     { program: 'gh', args: ['issue', 'view', '42', '--repo', 'example/project',
       '--json', 'number,title,state,url,assignees,labels'], cwd: repoRoot },
+    { program: 'gh', args: ['pr', 'list', '--repo', 'example/project', '--state', 'open',
+      '--head', 'agents/42', '--limit', '2', '--json', 'number,title,url,headRefName'], cwd: repoRoot },
     { program: 'gh', args: ['pr', 'list', '--repo', 'example/project', '--state', 'open',
       '--head', 'issue-42', '--limit', '2', '--json', 'number,title,url,headRefName'], cwd: repoRoot },
   ]);
@@ -77,7 +80,7 @@ test('offline status reports missing cache and unknown PR instead of claiming th
     runCommand: () => assert.fail('Offline status must not fetch GitHub data'),
   });
   assert.equal(formatStatus(status),
-    `Issue: #42 (not cached offline)\nOpen PR: unknown (offline)\nBranch: issue-42\nWorktree: ${worktreePath} (missing)\n` +
+    `Issue: #42 (not cached offline)\nOpen PR: unknown (offline)\nBranch: agents/42\nWorktree: ${worktreePath} (missing)\n` +
     'Last seat: unknown (no run log)\nLast log line: none\nLast error class: -\n' +
     'Artifacts: TASK.md=no RECIPE.yml=no PLAN.md=no RESULT.md=no REVIEW.md=no\n' +
     'Last run: model=- prompt_tokens=- completion_tokens=- context_max=-\n');
@@ -276,7 +279,7 @@ test('online assigned issue health uses actual local refs and latest log activit
         if (program === 'gh' && args[0] === 'pr') return '[]';
         if (program === 'git' && args[0] === 'remote') return 'https://github.com/example/project.git';
         assert.deepEqual([program, ...args],
-          ['git', 'for-each-ref', '--format=%(refname:short)', 'refs/heads/issue-42']);
+          ['git', 'for-each-ref', '--format=%(refname:short)', 'refs/heads/agents/42', 'refs/heads/issue-42']);
         return scenario.branch ? 'issue-42\n' : '';
       } });
     assert.equal(status.workHealth.status, scenario.expected);
@@ -284,7 +287,7 @@ test('online assigned issue health uses actual local refs and latest log activit
     assert.equal(status.issue.state, 'OPEN');
     assert.equal(status.worktreeExists, false, 'A branch without a worktree still counts as a claim');
     assert.ok(formatStatus(status).includes(`Work health: ${scenario.expected} (read-only; heartbeat threshold`));
-    assert.equal(calls.length, 4, 'Only issue/PR/ref reads are allowed');
+    assert.equal(calls.length, 5, 'Only issue/PR/ref reads are allowed');
   }
 });
 

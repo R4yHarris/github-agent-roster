@@ -164,8 +164,17 @@ not read cached issue data or create issues. A missing, closed, or empty issue
 lookup fails.
 
 Before creating a worktree, Roster fetches `origin` (`git fetch --prune`) and,
-by default, starts new branch `issue-N` from the fresh remote default branch
+by default, starts new branch `agents/N` from the fresh remote default branch
 (`origin/HEAD`, else `origin/main`/`origin/master`) in `.worktrees/issue-N`.
+The directory name and opaque `AI_TASK=issue-N` stay unchanged; they are not
+the branch namespace. Per FEATURE_SPEC **5.4**, new issue branches use
+`agents/<issue>` while an existing exact `issue-N` branch is reused, never
+renamed or reset. Local Git refs and registrations are checked together:
+both namespaces for one issue are ambiguous and refuse execution, and a branch
+checked out elsewhere or a foreign branch at the task path is never moved.
+Both layouts share the existing issue lock, checkpoints and learning identity.
+New attempt branches use `agents/N-aI` in `.worktrees/issue-N-aI`; existing
+attempt claims are preserved, not adopted by a new attempt batch.
 `start.base` (or `run --base`) may be `trunk` (default), `current` (the caller's
 HEAD), or an explicit ref; `start.sync: offline` (or `--no-fetch`) skips the
 fetch and reports freshness unknown. If no origin default branch exists, Roster

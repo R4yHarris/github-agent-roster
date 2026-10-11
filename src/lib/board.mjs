@@ -49,6 +49,6 @@ export function formatIssueSummary(cached, { env = process.env } = {}) {
     .replace(/[\x00-\x1f\x7f]/g, '?');
   return `Issue: #${cached.issue.number} ${safe(cached.issue.title)}\n` +
     `State: ${safe(cached.issue.state ?? 'UNKNOWN')}\n` +
-    `Branch: ${safe(cached.branch ?? `issue-${cached.issue.number}`)}\n` +
+    `Branch: ${safe(cached.branch ?? `agents/${cached.issue.number}`)}\n` +
     `PR: ${safe(cached.openPr?.url ?? (cached.openPr === null ? '(none)' : '(not cached)'))}\n`;
 }

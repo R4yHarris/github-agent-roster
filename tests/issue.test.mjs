@@ -78,8 +78,8 @@ test('reads the issue in the current repository and prepares one coder worktree'
       'refs/remotes/origin/master'], cwd: repoRoot },
     { program: 'git', args: ['rev-parse', '--verify', '--quiet', '--end-of-options', 'origin/main^{commit}'], cwd: repoRoot },
     { program: 'git', args: ['worktree', 'list', '--porcelain', '-z'], cwd: repoRoot },
-    { program: 'git', args: ['for-each-ref', '--format=%(refname)', 'refs/heads/issue-42'], cwd: repoRoot },
-    { program: 'git', args: ['worktree', 'add', '-b', 'issue-42', worktreePath, 'origin/main'], cwd: repoRoot },
+    { program: 'git', args: ['for-each-ref', '--format=%(refname)', 'refs/heads/agents/42', 'refs/heads/issue-42'], cwd: repoRoot },
+    { program: 'git', args: ['worktree', 'add', '-b', 'agents/42', worktreePath, 'origin/main'], cwd: repoRoot },
     { program: 'git', args: ['rev-parse', '--git-dir'], cwd: worktreePath },
   ]);
   assert.deepEqual(writes, [
@@ -114,6 +114,7 @@ ${issue.body}
     assignmentPath: path.join(worktreePath, 'ASSIGNMENT.md'),
     envPath,
     task: 'issue-42',
+    branch: 'agents/42',
     session: 'roster-20260928T222550149Z',
     nextCommand,
     reused: false,
@@ -335,8 +336,8 @@ test('surfaces worktree errors without writing assignment files', async () => {
   };
 
   await assert.rejects(runIssue(42, options),
-    /git worktree add -b issue-42 .*issue-42 origin\/main failed.*branch already exists/);
-  assert.deepEqual(calls.at(-1).args, ['for-each-ref', '--format=%(refname)', 'refs/heads/issue-42']);
+    /git worktree add -b agents\/42 .*issue-42 origin\/main failed.*branch already exists/);
+  assert.deepEqual(calls.at(-1).args, ['for-each-ref', '--format=%(refname)', 'refs/heads/agents/42', 'refs/heads/issue-42']);
   assert.equal(writes.length, 1);
   assert.deepEqual(messages, []);
 });
@@ -386,7 +387,7 @@ test('the user can start from the current HEAD without fetching', async () => {
   assert.equal(result.start.mode, 'current');
   assert.equal(calls.some(({ args }) => args[0] === 'fetch'), false);
   assert.deepEqual(calls.find(({ args }) => args[0] === 'worktree' && args[1] === 'add').args,
-    ['worktree', 'add', '-b', 'issue-42', path.join(repoRoot, '.worktrees', 'issue-42')]);
+    ['worktree', 'add', '-b', 'agents/42', path.join(repoRoot, '.worktrees', 'issue-42')]);
 });
 
 test('reports incomplete setup if writing the dotenv file fails', async () => {

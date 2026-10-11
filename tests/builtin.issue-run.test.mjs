@@ -73,13 +73,16 @@ test('builtin run reads the GitHub issue, creates a coder worktree, and stops at
   assert.doesNotMatch(liveLog, /http chat\.completions|README has a Status section|## Acceptance checks/);
   const offline = await readStatus({
     issue: 42, offline: true, repoRoot: options.target, config: stubConfig,
-    runCommand: () => assert.fail('Logged offline status must not call GitHub or Git'),
+    runCommand: async (program, args, cwd) => {
+      assert.equal(program, 'git', 'Offline status must not contact GitHub');
+      return git(cwd, ...args);
+    },
   });
   assert.equal(offline.runLog.lastSeat, 'reviewer');
   assert.equal(offline.runLog.lastLine, liveLog.trimEnd().split('\n').at(-1));
   assert.match(formatStatus(offline), /Last seat: reviewer/);
   assert.ok(formatStatus(offline).includes(`Last log line: ${offline.runLog.lastLine}`));
-  assert.equal(git(result.worktreePath, 'branch', '--show-current'), 'issue-42');
+  assert.equal(git(result.worktreePath, 'branch', '--show-current'), 'agents/42');
   assert.match(readFileSync(result.assignmentPath, 'utf8'), /Issue URL: https:\/\/github.com\/example\/project\/issues\/42/);
   assert.match(readFileSync(result.assignmentPath, 'utf8'), /README has a Status section/);
   const recipe = parseRecipe(readFileSync(result.recipePath, 'utf8'));
@@ -181,7 +184,7 @@ test('rerunning an issue reuses its worktree and preserves prior run artifacts w
     fetchImpl: () => assert.fail('Stub rerun must not call an endpoint') });
   assert.equal(rerun.reused, true);
   assert.equal(rerun.worktreePath, initial.worktreePath);
-  assert.equal(git(rerun.worktreePath, 'branch', '--show-current'), 'issue-42');
+  assert.equal(git(rerun.worktreePath, 'branch', '--show-current'), 'agents/42');
   assert.equal(readFileSync(rerun.taskPath, 'utf8'), oldTask);
   assert.equal(readFileSync(path.join(rerun.archivePath, 'RESULT.md'), 'utf8'), oldResult);
   assert.equal(rerun.planner.reused, true);
@@ -301,7 +304,7 @@ test('an App-credentialed issue run reports claim and outcome on the issue witho
   assert.deepEqual(statuses.map(({ status }) => status), ['in-progress', result.review?.verdict === 'pass' ? 'review' : 'blocked']);
   assert.equal(statuses[0].url, options.issue.url);
   assert.equal(statuses[0].repoRoot, options.target);
-  assert.deepEqual(statuses[0].detail, ['Branch: issue-42',
+  assert.deepEqual(statuses[0].detail, ['Branch: agents/42',
     'Start: current HEAD (fetched); origin default branch not found; starting from current HEAD',
     'Seats: planner,coder,reviewer']);
   assert.ok(logs.includes('Issue #42 status not updated (in-progress): GitHub issue API request failed (HTTP 502)'));

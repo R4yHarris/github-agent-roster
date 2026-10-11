@@ -13,6 +13,7 @@ import { githubRepository } from './github-repository.mjs';
 import { branchDrift, formatStart, resolveStart, startOptions } from './start.mjs';
 import { statePaths, STATE_SCOPES } from './repo-state.mjs';
 import { ensureLocalPath } from './paths.mjs';
+import { parseWorktreeInventory, resolveIssueBranch } from './issue-branches.mjs';
 export { githubRepository } from './github-repository.mjs';
 
 const execFileAsync = promisify(execFile);
@@ -162,21 +163,16 @@ export async function runIssue(issueNumber, {
   }) : null;
 
   const inventory = await command('git', ['worktree', 'list', '--porcelain', '-z'], repoRoot);
-  const registered = inventory.split('\0\0').filter(Boolean).map((record) => {
-    const fields = record.split('\0');
-    return {
-      worktree: fields.find((field) => field.startsWith('worktree '))?.slice(9),
-      branch: fields.find((field) => field.startsWith('branch '))?.slice(7),
-    };
-  });
+  const registered = parseWorktreeInventory(inventory);
+  const resolved = await resolveIssueBranch({ number, repoRoot, runCommand, worktrees: registered });
   const samePath = (value) => typeof value === 'string' &&
     (process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value)) ===
     (process.platform === 'win32' ? worktreePath.toLowerCase() : worktreePath);
-  const existing = registered.find(({ worktree }) => samePath(worktree));
-  const branch = `refs/heads/${task}`;
+  const existing = registered.find(({ path }) => samePath(path));
+  const branch = resolved.branch;
   const reused = Boolean(existing);
   if (existing && existing.branch !== branch) throw new Error('Existing issue worktree is on a different branch');
-  if (registered.some((entry) => entry.branch === branch && !samePath(entry.worktree))) {
+  if (registered.some((entry) => entry.branch === branch && !samePath(entry.path))) {
     throw new Error('Issue branch is already checked out in another worktree; refusing to move it');
   }
   const entry = await (fileSystem.lstat ? fileSystem.lstat(worktreePath) : fileSystem.stat(worktreePath))
@@ -192,15 +188,14 @@ export async function runIssue(issueNumber, {
   await beforeWorktree(repoRoot, worktreePath, issue, repository);
   let drift = null;
   if (!reused) {
-    const knownBranch = (await command('git', ['for-each-ref', '--format=%(refname)', branch], repoRoot))
-      .split('\n').includes(branch);
-    if (knownBranch) drift = await branchDrift({ repoRoot, runCommand, branch: task, start });
+    const knownBranch = resolved.known;
+    if (knownBranch) drift = await branchDrift({ repoRoot, runCommand, branch, start });
     await fileSystem.mkdir(path.dirname(worktreePath), { recursive: true });
     await command('git', knownBranch
-      ? ['worktree', 'add', worktreePath, task]
-      : ['worktree', 'add', '-b', task, worktreePath, ...(start.ref ? [start.ref] : [])], repoRoot);
+      ? ['worktree', 'add', worktreePath, branch]
+      : ['worktree', 'add', '-b', branch, worktreePath, ...(start.ref ? [start.ref] : [])], repoRoot);
   } else {
-    drift = await branchDrift({ repoRoot, runCommand, branch: task, start });
+    drift = await branchDrift({ repoRoot, runCommand, branch, start });
   }
   await initializeWorktreeSubmodules(worktreePath, command);
 
@@ -257,6 +252,7 @@ export async function runIssue(issueNumber, {
 
   log(`${formatStart(start, drift)}
 Worktree: ${worktreePath}${reused ? ' (reused)' : ''}
+Branch: ${branch}
 Assignment: ${assignmentPath}
 Environment: ${envPath}
 After editing inside the worktree, load the Environment path above (outside product files) into the worker environment and run:
@@ -266,6 +262,6 @@ ${nextCommand ?? (config.publish?.enabled === false
   ? 'Publication unavailable: publishing is disabled by publish.enabled.'
   : 'Publication unavailable: set model in AI_MODEL for GHCP, or complete a measured roster run.')}`);
 
-  return { issue, ask, metadata, repoRoot, worktreePath, assignmentPath, envPath, task, session, nextCommand, reused,
+  return { issue, ask, metadata, repoRoot, worktreePath, assignmentPath, envPath, task, branch, session, nextCommand, reused,
     start, drift };
 }

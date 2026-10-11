@@ -103,7 +103,7 @@ roster run --issue 42 --parallel 2 --auto-model
 `--parallel K` (also `/run N --parallel K`) applies to executable feature
 children, not to seats within one child. Every child still runs
 planner -> coder -> reviewer sequentially in its own `.worktrees/issue-N`
-and existing `issue-N` branch. `K` must be a positive safe integer; default
+and `agents/N` branch (existing `issue-N` branches are reused). `K` must be a positive safe integer; default
 `1` preserves the existing single-child order and return shape.
 The task bound is the smaller of K and the sum of registered fleet profile
 concurrency when routing is enabled. Saved/default runs use their configured
@@ -159,7 +159,7 @@ roster run --issue 42 --attempts 2 --auto-model
 Default `1` preserves the existing path and return shape. `seat.max_attempts`
 defaults to `3` and can be configured from 1 to 16. The harness plans and
 critiques once, then copies the unchanged TASK, recipe, and estimate into
-`.worktrees/issue-N-aI` on distinct `issue-N-aI` branches from the same base
+`.worktrees/issue-N-aI` on distinct `agents/N-aI` branches from the same base
 commit. Existing application edits, attempt directories, or attempt branches
 are never adopted or overwritten.
 

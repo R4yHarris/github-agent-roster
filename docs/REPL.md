@@ -254,7 +254,8 @@ library functions in the same Node process; those libraries may still invoke
 Git, GitHub CLI, tests, or the metrics exporter. It does not spawn another
 Roster CLI process or add a queue.
 
-`/run N` reuses an existing registered `issue-N` branch/worktree. Prior
+`/run N` reuses an existing registered `agents/N` or legacy `issue-N`
+branch in the unchanged `.worktrees/issue-N` directory. Prior
 generated outputs are archived locally in Git metadata, while app changes and
 the assignment/environment are preserved. An existing branch is never passed
 to `git worktree add -b`, and it is not moved; the run logs how far it is behind
@@ -481,7 +482,7 @@ loads it; only `/model ID --save` or an explicit probe `--set-model` changes
 the saved model. Plain model/effort/fleet selection never writes that file.
 
 The CLI equivalent is `roster status --issue N [--offline]`. Without an
-explicit number, status uses the current `issue-N` branch or a single issue
+explicit number, status uses the current `agents/N` or legacy `issue-N` branch or a single issue
 worktree; multiple candidates require `--issue N`. `--offline` never calls
 GitHub and does not turn unknown PR state into `none`.
 

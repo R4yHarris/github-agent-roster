@@ -98,9 +98,46 @@ test('a confirmed issue resumes its prepared handoff without another gh view or 
   assert.equal(second.planner.reused, true);
   assert.equal(second.planningOnly, undefined);
   assert.equal(second.result.mode, 'stub');
+  assert.equal(second.branch, 'agents/42');
   assert.equal(options.calls.filter(({ program }) => program === 'gh').length, initialGh);
   assert.equal(options.calls.filter(({ args }) => args[0] === 'worktree' && args[1] === 'add').length, 1);
 });
+
+test('legacy prepared and locally reconstructed issue handles resume without renaming or creating another branch', async (context) => {
+  const options = fixture(context);
+  const worktree = path.join(options.target, '.worktrees', 'issue-42');
+  git(options.target, 'worktree', 'add', '-b', 'issue-42', worktree);
+  const first = await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {} });
+  assert.equal(first.branch, 'issue-42');
+  for (const preparedRun of [first, await readLocalRun({ number: 42, cwd: options.target,
+    config: stubConfig, env: options.env })]) {
+    const second = await runBuiltinIssue(42, { ...options, config: stubConfig, preparedRun, log: () => {} });
+    assert.equal(second.branch, 'issue-42');
+    assert.equal(second.task, 'issue-42');
+    assert.equal(second.worktreePath, worktree);
+    assert.equal(second.planner.reused, true);
+  }
+  assert.equal(git(options.target, 'for-each-ref', '--format=%(refname)', 'refs/heads/agents/42'), '');
+  assert.equal(options.calls.filter(({ args }) => args[0] === 'worktree' && args[1] === 'add').length, 0);
+});
+
+for (const kind of ['dual namespace', 'renamed namespace', 'foreign branch']) {
+  test('prepared issue resume refuses ' + kind + ' before any seat or second worktree', async (context) => {
+    const options = fixture(context);
+    const first = await runBuiltinIssue(42, { ...options, config: stubConfig, log: () => {} });
+    if (kind === 'dual namespace') git(options.target, 'branch', 'issue-42');
+    if (kind === 'renamed namespace') git(first.worktreePath, 'branch', '-m', 'agents/42', 'issue-42');
+    if (kind === 'foreign branch') git(first.worktreePath, 'checkout', '-b', 'human-work');
+    const before = options.calls.length;
+    const product = readFileSync(path.join(first.worktreePath, 'README.md'), 'utf8');
+    await assert.rejects(runBuiltinIssue(42, { ...options, config: stubConfig, preparedRun: first,
+      log: () => {}, onPrepared: () => assert.fail('No seat preparation after changed branch ownership'),
+      fetchImpl: () => assert.fail('No model after changed branch ownership') }),
+    /Ambiguous|registration or branch changed/);
+    assert.equal(options.calls.slice(before).some(({ args }) => args[0] === 'worktree' && args[1] === 'add'), false);
+    assert.equal(readFileSync(path.join(first.worktreePath, 'README.md'), 'utf8'), product);
+  });
+}
 
 test('plan mode stays PLAN-only until a human accepts and resumes the same slice worktree', async (context) => {
   const options = fixture(context);

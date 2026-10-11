@@ -30,7 +30,7 @@ function fixture(t) {
 
 function githubResponses({ merged = true, issueState = 'open', expectedRunLine = runLine,
   expectedModel = model, expectedMetadata = '',
-  headRepo = 'example/project', htmlUrl = 'https://github.com/example/project/pull/7',
+  headRepo = 'example/project', headRef = 'issue-42', htmlUrl = 'https://github.com/example/project/pull/7',
   createdAt, mergedAt,
   prBody = issueMergeMessage('feat: issue 42', 42) } = {}) {
   const calls = [];
@@ -51,7 +51,7 @@ function githubResponses({ merged = true, issueState = 'open', expectedRunLine =
     }
     if (route === '/repos/example/project/pulls/7') {
       return Response.json({
-        merged, state: 'closed', head: { ref: 'issue-42', repo: { full_name: headRepo } },
+        merged, state: 'closed', head: { ref: headRef, repo: { full_name: headRepo } },
         base: { repo: { full_name: 'example/project' } },
         html_url: htmlUrl, body: prBody,
         merged_at: mergedAt,
@@ -105,6 +105,18 @@ test('App comments with PR URL, model, and AI-Run without closing the open issue
     'POST /repos/example/project/issues/42/comments',
     'DELETE /installation/token',
   ]);
+});
+
+test('App merged-issue verification accepts canonical head but refuses foreign and malformed heads', async (t) => {
+  const canonical = githubResponses({ headRef: 'agents/42' });
+  assert.equal((await commentMergedIssue({ ...fixture(t), issue, pullNumber: 7, model, runLine,
+    fetchImpl: canonical.fetchImpl })).commentId, 55);
+  for (const headRef of ['agents/43', 'agents/042', 'human-work']) {
+    const response = githubResponses({ headRef });
+    await assert.rejects(commentMergedIssue({ ...fixture(t), issue, pullNumber: 7, model, runLine,
+      fetchImpl: response.fetchImpl }), /merged|issue branch/);
+    assert.equal(response.calls.some(({ route }) => route.endsWith('/comments')), false);
+  }
 });
 
 test('confirmed publication returns only real GitHub delivery timestamps for local caching', async (t) => {

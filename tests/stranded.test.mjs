@@ -15,7 +15,7 @@ test('classifies only open assigned issues without mutating input or using label
     now, thresholdMs: 1000 };
   const before = structuredClone(input);
   assert.deepEqual(classifyStrandedWork(input), [
-    { issue: issues[0], branch: 'issue-1', status: 'stranded', lastHeartbeat: null },
+    { issue: issues[0], branch: 'agents/1', status: 'stranded', lastHeartbeat: null },
     { issue: issues[1], branch: 'issue-2', status: 'stale', lastHeartbeat: null },
     { issue: issues[2], branch: 'issue-3', status: 'healthy', lastHeartbeat: now },
     { issue: issues[5], branch: 'issue-6', status: 'healthy', lastHeartbeat: now - 1000 },
