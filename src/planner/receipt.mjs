@@ -1,4 +1,4 @@
-import { applicationFiles, normalizeAsk, oneLine } from './task.mjs';
+import { acceptanceCheck, applicationFiles, normalizeAsk } from './task.mjs';
 import { estimateTask } from '../runtime/estimate.mjs';
 
 const fields = new Set(['task', 'title', 'task_class', 'difficulty', 'estimate_min', 'model', 'ask',
@@ -46,7 +46,7 @@ export function validatePlanningReceipt(source, task) {
       !Array.isArray(receipt.files_allowed)) {
     throw new TypeError('Planning receipt must match the task title and contain checks and allowed files');
   }
-  receipt.acceptance_checks.forEach((check) => oneLine(check, 'Receipt acceptance check'));
+  receipt.acceptance_checks.forEach(acceptanceCheck);
   const files = applicationFiles(receipt.files_allowed);
   if (files.length !== task.files_allowed.length || files.some((file) => !task.files_allowed.includes(file))) {
     throw new TypeError('Planning receipt application paths differ from TASK.md');

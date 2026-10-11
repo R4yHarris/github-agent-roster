@@ -2,7 +2,7 @@ import { mergeUsage } from '../metrics/run.mjs';
 import { isAllowedFile } from '../runtime/tools.mjs';
 import { plannerMemoryText, redactSecrets } from '../runtime/memory.mjs';
 import { askRequirements, cleanAskText } from './stub.mjs';
-import { allowedFile, checkedList, oneLine } from './task.mjs';
+import { acceptanceCheck, allowedFile, checkedList, oneLine } from './task.mjs';
 import { selectReasoning } from '../llm/reasoning.mjs';
 
 function object(value, required, optional = []) {
@@ -56,7 +56,7 @@ export function validatePlan(value, { kind, filesAllowed = [], repositoryFiles, 
     }
     return { title, outcome: oneLine(issue.outcome, 'Child issue outcome'),
       acceptance_checks: checkedList(issue.acceptance_checks, 'Child issue checks',
-        (check) => oneLine(check, 'Acceptance check')),
+        acceptanceCheck),
       wave: issue.wave, files_allowed: files };
   });
   const waves = [...new Set(issues.map(({ wave }) => wave))].sort((a, b) => a - b);
@@ -153,6 +153,7 @@ export async function planOutline(ask, {
       'Do not implement, create issues, or grant policy permissions. Return only JSON with outcomes (1-8 short lines) ' +
       `and issues (${kind === 'feature' ? '2-5' : '2-12'} child issue drafts). Each issue has title, outcome, ` +
       'acceptance_checks (1-8 short verifiable lines), wave (integer1-8 starting at1 without gaps), ' +
+      'Each acceptance check is at most 240 characters; shorten wording without dropping requirements. ' +
       (proposeScope
         ? 'and files_allowed (1-32 paths). The human named no files: propose each draft\'s planned files from ' +
           'repository_files, or new files inside their directories. Planned files are scope the coder may expand ' +

@@ -1,10 +1,22 @@
 import { splitTaskFrontmatter } from '../runtime/skills.mjs';
 import { isForbiddenWrite, planArtifactFiles, plannerArtifactFiles } from '../runtime/tools.mjs';
 
-export function oneLine(value, label) {
+function normalizedLine(value, label) {
   const collapsed = typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim() : '';
   if (!collapsed) throw new TypeError(`${label} must be one nonempty line (at most 240 characters)`);
-  return collapsed.slice(0, 240);
+  return collapsed;
+}
+
+export function oneLine(value, label) {
+  return normalizedLine(value, label).slice(0, 240);
+}
+
+export function acceptanceCheck(value) {
+  const check = normalizedLine(value, 'Acceptance check');
+  if (check.length > 240) {
+    throw new TypeError('Acceptance check must be at most 240 characters; shorten it without dropping requirements');
+  }
+  return check;
 }
 
 export function allowedFile(value) {
@@ -67,7 +79,7 @@ export function validateDirectoryDocumentPlan(ask, files, checks) {
   const commands = /\b(?:npm|npx|pnpm|yarn|pip|apt|docker|kubectl|terraform|curl|wget|ssh|bash|powershell|Invoke-WebRequest)\b|\b(?:git\s+(?:push|clone)|gh\s+(?:pr|release)|node\s+--test)\b/i;
   const action = /\b(?:install(?:ation|ed|s)?|deploy(?:ment|ed|s)?|publish(?:ed|es|ing)?|purchase(?:d|s)?|buy|account|network|request|fetch|download(?:ed|s)?|upload(?:ed|s)?|serve(?:d|s)?|hosting)\b/i;
   const assertion = /\b(?:run|execute|succeeds?|successful(?:ly)?|exits?|passes?|created|activated|completed|live|reachable)\b|\b(?:is|are|was|were)\s+(?:installed|deployed|published|purchased|serving|running)\b/i;
-  const content = /\b(?:documents?|describes?|explains?|outlines?|contains?|includes?|covers?|lists?|mentions?|states?|warns?|contrasts?|shows?|compares?|defines?|presents?)\b/i;
+  const content = /\b(?:documents?|describes?|explains?|outlines?|contains?|includes?|cover(?:s|ing)?|lists?|mentions?|states?|warns?|contrasts?|shows?|compares?|defines?|presents?|gives?|indexes)\b/i;
   const activeClause = /(?:[;:]|\b(?:and|then))\s+(?:run|execute|install|deploy|publish|purchase|buy|register|create an? account|fetch|download|upload|request)(?:s|ed)?\b/i;
   for (const [index, check] of checks.entries()) {
     if (!content.test(check) || activeClause.test(check) || commands.test(check) && assertion.test(check) ||
@@ -266,7 +278,7 @@ export function parseTaskDocument(task, { expectedAsk, issueTitle, issueBody } =
   }
   const acceptance_checks = checkedList(sectionList(parsed.sections.find(({ name }) => name === 'acceptance checks'),
     'Acceptance Checks (or acceptance_checks)', { continuations: true }),
-  'Acceptance checks', (line) => oneLine(line, 'Acceptance check'));
+  'Acceptance checks', (line) => normalizedLine(line, 'Acceptance check'));
   const files_allowed = taskFilesAllowed(task);
   if (outputDirectory) {
     validateDirectoryFiles(files_allowed, outputDirectory);
