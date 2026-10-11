@@ -130,6 +130,19 @@ function parseImports(text) {
       !specifier.startsWith('node:') && !/^(fs|path|os|url|util|crypto)(\/|$)/.test(specifier));
     for (const entry of names) imports.push({ ...entry, specifier, harness, app });
   }
+  // `const { fn } = await import(url)` binds app code the same way a static import does; the specifier may be an expression.
+  const dynamic = /\b(?:const|let|var)\s+(\{[^}]*\}|[A-Za-z_$][\w$]*)\s*=\s*await\s+import\(([^\n;]*)\)/g;
+  for (const [, binding, argument] of text.matchAll(dynamic)) {
+    const literal = /^\s*(['"])([^'"]+)\1\s*$/.exec(argument)?.[2];
+    if (literal && (testHarnessSpecifiers.has(literal) || literal.startsWith('node:') ||
+        /^(fs|path|os|url|util|crypto)(\/|$)/.test(literal))) continue;
+    const names = binding.startsWith('{')
+      ? binding.slice(1, -1).split(',').map((part) => part.trim().split(/\s*:\s*/).pop().trim())
+      : [binding];
+    for (const name of names) {
+      if (/^[A-Za-z_$][\w$]*$/.test(name)) imports.push({ name, specifier: literal ?? argument.trim(), harness: false, app: true });
+    }
+  }
   return imports;
 }
 

@@ -164,3 +164,21 @@ test('test evidence needs a new test block or assertion, and import-only additio
   assert.equal(addsOnlyImports("import { a } from '../src/a.mjs';\nconst timeout = 50;"), false);
   assert.equal(addsOnlyImports(''), false);
 });
+
+test('a dynamically imported app function counts as app code, while a test of only built values is still flagged', () => {
+  const base = `import assert from 'node:assert/strict';
+import test from 'node:test';
+import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+const { parseCsv } = await import(pathToFileURL('/work/parse-csv.mjs'));
+`;
+  assert.deepEqual(analyze(`test('parses', () => {
+  assert.deepStrictEqual(parseCsv('a\\n1'), [{ a: '1' }]);
+});`, base), []);
+  const reasons = analyze(`test('only built values', () => {
+  const rows = [{ a: '1' }];
+  assert.deepStrictEqual(rows, [{ a: '1' }]);
+});`, base);
+  assert.equal(reasons.length, 1);
+  assert.match(reasons[0], /never calls imported app code/);
+});
