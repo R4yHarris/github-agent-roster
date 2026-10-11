@@ -6,7 +6,7 @@ import test from 'node:test';
 import { parseConfig } from '../src/lib/config.mjs';
 import { buildPlan, cleanAskText, planAsk, planFromTask, planStub } from '../src/planner/stub.mjs';
 import { deterministicPlanDefects } from '../src/planner/critic.mjs';
-import { parseTaskDocument, taskFilesAllowed } from '../src/planner/task.mjs';
+import { ensureAllowedFiles, parseTaskDocument, taskFilesAllowed } from '../src/planner/task.mjs';
 import { readTaskMetadata, updateTaskMetadata } from '../src/runtime/estimate.mjs';
 import { runPlanner } from '../src/seats/planner.mjs';
 
@@ -282,4 +282,12 @@ test('a template-copied Task title heading takes the real title from the next li
     'Implement atomic persistence');
   assert.equal(parseTaskDocument(`# Task title\n\ndifficulty: 2${body}`).title, 'Task title');
   assert.equal(parseTaskDocument(`# Ship the store\nDetails here.${body}`).title, 'Ship the store');
+});
+
+test('a bare filename in a directory-scoped Ask never widens the allowed files beyond the granted directory', () => {
+  const ask = 'Create a CLI exporting parseCsv and a bin script csv2json.mjs. Output it in a new "medium-csv" directory';
+  const task = '# T\n\n## Original Ask\n\n' + ask + '\n';
+  assert.equal(ensureAllowedFiles(task, ask), task);
+  assert.match(ensureAllowedFiles(task, 'Edit medium-csv/a.mjs. Output it in a new "medium-csv" directory'),
+    /- medium-csv\/a\.mjs/);
 });

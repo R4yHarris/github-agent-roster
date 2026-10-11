@@ -242,7 +242,7 @@ export async function planAsk(ask, {
         : 'You have no tools in this draft-only planning context. ') +
       'Plan one software task. JSON shape: {"title":"Task title","acceptance_checks":["check"],"files_allowed":["path"]}. ' +
       'Use 1-8 acceptance checks in JSON or TASK.md; group related checks without dropping requirements. ' +
-      'Each acceptance check must be at most 240 characters; shorten wording without dropping requirements. ' +
+      'Each acceptance check must be at most 240 characters; for a long requirement write several shorter checks (up to 8) instead of one long one, without dropping requirements. ' +
       'A code task needs acceptance_checks including node --test exits 0 and files_allowed. ' +
       'Optional fields: difficulty (1-5), estimate_min, task_class (feat|fix|docs|test), model, steps, notes. ' +
       (lockedModel ? `Keep model ${lockedModel}; do not choose another model. ` : '') +
