@@ -25,6 +25,14 @@ verification scripts. Verification never authorizes scratch files or scripts
 outside the explicit allowed files. Honor repository-specific test requirements and
 include directly related tests and documentation.
 
+Combine requested behaviors in regression inputs when one changes the state
+used by another; isolated green cases do not establish interaction correctness.
+For source-location errors, derive the expected physical position from the
+original input, not a logical item/record index after embedded newlines.
+For example, a bad row after one multiline record can begin on physical line
+4 while being only the third record. Do not invent a quote-start versus EOF
+diagnostic convention when the Ask does not choose one.
+
 ## Supply-chain judgment
 
 Prefer existing vetted dependencies and honor repository dependency policy.
