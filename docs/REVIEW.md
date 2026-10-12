@@ -24,6 +24,24 @@ Writing future setup/deployment instructions is not executing them; a request
 for public-serving instructions is not satisfied by localhost preview alone.
 The reviewer must not invent unrelated requirements or silently rewrite checks.
 
+For an executable Original Ask targeting an output directory, the independent
+Ask audit also receives the exact guarded delivered sources. A negative audit
+must return one `grounds: [{obligation, file, excerpt, reason}]` entry per
+reason: an exact Ask excerpt, a scoped source path, an exact source excerpt
+(whitespace collapsed), and the matching reason explaining the concrete
+violation. Only an absent scoped file permits `excerpt: null`. An extra
+working directory, installation, or dependency cannot acquire authority by
+appearing in a finding. Invalid grounding gets the existing single formatting
+retry, then fails incomplete; it never becomes an automatic pass.
+Validated negative grounds are retained in `REVIEW.md`, not just the transcript.
+
+This validates quotation provenance, not semantic truth. The model still
+must connect the source to the requested obligation; a genuine uncovered
+defect retains its veto despite passing host observations. Source and Ask
+excerpts use the same redaction and context limits as other evidence. Written
+documentation audits retain their existing procedure-specific checks.
+See FEATURE_SPEC sections 5.4, 5.5 and 5.6.
+
 ## Trusted host independent-verification protocol
 
 The host API `runReviewer` optionally accepts

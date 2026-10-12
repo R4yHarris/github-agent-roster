@@ -72,6 +72,179 @@ function dockerReviewOptions() {
       evidence: `Host-authorized source diagnostic check ${id}` })) } };
 }
 
+function executableAuditFixture(context, extraAsk = '') {
+  const options = fixture(context);
+  const ask = `Export ready as true and provide a CLI that prints ready. Include Node built-in tests. ${extraAsk}` +
+    'Output it in a new "src" directory.';
+  writeFileSync(path.join(options.worktree, 'TASK.md'),
+    '# Task: Executable audit\n\ndifficulty: 2\ntask_class: feat\n\n## Ask\n' + ask +
+    '\n\n## Acceptance checks\n- node --test src exits 0\n- app exports ready\n\n## Files allowed\n' +
+    '- src/app.mjs\n- src/cli.mjs\n- src/cli.test.mjs\n');
+  writeFileSync(path.join(options.worktree, 'src', 'cli.mjs'),
+    "import { ready } from './app.mjs';\nconsole.log(ready);\n");
+  writeFileSync(path.join(options.worktree, 'src', 'cli.test.mjs'),
+    "import test from 'node:test';\nimport assert from 'node:assert/strict';\n" +
+    "import { execFileSync } from 'node:child_process';\n" +
+    "test('CLI', () => assert.equal(execFileSync(process.execPath, ['src/cli.mjs'], " +
+    "{ encoding: 'utf8' }).trim(), 'true'));\n");
+  options.coderResult.excellence.files = ['src/app.mjs', 'src/cli.mjs', 'src/cli.test.mjs'];
+  return options;
+}
+
+function auditReply(body, reason, ground) {
+  return JSON.stringify({ verdict: 'fail', reasons: [reason], security_notes: [],
+    checks: reviewedChecks(body).map(id => ({ id, met: false, evidence: reason })),
+    grounds: [{ ...ground, reason }] });
+}
+
+test('executable Ask audit retries false import/dependency evidence against exact sources rather than accepting it', async (context) => {
+  const options = executableAuditFixture(context);
+  let calls = 0;
+  const review = await runReviewer({ ...options, config,
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      calls++;
+      let content = passingReview(body);
+      if (calls === 1) {
+        assert.match(body.messages[1].content, /## Exact delivered sources/);
+        assert.match(body.messages[1].content, /import \{ ready \} from '\.\/app\.mjs'/);
+        content = auditReply(body, 'CLI cannot resolve ../app.mjs without installing dependencies.', {
+          obligation: 'provide a CLI that prints ready', file: 'src/cli.mjs',
+          excerpt: "import { ready } from '../app.mjs';",
+        });
+      } else if (calls === 2) {
+        assert.match(body.messages.at(-1).content, /exact Ask\/source-grounded/);
+        assert.match(body.messages.at(-1).content, /An executed pass establishes only its recorded input/);
+      }
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content } }] });
+    },
+  });
+  assert.equal(calls, 3);
+  assert.equal(review.verdict, 'pass', review.content);
+  assert.equal(review.completed, true);
+  assert.equal(execFileSync(process.execPath, [path.join(options.worktree, 'src', 'cli.mjs')],
+    { cwd: tmpdir(), encoding: 'utf8' }).trim(), 'true');
+});
+
+test('persistently invented negative audit excerpts fail incomplete instead of receiving a passing fallback', async (context) => {
+  const options = executableAuditFixture(context);
+  let calls = 0;
+  const review = await runReviewer({ ...options, config,
+    fetchImpl: async (_url, request) => {
+      calls++;
+      const body = JSON.parse(request.body);
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+        content: auditReply(body, 'CLI requires an undeclared dependency.', {
+          obligation: 'provide a CLI that prints ready', file: 'src/cli.mjs', excerpt: "import 'missing-package';",
+        }) } }] });
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(review.verdict, 'fail');
+  assert.equal(review.completed, false);
+  assert.match(review.content, /exact Ask\/source-grounded/);
+  await assert.rejects(requirePassingReview({ worktreePath: options.worktree, review }), /passing REVIEW/);
+});
+
+test('negative audit cannot introduce an extra working-directory obligation absent from the Ask', async (context) => {
+  const options = executableAuditFixture(context);
+  const review = await runReviewer({ ...options, config,
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+        content: auditReply(body, 'Tests fail from inside src.', {
+          obligation: 'Tests must also run from inside src.', file: 'src/cli.test.mjs',
+          excerpt: "['src/cli.mjs']",
+        }) } }] });
+    },
+  });
+  assert.equal(review.verdict, 'fail');
+  assert.equal(review.completed, false);
+  assert.match(review.content, /exact Ask\/source-grounded/);
+});
+
+test('source-grounded requested cwd defect retains model veto despite passing covered host observations', async (context) => {
+  const options = executableAuditFixture(context, 'Tests must also run from inside src. ');
+  const env = { ...process.env };
+  delete env.NODE_TEST_CONTEXT;
+  const rootTests = execFileSync(process.execPath, ['--test', 'src'],
+    { cwd: options.worktree, encoding: 'utf8', env });
+  assert.match(rootTests, /# pass 1/);
+  assert.throws(() => execFileSync(process.execPath, ['--test', 'cli.test.mjs'],
+    { cwd: path.join(options.worktree, 'src'), encoding: 'utf8', stdio: 'pipe', env }),
+  error => error.status === 1 && /# fail 1/.test(error.stdout) && /Cannot find module/.test(error.stdout));
+  const subject = await captureVerificationSubject({ worktree: options.worktree,
+    files: options.coderResult.excellence.files });
+  const receipt = { ...(await independentReceipt(options)), subject_digest: subject.digest };
+  let calls = 0;
+  const review = await runReviewer({ ...options, config, independentVerification: { receipt },
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      calls++;
+      const content = calls === 1 ? auditReply(body, 'src/cli.test.mjs resolves src/cli.mjs inside src/src when run from src.', {
+        obligation: 'Tests must also run from inside src.', file: 'src/cli.test.mjs', excerpt: "['src/cli.mjs']",
+      }) : passingReview(body);
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content } }] });
+    },
+  });
+  assert.equal(calls, 2);
+  assert.equal(review.completed, true);
+  assert.equal(review.independentVerification.status, 'pass');
+  assert.equal(review.verdict, 'fail');
+  assert.match(review.content, /Original Ask audit.*src\/src/);
+  assert.match(review.content, /### Negative finding grounds/);
+  assert.match(review.content, /Ask: Tests must also run from inside src/);
+  assert.match(review.content, /Source \(src\/cli.test.mjs\): \['src\/cli.mjs'\]/);
+  await assert.rejects(requirePassingReview({ worktreePath: options.worktree, review }), /passing REVIEW/);
+});
+
+test('negative audit source excerpts share redaction and whitespace rules and remain durable', async (context) => {
+  const options = executableAuditFixture(context);
+  writeFileSync(path.join(options.worktree, 'src', 'cli.mjs'),
+    "import { ready } from './app.mjs';\nconsole.log(\n'grounding-test-private-key'\n);\n");
+  const review = await runReviewer({ ...options, config, env: { OPENAI_API_KEY: 'grounding-test-private-key' },
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      const audit = body.messages[0].content.includes('independent Original Ask audit');
+      assert.doesNotMatch(JSON.stringify(body), /grounding-test-private-key/);
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+        content: audit ? auditReply(body, 'src/cli.mjs prints a literal rather than the requested ready value.', {
+          obligation: 'provide a CLI that prints ready', file: 'src/cli.mjs', excerpt: "console.log( '[redacted]' );",
+        }) : passingReview(body) } }] });
+    },
+  });
+  assert.equal(review.verdict, 'fail');
+  assert.equal(review.completed, true, review.content);
+  assert.match(review.content, /Source \(src\/cli.mjs\): console.log\( '\[redacted\]' \);/);
+  assert.doesNotMatch(review.content, /grounding-test-private-key/);
+});
+
+test('negative audit may identify a deleted scoped deliverable but cannot mark an existing file absent', async (context) => {
+  for (const deleted of [true, false]) {
+    const options = executableAuditFixture(context);
+    if (deleted) {
+      options.git('add', 'src/cli.mjs');
+      options.git('-c', 'user.name=Test Fixture', '-c', 'user.email=fixture@example.invalid',
+        'commit', '-m', 'Existing CLI');
+      rmSync(path.join(options.worktree, 'src', 'cli.mjs'));
+    }
+    const review = await runReviewer({ ...options, config,
+      fetchImpl: async (_url, request) => {
+        const body = JSON.parse(request.body);
+        const audit = body.messages[0].content.includes('independent Original Ask audit');
+        return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+          content: audit ? auditReply(body, 'The requested CLI file is absent.', {
+            obligation: 'provide a CLI that prints ready', file: 'src/cli.mjs', excerpt: null,
+          }) : passingReview(body) } }] });
+      },
+    });
+    assert.equal(review.verdict, 'fail');
+    assert.equal(review.completed, deleted, review.content);
+    if (deleted) assert.match(review.content, /Source \(src\/cli.mjs\): \[File absent\]/);
+    else assert.match(review.content, /exact Ask\/source-grounded/);
+  }
+});
+
 test('Docker execution is wired before model review and contradictions force actionable repair findings', async (context) => {
   const options = fixture(context);
   let executed = 0;

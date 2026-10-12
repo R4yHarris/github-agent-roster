@@ -1,7 +1,7 @@
 # Eve architecture and carry-forward audit
 
-Audit for #473 and #489, updated 2026-10-12. Current reviewed baseline: PR #592
-(`4de15f9558a117c183845e532e862664268fd9d2`), with contracts pinned to reviewed
+Audit for #473 and #489, updated 2026-10-12. Current reviewed baseline: PR #599
+(`2994921928afbee8600a8c20527964ac6f05be07`), with contracts pinned to reviewed
 `fa48c244bc9b8ead5df927ec705ef41a39c56f68`. Earlier verification records below
 retain their original revisions and selectors. This is an implementation/evidence
 inventory, **not** human acceptance, a release claim, or a reset of failed runs.
@@ -105,6 +105,46 @@ Ordinary public issue/repair controls: **2/2 selected**, 17 intentionally
 unselected, **45858.4026 ms**. This documents failure-driven implementation
 and assisted recovery, not a new autonomous accepted run, held-out pilot,
 general semantic reliability, or authorization to promote difficulty.
+
+### Later failed calibration and grounded negative audits
+
+The later fresh #593 task `local-3a2fb45c199c172d` at reviewed `2994921`
+failed after **314902 ms**, serving `Qwen/Qwen3.8-27B-FP8`. Actual final
+tests passed **12/12**, including the baseline, and the original matrix passed
+**18/18 parser and 18/18 CLI**. One bounded review repair ran; final review
+JSON had string reasons/security notes instead of arrays and failed closed.
+
+A session-only oracle correction removed an exclusive quote-start-line
+convention not required by the Original Ask/numbered checks. The TASK's
+opening-line edge-case prose remains visible, not silently rewritten.
+Actual Docker replay still rejects the known faulty physical-row diagnostic
+(**6/18 parser and 6/18 CLI**) and accepts both retained correct and latest
+unchanged bytes, including multiline EOF and actual tests. The original
+autonomous failure remains unchanged.
+
+One assisted review-only retry completed **fail** in **39471 ms** with a
+passing independent receipt; publication remained denied. Last-response usage
+was **12094 prompt / 397 completion tokens**, merged returned usage
+**37864 / 836**, not an independently measured bill. Exact TASK/RESULT/product
+subject remained
+`d2d52c127d2bff9fd57ca29604aaa8a0a1eeb4165c360af68ad6e9286d12f606`.
+Read-only Docker diagnosis disproved nonexistent-dependency and parser-import
+claims: the actual CLI runs from an unrelated directory. It also reproduced
+a real package-cwd test limitation (**10 pass / 1 fail**), distinct from the
+required worktree-root test command. #593 is completed as an evidence task
+with a failed delivery, not accepted functionality.
+
+#600 now gives executable Original Ask audits exact guarded sources and
+requires negative reasons to quote both the requested obligation and scoped
+source. Invalid grounding gets one formatting retry, then fails incomplete;
+it never forces pass from a receipt. Valid grounds persist in REVIEW.
+This enforces quotation provenance, not semantic truth or autonomous
+counterexample discovery. Genuine uncovered defects retain their veto.
+Windows Node20 coupled reviewer/public-Ask/review-only/receipt/Docker controls
+passed **99/99**, zero failures/skips, **80337.0289 ms**, including actual
+Docker and root-versus-package-cwd executable regressions.
+Parent #581 remains open; full pilot, maintainer gates and difficulty
+promotion remain separate. Spec trace: **5.4, 5.5, 5.6**.
 
 ## Architecture against the code
 
