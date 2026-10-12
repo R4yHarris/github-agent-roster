@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { passingReview, reviewedChecks } from './helpers/review.mjs';
 import { parseConfig } from '../src/lib/config.mjs';
-import { requirePassingReview, runReviewer, unchangedExistingFiles } from '../src/seats/reviewer.mjs';
+import { previousFindingsSection, requirePassingReview, runReviewer, unchangedExistingFiles } from '../src/seats/reviewer.mjs';
 import { LlmTimeoutError } from '../src/llm/request.mjs';
 
 const example = readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8');
@@ -109,7 +109,58 @@ test('a re-review judges the previous findings and is bound by TASK.md constrain
   assert.equal((await reviewer(['Check 2 unmet: ready is not exported', ' '])).verdict, 'pass');
   assert.match(seen[1][0].content, /re-review after a repair[\s\S]*cite words from the check or TASK\.md/);
   assert.match(seen[1][1].content,
-    /## RESULT\.md[\s\S]*## Previous review findings\n\n- Check 2 unmet: ready is not exported\n\n## Diff/);
+    /## RESULT\.md[\s\S]*## Previous review findings\n\n1\. Check 2 unmet: ready is not exported\n\n## Diff/);
+});
+
+for (const scenario of ['missing', 'duplicate', 'out-of-range', 'invalid-evidence', 'invalid-resolved', 'unresolved', 'resolved', 'corrected']) {
+  test(`re-review requires explicit finding accounting: ${scenario}`, async (context) => {
+    const options = fixture(context);
+    let calls = 0;
+    const result = await runReviewer({ ...options, config, env: {},
+      previousFindings: ['Physical line differs from row index after a quoted newline', 'CRLF reproduces the same defect'],
+      fetchImpl: async (_url, request) => {
+        calls += 1;
+        const body = JSON.parse(request.body);
+        const findings = [
+          { id: 1, resolved: scenario !== 'unresolved', evidence: 'src/app.mjs traces physical input lines.' },
+          { id: 2, resolved: true, evidence: 'src/app.mjs counts CRLF as one line break.' },
+        ];
+        if (scenario === 'duplicate') findings[1].id = 1;
+        if (scenario === 'out-of-range') findings[1].id = 3;
+        if (scenario === 'invalid-evidence') findings[1].evidence = '';
+        if (scenario === 'invalid-resolved') findings[1].resolved = 'yes';
+        const report = JSON.parse(passingReview(body));
+        if (scenario === 'missing' || scenario === 'corrected' && calls === 1) delete report.findings;
+        else report.findings = findings;
+        if (scenario === 'corrected' && calls === 2) {
+          assert.match(body.messages.at(-1).content, /exactly 2 \{id, resolved, evidence\}/);
+        }
+        return Response.json({ choices: [{ finish_reason: 'stop', message: {
+          role: 'assistant', content: JSON.stringify(report),
+        } }] });
+      },
+    });
+    const invalid = !['unresolved', 'resolved', 'corrected'].includes(scenario);
+    assert.equal(calls, invalid || scenario === 'corrected' ? 2 : 1);
+    assert.equal(result.verdict, ['resolved', 'corrected'].includes(scenario) ? 'pass' : 'fail');
+    assert.equal(result.completed, !invalid);
+    if (scenario === 'unresolved') assert.match(result.content, /Finding 1 unresolved/);
+    if (!invalid) assert.match(result.content, /## Previous findings/);
+  });
+}
+
+test('previous finding evidence is not silently clipped and context overflow fails before model calls', async (context) => {
+  const findings = Array.from({ length: 9 }, (_, i) => `Finding ${i}: ${'e'.repeat(490)}`);
+  assert.match(previousFindingsSection(findings), /9\. Finding 8:/);
+  assert.ok(previousFindingsSection(findings).length > 3000);
+  const options = fixture(context);
+  const result = await runReviewer({ ...options, env: {}, previousFindings: findings,
+    config: { ...config, seat: { ...config.seat, context_chars: 2000 } },
+    fetchImpl: () => assert.fail('Incomplete finding evidence must not reach the model'),
+  });
+  assert.equal(result.verdict, 'fail');
+  assert.equal(result.completed, false);
+  assert.match(result.content, /Reviewer evidence exceeds seat.context_chars/);
 });
 
 test('a diff larger than 64 KiB but within seat.context_chars is reviewed, not a buffer failure', async (context) => {

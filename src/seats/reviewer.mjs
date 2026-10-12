@@ -92,7 +92,11 @@ const testReviewInstructions = 'For test changes, verify the assertions would fa
 
 const previousFindingsInstructions = 'This is a re-review after a repair. For each previous finding listed in the ' +
   'evidence, judge whether the current diff resolves it. A new finding must cite words from the check or TASK.md ' +
-  'that the change violates; a check met before stays met unless the diff regressed it.';
+  'that the change violates; a check met before stays met unless the diff regressed it. ' +
+  'Include findings: one {id, resolved, evidence} entry for every numbered previous finding, using its original id. ' +
+  'resolved is boolean; evidence is a trimmed single line citing the current changed code or verification. ' +
+  'A passing test that does not exercise the reported input is not resolution evidence. ' +
+  'Mark unresolved findings false; any unresolved finding fails the review even when every acceptance check is met.';
 
 const importSpecifier = /(?:\bfrom\s*|\bimport\s*\(?\s*)(['"])(\.{1,2}\/[^'"\n]+)\1/g;
 
@@ -127,9 +131,14 @@ export async function unchangedExistingFiles(worktree, changedFiles, allowedFile
 }
 
 export function previousFindingsSection(findings) {
-  const lines = Array.isArray(findings) ? findings.filter((finding) => typeof finding === 'string' && finding.trim()) : [];
+  const lines = previousFindingLines(findings);
   return lines.length ? '## Previous review findings\n\n' +
-    lines.map((finding) => `- ${finding.trim()}`).join('\n').slice(0, 3000) + '\n\n' : '';
+    lines.map((finding, index) => `${index + 1}. ${finding}`).join('\n') + '\n\n' : '';
+}
+
+function previousFindingLines(findings) {
+  return Array.isArray(findings) ? findings.filter((finding) => typeof finding === 'string' && finding.trim())
+    .map((finding) => finding.trim()) : [];
 }
 
 async function readRegularText(worktree, name, limit = maxFileBytes) {
@@ -163,7 +172,7 @@ function responseContent(response) {
   return response.message.content;
 }
 
-function parseResponse(content, checkCount = 0, changedFiles = []) {
+function parseResponse(content, checkCount = 0, changedFiles = [], findingCount = 0) {
   if (content.length > maxReviewChars) throw new Error(`Reviewer response exceeds ${maxReviewChars} characters`);
   let report;
   try {
@@ -173,7 +182,7 @@ function parseResponse(content, checkCount = 0, changedFiles = []) {
   }
   const keys = report && typeof report === 'object' && !Array.isArray(report) ? Object.keys(report) : [];
   if (!keys.length ||
-      keys.filter((key) => key !== 'checks' && key !== 'defects').sort().join(',') !== 'reasons,security_notes,verdict' ||
+      keys.filter((key) => key !== 'checks' && key !== 'defects' && key !== 'findings').sort().join(',') !== 'reasons,security_notes,verdict' ||
       !['pass', 'fail'].includes(report.verdict) ||
       !Array.isArray(report.reasons) || report.reasons.length > 16 ||
       (report.verdict === 'fail' && !report.reasons.length) ||
@@ -191,20 +200,31 @@ function parseResponse(content, checkCount = 0, changedFiles = []) {
     throw new Error(`Reviewer checks must be {id, met, evidence} entries for acceptance checks 1-${checkCount}`);
   }
   const defects = parseDefects(report.defects, changedFiles);
+  const findings = report.findings ?? [];
+  if (!Array.isArray(findings) || findings.length !== findingCount ||
+      findings.some((entry) => !entry || typeof entry !== 'object' || Array.isArray(entry) ||
+        Object.keys(entry).sort().join(',') !== 'evidence,id,resolved' ||
+        !Number.isSafeInteger(entry.id) || entry.id < 1 || entry.id > findingCount ||
+        typeof entry.resolved !== 'boolean' || !reviewLine(entry.evidence)) ||
+      new Set(findings.map(({ id }) => id)).size !== findings.length) {
+    throw new Error(`Reviewer findings must judge every previous finding (1-${findingCount}) with {id, resolved, evidence}`);
+  }
   // A pass must account for every check; the harness, not the model's summary, decides the verdict.
   if (report.verdict === 'pass' && checks.length !== checkCount) {
     throw new Error(`Reviewer pass must judge every numbered acceptance check (1-${checkCount}) with evidence`);
   }
   const unmet = checks.filter(({ met }) => !met).sort((a, b) => a.id - b.id);
-  if (unmet.length || defects.length) {
-    return { ...report, checks, defects, verdict: 'fail', reasons: [
+  const unresolved = findings.filter(({ resolved }) => !resolved).sort((a, b) => a.id - b.id);
+  if (unmet.length || defects.length || unresolved.length) {
+    return { ...report, checks, defects, findings, verdict: 'fail', reasons: [
+      ...unresolved.map(({ id, evidence }) => `Finding ${id} unresolved: ${evidence}`.slice(0, 500)),
       ...unmet.map(({ id, evidence }) => `Check ${id} unmet: ${evidence}`.slice(0, 500)),
       ...defects.map(({ file, symbol, input, outcome }) =>
         `Defect in ${file} ${symbol}: ${input} -> ${outcome}`.slice(0, 500)),
       ...report.reasons,
     ].slice(0, 16) };
   }
-  return { ...report, checks, defects };
+  return { ...report, checks, defects, findings };
 }
 
 const defectFields = 'file,input,outcome,symbol';
@@ -275,13 +295,15 @@ export async function readDiff(worktree, task, files, budget, repairFiles, scope
   return diff;
 }
 
-function formatReview({ verdict, reasons, securityNotes, checks = [], checkTexts = [], askAudit }) {
+function formatReview({ verdict, reasons, securityNotes, checks = [], checkTexts = [], findings = [], askAudit }) {
   const judged = checks.length ? '\n\n## Acceptance checks\n\n' + [...checks].sort((a, b) => a.id - b.id)
     .map(({ id, met, evidence }) => `- [${met ? 'x' : ' '}] ${id}. ${checkTexts[id - 1] ?? ''} — ${evidence}`)
     .join('\n') : '';
   return `# Review\n\nVerdict: ${verdict}\n\n## Reasons\n\n` +
     (reasons.length ? reasons.map((reason) => `- ${reason}`).join('\n')
       : '- Every acceptance check is met with cited evidence.') + judged +
+    (findings.length ? '\n\n## Previous findings\n\n' + [...findings].sort((a, b) => a.id - b.id)
+      .map(({ id, resolved, evidence }) => `- [${resolved ? 'x' : ' '}] ${id}. ${evidence}`).join('\n') : '') +
     (askAudit ? `\n\n## Original Ask audit\n\nVerdict: ${askAudit.verdict}\n\n` +
       askAudit.checks.map(({ met, evidence }) => `- [${met ? 'x' : ' '}] ${evidence}`).join('\n') : '') +
     '\n\n## Security notes\n\n' +
@@ -381,6 +403,7 @@ export async function runReviewer({
           'Fail the review unless each is necessary for the named outcome and its change is minimal and safe.\n\n'
         : '';
       const previous = previousFindingsSection(previousFindings);
+      const findingCount = previousFindingLines(previousFindings).length;
       const unchanged = await unchangedExistingFiles(worktree, coderResult.excellence.files ?? [], parsed.files_allowed);
       const unchangedNote = unchanged.length
         ? `## Unchanged existing files\n\nThese files exist at the base and are not in the diff: ${unchanged.join(', ')}.\n\n`
@@ -591,19 +614,21 @@ export async function runReviewer({
         if (final) break;
       }
       try {
-        report = parseResponse(content, checkTexts.length, coderResult.excellence.files ?? []);
+        report = parseResponse(content, checkTexts.length, coderResult.excellence.files ?? [], findingCount);
       } catch (error) {
         if (!(error instanceof Error)) throw error;
         messages.push(
           { role: 'assistant', content },
           { role: 'user', content: `Invalid reviewer JSON (${error.message}). Return only JSON with exactly ` +
             'verdict, reasons, security_notes, and checks (one {id, met, evidence} entry per numbered acceptance ' +
-            'check), plus optional defects ({file, symbol, input, outcome} naming a changed file). Do not repeat prose or request tools.' },
+            'check), plus optional defects ({file, symbol, input, outcome} naming a changed file). ' +
+            (findingCount ? `Include findings: exactly ${findingCount} {id, resolved, evidence} entries, one per numbered previous finding. ` : '') +
+            'Do not repeat prose or request tools.' },
         );
         response = await chat({ messages, response_format: { type: 'json_object' } });
         usage = mergeUsage(usage, response.usage);
         lastResponse = chat.lastResponse;
-        report = parseResponse(responseContent(response), checkTexts.length, coderResult.excellence.files ?? []);
+        report = parseResponse(responseContent(response), checkTexts.length, coderResult.excellence.files ?? [], findingCount);
       }
       if (docsOnly && report.verdict === 'pass' && /https:\/\//.test(parsed.acceptance_checks.join('\n'))) {
         const note = await readRegularText(worktree, parsed.files_allowed[0]).catch(() => '');
@@ -640,6 +665,7 @@ export async function runReviewer({
   const reasons = report.reasons.map((reason) => redactEvidence(reason, redaction));
   const securityNotes = report.security_notes.map((note) => redactEvidence(note, redaction));
   const content = formatReview({ verdict: report.verdict, reasons, securityNotes,
+    findings: (report.findings ?? []).map((entry) => ({ ...entry, evidence: redactEvidence(entry.evidence, redaction) })),
     checks: (report.checks ?? []).map((entry) => ({ ...entry, evidence: redactEvidence(entry.evidence, redaction) })),
     askAudit: askAudit && { verdict: askAudit.verdict, checks: askAudit.checks.map((entry) =>
       ({ ...entry, evidence: redactEvidence(entry.evidence, redaction) })) },

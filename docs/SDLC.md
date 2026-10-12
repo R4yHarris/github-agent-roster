@@ -360,7 +360,16 @@ proof: independent validation and human acceptance remain separate from a
 passing review. A completed model-backed review failure returns its
 per-check findings to a fresh coder context (at most two repairs, switching
 perspective when the same checks stay unmet), then reviews the repaired result
-again. A failed review after the last repair leaves the
+again. Re-review must return one numbered `{id, resolved, evidence}` judgment
+per previous finding, recorded in `REVIEW.md`. Missing, duplicate, malformed
+or out-of-range judgments use the existing bounded JSON correction, then fail
+closed if still invalid. Any unresolved finding overrides a checklist pass.
+All prior finding evidence is retained; context overflow fails explicitly rather
+than silently truncating it. A green test that does not exercise the reported
+input is not evidence that the defect was resolved. This enforces accountability,
+not the truth of a model's claimed resolution; independent validation remains
+necessary. Reviews with no prior findings retain their existing response shape.
+A failed review after the last repair leaves the
 coder's changes intact and blocks Roster-managed publication by default;
 see [review and explicit bypass](REVIEW.md).
 

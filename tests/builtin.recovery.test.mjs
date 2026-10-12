@@ -5,7 +5,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { passingReview, reviewedChecks } from './helpers/review.mjs';
+import { passingReview, reviewedChecks, reviewedFindings } from './helpers/review.mjs';
 import { parseConfig } from '../src/lib/config.mjs';
 import { writeAsk } from '../src/lib/ask.mjs';
 import {
@@ -469,12 +469,14 @@ test('a semantic review failure loops back to the coder, flags a stalled repair,
       }
       if (system.startsWith('You are the builtin reviewer seat.')) {
         reviews += 1;
-        reviewedPrevious.push(/## Previous review findings\n\n- Check 2 unmet: src\/a\.mjs has no ready export\./
+        reviewedPrevious.push(/## Previous review findings[\s\S]*\d+\. Check 2 unmet: src\/a\.mjs has no ready export\./
           .test(body.messages[1].content));
         return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
           verdict: 'fail', reasons: ['The ready export is missing.'], security_notes: [],
           checks: reviewedChecks(body).map((id) => ({ id, met: id !== 2,
             evidence: id === 2 ? 'src/a.mjs has no ready export.' : 'Tests exit 0.' })),
+          findings: reviewedFindings(body).map((id) => ({ id, resolved: false,
+            evidence: 'src/a.mjs still has no ready export.' })),
         }) } }] });
       }
       const text = JSON.stringify(body.messages);
