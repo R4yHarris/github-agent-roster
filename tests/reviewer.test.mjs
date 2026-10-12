@@ -8,6 +8,7 @@ import { passingReview, reviewedChecks } from './helpers/review.mjs';
 import { parseConfig } from '../src/lib/config.mjs';
 import { previousFindingsSection, requirePassingReview, runReviewer, unchangedExistingFiles } from '../src/seats/reviewer.mjs';
 import { LlmTimeoutError } from '../src/llm/request.mjs';
+import { captureVerificationSubject } from '../src/runtime/independent-verification.mjs';
 
 const example = readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8');
 const config = parseConfig(example.replace('base_url: ""', 'base_url: http://localhost:1234/v1')
@@ -41,6 +42,76 @@ function fixture(context) {
     excellence: { pass: true, files: ['src/app.mjs'] } };
   return { worktree, repoRoot, source, coderResult, git };
 }
+
+async function independentReceipt(options, actual = 'line 4') {
+  const subject = await captureVerificationSubject({ worktree: options.worktree, files: ['src/app.mjs'] });
+  return {
+    schema_version: 1, subject_digest: subject.digest,
+    observations: [1, 2].map((id) => ({
+      id, check_id: id, expected_output: 'line 4', actual_output: actual,
+      expected_exit: 1, actual_exit: 1, evidence: 'Executed original-Ask multiline diagnostic',
+    })),
+  };
+}
+
+function passingEndpoint(onRequest) {
+  return async (url, request) => {
+    onRequest?.();
+    return { status: 200, json: async () => ({
+      choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+        content: passingReview(JSON.parse(request.body)) } }],
+      model: 'actual-review-model',
+    }) };
+  };
+}
+
+test('trusted host execution contradiction overrides reviewer pass and publication', async (context) => {
+  const options = fixture(context);
+  const receipt = await independentReceipt(options, 'line 3');
+  const review = await runReviewer({ ...options, config, independentVerification: { receipt },
+    fetchImpl: passingEndpoint() });
+  assert.equal(review.verdict, 'fail', review.content);
+  assert.equal(review.completed, true);
+  assert.equal(review.independentVerification.status, 'fail');
+  assert.deepEqual(review.unmetChecks, [1, 2]);
+  assert.match(review.content, /Independent verification observation 1, check 1 failed/);
+  assert.match(review.content, /## Independent verification\n\nStatus: fail/);
+  await assert.rejects(requirePassingReview({ worktreePath: options.worktree, review }), /passing REVIEW/);
+});
+
+test('correct trusted host receipt preserves pass and publication refuses later product changes', async (context) => {
+  const options = fixture(context);
+  const receipt = await independentReceipt(options);
+  const review = await runReviewer({ ...options, config, independentVerification: { receipt },
+    fetchImpl: passingEndpoint() });
+  assert.equal(review.verdict, 'pass', review.content);
+  assert.equal(review.independentVerification.status, 'pass');
+  await requirePassingReview({ worktreePath: options.worktree, review });
+  writeFileSync(options.source, 'export const ready = false;\n');
+  await assert.rejects(requirePassingReview({ worktreePath: options.worktree, review }),
+    /Independent verification product bytes changed after review/);
+});
+
+test('missing required receipt fails incomplete before model inference', async (context) => {
+  const options = fixture(context);
+  const review = await runReviewer({ ...options, config, independentVerification: { receipt: undefined },
+    fetchImpl: async () => assert.fail('Missing execution evidence must not invoke a model') });
+  assert.equal(review.verdict, 'fail');
+  assert.equal(review.completed, false);
+  assert.equal(review.independentVerification.status, 'incomplete');
+  assert.match(review.content, /receipt is missing, malformed, or bound to different product bytes/);
+});
+
+test('product modification during model review invalidates independent verification', async (context) => {
+  const options = fixture(context);
+  const receipt = await independentReceipt(options);
+  const review = await runReviewer({ ...options, config, independentVerification: { receipt },
+    fetchImpl: passingEndpoint(() => writeFileSync(options.source, 'export const ready = false;\n')) });
+  assert.equal(review.verdict, 'fail');
+  assert.equal(review.completed, false);
+  assert.equal(review.independentVerification.status, 'incomplete');
+  assert.match(review.content, /subject changed during review/);
+});
 
 test('reviewer reads the diff, RESULT, and acceptance checks without receiving any tools', async (context) => {
   const options = fixture(context);
