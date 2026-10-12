@@ -9,6 +9,7 @@ import { parseConfig } from '../src/lib/config.mjs';
 import { runLoop } from '../src/runtime/loop.mjs';
 import { createTools } from '../src/runtime/tools.mjs';
 import { planStub } from '../src/planner/stub.mjs';
+import { parseArgs } from '../vendor/github-agent-contracts/scripts/agent-pr.mjs';
 
 const config = parseConfig(readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8')
   .replace('base_url: ""', 'base_url: http://localhost:8000/v1').replace('model: ""', 'model: test-model'));
@@ -19,6 +20,20 @@ function fixture(t) {
   t.after(() => rmSync(worktree, { recursive: true, force: true }));
   return worktree;
 }
+
+test('reviewed contracts exposes exact-head resume without replacing committed model authority', () => {
+  const head = 'a'.repeat(40);
+  const options = parseArgs(['--resume', head, '--merge-when-green'], { AI_MODEL: 'unrelated-current-model' });
+  assert.equal(options.resume, head);
+  assert.equal(options.mergeWhenGreen, true);
+  assert.equal(Object.hasOwn(options, 'model'), false);
+  for (const args of [
+    ['--resume', head, '--message', 'new commit'],
+    ['--resume', head, '--model', 'replacement-model'],
+    ['--resume', head, '--files', 'README.md'],
+    ['--resume', 'short-sha'],
+  ]) assert.throws(() => parseArgs(args, {}), /resume/);
+});
 
 test('worktree initialization runs recursive submodule update at its root and verifies a declared publisher', async (t) => {
   const worktree = fixture(t);
