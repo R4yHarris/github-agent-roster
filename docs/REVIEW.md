@@ -83,6 +83,54 @@ general independent verification can be offered through ordinary Roster runs.
 Do not describe a model-only review or a receipt-free run as independently
 executed verification.
 
+### Explicit Docker execution backend
+
+`runDockerVerification` in `src/runtime/verification-docker.mjs` is a trusted
+host-only, explicitly opted-in backend for the receipt protocol. It is not
+automatically invoked by the CLI, coder or reviewer. Ordinary-run generation
+and integration remain separate #581 work. Docker must already be installed
+and its Linux engine available; normal calls never install it or pull images.
+The host supplies an immutable locally acquired `sha256:` image ID. A bounded
+probe checks that the image runs Linux Node20 before executing product scripts.
+
+The host supplies the complete snapshot file set and an approved plan of
+1-16 observations. Each observation names a snapshotted `.js`, `.mjs` or `.cjs`
+script, `args`, `check_id`, `expected_stdout`, `expected_stderr`, `expected_exit`
+and a short `evidence` label. Expected results are host authority, not product
+output or model testimony. All checks must be covered. There is no shell
+command string or model-invokable executor. Node receives `--` before the
+absolute script path so script arguments cannot become Node options.
+
+Only exact guarded product files are copied into a temporary snapshot.
+TASK/RESULT bytes bind the receipt but are not mounted; absent/deleted product
+paths stay absent. Do not include credentials or private artifacts in the
+approved product set. Source snapshots use existing 64-file/64-KiB bounds;
+required unchanged dependencies and verifier scripts must be explicitly
+included in the subject set. Keep the review subject set identical.
+
+Each container uses `--pull never`, no external network, read-only root and
+product mount, nonroot UID, all capabilities dropped, no-new-privileges,
+256-MiB memory/swap bounds, one CPU, 32 PIDs and a 16-MiB non-executable temporary
+filesystem. It receives no host credential environment, home, repository Git
+storage, Docker socket or raw worktree mount. The Docker client still operates
+on the authorized host daemon; these controls do not protect against a
+compromised daemon/kernel or prove absolute hostile-code containment.
+
+Each invocation has a unique named container and a maximum 30-second deadline.
+Timeout, abort, oversized output, runtime/image failure, subject drift and
+cleanup errors stop explicitly without a passing receipt. Named containers
+are removed with an independent cleanup deadline even after cancellation;
+cleanup failure requires operator inspection, not silent retry. Temporary
+snapshot cleanup also fails explicitly. stdout/stderr are compared exactly;
+normal application exit codes 0-124 are observable, while Docker infrastructure
+exit codes and signal/resource exits fail as infrastructure.
+
+For intentional local validation only, set `ROSTER_VERIFICATION_TEST_IMAGE`
+to the explicitly acquired image ID and run the Docker test file. Without
+that variable its real-engine test is reported as skipped; mocked controls
+still run. This is not a claim of Docker availability on every platform or
+autonomous counterexample discovery.
+
 For directory-scoped Asks, a separate bounded, read-only review first sees only
 the Original Ask and delivered diff, not the planner checklist or coder prose.
 It judges whether all requested deliverables are usable and semantically
