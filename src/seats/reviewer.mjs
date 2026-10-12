@@ -20,6 +20,7 @@ import { isAllowedFile, isForbiddenRead, taskAndRepairFiles } from '../runtime/t
 import { loadPrincipal } from './principal.mjs';
 import { isLlmTimeout } from '../llm/request.mjs';
 import { routeFailure } from '../llm/openai.mjs';
+import { captureVerificationSubject, judgeVerificationReceipt } from '../runtime/independent-verification.mjs';
 import { isRunCancelled, throwIfCancelled } from '../runtime/cancel.mjs';
 
 const execute = promisify(execFile);
@@ -295,7 +296,8 @@ export async function readDiff(worktree, task, files, budget, repairFiles, scope
   return diff;
 }
 
-function formatReview({ verdict, reasons, securityNotes, checks = [], checkTexts = [], findings = [], askAudit }) {
+function formatReview({ verdict, reasons, securityNotes, checks = [], checkTexts = [], findings = [], askAudit,
+  independentVerification }) {
   const judged = checks.length ? '\n\n## Acceptance checks\n\n' + [...checks].sort((a, b) => a.id - b.id)
     .map(({ id, met, evidence }) => `- [${met ? 'x' : ' '}] ${id}. ${checkTexts[id - 1] ?? ''} — ${evidence}`)
     .join('\n') : '';
@@ -306,6 +308,12 @@ function formatReview({ verdict, reasons, securityNotes, checks = [], checkTexts
       .map(({ id, resolved, evidence }) => `- [${resolved ? 'x' : ' '}] ${id}. ${evidence}`).join('\n') : '') +
     (askAudit ? `\n\n## Original Ask audit\n\nVerdict: ${askAudit.verdict}\n\n` +
       askAudit.checks.map(({ met, evidence }) => `- [${met ? 'x' : ' '}] ${evidence}`).join('\n') : '') +
+    (independentVerification ? '\n\n## Independent verification\n\n' +
+      `Status: ${independentVerification.status}\n\n` +
+      'Trusted host receipt; not model testimony, a sandbox, or human acceptance.\n' +
+      (independentVerification.subjectDigest ? `\nSubject SHA-256: ${independentVerification.subjectDigest}\n` : '') +
+      (independentVerification.observations ?? []).map(({ id, check_id, met, evidence }) =>
+        `\n- [${met ? 'x' : ' '}] Observation ${id}, check ${check_id}: ${evidence}`).join('') : '') +
     '\n\n## Security notes\n\n' +
     (securityNotes.length ? securityNotes.map((note) => `- ${note}`).join('\n')
       : '- None reported by the reviewer (not a security audit).') + '\n';
@@ -317,6 +325,7 @@ export async function runReviewer({
   signal,
   previousFindings = [],
   priorWaveFiles = [],
+  independentVerification,
 } = {}) {
   if (typeof worktree !== 'string' || typeof repoRoot !== 'string' ||
       typeof coderResult?.resultPath !== 'string' || !config?.llm || !config.seat) {
@@ -334,6 +343,9 @@ export async function runReviewer({
   let endToEnd;
   let reads = 0;
   let askAudit;
+  let independentReport;
+  let verificationSubject;
+  let verificationFiles;
   try {
     throwIfCancelled(signal);
     const [task, result] = await Promise.all([
@@ -349,6 +361,18 @@ export async function runReviewer({
     const docsOnly = parsed.files_allowed.length > 0 && parsed.files_allowed.every((file) => file.endsWith('.md'));
     const checkTexts = parsed.acceptance_checks.filter((check) => !(docsOnly && /node --test/.test(check)));
     reviewedChecks = checkTexts;
+    if (independentVerification !== undefined) {
+      independentReport = { status: 'incomplete' };
+      if (!independentVerification || typeof independentVerification !== 'object' ||
+          Array.isArray(independentVerification) || Object.keys(independentVerification).join(',') !== 'receipt') {
+        throw new TypeError('Independent verification input must contain only a trusted host receipt');
+      }
+      verificationFiles = coderResult.excellence?.files;
+      verificationSubject = await captureVerificationSubject({ worktree, files: verificationFiles });
+      verificationFiles = verificationSubject.files.map((entry) => entry.path);
+      independentReport = judgeVerificationReceipt(independentVerification.receipt,
+        { subjectDigest: verificationSubject.digest, checkCount: checkTexts.length });
+    }
     const checks = checkTexts.map((check, index) => `${index + 1}. ${check}`).join('\n') + '\n';
     const docsEvidence = docsOnly ? 'Harness evidence: docs-only task, node --test was skipped. Do not fail for a missing test command.\n\n' : '';
     if (coderResult.timedOut === true || isLlmTimeout(coderResult.error)) {
@@ -649,6 +673,19 @@ export async function runReviewer({
         ].slice(0, 16), security_notes: [...askAudit.security_notes, ...report.security_notes].slice(0, 16) };
       }
     }
+    if (independentReport) {
+      const status = independentReport.status;
+      independentReport = { ...independentReport, status: 'incomplete' };
+      const current = await captureVerificationSubject({ worktree, files: verificationFiles });
+      if (current.digest !== verificationSubject.digest) {
+        throw new Error('Independent verification subject changed during review');
+      }
+      independentReport = { ...independentReport, status };
+      if (independentReport.status === 'fail') {
+        report = { ...report, verdict: 'fail',
+          reasons: [...independentReport.reasons, ...report.reasons].slice(0, 16) };
+      }
+    }
   } catch (error) {
     if (!(error instanceof Error)) throw error;
     if (isRunCancelled(error)) throw error;
@@ -665,6 +702,9 @@ export async function runReviewer({
   const reasons = report.reasons.map((reason) => redactEvidence(reason, redaction));
   const securityNotes = report.security_notes.map((note) => redactEvidence(note, redaction));
   const content = formatReview({ verdict: report.verdict, reasons, securityNotes,
+    independentVerification: independentReport && { ...independentReport,
+      observations: independentReport.observations?.map((entry) =>
+        ({ ...entry, evidence: redactEvidence(entry.evidence, redaction) })) },
     findings: (report.findings ?? []).map((entry) => ({ ...entry, evidence: redactEvidence(entry.evidence, redaction) })),
     checks: (report.checks ?? []).map((entry) => ({ ...entry, evidence: redactEvidence(entry.evidence, redaction) })),
     askAudit: askAudit && { verdict: askAudit.verdict, checks: askAudit.checks.map((entry) =>
@@ -675,9 +715,16 @@ export async function runReviewer({
   await onEvent?.({ type: 'wrote', path: 'REVIEW.md' });
   return { verdict: report.verdict, reasons, securityNotes, content, reviewPath, usage, response: lastResponse, queried,
     taskDigest, resultDigest, completed: queried && report.incomplete !== true, reads,
+    ...(independentReport ? { independentVerification: {
+      status: independentReport.status, subjectDigest: independentReport.subjectDigest,
+      files: verificationFiles,
+    } } : {}),
     endToEnd: endToEnd && { status: endToEnd.status, commands: endToEnd.runs.map(({ command, exitCode, problems }) =>
       ({ command, exitCode, problems })), failures: endToEnd.failures },
-    unmetChecks: (report.checks ?? []).filter((entry) => !entry.met).map((entry) => entry.id).sort((a, b) => a - b) };
+    unmetChecks: [...new Set([
+      ...(report.checks ?? []).filter((entry) => !entry.met).map((entry) => entry.id),
+      ...(independentReport?.observations ?? []).filter((entry) => !entry.met).map((entry) => entry.check_id),
+    ])].sort((a, b) => a - b) };
 }
 
 export async function requirePassingReview(run, skipReview = false) {
@@ -718,6 +765,16 @@ export async function requirePassingReview(run, skipReview = false) {
     }
     if (createHash('sha256').update(text).digest('hex') !== digest) {
       throw new Error(`${name} changed after review; rerun the reviewer or use --skip-review`);
+    }
+  }
+  if (review.independentVerification !== undefined) {
+    const verification = review.independentVerification;
+    if (verification?.status !== 'pass') {
+      throw new Error('Publication requires passing independent verification');
+    }
+    const subject = await captureVerificationSubject({ worktree: run.worktreePath, files: verification.files });
+    if (subject.digest !== verification.subjectDigest) {
+      throw new Error('Independent verification product bytes changed after review; rerun verification and review');
     }
   }
 }

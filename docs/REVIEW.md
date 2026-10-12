@@ -24,6 +24,65 @@ Writing future setup/deployment instructions is not executing them; a request
 for public-serving instructions is not satisfied by localhost preview alone.
 The reviewer must not invent unrelated requirements or silently rewrite checks.
 
+## Trusted host independent-verification protocol
+
+The host API `runReviewer` optionally accepts
+`independentVerification: { receipt }`. Supplying the option requires a valid
+receipt; an absent option preserves existing behavior. This is a prerequisite
+for independent execution under FEATURE_SPEC sections 5.4, 5.5 and 5.6,
+not an execution backend or completion of #581.
+
+A trusted host first calls `captureVerificationSubject({ worktree, files })`
+from `src/runtime/independent-verification.mjs`, using the exact changed-file
+set in `coderResult.excellence.files`. The subject binds raw TASK.md and
+RESULT.md bytes plus sorted product paths and hashes, including absent/deleted
+files. Paths are exact, relative, unique and guarded; files must be single-link
+regular files of at most 64 KiB. At most 64 product paths are supported.
+TASK.md includes the authoritative Ask. This is a changed-file binding, not a
+hash of every unchanged dependency, Git revision, environment or external input.
+
+The receipt has exactly `schema_version: 1`, `subject_digest`, and
+`observations`. Each of 1-64 observations has exactly:
+
+```json
+{
+  "id": 1,
+  "check_id": 1,
+  "expected_output": "line 4",
+  "actual_output": "line 3",
+  "expected_exit": 1,
+  "actual_exit": 1,
+  "evidence": "Executed the original-Ask multiline diagnostic"
+}
+```
+
+Observation IDs are unique integers 1-64; check IDs reference the current
+numbered review checks. Every check needs at least one observation. Output
+strings are bounded to 2000 characters and exits to integers 0-255; evidence
+is a trimmed single line of at most 500 characters. Exact output or exit
+mismatches force a failing review even when the model passes. This exact
+comparison protocol does not handle approximate/nondeterministic results.
+Missing, malformed, incomplete or stale receipts fail as incomplete review,
+not approval. The subject is rechecked after model review and before passing
+publication; changed bytes require fresh verification. REVIEW.md records the
+independent status and redacted evidence, not raw observed outputs.
+
+Only the calling trusted host supplies this input. Model response fields,
+TASK.md, RESULT.md, receipt files and other worktree content cannot enable
+verification or acquire authority. There is no CLI/config toggle, automatic
+receipt loading, callback execution, model tool, Docker dependency, image
+pull, network access or workflow/policy change in this protocol slice.
+Existing explicit `--skip-review` behavior remains unchanged.
+
+The host must own and authorize observation execution, expected results and
+file coverage. The protocol cannot prove that a host actually executed a
+test, chose sufficient counterexamples, captured every dependency, or told
+the truth. It is not a sandbox or human acceptance. An approved enforceable
+execution boundary and end-to-end runner adapter remain required before
+general independent verification can be offered through ordinary Roster runs.
+Do not describe a model-only review or a receipt-free run as independently
+executed verification.
+
 For directory-scoped Asks, a separate bounded, read-only review first sees only
 the Original Ask and delivered diff, not the planner checklist or coder prose.
 It judges whether all requested deliverables are usable and semantically
