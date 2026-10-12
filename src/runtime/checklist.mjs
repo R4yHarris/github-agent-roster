@@ -12,8 +12,10 @@ export const checklistTool = {
   type: 'function',
   function: {
     name: 'update_checklist',
-    description: 'Update your checklist of TASK.md acceptance checks. Mark one item in_progress while you work on it, ' +
-      'then done with evidence (the file and symbol or test that proves it), or blocked with the reason. ' +
+    description: 'Update your checklist of TASK.md acceptance checks. Keep at most one item in_progress. ' +
+      'Batch independently proven done items in one call with individual current evidence (file and symbol or test). ' +
+      'Shared evidence must cover each check; do not rerun unchanged tests merely to close another item. ' +
+      'Mark blocked with observed failure evidence. ' +
       'You cannot finish while any item is pending or in_progress.',
     parameters: {
       type: 'object',

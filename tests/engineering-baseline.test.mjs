@@ -27,6 +27,9 @@ test('builtin requests carry one engineering baseline while preserving roles, to
     assert.equal(body.messages[1].content, original[1].content);
     assert.deepEqual(body.tools, tools);
     assert.match(body.messages[0].content, /TDD/);
+    assert.match(body.messages[0].content, /isolated green cases do not establish interaction correctness/);
+    assert.match(body.messages[0].content, /original input, not a logical item\/record index/);
+    assert.match(body.messages[0].content, /Do not invent a quote-start versus EOF/);
     assert.match(body.messages[0].content, /No dependency is authorized/);
     assert.match(body.messages[0].content, /never invent/);
   }

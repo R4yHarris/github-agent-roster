@@ -181,8 +181,11 @@ async function executeLoop({ config, context, tools, fetchImpl, env, vault, veri
       'must be read as src/api.mjs, never ../src/api.mjs. Preserve existing behavior and implement the requested outcome; ' +
       'passing existing tests or rewriting identical content is not completion.' : '',
     mentionsSecrets(context.task) ? sentinelGuidance : '',
-    checklist ? 'Work the numbered checks one at a time with update_checklist: mark an item in_progress, then done ' +
-      'with evidence (file and symbol or test) or blocked with the reason. You cannot finish with open items. ' +
+    checklist ? 'Use update_checklist to track the numbered checks: keep at most one item in_progress. ' +
+      'After gathering current evidence, batch all proven checks as done in one items array, giving evidence ' +
+      'for each check (file and symbol or test). A shared test run may support multiple checks only when it actually ' +
+      'covers each stated behavior; do not rerun unchanged tests just to close another check. Mark unproven checks ' +
+      'blocked only with observed failure evidence. You cannot finish with open items. ' +
       'Write the acceptance tests first and run them to see them fail, then implement: a new test that already ' +
       'passes on the base code is rejected as not red.' : '',
     evidenceWorkspace ? 'Acceptance state survives host handoffs, not prose claims. After the last edit, gather current ' +

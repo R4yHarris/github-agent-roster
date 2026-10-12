@@ -34,6 +34,22 @@ or cancelled attempt cannot carry a passing completion. A later failed or
 cancelled test invalidates an earlier passing test observation. Changed source
 bytes require fresh evidence, even if tests previously passed.
 
+Checklist guidance permits a single `update_checklist` call to complete
+multiple proven checks, each with its own current evidence reference. A shared
+test observation may support multiple checks only when the tests actually
+cover them; it is not proof of semantic coverage by itself. At most one check
+may be `in_progress`. One unsupported entry rejects the entire batch, without
+partially closing earlier entries. Mandatory final verification is unchanged:
+batching does not cache tests, skip the final run, enlarge budgets or close
+checks automatically from prose.
+
+The shared engineering baseline also carries the failure-driven lesson from
+#602: combine requested behaviors when one changes state used by another, and
+derive physical source-position diagnostics from the original input rather
+than logical record indexes. These are instructions, not an executable oracle,
+proof of model adherence, a speedup measurement or acceptance. An unrequested
+quote-start/EOF line convention is not added. Spec trace: §§5.4 and 5.6.
+
 Free-form coder checklist evidence is used only to select an already observed
 reference. It is never exported or replayed in the next context. Terminal
 capsule evidence and its rendering are derived exclusively by the host from
