@@ -110,6 +110,27 @@ see the complete [GHCP example](GHCP.md).
 Do not commit as the signed-in human when App environment variables are set.
 Never commit tokens, private keys, or `.env`.
 
+### Recover an interrupted exact-head publication
+
+The reviewed contracts revision `fa48c244bc9b8ead5df927ec705ef41a39c56f68`
+adds explicit resume without a second commit, push or PR. After inspecting the
+existing App commit and matching open PR, run from its clean feature worktree:
+
+```powershell
+node vendor\github-agent-contracts\scripts\agent-pr.mjs --resume "<exact 40-character existing head SHA>" --merge-when-green
+```
+
+Metadata-only recovery omits `--merge-when-green`. Resume preserves the
+committed model/run and original bot author/committer; do not supply `--model`,
+`--message` or `--files`, or substitute current GHCP metadata for a completed
+seat. It rechecks local/remote/PR identity, reviewed policy and all required
+exact-head checks, including ruleset-only branch protections.
+Missing or conflicting metadata authority, dirty state, real head drift,
+missing/merged PR or permission failure stops explicitly. HTTP 422 remains a
+Checks-permission stop, not permission to use another token or human fallback.
+Merge remains separately authorized and conservative cleanup can report a
+confirmed remote merge with incomplete local worktree cleanup.
+
 ## Trailer CI
 
 The [composite action](../.github/actions/check-agent-trailers/action.yml)

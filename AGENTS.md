@@ -88,3 +88,13 @@ chat, queue, or runtime. The parent Copilot calls
 for the issue, then the App publisher for reviewed changes. It must not
 `git commit` as R4yHarris when `GITHUB_APP_*` is set. Follow the
 [GHCP bridge](docs/GHCP.md) for publication and HTTP 422 handling.
+
+## Publication learnings
+
+GitHub closing keywords in commit messages and PR bodies ignore prose negation:
+writing `do not close` followed by an issue reference can still close that issue.
+For an incomplete parent, write `Parent <issue reference> remains open` instead;
+reserve closing keywords for the exact completed scope and verify issue/project
+state after merge. Preserve original commits when correcting an unintended
+closure: reopen the issue, reconcile its project status and correct the mutable
+PR body, without inventing acceptance or amending provenance.
