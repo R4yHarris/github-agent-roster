@@ -90,6 +90,51 @@ test('reviewer asks for original-Ask fidelity even when a planner check and gree
   assert.match(result.content, /zero is even/);
 });
 
+for (const stage of ['ask-audit', 'checklist']) {
+  test(`reviewer traces multiline diagnostics across requested behavior interactions in ${stage}`, async (context) => {
+    const options = fixture(context);
+    mkdirSync(path.join(options.worktree, 'medium-csv'));
+    writeFileSync(path.join(options.worktree, 'medium-csv', 'parseCsv.mjs'),
+      'export function rowError(recordIndex) { return new SyntaxError(`Row on line ${recordIndex + 1}`); }\n');
+    options.coderResult.excellence.files = ['medium-csv/parseCsv.mjs'];
+    writeFileSync(path.join(options.worktree, 'TASK.md'), '# Task: CSV diagnostics\n\n' +
+      'difficulty: 2\ntask_class: feat\n\n## Acceptance checks\n' +
+      '- Quoted newlines work and wrong field counts throw SyntaxError naming the line\n\n' +
+      '## Files allowed\n- `medium-csv/parseCsv.mjs`\n\n## Ask\n' +
+      'Parse CSV with newlines inside quoted fields and throw SyntaxError naming the line for a wrong field count. ' +
+      'Output it in a new "medium-csv" directory.\n');
+    let calls = 0;
+    const result = await runReviewer({ ...options, config, env: {}, askKind: 'slice',
+      fetchImpl: async (_url, request) => {
+        const body = JSON.parse(request.body);
+        calls += 1;
+        assert.match(body.messages[0].content, /Trace relevant interactions between requested behaviors/);
+        assert.match(body.messages[0].content, /green isolated tests do not prove combined correctness/);
+        assert.match(body.messages[0].content, /physical source positions.*record indexes/);
+        assert.match(body.messages[0].content, /Do not invent unrelated combinations or extra requirements/);
+        const audit = calls === 1;
+        const fail = stage === 'ask-audit' && audit;
+        return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+          content: JSON.stringify({ verdict: fail ? 'fail' : 'pass',
+            reasons: fail ? ['medium-csv/parseCsv.mjs reports record index rather than physical line after a quoted newline.'] : [],
+            security_notes: [], checks: [{ id: 1, met: !fail,
+              evidence: 'medium-csv/parseCsv.mjs computes line as recordIndex + 1.' }],
+            ...(!audit && stage === 'checklist' ? { defects: [{
+              file: 'medium-csv/parseCsv.mjs', symbol: 'rowError',
+              input: 'a,b\\n"first\\nsecond",ok\\nx',
+              outcome: 'reports line 3 instead of physical line 4 after a quoted multiline record',
+            }] } : {}),
+          }),
+        } }] });
+      },
+    });
+    assert.equal(calls, 2);
+    assert.equal(result.verdict, 'fail');
+    assert.equal(result.completed, true);
+    assert.match(result.content, /physical line/);
+  });
+}
+
 test('reviewer preserves required written setup instructions without demanding deployment execution', async (context) => {
   const options = fixture(context);
   writeFileSync(path.join(options.worktree, 'TASK.md'), '# Task: Marketing setup\n\n' +
