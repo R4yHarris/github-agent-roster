@@ -47,6 +47,18 @@
     "review": {
       "role": "assistant",
       "content": "{\"verdict\":\"pass\",\"reasons\":[],\"security_notes\":[],\"checks\":[{\"id\":1,\"met\":true,\"evidence\":\"The harness checks passed.\"},{\"id\":2,\"met\":true,\"evidence\":\"README contains Status.\"}]}"
+    },
+    "review-repaired": {
+      "role": "assistant",
+      "content": "{\"verdict\":\"pass\",\"reasons\":[],\"security_notes\":[],\"checks\":[{\"id\":1,\"met\":true,\"evidence\":\"The harness checks passed.\"},{\"id\":2,\"met\":true,\"evidence\":\"README contains Status.\"}],\"findings\":[{\"id\":1,\"resolved\":true,\"evidence\":\"README Status now contains Active. Ready.\"},{\"id\":2,\"resolved\":true,\"evidence\":\"README Status now has the required second sentence.\"}]}"
+    },
+    "review-fail-two": {
+      "role": "assistant",
+      "content": "{\"verdict\":\"fail\",\"reasons\":[\"Add a second sentence to Status.\"],\"security_notes\":[],\"checks\":[{\"id\":1,\"met\":true,\"evidence\":\"The harness checks passed.\"},{\"id\":2,\"met\":false,\"evidence\":\"Status needs more detail.\"}],\"findings\":[{\"id\":1,\"resolved\":false,\"evidence\":\"README Status still lacks detail.\"},{\"id\":2,\"resolved\":false,\"evidence\":\"README Status still lacks a second sentence.\"}]}"
+    },
+    "review-fail-four": {
+      "role": "assistant",
+      "content": "{\"verdict\":\"fail\",\"reasons\":[\"Add a second sentence to Status.\"],\"security_notes\":[],\"checks\":[{\"id\":1,\"met\":true,\"evidence\":\"The harness checks passed.\"},{\"id\":2,\"met\":false,\"evidence\":\"Status needs more detail.\"}],\"findings\":[{\"id\":1,\"resolved\":false,\"evidence\":\"README Status still lacks detail.\"},{\"id\":2,\"resolved\":false,\"evidence\":\"README Status still lacks a second sentence.\"},{\"id\":3,\"resolved\":false,\"evidence\":\"README Status does not resolve the unmet detail check.\"},{\"id\":4,\"resolved\":false,\"evidence\":\"README Status still has no requested second sentence.\"}]}"
     }
   },
   "scenarios": [
@@ -64,13 +76,13 @@
     },
     {
       "name": "review-recovered",
-      "steps": [["planner", "plan"], ["coder", "write"], ["coder", "done"], ["reviewer", "review-fail"], ["coder", "revise"], ["coder", "done"], ["reviewer", "review"]],
+      "steps": [["planner", "plan"], ["coder", "write"], ["coder", "done"], ["reviewer", "review-fail"], ["coder", "revise"], ["coder", "done"], ["reviewer", "review-repaired"]],
       "tests": ["pass", "pass"],
       "expected": {"requests": 7, "tools": 2, "tests": 2, "repairs": 0, "reviewRepairs": 1, "verdict": "pass", "readme": "# Example\n\n## Status\nActive. Ready.\n"}
     },
     {
       "name": "review-exhausted",
-      "steps": [["planner", "plan"], ["coder", "write"], ["coder", "done"], ["reviewer", "review-fail"], ["coder", "revise-incomplete"], ["coder", "done"], ["reviewer", "review-fail"], ["coder", "revise-incomplete"], ["coder", "done"], ["reviewer", "review-fail"]],
+      "steps": [["planner", "plan"], ["coder", "write"], ["coder", "done"], ["reviewer", "review-fail"], ["coder", "revise-incomplete"], ["coder", "done"], ["reviewer", "review-fail-two"], ["coder", "revise-incomplete"], ["coder", "done"], ["reviewer", "review-fail-four"]],
       "tests": ["pass", "pass", "pass"],
       "expected": {"requests": 10, "tools": 3, "tests": 3, "repairs": 0, "reviewRepairs": 2, "verdict": "fail", "readme": "# Example\n\n## Status\nActive (detail pending).\n"}
     },

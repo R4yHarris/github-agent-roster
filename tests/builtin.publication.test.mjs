@@ -5,7 +5,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { passingReview, reviewedChecks } from './helpers/review.mjs';
+import { passingReview, reviewedChecks, reviewedFindings } from './helpers/review.mjs';
 import { parseConfig } from '../src/lib/config.mjs';
 import { writeAsk } from '../src/lib/ask.mjs';
 import {
@@ -207,6 +207,8 @@ test('a failed reviewer keeps coder changes but blocks publication unless explic
           choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: JSON.stringify({
             verdict: 'fail', reasons: ['The diff lacks sufficient evidence for a full review.'],
             security_notes: ['Inspect downstream use of the edited section.'],
+            findings: reviewedFindings(body).map((id) => ({ id, resolved: false,
+              evidence: 'README.md still lacks sufficient evidence for the finding.' })),
           }) } }],
         }) };
       }
@@ -250,7 +252,8 @@ test('a failed reviewer keeps coder changes but blocks publication unless explic
       await assert.rejects(runIssueWithSeats(42, args), /passing REVIEW\.md/);
     }
     assert.equal(published, skipReview || !reviewRequired ? 1 : 0);
-    assert.match(logs.join('\n'), /Review failure: The diff lacks sufficient evidence/);
+    assert.match(logs.join('\n'), /Review failure: [^\n]*The diff lacks sufficient evidence/);
+    if (!skipReview && reviewRequired) assert.match(logs.join('\n'), /Review failure: Finding 1 unresolved/);
     if (skipReview || !reviewRequired) {
       assert.match(logs.join('\n'), /WARNING: review failed; publication is permitted only because[\s\S]*These changes are not approved/);
     } else {
