@@ -371,6 +371,14 @@ export async function runReviewer({
         throw new TypeError('Independent verification input must contain only a trusted host receipt or Docker plan');
       }
       verificationFiles = coderResult.excellence?.files;
+      if ('docker' in independentVerification && independentVerification.docker?.additionalFiles !== undefined) {
+        const additional = independentVerification.docker.additionalFiles;
+        if (!Array.isArray(additional) || additional.length > 64 || !Array.isArray(verificationFiles)) {
+          throw new TypeError('Independent verification additionalFiles must be exact approved product paths');
+        }
+        verificationFiles = [...new Set([...verificationFiles, ...additional]
+          .map((file) => typeof file === 'string' ? file.replaceAll('\\', '/') : file))];
+      }
       verificationSubject = await captureVerificationSubject({ worktree, files: verificationFiles });
       verificationFiles = verificationSubject.files.map((entry) => entry.path);
       if ('receipt' in independentVerification) {
@@ -423,7 +431,8 @@ export async function runReviewer({
       if (independentVerification && 'docker' in independentVerification) {
         const docker = independentVerification.docker;
         if (!docker || typeof docker !== 'object' || Array.isArray(docker) ||
-            Object.keys(docker).some((key) => !['enabled', 'image', 'plan', 'dockerPath', 'timeoutMs'].includes(key))) {
+            Object.keys(docker).some((key) =>
+              !['enabled', 'image', 'plan', 'dockerPath', 'timeoutMs', 'verifiers', 'additionalFiles'].includes(key))) {
           throw new TypeError('Independent Docker verification requires only approved backend options');
         }
         const executed = await runDockerVerification({ ...docker, worktree, files: verificationFiles,

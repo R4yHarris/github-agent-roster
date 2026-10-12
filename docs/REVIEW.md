@@ -135,14 +135,18 @@ autonomous counterexample discovery.
 
 Trusted callers of `runBuiltinTask`, `runBuiltinIssue` and `runBuiltinAsk` may
 now supply `independentVerification: { docker: { enabled: true, image, plan,
-dockerPath, timeoutMs } }`. `plan`, `image` and explicit opt-in are required;
+dockerPath, timeoutMs, additionalFiles, verifiers } }`. `plan`, `image` and explicit opt-in are required;
 the executable and deadline use the backend defaults when omitted.
 This API option is not inferred from config, environment, issue text, coder
 output or model response. There is no new CLI flag or implicit image acquisition.
 The existing `{ receipt }` reviewer option remains supported.
 
 For each eligible completed LLM coder result, the harness executes the approved
-plan against the exact current `excellence.files` subject before model review.
+plan against the exact current `excellence.files` plus explicitly host-approved
+`additionalFiles` subject before model review. Additional paths are subject to
+the same private/path/link/size limits, do not grant coder write authority and
+remain bound during review and before publication, even when not changed by the
+coder. Unlisted dependencies are not automatically included.
 The reviewer receives no execution tools. Executed mismatches override a model
 pass and supply unmet check IDs to existing bounded repair; the plan executes
 again against new bytes after repair or a review retry. Infrastructure or plan
@@ -153,10 +157,26 @@ explicit review bypass semantics remain unchanged.
 The host must approve script scope, expected outcomes, check coverage and
 unchanged dependencies in advance. A script supplied by the coder is not
 automatically an independent test simply because Docker executes it.
-This builtin adapter mounts only the current coder-reported file set; it does
-not implicitly include unchanged dependencies. A plan requiring unlisted
-imports fails execution rather than expanding the snapshot.
-Independent counterexample generation, protected host-owned verifier artifacts,
+The host may supply `verifiers: [{ name: 'oracle.mjs', source: '...' }]` separately
+from product files and select `script: 'verifier:oracle.mjs'` in a plan entry.
+Names are simple `.mjs` filenames; source is bounded to 64 KiB each, at most
+16 scripts and 256 KiB combined. These host-only sources are snapshotted into a
+separate read-only `/verifier` mount, never written into the coder worktree.
+An oracle can import approved dependencies via absolute `/product/...` paths
+and assert counterexamples; the coder cannot replace the oracle by writing a
+similarly named product file. The plan arguments, expected outputs and verifier
+sources are copied before asynchronous execution, so later caller mutation
+cannot change the approved execution in progress. Product scripts and host
+scripts share the same isolation, resource limits and explicit cleanup.
+Read-only mounting prevents replacing the approved source; it is not an
+unspoofable oracle against intentionally hostile product code. A directly
+imported product shares the verifier's JavaScript process, and container
+isolation still depends on the approved Docker daemon and host kernel.
+
+This is protected execution of a trusted-host oracle, not proof that any
+model-generated assertion or expected value is correct. The caller must approve
+counterexamples from the Original Ask independently; nothing discovers scripts
+or grants execution from model testimony. Independent counterexample generation
 and user-facing onboarding remain further #581 work. The optional API wiring
 does not establish autonomous semantic detection or accept the whole initiative.
 
