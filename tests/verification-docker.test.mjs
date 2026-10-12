@@ -173,3 +173,73 @@ console.log('isolated');
   assert.notEqual(rejected.receipt.observations[0].actual_output,
     rejected.receipt.observations[0].expected_output);
 });
+
+test('host verifier sources use a separate readonly mount and frozen plan inputs', async (context) => {
+  const options = await fixture(context);
+  const verifiers = [{ name: 'oracle.mjs', source: "console.log('line 4');\n" }];
+  const plan = [{ ...options.plan[0], script: 'verifier:oracle.mjs' }];
+  const directories = new Set();
+  const result = await runDockerVerification({ ...options, verifiers, plan,
+    runCommand: async (command, args) => {
+      if (args[0] === 'rm') return {};
+      const mounts = args.flatMap((arg, index) => arg === '--mount' ? [args[index + 1]] : []);
+      assert.equal(mounts.length, 2);
+      for (const mount of mounts) {
+        assert.ok(mount.endsWith(',readonly'));
+        directories.add(mount.slice('type=bind,source='.length, mount.indexOf(',target=')));
+      }
+      const oracleMount = mounts.find((mount) => mount.includes('target=/verifier,'));
+      const oracleRoot = oracleMount.slice('type=bind,source='.length, oracleMount.indexOf(',target='));
+      assert.equal(await fs.readFile(path.join(oracleRoot, 'oracle.mjs'), 'utf8'), "console.log('line 4');\n");
+      if (args.includes('-e')) {
+        verifiers[0].source = 'throw new Error("mutated");';
+        plan[0].script = '-e';
+        plan[0].expected_stdout = 'forged';
+        return { stdout: 'v20.20.2\n', stderr: '' };
+      }
+      assert.deepEqual(args.slice(-2), ['--', '/verifier/oracle.mjs']);
+      return { stdout: 'line 4\n', stderr: '' };
+    } });
+  assert.equal(result.status, 'pass');
+  for (const directory of directories) await assert.rejects(fs.stat(directory), { code: 'ENOENT' });
+});
+
+test('invalid host verifier source and script selection refuse before Docker invocation', async (context) => {
+  const options = await fixture(context);
+  const source = "console.log('ok');";
+  for (const verifiers of [
+    null, [{ name: '../oracle.mjs', source }], [{ name: 'oracle.mjs', source: '\0' }],
+    [{ name: 'oracle.js', source }], [{ name: 'oracle.mjs', source, unexpected: true }],
+    [{ name: 'oracle.mjs', source: 'x'.repeat(65_537) }],
+    Array.from({ length: 17 }, (_, index) => ({ name: `v${index}.mjs`, source })),
+    [{ name: 'oracle.mjs', source }, { name: 'oracle.mjs', source }],
+    Array.from({ length: 5 }, (_, index) => ({ name: `v${index}.mjs`, source: 'x'.repeat(65_536) })),
+  ]) await assert.rejects(runDockerVerification({ ...options, verifiers,
+    runCommand: async () => assert.fail('Invalid host verifier must never execute') }));
+  await assert.rejects(runDockerVerification({ ...options,
+    plan: [{ ...options.plan[0], script: 'verifier:absent.mjs' }],
+    runCommand: async () => assert.fail('Missing host verifier must never execute') }));
+});
+
+test('opt-in real Docker oracle assertions inspect approved products independently of coder output', {
+  skip: !process.env.ROSTER_VERIFICATION_TEST_IMAGE,
+}, async (context) => {
+  const options = await fixture(context);
+  await fs.writeFile(path.join(options.worktree, 'check.mjs'), 'export const line = 3;\n');
+  const settings = { ...options, image: process.env.ROSTER_VERIFICATION_TEST_IMAGE,
+    verifiers: [{ name: 'oracle.mjs', source: `
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import {line} from '/product/check.mjs';
+assert.throws(()=>fs.writeFileSync('/verifier/oracle.mjs','forged'));
+assert.equal(line,4);
+console.log('line 4');
+` }], plan: [{ ...options.plan[0], script: 'verifier:oracle.mjs' }] };
+  const rejected = await runDockerVerification(settings);
+  assert.equal(rejected.status, 'fail');
+  assert.equal(rejected.receipt.observations[0].actual_exit, 1);
+  await fs.writeFile(path.join(options.worktree, 'check.mjs'), 'export const line = 4;\n');
+  const accepted = await runDockerVerification(settings);
+  assert.equal(accepted.status, 'pass', JSON.stringify(accepted));
+  assert.notEqual(accepted.subject.digest, rejected.subject.digest);
+});

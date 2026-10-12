@@ -174,6 +174,47 @@ test('opt-in real Docker reviewer integration rejects false approval and accepts
   await assert.rejects(requirePassingReview({ worktreePath: options.worktree, review: accepted }), /changed after/);
 });
 
+test('host-approved unchanged dependency is snapshotted and binds final publication', async (context) => {
+  const options = fixture(context);
+  const dependency = path.join(options.worktree, 'src', 'dependency.mjs');
+  writeFileSync(dependency, 'export const value = 4;\n');
+  const independentVerification = dockerReviewOptions();
+  independentVerification.docker.additionalFiles = ['src/dependency.mjs', 'src\\app.mjs'];
+  independentVerification.docker.verifiers = [{ name: 'oracle.mjs', source: 'host approved source' }];
+  for (const entry of independentVerification.docker.plan) entry.script = 'verifier:oracle.mjs';
+  const review = await runReviewer({ ...options, config, independentVerification,
+    runVerificationCommand: async (command, args) => {
+      if (args[0] === 'rm') return {};
+      if (args.includes('-e')) return { stdout: 'v20.20.2\n', stderr: '' };
+      const mount = args[args.indexOf('--mount') + 1];
+      const snapshot = mount.slice('type=bind,source='.length, mount.indexOf(',target='));
+      assert.equal(readFileSync(path.join(snapshot, 'src', 'dependency.mjs'), 'utf8'), 'export const value = 4;\n');
+      return { stdout: 'line 4\n', stderr: '' };
+    }, fetchImpl: passingEndpoint() });
+  assert.equal(review.verdict, 'pass', review.content);
+  assert.deepEqual(review.independentVerification.files, ['src/app.mjs', 'src/dependency.mjs']);
+  await requirePassingReview({ worktreePath: options.worktree, review });
+  writeFileSync(dependency, 'export const value = 3;\n');
+  await assert.rejects(requirePassingReview({ worktreePath: options.worktree, review }), /changed after review/);
+});
+
+test('additional dependency authority does not permit secret, escaping or malformed scopes', async (context) => {
+  for (const additionalFiles of [
+    ['.env'], ['../outside.mjs'], 'src/dependency.mjs', [null],
+    Array.from({ length: 65 }, (_, index) => `src/dependency-${index}.mjs`),
+  ]) {
+    const options = fixture(context);
+    const independentVerification = dockerReviewOptions();
+    independentVerification.docker.additionalFiles = additionalFiles;
+    const review = await runReviewer({ ...options, config, independentVerification,
+      runVerificationCommand: async () => assert.fail('Invalid dependency must not execute'),
+      fetchImpl: async () => assert.fail('Invalid dependency must not invoke a model') });
+    assert.equal(review.verdict, 'fail');
+    assert.equal(review.completed, false);
+    assert.equal(review.independentVerification.status, 'incomplete');
+  }
+});
+
 test('trusted host execution contradiction overrides reviewer pass and publication', async (context) => {
   const options = fixture(context);
   const receipt = await independentReceipt(options, 'line 3');
