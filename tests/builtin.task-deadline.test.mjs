@@ -7,7 +7,48 @@ import { runBuiltinAsk, runBuiltinIssue, runBuiltinTask } from '../src/lib/built
 import { planStub } from '../src/planner/stub.mjs';
 import { formatConfig } from '../src/lib/config.mjs';
 import { openProvenanceStore } from '../src/lib/provenance-store.mjs';
-import { fixture, llmConfig, git } from './helpers/builtin.mjs';
+import { fixture, llmConfig, vllmConfig, git } from './helpers/builtin.mjs';
+import { withResearchSummary } from './helpers/research.mjs';
+
+for (const entry of ['ask', 'task']) {
+  test(`${entry} entry preserves the host independent verification requirement`, async (context) => {
+    const options = fixture(context);
+    let wrote = false;
+    const fetchImpl = withResearchSummary(async (url, request) => {
+      const body = JSON.parse(request.body);
+      if (body.messages[0].content.startsWith('You are the builtin planner seat.')) {
+        return { status: 200, json: async () => ({ choices: [{ message: { role: 'assistant',
+          content: JSON.stringify({ title: options.issue.title,
+            acceptance_checks: ['README has a Status section'], files_allowed: ['README.md'] }) } }] }) };
+      }
+      if (!wrote) {
+        wrote = true;
+        return { status: 200, json: async () => ({ choices: [{ finish_reason: 'tool_calls',
+          message: { role: 'assistant', tool_calls: [{ id: 'write', type: 'function',
+            function: { name: 'write_file', arguments: JSON.stringify({
+              path: 'README.md', content: '# Example\n\n## Status\nReady.\n',
+            }) } }] } }] }) };
+      }
+      return { status: 200, json: async () => ({ choices: [{ finish_reason: 'stop',
+        message: { role: 'assistant', content: 'Added Status.' } }], model: 'actual-coder-model' }) };
+    });
+    const execution = { ...options, config: vllmConfig, fetchImpl, log: () => {},
+      independentVerification: { docker: undefined },
+      runVerificationCommand: async () => assert.fail('Invalid backend must not execute') };
+    let result;
+    if (entry === 'ask') result = await runBuiltinAsk(options.issue.body, execution);
+    else {
+      writeFileSync(path.join(options.target, 'TASK.md'), planStub(options.issue.body, {
+        title: options.issue.title, reference: 'local:verification',
+      }).task);
+      result = await runBuiltinTask({ ...execution, cwd: options.target });
+    }
+    assert.equal(result.review.verdict, 'fail');
+    assert.equal(result.review.completed, false);
+    assert.equal(result.review.independentVerification.status, 'incomplete');
+    assert.match(result.review.content, /approved backend options/);
+  });
+}
 
 test('task timeout retains cancellation provenance and ownership until preparation stops', async (t) => {
   const options = fixture(t);

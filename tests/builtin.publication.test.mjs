@@ -125,6 +125,7 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
         AI_SESSION: 'roster-42-coder', AI_TASK: 'issue-42' }));
     },
   });
+
   assert.equal(published, 1);
   assert.equal(commented, 1);
   assert.equal(completion, 3);
@@ -163,6 +164,130 @@ test('LLM run stages only allowed code, supplies AI-Run fields, and invokes the 
   assert.ok(!logs.join('\n').includes('private-key'));
   assert.match(logs.join('\n'), /Reviewed worktree:[\s\S]*git diff --stat:[\s\S]*README.md/);
   assert.match(logs.join('\n'), /roster eval roster-42-coder accept 1 n --minutes M/);
+});
+
+test('public issue runner forwards host verification requirement and cannot publish without executed evidence', async (context) => {
+  const options = fixture(context);
+  let completion = 0;
+  const pending = runBuiltinIssue(42, {
+    ...options, config: vllmConfig, publish: true, log: () => {},
+    env: { ...options.env, GITHUB_APP_ID: '1',
+      GITHUB_APP_PRIVATE_KEY_PATH: path.join(options.base, 'test-only.pem') },
+    independentVerification: { docker: undefined },
+    runVerificationCommand: async () => assert.fail('Invalid Docker settings must never execute'),
+    publisher: async () => assert.fail('Missing verification evidence must not publish'),
+    fetchImpl: async (url, request) => {
+      const body = JSON.parse(request.body);
+      completion++;
+      if (completion === 1) return { status: 200, json: async () => ({
+        choices: [{ message: { role: 'assistant', content: JSON.stringify({
+          title: 'Add Status to README', acceptance_checks: ['README has a Status section'],
+          files_allowed: ['README.md'],
+        }) } }],
+      }) };
+      if (completion === 2) return { status: 200, json: async () => ({
+        choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant',
+          tool_calls: [{ id: 'write', type: 'function', function: { name: 'write_file',
+            arguments: JSON.stringify({ path: 'README.md', content: '# Example\n\n## Status\nReady.\n' }) } }] } }],
+      }) };
+      assert.ok(body.messages[0].content.includes('TASK.md'), 'Only coder completion may remain');
+      return { status: 200, json: async () => ({
+        choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Added Status.' } }],
+        model: 'actual-coder-model',
+      }) };
+    },
+  });
+  await assert.rejects(pending, /Publication requires a passing REVIEW/);
+  const review = readFileSync(path.join(options.target, '.worktrees', 'issue-42', 'REVIEW.md'), 'utf8');
+  assert.match(review, /Verdict: fail/);
+  assert.match(review, /approved backend options/);
+  assert.match(review, /incomplete/);
+});
+
+test('builtin review repair reexecutes approved Docker observations on the repaired implementation', async (context) => {
+  const options = fixture(context);
+  options.issue.title = 'Export physicalLine and print it';
+  options.issue.body = 'Export physicalLine and print line 4.\n\n## Acceptance checks\n' +
+    '- node --test exits 0\n- app prints line 4\n\n## Files allowed\n- `app.mjs`\n- `smoke.test.mjs`\n';
+  let coderTurns = 0;
+  let observations = 0;
+  let writtenRevision = -1;
+  let readRevision = -1;
+  let repairContexts = 0;
+  const result = await runBuiltinIssue(42, { ...options, config: llmConfig, log: () => {},
+    onRunEvent: (event) => {
+      if (event.type === 'review-repair') repairContexts++;
+    },
+    independentVerification: { docker: { enabled: true, image: `sha256:${'a'.repeat(64)}`,
+      plan: [1, 2].map((id) => ({ script: 'app.mjs', args: [], check_id: id,
+        expected_stdout: 'line 4\n', expected_stderr: '', expected_exit: 0,
+        evidence: `Host-controlled original Ask observation ${id}` })) } },
+    runVerificationCommand: async (program, args) => {
+      if (args[0] === 'rm') return {};
+      if (args.includes('-e')) return { stdout: 'v20.20.2\n', stderr: '' };
+      observations++;
+      const mount = args[args.indexOf('--mount') + 1];
+      const snapshot = mount.slice('type=bind,source='.length, mount.indexOf(',target='));
+      return { stdout: readFileSync(path.join(snapshot, 'app.mjs'), 'utf8').includes('=> 4')
+        ? 'line 4\n' : 'line 3\n', stderr: '' };
+    },
+    fetchImpl: async (url, request) => {
+      const body = JSON.parse(request.body);
+      if (body.messages[0].content.startsWith('You are a read-only plan critic.')) {
+        return { status: 200, json: async () => ({
+          choices: [{ message: { role: 'assistant', content: '{"defects":[]}' } }],
+        }) };
+      }
+      const names = body.tools?.map(({ function: tool }) => tool.name) ?? [];
+      if (body.messages[0].content.startsWith('You are the builtin planner seat.')) return { status: 200, json: async () => ({
+        choices: [{ message: { role: 'assistant', content: JSON.stringify({
+          title: options.issue.title, acceptance_checks: ['node --test exits 0', 'app prints line 4'],
+          files_allowed: ['app.mjs', 'smoke.test.mjs'],
+          design: { new_exports: [{ file: 'app.mjs', name: 'physicalLine' }],
+            outline: ['Export the diagnostic and print its numeric line.'] },
+        }) } }],
+      }) };
+      if (!names.includes('write_file')) return { status: 200, json: async () => ({
+        choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: passingReview(body) } }],
+        model: 'actual-review-model',
+      }) };
+      coderTurns++;
+      const revision = observations ? 1 : 0;
+      if (readRevision !== revision) {
+        readRevision = revision;
+        return { status: 200, json: async () => ({
+          choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', tool_calls: [{
+            id: `read-${revision}`, type: 'function', function: { name: 'read_file',
+              arguments: JSON.stringify({ path: revision ? 'app.mjs' : 'smoke.test.mjs' }) },
+          }] } }],
+          model: 'actual-coder-model',
+        }) };
+      }
+      if (writtenRevision === revision) {
+        return { status: 200, json: async () => ({
+          choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'Implemented app and checked tests.' } }],
+          model: 'actual-coder-model',
+        }) };
+      }
+      writtenRevision = revision;
+      const files = [{ path: 'app.mjs', content: `export const physicalLine = () => ${observations ? 4 : 3};\nconsole.log('line ' + physicalLine());\n` }];
+      if (!observations) files.push({ path: 'smoke.test.mjs', content:
+        "import test from 'node:test';\nimport assert from 'node:assert/strict';\nimport {physicalLine} from './app.mjs';\n" +
+        "test('physicalLine is numeric', () => assert.equal(typeof physicalLine(), 'number'));\n" });
+      return { status: 200, json: async () => ({
+        choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', tool_calls: files.map((file, id) => ({
+          id: `write-${coderTurns}-${id}`, type: 'function', function: { name: 'write_file', arguments: JSON.stringify(file) },
+        })) } }],
+        model: 'actual-coder-model',
+      }) };
+    },
+  });
+  assert.equal(result.failed, false, result.review?.content);
+  assert.equal(result.review.verdict, 'pass', result.review.content);
+  assert.equal(result.review.independentVerification.status, 'pass');
+  assert.equal(observations, 4, 'Both failed and repaired runs must execute all observations');
+  assert.ok(coderTurns >= 2, 'A fresh coder repair context must complete');
+  assert.equal(repairContexts, 1);
 });
 
 test('the reviewed diff summary lists new files that git diff HEAD omits', async (context) => {
