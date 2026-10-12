@@ -16,6 +16,79 @@ const outline = (entry) => ({
     files_allowed: ['guide/README.md'], acceptance_checks: [entry] })),
 });
 
+test('planner preserves the exact UTF-8 response boundary and corrects oversized replies without echoing them', async () => {
+  const config = parseConfig(readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8')
+    .replace('base_url: ""', 'base_url: "http://localhost:1234/v1"').replace('model: ""', 'model: test-model'));
+  const plan = JSON.stringify({ title: 'Guide',
+    acceptance_checks: ['The guide contains setup instructions'], files_allowed: options.filesAllowed });
+  for (const content of [plan.padEnd(16_384), `${plan}${' '.repeat(16_384 - plan.length - 2)}\u00e9`]) {
+    assert.equal(Buffer.byteLength(content), 16_384);
+    const result = await planAsk(ask, { config, env: {},
+      fetchImpl: async () => Response.json({ choices: [{ finish_reason: 'stop',
+        message: { role: 'assistant', content } }] }),
+    });
+    assert.equal(result.error, undefined);
+  }
+  for (const persistent of [false, true]) {
+    let calls = 0;
+    const sentinel = 'test-only-rejected-response-sentinel';
+    const excessive = `${plan}${' '.repeat(16_384)}${sentinel}`;
+    const result = await planAsk(ask, { config: { ...config, planner: { ...config.planner, turn_budget: 1 } },
+      env: {}, tools: { write_file: async () => ({ ok: true }) },
+      fetchImpl: async (_url, request) => {
+        calls += 1;
+        const messages = JSON.parse(request.body).messages;
+        if (calls === 2) {
+          assert.match(messages.at(-1).content, /response.*16384.*UTF-8 bytes/i);
+          assert.ok(messages.at(-1).content.includes(`got ${Buffer.byteLength(excessive)}`));
+          assert.ok(!JSON.stringify(messages).includes(sentinel));
+          assert.equal(messages[1].content, ask);
+        }
+        return Response.json({ model: 'actual-model', usage: { prompt_tokens: 10, completion_tokens: 5 },
+          choices: [{ finish_reason: 'stop', message: {
+            role: 'assistant', content: calls === 1 || persistent ? excessive : plan,
+          } }] });
+      },
+    });
+    assert.equal(calls, 2);
+    assert.deepEqual(result.usage, { prompt_tokens: 20, completion_tokens: 10 });
+    assert.equal(result.response.model, 'actual-model');
+    if (persistent) {
+      assert.equal(result.mode, 'stub');
+      assert.match(result.error, /response exceeds 16 KiB.*Unverified stub/);
+      assert.doesNotMatch(result.task, new RegExp(sentinel));
+    } else {
+      assert.equal(result.error, undefined);
+      assert.equal(parseTaskDocument(result.task, { expectedAsk: ask }).ask, ask);
+    }
+  }
+  const oneByteOver = `${plan}${' '.repeat(16_384 - plan.length - 1)}\u00e9`;
+  assert.equal(Buffer.byteLength(oneByteOver), 16_385);
+  let calls = 0;
+  const stopped = await planAsk(ask, { config: { ...config, planner: { ...config.planner, turn_budget: 1 } },
+    env: {}, fetchImpl: async () => {
+      calls += 1;
+      return Response.json({ choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant', content: oneByteOver,
+      } }] });
+    },
+  });
+  assert.equal(calls, 2);
+  assert.match(stopped.error, /got 16385/);
+  calls = 0;
+  await assert.rejects(planAsk(ask, { config: { ...config, planner: { ...config.planner, turn_budget: 1 } },
+    env: {}, criticFeedback: { task: buildPlan(ask, { ...options,
+      acceptanceChecks: ['The guide contains setup instructions'] }).task },
+    fetchImpl: async () => {
+      calls += 1;
+      return Response.json({ choices: [{ finish_reason: 'stop', message: {
+        role: 'assistant', content: oneByteOver,
+      } }] });
+    },
+  }), /Planner turn budget \(1\) exhausted.*got 16385/);
+  assert.equal(calls, 1);
+});
+
 test('all planner ingress paths reject oversized checks and preserve the exact 240-character boundary', () => {
   const full = check(240);
   assert.equal(full.length, 240);

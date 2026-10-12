@@ -208,6 +208,12 @@ without editing the tracked example or storing credentials.
   JSON plan accompanying an incomplete artifact draft is finalized without an
   extra model call. Invalid drafts return their validation error to the planner,
   rather than a misleading successful write alone. An oversized acceptance check
+  and an oversized text response do not authorize larger limits. Text replies
+  must fit 16384 UTF-8 bytes; excess returns measured byte-count feedback without
+  echoing the rejected reply, using the existing one validation correction.
+  The planner must return a concise complete plan, not drop Ask requirements.
+  Repeated excess leaves an explicitly unverified stub with response-backed
+  usage retained; critic turn budgets still apply. An oversized acceptance check
   reports its 1-based position, normalized character count and excess over the
   240-character limit without echoing its contents. Split the requirement into
   shorter checks (at most eight total), preserving every outcome; checks are never
