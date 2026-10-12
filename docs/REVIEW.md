@@ -100,7 +100,17 @@ requested documentation. Original Ask authority is supplied separately from
 the checklist so a matching checklist cannot override the requested outcome.
 A re-review after a repair, including
 the first review of a rerun that carried findings, receives the previous
-findings and judges whether the diff resolves each. A new finding must cite
+findings numbered from 1 and must return `findings`: exactly one
+`{id, resolved, evidence}` judgment per finding. IDs must be unique and in range;
+`resolved` is boolean and evidence is a trimmed single line of at most 500
+characters citing current code or verification. Missing or invalid accounting
+uses the existing one JSON correction, then leaves an incomplete failing review.
+Any `resolved: false` overrides a checklist pass; `REVIEW.md` records the
+judgments under `## Previous findings`. Prior evidence is never silently
+clipped to fit context; overflow fails explicitly. A green test that does not
+exercise the reported failure is not resolution evidence. These judgments
+remain model claims, not independent proof or human acceptance.
+With no prior findings, the existing JSON shape is unchanged. A new finding must cite
 check or TASK.md wording the change violates, and a check met before stays met
 unless the diff regressed it. This keeps repair rounds converging instead of
 spending them on a fresh hunt.

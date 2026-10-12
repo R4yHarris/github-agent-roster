@@ -5,7 +5,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, write
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { passingReview, reviewedChecks } from './helpers/review.mjs';
+import { passingReview, reviewedChecks, reviewedFindings } from './helpers/review.mjs';
 import { parseConfig } from '../src/lib/config.mjs';
 import { writeAsk } from '../src/lib/ask.mjs';
 import {
@@ -302,6 +302,8 @@ test('docs slice review repair is bounded when every review fails', async (conte
         if (system.startsWith('You are the builtin reviewer seat.')) {
           return Response.json({ choices: [{ message: { role: 'assistant', content: JSON.stringify({
             verdict: 'fail', reasons: ['Needs additional evidence.'], security_notes: [],
+            findings: reviewedFindings(body).map((id) => ({ id, resolved: false,
+              evidence: 'README.md still lacks the requested evidence.' })),
           }) } }] });
         }
         coderTurns += 1;
