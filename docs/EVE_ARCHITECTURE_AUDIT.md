@@ -1,7 +1,9 @@
 # Eve architecture and carry-forward audit
 
-Audit for #473 and #489, 2026-10-11. Baseline: reviewed main through PR #541
-(`24707b9f1bb78df90decb76e297027968389c23c`). This is an implementation/evidence
+Audit for #473 and #489, updated 2026-10-12. Current reviewed baseline: PR #592
+(`4de15f9558a117c183845e532e862664268fd9d2`), with contracts pinned to reviewed
+`fa48c244bc9b8ead5df927ec705ef41a39c56f68`. Earlier verification records below
+retain their original revisions and selectors. This is an implementation/evidence
 inventory, **not** human acceptance, a release claim, or a reset of failed runs.
 
 Product trace: FEATURE_SPEC **5.1–5.8**, with principles **3**, non-goals **7** and
@@ -9,11 +11,106 @@ harness acceptance **8** binding. Sources read directly: FEATURE_SPEC,
 MULTIAGENT, SDLC, ONE_TASK_LOOP, METRICS, FLEET, source modules below, issue bodies
 and existing merged-PR evidence. No comparator marketing claims are needed.
 
+## Current delivery and remaining gates
+
+The runtime remains planner -> coder -> matching tests -> read-only reviewer ->
+bounded fresh-context repair -> explicit App publication -> acceptance/learning.
+Cognitive inspiration is implemented through bounded evidence, obligations,
+context, memory and recovery inside this lifecycle, not a biological brain,
+general chatbot swarm, second queue or new runtime.
+
+- **Independent verification:** #588 wires explicitly host-approved Docker
+  observations into ordinary Ask, issue and existing-TASK review paths, including
+  fresh execution after coder repairs. #592 adds bounded host-owned verifier
+  sources on a separate read-only mount and explicitly approved unchanged
+  dependencies. Exact TASK/RESULT/product bytes bind observations, review and
+  final publication. Contradictions override model approval; invalid plans and
+  backend failures are explicit failing/incomplete reviews. Defaults remain
+  unchanged: no implicit image acquisition, executable discovery or model
+  authority to approve its own oracle. Read-only source is not an unspoofable
+  oracle against intentionally hostile product code.
+- **Actual retained counterexamples:** a real Docker replay invokes a deliberately
+  false-pass mock reviewer against the original faulty and correct M3 bytes.
+  The faulty delivery passes 6/18 parser and 6/18 CLI cases and is rejected;
+  the correct delivery passes 18/18 of each and is approved, then publication
+  is denied after its unchanged parser dependency changes. Combined valid
+  quoted-comma/escaped-quote/newline behavior passes both. Original retained
+  files remain unchanged. This is host-approved test evidence, not live
+  inference, autonomous counterexample discovery or human acceptance.
+- **Publishing recovery:** reviewed contracts
+  [R4yHarris/github-agent-contracts#13](https://github.com/R4yHarris/github-agent-contracts/pull/13)
+  and Roster #589 deliver explicit exact-head `--resume` consumption without a
+  replacement commit, push or PR. The original App/model/run identity, exact
+  remote and PR head, current policy and required checks are revalidated,
+  including ruleset-only protection. No vendor sources were rewritten here.
+- **Pilot:** Ray explicitly accepted #474/#475. #590 exercises the real public
+  baseline/opt-in lifecycle and paired evaluator with deterministic transport,
+  actual fixture tests and honest unknowns. It is synthetic, not held out, and
+  reports `pilot-incomplete`. #476 remains open for its separate held-out and
+  comparative acceptance obligations; #477 remains gated. No 40-task/20-fault
+  campaign or difficulty promotion is implied by these development controls.
+- **Other gaps:** #439's trusted base-checker workflow source remains
+  maintainer-owned carry-forward. Cost requires authoritative returned units or
+  human-owned rates; unknown cost remains unknown. #570 is an offline-only
+  Copilot feasibility lane under #569, not an installed or approved provider.
+  #571-#573 retain their architecture, auth and live-call approval gates.
+
+At exact #592 head `cd937349a3be32ee4278dac3adeb99090912a20d`, required
+Linux Node20 CI passed **1947/1950** tests, zero failures, with **three explicit
+Docker opt-in skips**, in **55593.740921 ms**. Windows Node `v20.20.2` ran the
+actual Docker backend/receipt/reviewer gate: **47/47**, zero skips, in
+**45595.4996 ms**. Ordinary public issue/repair controls passed **2/2 selected**
+tests, with 17 intentionally unselected, in **26277.6279 ms**. These are exact
+selectors and environments, not a controlled speedup or end-to-end model-quality
+claim. Fresh protected-oracle M3 calibration is tracked separately in #593.
+
+### Fresh calibration and review-only recovery
+
+#593 ran the public M3 lifecycle at `4de15f9` using the saved requested model
+`qwen3.8-27b`; the endpoint actually served `Qwen/Qwen3.8-27B-FP8`, effort `m`.
+The fresh task was `local-9015e2d9ea61ce19`, elapsed **259532 ms**. Two matching
+test repairs completed; final consumer tests passed **16/16**, including its
+baseline, and protected Docker plus the independent post-run matrix passed
+**18/18 parser and 18/18 CLI** cases. The original run still failed because
+the reviewer was incomplete after malformed JSON and a request failure.
+Publication was denied and `verified_delivery: false` remains unchanged.
+
+A targeted read-only recovery, not another coder run, completed with a false
+negative in **30525 ms**: it claimed an unclosed multiline quote at EOF would
+not throw. Actual source calls `endField()` from `endRecord()` and throws while
+`inQuotes`; the expanded host oracle executes that exact EOF input in both
+parser and CLI. This led to two concrete library repairs:
+
+- #594 forwards explicit host approval/backend options through `runOnlyReview`,
+  uses its existing `again` archive path, and refuses to silently discard prior
+  independent verification. A direct seat-only attempt before using this API
+  failed `EEXIST`; no successful verdict was inferred from that failed attempt.
+- #595 supplies exact, redacted, subject-bound host observation facts to both
+  model review and Original Ask audit. Previously they affected the final gate
+  but were absent from both model contexts. Passing observations still cover
+  only declared inputs and do not override a separate model-reported defect.
+
+With those repairs and the concrete EOF observation, one bounded reviewer-only
+recovery passed in **39960 ms**, serving `Qwen/Qwen3.8-27B-FP8`. Its returned
+review response reports **11251 prompt tokens / 471 completion tokens**; these
+are the recorded response fields, not an independently measured aggregate bill
+for every earlier request. Cost and unreturned counts remain unknown.
+TASK/RESULT/product subject SHA-256 remained
+`35b09b12b43c062d85b78fc4dc6034a0b344fa43f1fc6e475c422a3e5b6f8ecd`.
+The passing review gate was checked; no consumer publication occurred.
+
+Final Windows Node20 coupled review-only/receipt/reviewer controls:
+**44/44**, zero failures/skips, **50291.6603 ms**, including actual Docker.
+Ordinary public issue/repair controls: **2/2 selected**, 17 intentionally
+unselected, **45858.4026 ms**. This documents failure-driven implementation
+and assisted recovery, not a new autonomous accepted run, held-out pilot,
+general semantic reliability, or authorization to promote difficulty.
+
 ## Architecture against the code
 
 | Designed component | Current implementation evidence | Boundary / remaining gap |
 | --- | --- | --- |
-| App identity, role authority and provenance (5.1) | `lib/publication.mjs`, `seat-publication.mjs`, `metrics/run.mjs`; pinned contracts publisher; protected tools | Publishing SDK/merger/deployer authority belongs to contracts/human policy, not a missing model seat. #368 publisher stale-head recovery remains external debt; use single-commit branches, not vendor edits. |
+| App identity, role authority and provenance (5.1) | `lib/publication.mjs`, `seat-publication.mjs`, `metrics/run.mjs`; pinned contracts publisher; protected tools; reviewed exact-head recovery consumed in #589 | Publishing SDK/merger/deployer authority belongs to contracts/human policy, not a missing model seat. Explicit recovery preserves the original App commit/model/run; no human-credential fallback or vendor rewrite. |
 | Trusted CI/review gates (5.5) | Read-only `seats/reviewer.mjs`, `runtime/review-verify.mjs`, bounded fresh-context review repair in `lib/builtin.mjs` | #439 remains real human-owned workflow debt: checkout does not independently select base-revision action/checker source. A green check alone does not establish that trust property. No workflow edits were made. |
 | Planner → coder → reviewer seats (5.2–5.5) | `seats/planner.mjs`, `coder.mjs`, `reviewer.mjs`; sequential orchestration, cache/retry/repairs in `lib/builtin.mjs` | Implemented, not absent. Same process/worktree by default; opt-in isolated child/attempt trees are not a new runtime or task board. Stable Eve worker identity independent of seats/models is a later #477 outcome, not delivered by these names. |
 | Ask taxonomy/specialization (5.3) | `planner/classify.mjs` produces question/incident `specKind` metadata; execution still uses clarify/slice/feature/initiative; `/btw` is a bounded read-only task side-question. `runtime/context-policy.mjs` consumes bounded incident metadata plus an explicit investigation/repair directive from the preserved TASK Ask to select the existing incident coder packet. | Incident specialization is guidance inside the ordinary gated seats, not a new primary runtime or urgency grant. Ambiguous incidents still clarify/split; questions or documentation mentions alone do not select the packet. Skill-bounded recipes must cover incident. Primary repository questions now use `lib/repository-question.mjs` via explicit CLI/shell and natural-question intake (#550), from human-declared read scope only and without executing a task. `/btw` remains a distinct task-metadata question. |
@@ -192,13 +289,15 @@ does not claim cross-platform live acceptance from unit tests.
   authoritative returned cost or human-owned pricing input. Optional telemetry
   export is not a current delivery prerequisite and needs an explicit collector
   configuration; no new runtime dependency was added.
-- **Human/dependency gates:** #477 depends on #476, which explicitly prohibits
-  execution until #474/#475 are human-evaluated and closed. Then bounded linked
-  slices and actual measured resource/council evidence are required. #499 is
-  specifically human diagnosis/scope review, not that dependency chain: preserve
-  original timeout and unchanged successful minimal-consumer evidence, never
-  disable verification to pass. #439 workflow source binding is human-owned;
-  #368 publisher recovery is contracts-owned, never a vendor edit here.
+- **Human/dependency gates:** #474/#475 were explicitly accepted by Ray and
+  closed, allowing bounded #476 development. Full pilot acceptance remains
+  outstanding and gates #477; measured resource/council evidence is not replaced
+  by deterministic fixtures. Ray approved #499's test policy and delegated its
+  technical disposition: closed/Done after fresh controls, retaining the
+  original timeout separately from successful unchanged minimal-consumer runs.
+  #439 workflow source binding remains human-owned. Exact-head publisher
+  recovery was delivered upstream and consumed through the reviewed gitlink,
+  never a vendor-source edit here.
 
 ## Verified last-green recovery evidence
 

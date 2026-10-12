@@ -133,13 +133,20 @@ autonomous counterexample discovery.
 
 ### Builtin run API integration
 
-Trusted callers of `runBuiltinTask`, `runBuiltinIssue` and `runBuiltinAsk` may
+Trusted callers of `runBuiltinTask`, `runBuiltinIssue`, `runBuiltinAsk` and
+the review-only `runOnlyReview` API may
 now supply `independentVerification: { docker: { enabled: true, image, plan,
 dockerPath, timeoutMs, additionalFiles, verifiers } }`. `plan`, `image` and explicit opt-in are required;
 the executable and deadline use the backend defaults when omitted.
 This API option is not inferred from config, environment, issue text, coder
 output or model response. There is no new CLI flag or implicit image acquisition.
 The existing `{ receipt }` reviewer option remains supported.
+`runOnlyReview` also forwards the host backend executor used by offline tests.
+For a retry of a run with independent-verification metadata, the caller must
+explicitly supply fresh approval again; otherwise it refuses before archiving
+the existing review or invoking a model. Prior review metadata is not an
+executable plan, and an ordinary `/review --again` cannot silently drop that
+gate. No host scripts or authority are inferred from a saved review.
 
 For each eligible completed LLM coder result, the harness executes the approved
 plan against the exact current `excellence.files` plus explicitly host-approved
@@ -153,6 +160,13 @@ again against new bytes after repair or a review retry. Infrastructure or plan
 failure writes an incomplete failing review, not model-approved success.
 Failed/timed-out/stub coders never execute the Docker backend. Existing
 explicit review bypass semantics remain unchanged.
+Both the main reviewer and the independent Original Ask audit receive the exact
+subject-bound observation IDs, check IDs, expected/actual outputs and exits,
+and host-approved evidence. These facts are redacted and included in the
+existing context budget, not silently omitted or truncated to make a request
+fit. Actual product output remains untrusted data, not role instructions.
+Passing observations cover only their declared inputs: they do not force model
+approval of an uncovered defect or establish human acceptance.
 
 The host must approve script scope, expected outcomes, check coverage and
 unchanged dependencies in advance. A script supplied by the coder is not

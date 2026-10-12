@@ -229,6 +229,91 @@ test('trusted host execution contradiction overrides reviewer pass and publicati
   await assert.rejects(requirePassingReview({ worktreePath: options.worktree, review }), /passing REVIEW/);
 });
 
+test('main reviewer and independent Ask audit both receive exact redacted host execution facts', async (context) => {
+  const options = fixture(context);
+  const taskPath = path.join(options.worktree, 'TASK.md');
+  writeFileSync(taskPath, readFileSync(taskPath, 'utf8')
+    .replace('Update app.', 'Update app. Output it in a new "src" directory.'));
+  const receipt = await independentReceipt(options);
+  for (const observation of receipt.observations) {
+    observation.expected_output = 'line 4 receipt-secret-value';
+    observation.actual_output = 'line 4 receipt-secret-value';
+    observation.evidence = 'Executed EOF counterexample traces endRecord through endField';
+  }
+  const requests = [];
+  const review = await runReviewer({
+    ...options, config, env: { OPENAI_API_KEY: 'receipt-secret-value' },
+    independentVerification: { receipt },
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      const evidence = body.messages[1].content;
+      assert.match(evidence, /## Independent executed observations/);
+      assert.ok(evidence.includes(receipt.subject_digest));
+      assert.match(evidence, /"expected_exit":1,"actual_exit":1/);
+      assert.match(evidence, /Executed EOF counterexample traces endRecord through endField/);
+      assert.match(evidence, /covers only the declared observations/);
+      assert.match(evidence, /untrusted product data/);
+      assert.doesNotMatch(evidence, /receipt-secret-value/);
+      assert.match(evidence, /\[redacted\]/);
+      assert.equal(body.tools, undefined);
+      requests.push(body.messages[0].content);
+      return Response.json({ model: 'actual-review-model', choices: [{
+        finish_reason: 'stop', message: { role: 'assistant', content: passingReview(body) },
+      }] });
+    },
+  });
+  assert.equal(review.verdict, 'pass', review.content);
+  assert.equal(requests.length, 2);
+  assert.match(requests[0], /independent Original Ask audit/);
+  assert.match(requests[1], /Return only JSON with verdict/);
+  assert.doesNotMatch(requests[1], /Perform an independent Original Ask audit/);
+});
+
+test('required execution facts exceeding the remaining context budget fail without model invocation', async (context) => {
+  const options = fixture(context);
+  let baselineChars;
+  const baseline = await runReviewer({
+    ...options, config,
+    fetchImpl: async (_url, request) => {
+      const body = JSON.parse(request.body);
+      baselineChars = body.messages.reduce((sum, message) => sum + message.content.length, 0);
+      return Response.json({ choices: [{ finish_reason: 'stop',
+        message: { role: 'assistant', content: passingReview(body) } }] });
+    },
+  });
+  assert.equal(baseline.verdict, 'pass');
+  rmSync(baseline.reviewPath);
+  const receipt = await independentReceipt(options);
+  receipt.observations = Array.from({ length: 10 }, (_, index) => ({
+    ...receipt.observations[index % 2], id: index + 1,
+    expected_output: 'x'.repeat(1400), actual_output: 'x'.repeat(1400),
+  }));
+  const review = await runReviewer({
+    ...options, config: { ...config, seat: { ...config.seat, context_chars: baselineChars + 10 } },
+    independentVerification: { receipt },
+    fetchImpl: async () => assert.fail('Required observations must not be silently dropped to fit'),
+  });
+  assert.equal(review.verdict, 'fail');
+  assert.equal(review.completed, false);
+  assert.match(review.content, /evidence exceeds seat.context_chars/);
+});
+
+test('passing host observations do not override a model-reported uncovered defect', async (context) => {
+  const options = fixture(context);
+  const receipt = await independentReceipt(options);
+  const review = await runReviewer({
+    ...options, config, independentVerification: { receipt },
+    fetchImpl: async (_url, request) => Response.json({
+      choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+        content: JSON.stringify({ verdict: 'fail', reasons: ['src/app.mjs has a separate uncovered defect.'],
+          security_notes: [], checks: reviewedChecks(JSON.parse(request.body)) }) } }],
+    }),
+  });
+  assert.equal(review.independentVerification.status, 'pass');
+  assert.equal(review.verdict, 'fail');
+  await assert.rejects(requirePassingReview({ worktreePath: options.worktree, review }), /passing REVIEW/);
+});
+
 test('correct trusted host receipt preserves pass and publication refuses later product changes', async (context) => {
   const options = fixture(context);
   const receipt = await independentReceipt(options);
