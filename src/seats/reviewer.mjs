@@ -21,6 +21,7 @@ import { loadPrincipal } from './principal.mjs';
 import { isLlmTimeout } from '../llm/request.mjs';
 import { routeFailure } from '../llm/openai.mjs';
 import { captureVerificationSubject, judgeVerificationReceipt } from '../runtime/independent-verification.mjs';
+import { runDockerVerification } from '../runtime/verification-docker.mjs';
 import { isRunCancelled, throwIfCancelled } from '../runtime/cancel.mjs';
 
 const execute = promisify(execFile);
@@ -326,6 +327,7 @@ export async function runReviewer({
   previousFindings = [],
   priorWaveFiles = [],
   independentVerification,
+  runVerificationCommand,
 } = {}) {
   if (typeof worktree !== 'string' || typeof repoRoot !== 'string' ||
       typeof coderResult?.resultPath !== 'string' || !config?.llm || !config.seat) {
@@ -364,14 +366,17 @@ export async function runReviewer({
     if (independentVerification !== undefined) {
       independentReport = { status: 'incomplete' };
       if (!independentVerification || typeof independentVerification !== 'object' ||
-          Array.isArray(independentVerification) || Object.keys(independentVerification).join(',') !== 'receipt') {
-        throw new TypeError('Independent verification input must contain only a trusted host receipt');
+          Array.isArray(independentVerification) ||
+          !['receipt', 'docker'].includes(Object.keys(independentVerification).join(','))) {
+        throw new TypeError('Independent verification input must contain only a trusted host receipt or Docker plan');
       }
       verificationFiles = coderResult.excellence?.files;
       verificationSubject = await captureVerificationSubject({ worktree, files: verificationFiles });
       verificationFiles = verificationSubject.files.map((entry) => entry.path);
-      independentReport = judgeVerificationReceipt(independentVerification.receipt,
-        { subjectDigest: verificationSubject.digest, checkCount: checkTexts.length });
+      if ('receipt' in independentVerification) {
+        independentReport = judgeVerificationReceipt(independentVerification.receipt,
+          { subjectDigest: verificationSubject.digest, checkCount: checkTexts.length });
+      }
     }
     const checks = checkTexts.map((check, index) => `${index + 1}. ${check}`).join('\n') + '\n';
     const docsEvidence = docsOnly ? 'Harness evidence: docs-only task, node --test was skipped. Do not fail for a missing test command.\n\n' : '';
@@ -415,6 +420,18 @@ export async function runReviewer({
         security_notes: ['Security review was not completed.'],
       };
     } else {
+      if (independentVerification && 'docker' in independentVerification) {
+        const docker = independentVerification.docker;
+        if (!docker || typeof docker !== 'object' || Array.isArray(docker) ||
+            Object.keys(docker).some((key) => !['enabled', 'image', 'plan', 'dockerPath', 'timeoutMs'].includes(key))) {
+          throw new TypeError('Independent Docker verification requires only approved backend options');
+        }
+        const executed = await runDockerVerification({ ...docker, worktree, files: verificationFiles,
+          checkCount: checkTexts.length, signal, ...(runVerificationCommand ? { runCommand: runVerificationCommand } : {}) });
+        independentReport = judgeVerificationReceipt(executed.receipt,
+          { subjectDigest: verificationSubject.digest, checkCount: checkTexts.length });
+        await onEvent?.({ type: 'independent-verification', status: independentReport.status });
+      }
       if (!config.llm.base_url) throw new Error('Reviewer requires a configured model endpoint');
       const budget = config.seat.context_chars;
       if (!Number.isSafeInteger(budget) || budget < 1) {

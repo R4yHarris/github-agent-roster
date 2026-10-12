@@ -87,8 +87,8 @@ executed verification.
 
 `runDockerVerification` in `src/runtime/verification-docker.mjs` is a trusted
 host-only, explicitly opted-in backend for the receipt protocol. It is not
-automatically invoked by the CLI, coder or reviewer. Ordinary-run generation
-and integration remain separate #581 work. Docker must already be installed
+automatically enabled by the CLI, coder or reviewer. Builtin API wiring is
+described below; independent generation remains separate #581 work. Docker must already be installed
 and its Linux engine available; normal calls never install it or pull images.
 The host supplies an immutable locally acquired `sha256:` image ID. A bounded
 probe checks that the image runs Linux Node20 before executing product scripts.
@@ -130,6 +130,35 @@ to the explicitly acquired image ID and run the Docker test file. Without
 that variable its real-engine test is reported as skipped; mocked controls
 still run. This is not a claim of Docker availability on every platform or
 autonomous counterexample discovery.
+
+### Builtin run API integration
+
+Trusted callers of `runBuiltinTask`, `runBuiltinIssue` and `runBuiltinAsk` may
+now supply `independentVerification: { docker: { enabled: true, image, plan,
+dockerPath, timeoutMs } }`. `plan`, `image` and explicit opt-in are required;
+the executable and deadline use the backend defaults when omitted.
+This API option is not inferred from config, environment, issue text, coder
+output or model response. There is no new CLI flag or implicit image acquisition.
+The existing `{ receipt }` reviewer option remains supported.
+
+For each eligible completed LLM coder result, the harness executes the approved
+plan against the exact current `excellence.files` subject before model review.
+The reviewer receives no execution tools. Executed mismatches override a model
+pass and supply unmet check IDs to existing bounded repair; the plan executes
+again against new bytes after repair or a review retry. Infrastructure or plan
+failure writes an incomplete failing review, not model-approved success.
+Failed/timed-out/stub coders never execute the Docker backend. Existing
+explicit review bypass semantics remain unchanged.
+
+The host must approve script scope, expected outcomes, check coverage and
+unchanged dependencies in advance. A script supplied by the coder is not
+automatically an independent test simply because Docker executes it.
+This builtin adapter mounts only the current coder-reported file set; it does
+not implicitly include unchanged dependencies. A plan requiring unlisted
+imports fails execution rather than expanding the snapshot.
+Independent counterexample generation, protected host-owned verifier artifacts,
+and user-facing onboarding remain further #581 work. The optional API wiring
+does not establish autonomous semantic detection or accept the whole initiative.
 
 For directory-scoped Asks, a separate bounded, read-only review first sees only
 the Original Ask and delivered diff, not the planner checklist or coder prose.

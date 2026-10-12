@@ -352,6 +352,8 @@ async function executeBuiltinTask({
   onRunEvent,
   signal,
   steeringControl,
+  independentVerification,
+  runVerificationCommand,
 } = {}) {
   throwIfCancelled(signal);
   config = { ...config, capabilities: config.capabilities ?? await loadCapabilities({ cwd }) };
@@ -432,6 +434,7 @@ async function executeBuiltinTask({
     const review = await liveLog.seat('reviewer', reviewerSession, reviewConfig, (onEvent) => runReviewer({
       worktree: worktreePath, repoRoot, config: reviewConfig, coderResult: result,
       env, fetchImpl, vault, onEvent, askKind, retryCommand, signal,
+      independentVerification, runVerificationCommand,
     }));
     const reviewRun = review.queried ? buildRun({
       config: reviewConfig, response: review.response, task, session: reviewerSession, env,
@@ -852,6 +855,8 @@ async function executeBuiltinAssignment(issueNumber, {
   fetchImpl,
   vault,
   runTestCommand,
+  independentVerification,
+  runVerificationCommand,
   publisher = execFileAsync,
   issueCommenter = commentMergedIssue,
   metricsLoader = loadMetrics,
@@ -1333,6 +1338,7 @@ async function executeBuiltinAssignment(issueNumber, {
         review = await liveLog.seat('reviewer', sessions.reviewer, reviewConfig, (onEvent) => runReviewer({
           worktree: worktreePath, repoRoot, config: reviewConfig,
           coderResult, fetchImpl, env, vault, onEvent, askKind, retryCommand, signal, previousFindings, priorWaveFiles,
+          independentVerification, runVerificationCommand,
         }));
       } catch (error) {
         throwIfCancelled(signal);

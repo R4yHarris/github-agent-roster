@@ -65,6 +65,115 @@ function passingEndpoint(onRequest) {
   };
 }
 
+function dockerReviewOptions() {
+  return { docker: { enabled: true, image: `sha256:${'a'.repeat(64)}`,
+    plan: [1, 2].map((id) => ({ script: 'src/app.mjs', args: [], check_id: id,
+      expected_stdout: 'line 4\n', expected_stderr: '', expected_exit: 0,
+      evidence: `Host-authorized source diagnostic check ${id}` })) } };
+}
+
+test('Docker execution is wired before model review and contradictions force actionable repair findings', async (context) => {
+  const options = fixture(context);
+  let executed = 0;
+  let cleaned = 0;
+  const review = await runReviewer({ ...options, config,
+    independentVerification: dockerReviewOptions(),
+    runVerificationCommand: async (program, args) => {
+      if (args[0] === 'rm') { cleaned++; return {}; }
+      if (args.includes('-e')) return { stdout: 'v20.20.2\n', stderr: '' };
+      executed++;
+      return { stdout: 'line 3\n', stderr: '' };
+    },
+    fetchImpl: passingEndpoint(() => assert.equal(executed, 2)),
+  });
+  assert.equal(review.verdict, 'fail', review.content);
+  assert.equal(review.completed, true);
+  assert.deepEqual(review.unmetChecks, [1, 2]);
+  assert.equal(cleaned, 3);
+  assert.equal(review.independentVerification.status, 'fail');
+});
+
+test('Docker infrastructure failure is incomplete without model approval and invalid inputs cannot enable execution', async (context) => {
+  const options = fixture(context);
+  let cleaned = 0;
+  const review = await runReviewer({ ...options, config,
+    independentVerification: dockerReviewOptions(),
+    runVerificationCommand: async (program, args) => {
+      if (args[0] === 'rm') { cleaned++; return {}; }
+      throw Object.assign(new Error('Docker unavailable'), { code: 'ENOENT' });
+    },
+    fetchImpl: async () => assert.fail('Infrastructure failure must not ask a model to approve'),
+  });
+  assert.equal(review.verdict, 'fail');
+  assert.equal(review.completed, false);
+  assert.equal(review.independentVerification.status, 'incomplete');
+  assert.match(review.content, /Docker unavailable/);
+  assert.equal(cleaned, 1);
+});
+
+test('Docker checks reexecute against repaired bytes instead of reusing prior executed evidence', async (context) => {
+  const options = fixture(context);
+  let runs = 0;
+  const settings = { ...options, config, independentVerification: dockerReviewOptions(),
+    runVerificationCommand: async (program, args) => {
+      if (args[0] === 'rm') return {};
+      if (args.includes('-e')) return { stdout: 'v20.20.2\n', stderr: '' };
+      runs++;
+      return { stdout: readFileSync(options.source, 'utf8').includes('repaired') ? 'line 4\n' : 'line 3\n',
+        stderr: '' };
+    }, fetchImpl: passingEndpoint() };
+  const first = await runReviewer(settings);
+  assert.equal(first.verdict, 'fail');
+  rmSync(first.reviewPath);
+  writeFileSync(options.source, 'export const ready = true; // repaired\n');
+  const repaired = await runReviewer(settings);
+  assert.equal(repaired.verdict, 'pass', repaired.content);
+  assert.notEqual(repaired.independentVerification.subjectDigest, first.independentVerification.subjectDigest);
+  assert.equal(runs, 4);
+  await requirePassingReview({ worktreePath: options.worktree, review: repaired });
+});
+
+test('invalid and missing Docker options fail closed and failed coders never execute Docker', async (context) => {
+  for (const setting of [{ docker: undefined }, { docker: { ...dockerReviewOptions().docker, runCommand: () => {} } }]) {
+    const options = fixture(context);
+    const review = await runReviewer({ ...options, config, independentVerification: setting,
+      runVerificationCommand: async () => assert.fail('Invalid options must not execute'),
+      fetchImpl: async () => assert.fail('Invalid options must not invoke a model') });
+    assert.equal(review.verdict, 'fail');
+    assert.equal(review.completed, false);
+  }
+  const options = fixture(context);
+  const review = await runReviewer({ ...options, config,
+    coderResult: { ...options.coderResult, timedOut: true },
+    independentVerification: dockerReviewOptions(),
+    runVerificationCommand: async () => assert.fail('Failed coder must not execute Docker'),
+    fetchImpl: async () => assert.fail('Failed coder must not invoke a model') });
+  assert.equal(review.verdict, 'fail');
+  assert.equal(review.completed, false);
+});
+
+test('opt-in real Docker reviewer integration rejects false approval and accepts corrected output', {
+  skip: !process.env.ROSTER_VERIFICATION_TEST_IMAGE,
+}, async (context) => {
+  const options = fixture(context);
+  const independentVerification = dockerReviewOptions();
+  independentVerification.docker.image = process.env.ROSTER_VERIFICATION_TEST_IMAGE;
+  writeFileSync(options.source, "console.log('line 3');\n");
+  const settings = { ...options, config, independentVerification, fetchImpl: passingEndpoint() };
+  const rejected = await runReviewer(settings);
+  assert.equal(rejected.verdict, 'fail', rejected.content);
+  assert.deepEqual(rejected.unmetChecks, [1, 2]);
+  assert.equal(rejected.independentVerification.status, 'fail');
+  rmSync(rejected.reviewPath);
+  writeFileSync(options.source, "console.log('line 4');\n");
+  const accepted = await runReviewer(settings);
+  assert.equal(accepted.verdict, 'pass', accepted.content);
+  assert.equal(accepted.independentVerification.status, 'pass');
+  await requirePassingReview({ worktreePath: options.worktree, review: accepted });
+  writeFileSync(options.source, "console.log('stale');\n");
+  await assert.rejects(requirePassingReview({ worktreePath: options.worktree, review: accepted }), /changed after/);
+});
+
 test('trusted host execution contradiction overrides reviewer pass and publication', async (context) => {
   const options = fixture(context);
   const receipt = await independentReceipt(options, 'line 3');
