@@ -344,7 +344,14 @@ Narration remains a live rewritten transcript line and is not the seat result.
 After a successful RESULT.md, the read-only builtin reviewer checks the task
 acceptance checks and the Git diff against that result, then writes REVIEW.md
 with pass/fail reasons and security notes. A failed or productless draft does
-not open review. A completed model-backed review failure returns its
+not open review. Both the checklist review and independent Original Ask audit
+trace relevant interactions between requested behaviors, rather than accepting
+isolated green tests as proof of combined correctness. For requested source-line
+diagnostics after multiline input, physical input positions are not record
+indexes. Findings must identify a concrete requested-behavior violation, not
+invent extra features. These are model review instructions, not a deterministic
+proof: independent validation and human acceptance remain separate from a
+passing review. A completed model-backed review failure returns its
 per-check findings to a fresh coder context (at most two repairs, switching
 perspective when the same checks stay unmet), then reviews the repaired result
 again. A failed review after the last repair leaves the
