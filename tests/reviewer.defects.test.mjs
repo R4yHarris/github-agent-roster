@@ -119,6 +119,12 @@ for (const stage of ['ask-audit', 'checklist']) {
             reasons: fail ? ['medium-csv/parseCsv.mjs reports record index rather than physical line after a quoted newline.'] : [],
             security_notes: [], checks: [{ id: 1, met: !fail,
               evidence: 'medium-csv/parseCsv.mjs computes line as recordIndex + 1.' }],
+            ...(fail ? { grounds: [{
+              obligation: 'throw SyntaxError naming the line for a wrong field count',
+              file: 'medium-csv/parseCsv.mjs',
+              excerpt: 'new SyntaxError(`Row on line ${recordIndex + 1}`)',
+              reason: 'medium-csv/parseCsv.mjs reports record index rather than physical line after a quoted newline.',
+            }] } : {}),
             ...(!audit && stage === 'checklist' ? { defects: [{
               file: 'medium-csv/parseCsv.mjs', symbol: 'rowError',
               input: 'a,b\\n"first\\nsecond",ok\\nx',
