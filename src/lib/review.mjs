@@ -15,11 +15,14 @@ const execute = promisify(execFile);
 
 export async function runOnlyReview(run, {
   repoRoot, config, env = process.env, again = false, fetchImpl, vault, signal, onRunEvent,
-  debug, errorOutput = process.stderr,
+  debug, errorOutput = process.stderr, independentVerification, runVerificationCommand,
 }) {
   if (!run?.worktreePath || !run.result?.resultPath) throw new Error('A completed coder result is required; run or resume a task before /review.');
   if (run.planningOnly) throw new Error('Planning-only output is not a completed coder result to review.');
   throwIfCancelled(signal);
+  if (run.review?.independentVerification && !independentVerification) {
+    throw new Error('Independent verification must be explicitly approved again for a review-only retry; prior review metadata is not execution authority.');
+  }
   const worktree = run.worktreePath;
   const task = await readPlannerTask(worktree);
   if (task === null) throw new Error('Review requires TASK.md in the current worktree.');
@@ -48,6 +51,7 @@ export async function runOnlyReview(run, {
     previousDelivery: run.delivery });
   const review = await logger.seat('reviewer', session, config, async (onEvent) => (await import('../seats/reviewer.mjs')).runReviewer({
     worktree, repoRoot, config, coderResult, env, fetchImpl, vault, signal, onEvent, askKind: run.askKind ?? 'slice',
+    independentVerification, runVerificationCommand,
   }));
   const measured = review.response ? buildRun({ config, response: review.response, task: run.task, session, env: {} }) : null;
   if (path.relative(path.resolve(run.repoRoot ?? worktree), path.resolve(worktree))) {
