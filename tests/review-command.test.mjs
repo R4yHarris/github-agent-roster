@@ -124,6 +124,14 @@ test('review-only retries execute fresh approved observations and retain depende
     runVerificationCommand: async () => assert.fail('Missing host authority must not execute'),
   }), /explicitly approved again/);
   assert.equal(readFileSync(path.join(run.worktreePath, 'REVIEW.md'), 'utf8'), originalReview);
+  const retainedReview = originalReview.replaceAll('\n', '\r\n');
+  writeFileSync(path.join(run.worktreePath, 'REVIEW.md'), retainedReview);
+  await assert.rejects(runOnlyReview({ ...rejected, review: undefined }, {
+    ...options, independentVerification: undefined, again: true,
+    fetchImpl: async () => assert.fail('Stored independent authority must survive missing run metadata'),
+    runVerificationCommand: async () => assert.fail('Stored metadata is not execution approval'),
+  }), /explicitly approved again/);
+  assert.equal(readFileSync(path.join(run.worktreePath, 'REVIEW.md'), 'utf8'), retainedReview);
   writeFileSync(path.join(run.worktreePath, 'README.md'), '# Approved\n');
   const accepted = await runOnlyReview({ ...rejected, result: run.result }, { ...options, again: true });
   assert.equal(accepted.review.verdict, 'pass', accepted.review.content);

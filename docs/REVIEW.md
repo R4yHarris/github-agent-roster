@@ -142,7 +142,8 @@ This API option is not inferred from config, environment, issue text, coder
 output or model response. There is no new CLI flag or implicit image acquisition.
 The existing `{ receipt }` reviewer option remains supported.
 `runOnlyReview` also forwards the host backend executor used by offline tests.
-For a retry of a run with independent-verification metadata, the caller must
+For a retry with independent-verification metadata in the run or its existing
+managed review artifact, the caller must
 explicitly supply fresh approval again; otherwise it refuses before archiving
 the existing review or invoking a model. Prior review metadata is not an
 executable plan, and an ordinary `/review --again` cannot silently drop that

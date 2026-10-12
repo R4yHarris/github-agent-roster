@@ -20,13 +20,14 @@ export async function runOnlyReview(run, {
   if (!run?.worktreePath || !run.result?.resultPath) throw new Error('A completed coder result is required; run or resume a task before /review.');
   if (run.planningOnly) throw new Error('Planning-only output is not a completed coder result to review.');
   throwIfCancelled(signal);
-  if (run.review?.independentVerification && !independentVerification) {
-    throw new Error('Independent verification must be explicitly approved again for a review-only retry; prior review metadata is not execution authority.');
-  }
   const worktree = run.worktreePath;
   const task = await readPlannerTask(worktree);
   if (task === null) throw new Error('Review requires TASK.md in the current worktree.');
   const previous = await readPreviousReview(worktree);
+  if (!independentVerification && (run.review?.independentVerification ||
+      /^## Independent verification[ \t]*\r?$/m.test(previous ?? ''))) {
+    throw new Error('Independent verification must be explicitly approved again for a review-only retry; prior review metadata is not execution authority.');
+  }
   if (previous !== null) {
     if (!again) throw new Error('REVIEW.md already exists; use /review --again to rerun the current diff.');
     const tracked = (await execute('git', ['ls-files', '--', 'REVIEW.md'], {
