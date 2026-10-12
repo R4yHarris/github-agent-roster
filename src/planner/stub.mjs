@@ -244,6 +244,7 @@ export async function planAsk(ask, {
         'passed through the app code under test; never sk-, ghp_, or github_pat_ shaped values, which the secret gate rejects. '
         : 'You have no tools in this draft-only planning context. ') +
       'Plan one software task. JSON shape: {"title":"Task title","acceptance_checks":["check"],"files_allowed":["path"]}. ' +
+      'Keep each text response within 16384 UTF-8 bytes. Return the plan without narration or repeated drafts. ' +
       'Use 1-8 acceptance checks in JSON or TASK.md; group related checks without dropping requirements. ' +
       'Each acceptance check must be at most 240 characters; for a long requirement write several shorter checks (up to 8) instead of one long one, without dropping requirements. ' +
       'A code task needs acceptance_checks including node --test exits 0 and files_allowed. ' +
@@ -505,8 +506,21 @@ export async function planAsk(ask, {
       }
       throw new Error('LLM planner did not return a JSON task plan');
     }
-    if (Buffer.byteLength(message.content, 'utf8') > 16_384) {
-      throw new Error('LLM planner response exceeds 16 KiB');
+    const responseBytes = Buffer.byteLength(message.content, 'utf8');
+    if (responseBytes > 16_384) {
+      const failure = `LLM planner response exceeds 16 KiB (limit 16384 UTF-8 bytes, got ${responseBytes})`;
+      if (criticFeedback && turn >= budget) {
+        throw new Error(`Planner turn budget (${budget}) exhausted: ${failure}`);
+      }
+      if (validationRepairUsed) {
+        if (criticFeedback) throw new Error(`Plan critic revision failed after one correction: ${failure}`);
+        return fallback(failure, turn);
+      }
+      validationRepairUsed = true;
+      messages.push({ role: 'user', content: `${failure}. Return only one concise required JSON task plan, ` +
+        'preserving every Original Ask outcome and the authorized files. No narration or repeated drafts. ' +
+        'The rejected response is omitted; do not truncate requirements to fit.' });
+      continue;
     }
     let failure;
     let plan;
