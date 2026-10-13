@@ -125,9 +125,17 @@ committed model/run and original bot author/committer; do not supply `--model`,
 `--message` or `--files`, or substitute current GHCP metadata for a completed
 seat. It rechecks local/remote/PR identity, reviewed policy and all required
 exact-head checks, including ruleset-only branch protections.
+The reviewed revision `0050ada7184d7ef167310ef25b4312a024069505`
+also requests repository-scoped **Administration read** for resume only, so
+legacy branch-protection requirements can be inspected. Normal publication
+and `--merge-when-green` alone retain their existing token scopes. A human
+must grant and accept Administration read on the App installation; approving
+the code change does not establish that GitHub accepted the permission.
 Missing or conflicting metadata authority, dirty state, real head drift,
-missing/merged PR or permission failure stops explicitly. HTTP 422 remains a
-Checks-permission stop, not permission to use another token or human fallback.
+missing/merged PR or permission failure stops explicitly. HTTP 403/422 while
+requesting the resume token stops without a reduced-scope retry; a Checks
+permission HTTP 422 is likewise a stop, not permission to use another token
+or human fallback.
 Merge remains separately authorized and conservative cleanup can report a
 confirmed remote merge with incomplete local worktree cleanup.
 

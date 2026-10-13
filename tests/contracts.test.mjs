@@ -9,7 +9,7 @@ import { parseConfig } from '../src/lib/config.mjs';
 import { runLoop } from '../src/runtime/loop.mjs';
 import { createTools } from '../src/runtime/tools.mjs';
 import { planStub } from '../src/planner/stub.mjs';
-import { parseArgs } from '../vendor/github-agent-contracts/scripts/agent-pr.mjs';
+import { buildInstallationPermissions, parseArgs } from '../vendor/github-agent-contracts/scripts/agent-pr.mjs';
 
 const config = parseConfig(readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8')
   .replace('base_url: ""', 'base_url: http://localhost:8000/v1').replace('model: ""', 'model: test-model'));
@@ -33,6 +33,18 @@ test('reviewed contracts exposes exact-head resume without replacing committed m
     ['--resume', head, '--files', 'README.md'],
     ['--resume', 'short-sha'],
   ]) assert.throws(() => parseArgs(args, {}), /resume/);
+});
+
+test('reviewed contracts adds explicit read-only inspection without widening default publication', () => {
+  assert.deepEqual(buildInstallationPermissions(), { contents: 'write', pull_requests: 'write' });
+  assert.deepEqual(buildInstallationPermissions({ readChecks: true }), {
+    contents: 'write', pull_requests: 'write', checks: 'read',
+  });
+  assert.deepEqual(buildInstallationPermissions({ readChecks: true, readAdministration: true }), {
+    contents: 'write', pull_requests: 'write', checks: 'read', administration: 'read',
+  });
+  assert.throws(() => buildInstallationPermissions({ additionalPermissions: { administration: 'write' } }),
+    /Unsupported additional installation permission/);
 });
 
 test('worktree initialization runs recursive submodule update at its root and verifies a declared publisher', async (t) => {
