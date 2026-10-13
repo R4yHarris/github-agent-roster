@@ -236,7 +236,8 @@ are not evidence of this author's or a future worker's actual identity.
 
 ## 8. Staged acceptance and bounded next implementation gate
 
-These are proposed checks, **not executed results**:
+These are gate definitions. Gate B's synthetic development evidence is recorded
+below; gates C/D remain unexecuted.
 
 | Gate | Bounded proof and stop condition |
 | --- | --- |
@@ -249,12 +250,54 @@ These are proposed checks, **not executed results**:
 | C: containment qualification | After separate approval, test a pinned real executable in the selected OS boundary with synthetic canary credentials and no private task data. Prove denied HOME/keychain/absolute executable/key-mount/IPC/egress paths and process-tree cleanup. Mocks are not this proof. |
 | D: authorized live smoke | Only after B/C review and explicit account/data/model/spend approval; one low-risk task, bounded attempt, independent review, no automatic publish. Onboarding/calibration and publication require their own authorization. |
 
-**Next gate requested, not granted:** approve gate B's two-file offline mock
-slice and its exact checks after independent review of this proposal. Keep
-gate C's platform/auth decision separate. Stop on any unsupported contract,
+Gate B's test-only follow-up is tracked as #611 after Ray's architecture and
+scoped-batch approvals and renewed delivery instruction. Keep gate C's
+platform/auth decision separate. Stop on any unsupported contract,
 missing proof or unresolved model attribution; do not use the offline packet's
 39 passing tests as new worker/isolation acceptance. No second runtime board,
 new issues, installs or live data transfer are necessary to decide gate B.
+
+### Gate B development evidence
+
+The test-only [worker helper](../tests/helpers/copilot-worker-offline.mjs) and
+[contract tests](../tests/copilot-worker-contract.test.mjs) simulate multiple
+inference events per task attempt, rather than treating idle as one inference.
+They have no production imports from Roster and do not launch an executable.
+They reuse scoped `createTools` reads and protected-path classification.
+
+The synthetic contract freezes caller data, binds Ask/task/base/scope/config
+anchors, bounds files/bytes/events/callbacks and JSON structure, and preflights
+file/deletion imports. Protected paths, path escapes, ambiguous Windows names,
+hardlinks/junctions, malformed/duplicate/oversize envelopes and candidate drift
+are refused. Logical-clock deadline, cancellation and revocation deny late
+callbacks/import/review; missing idle/exit/cleanup and synthetic cleanup errors
+remain blocked. A separate fixture host receipt is required for review
+eligibility. Requested/served models, complete/partial/zero/mixed usage units
+remain separate, and every mock result is nonpublishable, not a builtin seat
+or an AI-Run. The fetch tripwire recorded zero network attempts.
+
+Windows Node `v20.20.2` parent verification ran:
+
+```powershell
+& $node20 --test --test-reporter=tap `
+  tests\copilot-worker-contract.test.mjs `
+  tests\tools.absolute-path.test.mjs tests\tools.test.mjs
+```
+
+Result: **121 tests, 120 passed, zero failures, one explicit skip**,
+**13087.4816 ms**. The separate child reported 112 passing selected tests on
+Node `v20.19.5`; its selector is not equated to this parent selector and its
+actual authoring model remains unknown. Parent review added bounded cyclic,
+deep, oversized and high-node JSON refusal controls.
+
+These tests prove a proposed fixture protocol only. Empty frozen environment
+descriptors are not physical authentication isolation; injected event/exit
+flags are not real process or server shutdown. Synchronous fixture import
+does not defeat a concurrent filesystem attacker or prove atomic rollback
+after I/O failure. A synthetic host receipt is not independent live model
+review, and no passing mock authorizes publication. Gates C/D, actual supported
+CLI capability wiring, account/data/spend/dependency approval and #570's
+publication gate remain separate. No real worker adapter is delivered here.
 
 ## Sources and preparation record
 
