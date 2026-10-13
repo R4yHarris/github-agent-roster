@@ -84,3 +84,67 @@ presented as measured child model/usage. This fresh replay confirms public
 lifecycle-to-evaluator plumbing, default-off behavior and honest unknowns, not
 a live model comparison or measured held-out pilot. Parent #476 remains open
 for its separate acceptance and comparative-evidence obligations.
+
+## Paired cancellation controls
+
+[#605](https://github.com/R4yHarris/github-agent-roster/issues/605) adds two
+development fault scenarios to the same public integration test. Each runs
+both the omitted-option baseline and the `evidence_workspace: true` condition
+against one temporary repository, frozen Ask/checks, source revision and tool
+set. These author-created scenarios are **synthetic, not held out**.
+
+| Cancellation point | Observed fixture tests in both conditions | Delivery/review |
+| --- | --- | --- |
+| After a persisted README edit | unknown; no test process was started | cancelled; no review |
+| After passing fixture tests and checklist updates | pass; one actual `node --test` execution per condition | cancelled; no review |
+
+Both abort while a scripted HTTP response returns late write/test requests.
+The late requests cannot mutate the preserved edit, start another test,
+continue inference or reach the reviewer. The source repository remains
+unchanged; the issue worktree retains the exact planned authority and a
+failing cancellation RESULT with no fabricated REVIEW. For the opt-in run,
+the terminal continuation is cancelled, with acceptance entries pending and
+evidence references cleared, even when pre-cancellation tests passed. The
+baseline has no continuation capsule. Nested fixture test processes remove
+the inherited `NODE_TEST_CONTEXT` marker and must report one passing test,
+not merely exit successfully without running the fixture.
+
+The evaluator consumes the actual observed test outcomes, absent review and
+absent human acceptance. Passing tests do not turn a cancelled lifecycle
+into successful delivery. Each summary remains `pilot-incomplete`, with zero
+measured held-out task/fault cases and unknown usage, cost, energy, hardware
+and latency thresholds. No safety violation is reported by these controls;
+that is not a full safety certification. Publication is disabled and a
+publisher tripwire must remain uncalled; no live App publication permission
+or real model cancellation is tested.
+
+The reviewed implementation base for this slice is
+`b5ed130acb1857207096636d3b1346614de85794`, with contracts
+`fa48c244bc9b8ead5df927ec705ef41a39c56f68`. Windows Node `v20.20.2` ran the
+initial integration selector with **3/3** passing tests, no failures,
+cancellations or skips, in **36632.9257 ms**:
+
+```powershell
+& $node20 --test --test-reporter=tap tests\eve-pilot.integration.test.mjs
+```
+
+The final coupled Windows Node `v20.20.2` replay passed **38/38** tests,
+zero failures, cancellations or skips, in **114175.6498 ms**:
+
+```powershell
+& $node20 --test --test-reporter=tap `
+  tests\eve-pilot.integration.test.mjs tests\eve-pilot.test.mjs `
+  tests\builtin.replay.test.mjs tests\loop.acceptance.test.mjs
+```
+
+Two intermediate coupled attempts failed on harness summary assertions:
+fault cases are excluded from ordinary task-pair counts. The first expected
+one unknown task pair for a fault; the attempted correction then touched the
+existing ordinary-task assertion instead of the fault assertion. Both
+expectations are corrected in the final replay. No runtime evaluator or
+cancellation behavior was changed to make these tests pass.
+
+This is bounded development verification, not execution of the deferred
+campaign or acceptance of #476. Independently selected held-out cases,
+comparative measurements and genuine human acceptance remain outstanding;
+#477's expansion gate is unchanged.
