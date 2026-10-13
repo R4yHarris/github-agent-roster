@@ -1,8 +1,8 @@
 # Eve architecture and carry-forward audit
 
-Audit for #473 and #489, updated 2026-10-13. Current reviewed baseline: PR #606
-(`f75cfbe439da68e616ce4fe723164cc718524630`), with contracts pinned to reviewed
-`fa48c244bc9b8ead5df927ec705ef41a39c56f68`. Earlier verification records below
+Audit for #473 and #489, updated 2026-10-13. Current reviewed baseline: PR #612
+(`de6447dc5e62b7b338310d33f0fb2e0c7abca193`), with contracts pinned to reviewed
+`0050ada7184d7ef167310ef25b4312a024069505`. Earlier verification records below
 retain their original revisions and selectors. This is an implementation/evidence
 inventory, **not** human acceptance, a release claim, or a reset of failed runs.
 
@@ -42,7 +42,12 @@ general chatbot swarm, second queue or new runtime.
   and Roster #589 deliver explicit exact-head `--resume` consumption without a
   replacement commit, push or PR. The original App/model/run identity, exact
   remote and PR head, current policy and required checks are revalidated,
-  including ruleset-only protection. No vendor sources were rewritten here.
+  including ruleset-only protection. Reviewed
+  [R4yHarris/github-agent-contracts#14](https://github.com/R4yHarris/github-agent-contracts/pull/14)
+  adds Administration read only to resume token requests; #610 consumes that
+  reviewed dependency. Normal publication and merge-only token scopes remain
+  unchanged. An accepted installation grant is still required; code approval
+  cannot create it. No vendor sources were rewritten here.
 - **Pilot:** Ray explicitly accepted #474/#475. #590 exercises the real public
   baseline/opt-in lifecycle and paired evaluator with deterministic transport,
   actual fixture tests and honest unknowns. It is synthetic, not held out, and
@@ -50,7 +55,11 @@ general chatbot swarm, second queue or new runtime.
   after persisted edits and after actual passing fixture tests. Late returned
   tool requests cannot continue work; cancelled runs remain failing deliveries
   despite earlier green tests. These fault cases are also synthetic, not held
-  out. #476 remains open for its separate held-out and
+  out. #608 delivers the [independent preparation and freeze procedure](EVE_PILOT.md),
+  not selected cases or execution. The source-pool proposal on #476 is metadata
+  review only: public exposure and model contamination remain separate unknowns,
+  and ordinary bug fixes are not the adversarial-fault cohort.
+  #476 remains open for its separate held-out and
   comparative acceptance obligations; #477 remains gated. No 40-task/20-fault
   campaign or difficulty promotion is implied by these development controls.
 - **Other gaps:** #439's trusted base-checker workflow source remains
@@ -59,10 +68,46 @@ general chatbot swarm, second queue or new runtime.
   Copilot feasibility lane under #569, not an installed or approved provider.
   Its offline spike is independently reviewed and PR #596 has green required
   checks, but exact-head resume is blocked by Administration-read inspection.
-  The publisher does not request that permission: both a separately approved
-  upstream resume-only token-scope change and the human App/installation grant
-  are needed. No protection-check bypass or new permission is inferred.
-  #571-#573 retain their architecture, auth and live-call approval gates.
+  The reviewed publisher now requests that permission for resume, but the latest
+  read-only installation check still reports App `r4yharris-agent-coder` with
+  `administration: null`, `checks: read`, and token request HTTP 422
+  ("The permissions requested are not granted to this installation").
+  Ray's reported grant is retained as intent, not contradicted by a claim about
+  which installation was changed. No token was granted, original #596 commit
+  `784c04806ca06e75bf0b36af7b56cf388f49d0c4` remains unchanged, and no narrower
+  permission or human-credential fallback was attempted.
+- **Copilot architecture and offline contract:** #609 records the selected
+  [distinct external full-agent worker design](COPILOT_WORKER_DESIGN.md), not a
+  CLI-owned multi-call loop masquerading as one builtin inference. #612 closes
+  #611's test-only protocol slice: immutable task anchors, scoped callbacks and
+  artifact import guards, bounded JSON, logical cancellation/revocation,
+  honest unknown/mixed usage and a separate synthetic host review receipt.
+  All mock results remain nonpublishable, not builtin seats or AI-Runs.
+  #571 stays open: real capability wiring, physical credential isolation,
+  process/server shutdown, inference authentication and hard-spend proof are
+  not established. The physical boundary choice remains unapproved.
+  #572/#573 retain dependency/auth/data/account/model/spend and live-call gates.
+
+At exact #612 head `15376b6310cc65a87449f5135c913d71885e7046`, full Linux
+Node20 CI passed **2049/2052**, zero failures, with **three skips**, in
+**72115.085088 ms**. Windows Node `v20.20.2` selected worker/path/tool fixtures
+passed **120/121**, zero failures, with one existing symlink skip, in
+**13087.4816 ms**. These are regressions and synthetic protocol evidence, not
+physical containment, live Copilot integration or measured model throughput.
+
+Authorized offline acceptance subsets retain their exact scope:
+
+| Candidate | Selected evidence | Result | Still unproven |
+| --- | --- | --- | --- |
+| `0652c2c` | RT-11 checkpoint/interruption fixtures | 39/39, zero skips, 59978.0021 ms | Full operator resume and prerequisite acceptance |
+| `f3bb779` | RT-13/14 reviewer/repair/publication fixtures | 89/90, zero failures, one skip, 267590.3935 ms | Full operator acceptance and skipped opt-in proof |
+| `f3bb779` | RT-06 scope/admission fixtures | 23/23, zero skips, 7233.8903 ms | Full staffing/heartbeat, distributed admission or hardware throughput |
+| `de6447d` | RT-22/23 lock/provenance/retention/isolation fixtures | 100/100, zero skips, 2017.6672 ms | Actual owned-worker interruption, full reclone/migration and human-approved memory promotion |
+
+The last selector contains 47 top-level tests plus nested tests, not 100
+operator scenarios. Dead-owner cases use injected liveness; they do not prove
+a killed-worker recovery. No Test card is marked Pass/Done by these subsets,
+no full campaign candidate is frozen and no human AI-Eval is fabricated.
 
 At exact #592 head `cd937349a3be32ee4278dac3adeb99090912a20d`, required
 Linux Node20 CI passed **1947/1950** tests, zero failures, with **three explicit
