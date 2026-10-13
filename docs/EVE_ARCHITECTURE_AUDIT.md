@@ -1,7 +1,7 @@
 # Eve architecture and carry-forward audit
 
-Audit for #473 and #489, updated 2026-10-12. Current reviewed baseline: PR #599
-(`2994921928afbee8600a8c20527964ac6f05be07`), with contracts pinned to reviewed
+Audit for #473 and #489, updated 2026-10-13. Current reviewed baseline: PR #606
+(`f75cfbe439da68e616ce4fe723164cc718524630`), with contracts pinned to reviewed
 `fa48c244bc9b8ead5df927ec705ef41a39c56f68`. Earlier verification records below
 retain their original revisions and selectors. This is an implementation/evidence
 inventory, **not** human acceptance, a release claim, or a reset of failed runs.
@@ -46,13 +46,22 @@ general chatbot swarm, second queue or new runtime.
 - **Pilot:** Ray explicitly accepted #474/#475. #590 exercises the real public
   baseline/opt-in lifecycle and paired evaluator with deterministic transport,
   actual fixture tests and honest unknowns. It is synthetic, not held out, and
-  reports `pilot-incomplete`. #476 remains open for its separate held-out and
+  reports `pilot-incomplete`. #606 adds paired public cancellation controls
+  after persisted edits and after actual passing fixture tests. Late returned
+  tool requests cannot continue work; cancelled runs remain failing deliveries
+  despite earlier green tests. These fault cases are also synthetic, not held
+  out. #476 remains open for its separate held-out and
   comparative acceptance obligations; #477 remains gated. No 40-task/20-fault
   campaign or difficulty promotion is implied by these development controls.
 - **Other gaps:** #439's trusted base-checker workflow source remains
   maintainer-owned carry-forward. Cost requires authoritative returned units or
   human-owned rates; unknown cost remains unknown. #570 is an offline-only
   Copilot feasibility lane under #569, not an installed or approved provider.
+  Its offline spike is independently reviewed and PR #596 has green required
+  checks, but exact-head resume is blocked by Administration-read inspection.
+  The publisher does not request that permission: both a separately approved
+  upstream resume-only token-scope change and the human App/installation grant
+  are needed. No protection-check bypass or new permission is inferred.
   #571-#573 retain their architecture, auth and live-call approval gates.
 
 At exact #592 head `cd937349a3be32ee4278dac3adeb99090912a20d`, required
@@ -143,8 +152,54 @@ counterexample discovery. Genuine uncovered defects retain their veto.
 Windows Node20 coupled reviewer/public-Ask/review-only/receipt/Docker controls
 passed **99/99**, zero failures/skips, **80337.0289 ms**, including actual
 Docker and root-versus-package-cwd executable regressions.
-Parent #581 remains open; full pilot, maintainer gates and difficulty
+This historical verification preceded #581's exact-scope disposition below;
+full pilot, maintainer gates and difficulty
 promotion remain separate. Spec trace: **5.4, 5.5, 5.6**.
+
+### Current calibration, guidance and scope disposition
+
+The next fresh M3 task, `local-aebe5a0519f9b7ee`, ran at `8a740e1` and
+was cancelled by the external ten-minute harness after **600753 ms**. Saved
+configuration requested `qwen3.8-27b`; actual planner/coder responses served
+`glm-5.3-flash`. The coder reached 33 tool-loop turns with four of six checks
+done, one active and one pending. Latest generated tests passed **12/12**, but
+the reviewer never started. A separate read-only Docker diagnostic rejected
+the unchanged product at **6/18 parser and 6/18 CLI**, because logical row
+indexes lost physical line positions after embedded newlines. #602 records a
+completed **failed** calibration, not an accepted delivery. Returned coder
+context/output counts are 26031/55, not an aggregate bill; cost stays unknown.
+
+#604 explicitly guides existing atomic checklist batching: at most one
+active item, individual current evidence for each completed check, shared
+test observations only where they cover each obligation. Deterministic
+controls complete three checks in two model requests while retaining two
+test executions, including mandatory final verification. No test cache,
+deadline increase or reviewer bypass was added. Interaction/physical-position
+guidance is retained in the engineering principal; this is not evidence of
+live-model obedience or speedup. No fresh whole-M3 run followed that change.
+
+#581 is **closed / Done for its original acceptance scope**: protected
+independent execution, retained negative and positive controls, fail-closed
+receipts and honestly reported fresh calibration. Its original obligations
+did not require general autonomous counterexample discovery or guaranteed
+consumer success. Earlier prose broadened that slice incorrectly; its closure
+does not accept failed consumer runs. General reliability/efficiency remain
+under #473/#489, with held-out pilot acceptance under #476 and #477 gated.
+
+#606's exact-head Linux Node20 CI reports **1967 total, 1964 passed, zero
+failures and three explicit Docker opt-in skips**, **74012.703141 ms**.
+Windows Node `v20.20.2` coupled public lifecycle/evaluator/replay/continuation
+controls passed **38/38**, zero failures/skips, **114175.6498 ms**. Initial
+harness task-versus-fault pair-count assertion failures and their correction
+are retained in [EVE_INTEGRATION](EVE_INTEGRATION.md). These are distinct
+selectors/environments, not a controlled timing comparison.
+
+Difficulty evidence remains development-only: retained easy E1–E6 deliveries
+all reviewed pass (approximately 35–127 seconds at `04198f4`, actual Qwen);
+latest retained M1/M2 reviewed passes took approximately 511/455 seconds at
+`fa58240`, actual `glm-5.3-flash`. M3 remains inconsistent as recorded above.
+No completed levels 3–5 acceptance corpus, genuine human difficulty promotion,
+full deferred campaign or complete Eve release is established.
 
 ## Architecture against the code
 
