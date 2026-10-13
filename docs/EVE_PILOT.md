@@ -218,3 +218,87 @@ proof. It cannot verify a frozen SHA, real test execution, held-out provenance,
 human authentication or completeness of incident reporting. The bundled fixture
 is synthetic: its improvement, numbers and violation are **only test examples**,
 and neither a measured baseline nor a completed pilot/human evaluation.
+
+## Independent pilot preparation and freeze
+
+Ray approved preparation on 2026-10-13 for [#476](https://github.com/R4yHarris/github-agent-roster/issues/476).
+Preparation is distinct from final corpus approval, execution, measured outcomes
+and human acceptance. This procedure traces to FEATURE_SPEC sections 5.4, 5.5,
+5.6 and 5.8, honoring sections 3 and 7. It uses existing manifest/evaluator
+interfaces; no new runtime, task board or automatic approval is introduced.
+
+### Review package
+
+Before execution, assemble:
+
+| Artifact | Required preparation evidence |
+| --- | --- |
+| Source inventory | Origin, source revision, access/license constraints and selector; distinguish human-origin tasks from generated development examples |
+| Split ledger | Optimization inventory, related issue/patch/defect groups, duplicate checks and known exposure to prompts, skills, memory, fixtures and evaluator tuning |
+| Case inputs | Exact preserved Ask, allowed files, checks, reproducible base revision, task class/difficulty and protected verifier inputs where explicitly approved |
+| Manifest | Two matched conditions, frozen bundles/controls, unique task/fault IDs and explicit held-out/synthetic declarations |
+| Approval ledger | Protocol, source selection, thresholds, model/environment, trials, finite budgets, stopping rules and execution approver |
+| Digest inventory | Exact input/configuration bytes, their SHA-256 digests, encoding/newline convention and inventory version |
+
+Keep provenance and approval ledgers separate from the evaluator manifest.
+Schema validation alone cannot authenticate their assertions. Unapproved or
+missing fields remain pending, not successful defaults. Do not include secrets,
+private transcript bodies or expected answers in a public review package.
+
+### Candidate sources and independence
+
+Prefer a selector with no exposure to optimization examples or measured outputs.
+Potential pools are separately supplied human maintenance requests, documentation
+and feature asks, historical defects with reproducible bases, and independently
+curated fault cases. Their availability, permitted use, provenance, suitability
+and independence must be checked before selection; these are candidate source
+categories, not an approved or populated dataset.
+
+Do not copy benchmark solutions or assume a public benchmark is unseen by a
+model. Independence here concerns the Roster optimization process; pretrained
+exposure remains a limitation unless independently established. A separate
+child writing new cases does not itself establish held-out provenance.
+
+Exclude observed development tasks, their answer/oracle variants and related
+defect families from the held-out pool. Group duplicates and near-duplicates
+before splitting. Inspect issue/patch lineage and leakage into prompts, skills,
+memory/retrieval, test fixtures and evaluator logic. If independence cannot be
+shown, classify the case as development rather than setting `held_out: true`.
+Never replace a failed case after seeing its outcome without preserving the
+original and declaring a new experimental package.
+
+### Freeze and execution boundary
+
+1. Review the source/split ledger and the 40-task/20-fault class coverage.
+   Repeated trials do not supply missing distinct cases.
+2. Declare the deliberate baseline/Eve bundle difference. Freeze model/profile,
+   sampler, tool order, test budgets, base revisions and source-evidence identity.
+   Include host/model artifact/quantization/template identities when applicable.
+3. Declare thresholds, finite task/request/test budgets, trial count and stop
+   conditions before results exist. No dollar, credit or energy ceiling is
+   inferred from hardware or unreturned provider fields.
+4. Validate the manifest through `validatePilotManifest`; validate provenance,
+   reproducible bases and host-approved verifier authority separately.
+5. Specify deterministic JSON serialization: recursively sorted object keys,
+   preserved array order, UTF-8 and an explicit newline policy. Hash exact
+   serialized manifest bytes and every referenced artifact. Retain both the
+   bytes and digest inventory; a SHA written in a manifest is not a freeze proof.
+6. Obtain explicit final package and execution approval. Independent digest
+   review is recommended, not an invented requirement for two human operators.
+7. Recompute input digests before each authorized paired run. Stop on drift,
+   leakage, unapproved authority, unavailable bases or a requested/served model
+   mismatch. Do not silently substitute an endpoint/model or mutate the package.
+
+Run each pair in isolated worktrees with matched starting inputs and memory
+rules; one condition must not consume the other's learned outputs. Retain every
+attempt, cancellation, failed check and missing review. Passing tests before
+cancellation remain test evidence, not successful delivery. Evaluate faults
+separately and keep human acceptance separate from scripted/model verdicts.
+Known zero measurements are not unknown; absent values remain null.
+
+Only demonstrably isolated unaffected strata may remain comparable after
+invalidation. Preserve raw observations and reasons. `protocol-covered` and
+`no-reported-violations` are descriptive labels, not an overall release gate.
+The final comparative interpretation and #476 acceptance remain separate from
+preparation; [#477](https://github.com/R4yHarris/github-agent-roster/issues/477)
+does not unlock from publishing this procedure.
