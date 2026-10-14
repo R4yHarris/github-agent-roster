@@ -47,14 +47,26 @@ async function outsideGit(directory) {
 // ACL hardening spawns PowerShell/icacls on Windows; once per file identity per process keeps per-request key
 // lookups cheap. The identity includes inode and birth time, so a recreated path is hardened again.
 const securedPaths = new Set();
+const pendingHardening = new Map();
 const identity = (path, stat) => `${path}\0${stat.ino}\0${stat.birthtimeMs}`;
+
+async function hardenOnce(path, stat, operation) {
+  const key = identity(path, stat);
+  if (securedPaths.has(key)) return;
+  let pending = pendingHardening.get(key);
+  if (!pending) {
+    pending = operation().then(() => { securedPaths.add(key); })
+      .finally(() => { pendingHardening.delete(key); });
+    pendingHardening.set(key, pending);
+  }
+  await pending;
+}
 
 async function secureDirectory(directory, stat) {
   if (process.platform !== 'win32') {
     await fs.chmod(directory, 0o700);
     return;
   }
-  if (securedPaths.has(identity(directory, stat))) return;
   // Node's chmod does not enforce owner-only access on Windows.
   const script = [
     "$ErrorActionPreference = 'Stop'",
@@ -66,12 +78,11 @@ async function secureDirectory(directory, stat) {
     '$acl.AddAccessRule($rule)',
     '[System.IO.Directory]::SetAccessControl($env:ROSTER_VAULT_DIRECTORY, $acl)',
   ].join('; ');
-  await execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+  await hardenOnce(directory, stat, () => execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
     env: { ...process.env, ROSTER_VAULT_DIRECTORY: directory },
     windowsHide: true,
     timeout: 10_000,
-  });
-  securedPaths.add(identity(directory, stat));
+  }));
 }
 
 export function createFileVault({ directory = join(homedir(), '.roster', 'vault') } = {}) {
@@ -108,10 +119,8 @@ export function createFileVault({ directory = join(homedir(), '.roster', 'vault'
       const opened = await file.stat();
       if (!opened.isFile()) throw new VaultError('Vault files must be regular files.');
       if (process.platform === 'win32') {
-        if (!securedPaths.has(identity(path, opened))) {
-          await execute('icacls.exe', [path, '/reset', '/Q'], { windowsHide: true, timeout: 10_000 });
-          securedPaths.add(identity(path, opened));
-        }
+        await hardenOnce(path, opened, () =>
+          execute('icacls.exe', [path, '/reset', '/Q'], { windowsHide: true, timeout: 10_000 }));
       } else {
         await file.chmod(0o600);
       }

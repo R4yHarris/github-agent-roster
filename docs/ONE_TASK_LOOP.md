@@ -162,6 +162,12 @@ never starts. The original 30-second test deadline remains unchanged. A passing
 controlled run is not proof of timing reliability on a contended Windows host
 (FEATURE_SPEC §5.4, §5.8).
 
+Concurrent Windows vault lookups share an in-flight ACL-hardening operation
+for the same file identity. Every waiter must observe successful hardening
+before reading; a failure rejects all waiters and a later lookup retries.
+Recreated paths are hardened again. This avoids redundant PowerShell/icacls
+launches without weakening owner-only storage checks (FEATURE_SPEC §5.8).
+
 Manual handoff remains available explicitly:
 
 `runIssue(issueNumber)` in `src/lib/issue.mjs` implements
