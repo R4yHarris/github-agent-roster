@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 import { PassThrough } from 'node:stream';
 import { setTimeout as wait } from 'node:timers/promises';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { answerRepositoryQuestion, repositoryQuestionText } from '../src/lib/repository-question.mjs';
 import { submitAsk, formatAsk } from '../src/lib/ask.mjs';
 import { parseConfig } from '../src/lib/config.mjs';
@@ -114,14 +114,42 @@ test('directory grant supplies public excerpts only and marks omitted lines unkn
 
 test('real CLI process restart gives same offline source answer without GitHub or state', async (t) => {
   const options = fixture(t);
+  execFileSync('git', ['init', '-q', options.cwd], { stdio: 'pipe' });
+  mkdirSync(path.join(options.cwd, '.roster'));
+  const configPath = path.join(options.cwd, '.roster', 'config.yml');
+  const offlineConfig = readFileSync(path.join(sourceRoot, 'roster.config.example.yml'), 'utf8');
+  writeFileSync(configPath, offlineConfig);
+  const preload = path.join(options.cwd, 'deny-requests.mjs');
+  writeFileSync(preload, "import child from 'node:child_process';\n" +
+    "import fs from 'node:fs';\n" +
+    "import path from 'node:path';\n" +
+    "import { syncBuiltinESMExports } from 'node:module';\n" +
+    `const installedConfig = ${JSON.stringify(path.join(sourceRoot, '.roster', 'config.yml'))};\n` +
+    "const read = fs.readFileSync;\n" +
+    "fs.readFileSync = function(file, ...args) {\n" +
+    "  if (typeof file === 'string' && path.resolve(file) === installedConfig) throw new Error('Offline question must not read installed model configuration');\n" +
+    "  return read.call(this, file, ...args);\n" +
+    "};\n" +
+    "globalThis.fetch = () => { throw new Error('Offline question must not request a model'); };\n" +
+    "for (const name of ['execFile', 'execFileSync', 'spawn', 'spawnSync']) {\n" +
+    "  const original = child[name];\n" +
+    "  child[name] = function(program, ...args) {\n" +
+    "    if (/^(?:.*[\\\\/])?gh(?:\\.exe)?$/i.test(program)) throw new Error('Offline question must not request GitHub');\n" +
+    "    return original.call(this, program, ...args);\n" +
+    "  };\n" +
+    "}\nsyncBuiltinESMExports();\n");
+  const before = readdirSync(options.cwd).sort();
   const env = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, USERPROFILE: process.env.USERPROFILE };
   for (const command of ['question', 'ask', 'question']) {
-    const result = spawnSync(process.execPath, [path.join(sourceRoot, 'src', 'cli.mjs'), command, ...(command === 'question' ? ['--files', 'src/api.mjs', '--', 'How does this work?'] : [question()])],
+    const result = spawnSync(process.execPath, ['--import', pathToFileURL(preload).href,
+      path.join(sourceRoot, 'src', 'cli.mjs'), command, ...(command === 'question' ? ['--files', 'src/api.mjs', '--', 'How does this work?'] : [question()])],
       { cwd: options.cwd, env, encoding: 'utf8', timeout: 30000 });
     assert.equal(result.status, 0, result.stderr + result.stdout);
     assert.match(result.stdout, /1: export const value = 42/);
   }
-  assert.deepEqual(readdirSync(options.cwd), ['src']);
+  assert.deepEqual(readdirSync(options.cwd).sort(), before);
+  assert.deepEqual(readdirSync(path.join(options.cwd, '.roster')), ['config.yml']);
+  assert.equal(readFileSync(configPath, 'utf8'), offlineConfig);
 });
 
 test('fresh shell explicit/natural questions read sources without invoking seats; stop cancels response', async (t) => {
