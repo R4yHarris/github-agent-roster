@@ -103,6 +103,71 @@ Do not run onboarding with `sudo` to work around global-bin PATH setup.
 
 ## Wizard steps
 
+### Optional Copilot offline diagnostics
+
+Copilot is not an enabled provider. The independent diagnostic path for #572
+does not satisfy #571's production runtime/capability or auth-mode gates.
+It implements spec [5.2](FEATURE_SPEC.md#52-roster-and-staffing),
+[5.7](FEATURE_SPEC.md#57-human-interface) and
+[5.8](FEATURE_SPEC.md#58-operate-it), preserving sections 3 and 7.
+The [worker design](COPILOT_WORKER_DESIGN.md) remains the gate definition,
+not proof that a runtime is installed, qualified or entitled.
+
+```powershell
+roster doctor --copilot
+roster doctor --copilot --opt-in --runtime "C:\approved-runtime\copilot.exe" --model exact-requested-model
+```
+
+In the shell use `/doctor copilot` with the same optional flags; single-quote
+Windows paths containing spaces (for example, `--runtime 'C:\approved runtime\copilot.exe'`).
+No opt-in
+means no runtime inspection. `--opt-in` consents **only to offline diagnostics
+for that invocation**, not execution, account access, model selection or a
+saved setting. The optional runtime path is inspected for regular-file metadata
+only; no PATH discovery, version command or external CLI is run. A regular file
+does not prove executable identity/version, platform support or containment.
+Explicit UNC/network paths, device namespaces and URI-like paths are rejected
+before any filesystem inspection, even without opt-in, as are all ASCII C0
+control characters and DEL. Local relative/absolute paths retain literal
+internal spaces. Lexical validation cannot prove that an operator-selected
+mounted drive or filesystem is local; the operator must choose a genuinely
+local path. Roster does not probe network mounts to establish locality.
+`--model` validates an exact requested ID without normalization, saving it,
+probing it or assuming entitlement. Without provider contact, actual account,
+auth source and model availability remain unverified. Copilot execution is
+always reported blocked; CLI exit status is 1, including in a terminal.
+Non-TTY reporting works without prompts or login and explains the separate
+human terminal requirement. Invalid options exit with an explicit error.
+
+Diagnostics never read private config, fleet settings, App key contents,
+tokens, keychain/credential stores or `gh` credentials; they do not make network
+requests, send model prompts, install dependencies or launch a process.
+Existing doctor/warm, local onboarding and local/stub defaults are unchanged.
+Signed-out, expired/revoked, policy/permission failures and unavailable models
+have declared-state offline fixture coverage, not live account evidence.
+
+Supported CLI environment tokens take precedence (`COPILOT_GITHUB_TOKEN`,
+`GH_TOKEN`, `GITHUB_TOKEN`), followed by stored CLI OAuth and possible `gh`
+fallback. These are risks to isolate, not authentication approval. Inference
+must never inherit ambient human login or publishing `GITHUB_APP_*` credentials.
+A clean child environment alone does not prove HOME/keychain isolation.
+After independent capability/account approval, the human may consult the
+[official authentication/logout guide](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/authenticate-copilot-cli)
+in their own terminal. Roster does not log in, collect codes, extract/display/
+copy/delete credentials or start logout. Logout alone does not remove an
+environment-token override; the human must review its source separately.
+The [official install guide](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli)
+describes separate installation; npm CLI requires Node 22+, whereas Roster
+remains Node 20 ESM with zero runtime dependencies.
+
+License, account/model policy, external repository-data disclosure, retention,
+finite budget and spend authorization are unknown. No live setup, provider
+enablement or inference follows from a successful metadata check. Full #572
+remains open until #571 and explicit auth/data/account/model/spend gates permit
+production setup.
+
+### Existing local wizard
+
 1. Run `roster onboard` in a terminal. The wizard displays the platform.
    Non-TTY input or output prints `roster onboard needs a terminal` and
    exits 2 without writing files.

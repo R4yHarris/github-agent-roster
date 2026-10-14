@@ -76,7 +76,7 @@ export const commands = Object.freeze([
     ['--difficulty 1-5: required task capacity']),
   page('statusbar', 'Settings', '/statusbar on|off', 'Toggle both tray bars for this process.', '/statusbar off'),
   page('debug', 'Settings', '/debug on|off|status', 'Toggle or show metadata-only debug logging for this process.', '/debug status'),
-  page('doctor', 'Settings', '/doctor [warm]', 'Run existing offline prerequisite checks or a read-only host/status warm probe.', '/doctor warm'),
+  page('doctor', 'Settings', '/doctor [warm|copilot [--opt-in] [--runtime PATH] [--model ID]]', 'Run existing prerequisite checks, a read-only warm probe, or blocked offline Copilot diagnostics; never enables a worker or starts login.', '/doctor copilot --opt-in'),
   page('config', 'Settings', '/config [path|set KEY VALUE]',
     'Show redacted private config or its path. Set only effort/context budget; statusbar/debug are process-only. Endpoints, PEM paths and policy are refused.',
     '/config set context.budget 12000'),

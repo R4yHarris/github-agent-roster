@@ -13,6 +13,7 @@ const help = `Usage:
   roster --help
   roster question TEXT       Read-only scoped repository question; never starts a task
   roster doctor [--warm]
+  roster doctor --copilot [--opt-in] [--runtime PATH] [--model ID]
   roster init
   roster onboard [--discover]
   roster fleet list
@@ -46,6 +47,7 @@ const help = `Usage:
 Ask creates a GitHub issue when gh is available; otherwise it saves a local draft.
 Doctor checks local prerequisites without contacting GitHub or printing App env values.
 Doctor --warm additionally probes the configured LLM /models with its request timeout.
+Doctor --copilot reports offline blockers only; --opt-in never enables or launches a worker.
 Init copies review-only examples; it never overwrites agent-policy.yml.
 Onboard configures a real vLLM model and local permissions in an interactive terminal.
 Run classifies clarify | slice | feature | initiative before seats.
@@ -128,6 +130,13 @@ async function main(args) {
     });
     process.stdout.write(formatAsk(result));
   } else if (args[0] === 'doctor') {
+    if (args[1] === '--copilot') {
+      const { checkCopilotDoctor, formatCopilotDoctor, parseCopilotDoctorArgs } = await import('./lib/copilot-doctor.mjs');
+      const result = checkCopilotDoctor(parseCopilotDoctorArgs(args.slice(2)));
+      process.stdout.write(formatCopilotDoctor(result));
+      process.exitCode = 1;
+      return;
+    }
     const { checkDoctor, formatDoctor, warmDoctor } = await import('./lib/doctor.mjs');
     if (args.length > 2 || args.length === 2 && args[1] !== '--warm') {
       throw new TypeError('Use roster doctor [--warm].');
