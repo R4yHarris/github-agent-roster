@@ -3,6 +3,13 @@
 Tests use only Node's built-in `node --test` runner (Node 20+), with no API key,
 model endpoint, or runtime package.
 
+Offline CLI fixtures initialize their own consumer repository and explicit
+blank-endpoint configuration. Clearing environment variables alone does not
+make a subprocess offline: the installed checkout may contain a private live
+configuration. Repository-question restart tests deny model and GitHub requests
+and verify that their existing configuration and directory contents stay
+unchanged (FEATURE_SPEC §5.7, §5.8).
+
 ## Running
 
 ```sh
