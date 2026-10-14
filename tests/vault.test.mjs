@@ -89,6 +89,67 @@ test('concurrent first writes share one complete key, including case-distinct na
   assert.equal(readdirSync(directory).length, names.length + 1);
 });
 
+function hardeningProbe(directory, failFirst = false) {
+  const source = `
+    import child from 'node:child_process';
+    import { syncBuiltinESMExports } from 'node:module';
+    import { promisify } from 'node:util';
+    import { rm, mkdir } from 'node:fs/promises';
+    import assert from 'node:assert/strict';
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    let calls = 0;
+    let settled = 0;
+    child.execFile = (program, args, options, callback) => {
+      assert.equal(program, 'powershell.exe');
+      const attempt = ++calls;
+      setTimeout(() => {
+        settled++;
+        callback(${failFirst} && attempt === 1 ? new Error('test hardening failure') : null, '', '');
+      }, 20);
+      return { stdin: { end() {} } };
+    };
+    child.execFile[promisify.custom] = (program, args, options) => new Promise((resolve, reject) =>
+      child.execFile(program, args, options, (error, stdout, stderr) =>
+        error ? reject(error) : resolve({ stdout, stderr })));
+    syncBuiltinESMExports();
+    const { createFileVault } = await import(${JSON.stringify(new URL('../src/vault/file.mjs', import.meta.url).href)});
+    const directory = ${JSON.stringify(directory)};
+    const read = () => createFileVault({ directory }).get('MISSING');
+    const results = await Promise.allSettled(Array.from({ length: 8 }, read));
+    assert.equal(calls, 1, 'concurrent callers must share one hardening operation');
+    assert.equal(settled, 1, 'no caller may proceed before hardening settles');
+    if (${failFirst}) {
+      assert.ok(results.every(({ status }) => status === 'rejected'));
+      assert.equal(await read(), undefined, 'failed hardening must be retried');
+      assert.equal(calls, 2);
+    } else {
+      assert.ok(results.every(({ status, value }) => status === 'fulfilled' && value === undefined));
+      assert.equal(await read(), undefined);
+      assert.equal(calls, 1, 'successful hardening stays cached for this identity');
+      await rm(directory, { recursive: true });
+      await mkdir(directory);
+      assert.equal(await read(), undefined);
+      assert.equal(calls, 2, 'a recreated directory must be hardened again');
+    }
+    console.log('hardening invariant passed');
+  `;
+  return execFileSync(process.execPath, ['--input-type=module', '-e', source], {
+    encoding: 'utf8', timeout: 10_000,
+  }).trim();
+}
+
+test('concurrent Windows reads await one hardening operation per directory identity', (t) => {
+  const { directory } = fixture(t);
+  mkdirSync(directory);
+  assert.equal(hardeningProbe(directory), 'hardening invariant passed');
+});
+
+test('failed shared Windows hardening rejects all waiters and permits an explicit retry', (t) => {
+  const { directory } = fixture(t);
+  mkdirSync(directory);
+  assert.equal(hardeningProbe(directory, true), 'hardening invariant passed');
+});
+
 test('vault directories and files have owner-only access', async (t) => {
   const { directory, vault } = fixture(t);
   await vault.set('TOKEN', secret);
