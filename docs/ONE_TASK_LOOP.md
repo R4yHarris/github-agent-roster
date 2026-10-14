@@ -168,6 +168,11 @@ before reading; a failure rejects all waiters and a later lookup retries.
 Recreated paths are hardened again. This avoids redundant PowerShell/icacls
 launches without weakening owner-only storage checks (FEATURE_SPEC §5.8).
 
+Repository identity reads the common directory and origin concurrently.
+Both checks must finish successfully before an identity is returned; unreadable
+common metadata still takes diagnostic precedence. No identity is cached across
+lookups, so changing an origin remains observable (FEATURE_SPEC §5.8).
+
 Manual handoff remains available explicitly:
 
 `runIssue(issueNumber)` in `src/lib/issue.mjs` implements
