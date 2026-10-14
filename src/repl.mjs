@@ -38,6 +38,7 @@ import { contextMaxForModel } from './llm/window.mjs';
 import { splitArguments } from './lib/arguments.mjs';
 import { formatIssueSummary, listOpenIssues, readDiffNames } from './lib/board.mjs';
 import { checkDoctor, formatDoctor, warmDoctor } from './lib/doctor.mjs';
+import { checkCopilotDoctor, formatCopilotDoctor, parseCopilotDoctorArgs } from './lib/copilot-doctor.mjs';
 import { configSetting, privateConfigPath, publicConfig } from './shell/settings.mjs';
 import { parseShellEvaluationArgs } from './shell/evaluation.mjs';
 import { listCheckpoints, rewindCheckpoint, restoreVerifiedCheckpoint } from './lib/checkpoints.mjs';
@@ -118,6 +119,7 @@ const defaultServices = {
   getFleetProfile, loadFleet, withFleetProfile, runFleet, probeModelDetails,
   formatIssueSummary, listOpenIssues, readDiffNames,
   checkDoctor, formatDoctor, warmDoctor, privateConfigPath, publicConfig,
+  checkCopilotDoctor, formatCopilotDoctor,
   listCheckpoints, rewindCheckpoint, restoreVerifiedCheckpoint, readPlannerTask,
   listLocalRuns, readLocalRun, recapRun,
   askSideQuestion, answerRepositoryQuestion,
@@ -1126,12 +1128,20 @@ export function createDispatcher({
         return true;
       }
       case 'doctor': {
+        const words = splitArguments(args);
+        if (words[0] === 'copilot') {
+          const options = parseCopilotDoctorArgs(words.slice(1));
+          const result = await api.checkCopilotDoctor({ ...options,
+            isTTY: Boolean(input.isTTY && output.isTTY) });
+          safeWrite(api.formatCopilotDoctor(result));
+          return true;
+        }
         if (!args) {
           const result = await api.checkDoctor({ cwd: currentRoot(), installationRoot: repoRoot, env });
           safeWrite(api.formatDoctor(result));
           return true;
         }
-        if (args !== 'warm') throw new TypeError('Use /doctor or /doctor warm.');
+        if (args !== 'warm') throw new TypeError('Use /doctor, /doctor warm, or /doctor copilot [--opt-in] [--runtime PATH] [--model ID].');
         if (state.controller !== null) throw new Error('A seat is already running; cancel it before warming.');
         const controller = new AbortController();
         state.controller = controller;

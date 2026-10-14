@@ -140,3 +140,39 @@ test('doctor uses the existing checks and warm prints only host/status, not its 
   assert.equal(shell.text, 'Warm probe: host=localhost:8000 status=200\n');
   assert.doesNotMatch(shell.text, /PRIVATE_WARM|secret-app-marker|timeout|elapsed/);
 });
+
+test('shell Copilot diagnostics preserve local defaults and saved config without probing or enabling', async (t) => {
+  const shell = fixture(t, example, { GITHUB_APP_ID: 'secret-app-marker', GH_TOKEN: 'secret-human-marker' }, {
+    checkDoctor: () => assert.fail('Copilot diagnostics must not inspect App/config prerequisites'),
+    warmDoctor: () => assert.fail('Copilot diagnostics must not probe a model'),
+  });
+  const before = readFileSync(shell.file, 'utf8');
+  const active = shell.state.config;
+  await shell.dispatch('/doctor copilot');
+  assert.match(shell.text, /Copilot remains off/);
+  shell.reset();
+  await shell.dispatch('/doctor copilot --opt-in --model exact-model');
+  assert.match(shell.text, /Copilot offline diagnostics: BLOCKED/);
+  assert.match(shell.text, /Unqualified: #571/);
+  assert.match(shell.text, /Model availability and entitlement are unverified/);
+  assert.doesNotMatch(shell.text, /secret-app-marker|secret-human-marker/);
+  assert.equal(shell.state.config, active);
+  assert.equal(readFileSync(shell.file, 'utf8'), before);
+  assert.match(formatHelp('doctor'), /copilot.*--opt-in/);
+  await assert.rejects(shell.dispatch('/doctor copilot --login'), /Use roster doctor --copilot/);
+});
+
+test('shell doctor uses shared parsing for quoted runtime paths and explicit diagnostic consent', async (t) => {
+  let received;
+  const shell = fixture(t, example, {}, {
+    checkCopilotDoctor(options) {
+      received = options;
+      return { fixture: true };
+    },
+    formatCopilotDoctor: () => 'BLOCKED fixture\n',
+  });
+  await shell.dispatch("/doctor copilot --opt-in --runtime 'C:\\fixture path\\copilot.exe' --model exact-model");
+  assert.deepEqual(received, { optIn: true, runtimePath: 'C:\\fixture path\\copilot.exe',
+    model: 'exact-model', isTTY: false });
+  assert.equal(shell.text, 'BLOCKED fixture\n');
+});
