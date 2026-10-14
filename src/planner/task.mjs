@@ -185,7 +185,7 @@ export function applicationFiles(items) {
 export function taskFilesAllowed(task) {
   const { sections } = taskSections(task);
   return applicationFiles(sectionList(sections.find(({ name }) => name === 'files allowed'),
-    'an Allowed Files list (or Files allowed)'));
+    'an Allowed Files list (or Files allowed)').map((file) => file.trim()));
 }
 
 function askContentLines(value) {

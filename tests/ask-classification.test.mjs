@@ -9,7 +9,7 @@ import { askRequirements } from '../src/planner/stub.mjs';
 import { planOutline, validatePlan } from '../src/planner/plan.mjs';
 import { parsePlanDocument } from '../src/planner/plan-document.mjs';
 import { createTools, isForbiddenWrite, isManagedFile } from '../src/runtime/tools.mjs';
-import { allowedFile, isDirectoryDocumentAsk, validateDirectoryDocumentPlan, validateDirectoryFiles } from '../src/planner/task.mjs';
+import { allowedFile, isDirectoryDocumentAsk, taskFilesAllowed, validateDirectoryDocumentPlan, validateDirectoryFiles } from '../src/planner/task.mjs';
 
 const example = readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8');
 const stub = parseConfig(example);
@@ -25,6 +25,7 @@ test('marketing document deliverables grant their exact space-containing directo
   const files = ['docs/design and implementation plan/DESIGN.md',
     'docs/design and implementation plan/IMPLEMENTATION.md'];
   for (const file of files) assert.equal(allowedFile(file), file);
+  assert.deepEqual(taskFilesAllowed('# Task\n\n## Allowed Files\n- `   docs/design and implementation plan/DESIGN.md   `'), [files[0]]);
   validateDirectoryFiles(files, 'docs/design and implementation plan');
   validateDirectoryDocumentPlan(marketingAsk, files, ['DESIGN describes the business services and navigation']);
   assert.throws(() => validateDirectoryFiles(['docs/design/README.md'],
@@ -51,7 +52,8 @@ test('deliverable destination prose still excludes examples, multiple grants and
   const explicit = `${marketingAsk}\n\n## Allowed Files\n- README.md`;
   assert.deepEqual(askRequirements(explicit).files, ['README.md']);
   assert.equal(askRequirements(explicit).outputDirectory, undefined);
-  for (const file of ['docs/name  two.md', 'docs/trailing .md ', 'docs/../escape.md', 'docs/tab\tname.md']) {
+  for (const file of ['docs/name  two.md', 'docs/trailing .md ', 'docs/../escape.md', 'docs/tab\tname.md',
+    `docs/${'a'.repeat(240)}.md`]) {
     assert.throws(() => allowedFile(file), /Files allowed/);
   }
 });
