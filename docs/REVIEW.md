@@ -235,7 +235,19 @@ unmet verdict overrides a summary pass, using the existing per-check gate.
 Provider names or DNS/TLS terminology alone do not prove the missing upload/publishing procedure.
 One usable dashboard or command path suffices; multiple providers and
 deployment execution are not required. A prepared page may be a prerequisite
-when the Ask requests design and instructions rather than implementation.
+when the Ask requests design and instructions rather than implementation, but
+not when the Ask requests obtaining it.
+For an Ask that requests obtaining (or acquiring/procuring) the artifact, a third
+bounded call is recorded as audit check 3. It extracts an origin: `ask_supplied`
+(the Ask itself says the artifact already exists; the quote must be a verbatim Ask
+excerpt stating that), `guide_steps` (one verbatim operational command or named UI
+action from the delivered files, containing its cited controls and different from
+the transfer step), or `missing`. A guide-invented "have your page ready" or a bare
+upload step fails; a human-supplied ready artifact and a concrete acquisition
+followed by transfer pass. Explicitly negated artifact availability in the
+cited Ask sentence is denied, as is acquisition evidence that merely contains
+or is a fragment of the cited transfer step. Like the other source checks this is grounding, not
+proof the steps work; a model can still cite a vague step that contains a control.
 Passing transition evidence must quote an operational step from the delivered
 evidence, rather than paraphrase a recommendation into a command that was
 never written. The harness checks that excerpt after redaction, whitespace
@@ -251,7 +263,8 @@ mechanism fails the numbered check even when the model's summary says pass.
 Full allowed artifacts are read through the existing guarded text reader for
 this extraction, so a small diff does not hide operational steps or prerequisites.
 This adds one reviewer call for setup/installation/deployment/hosting
-documentation, plus at most one corrective reply for invalid output; all
+documentation and one acquisition call when the Ask requests obtaining the
+artifact, each with at most one corrective reply for invalid output; all
 calls remain within the same seat, task deadline, and per-context budget.
 
 Separately from checks, the reviewer probes the changed code for five defect
