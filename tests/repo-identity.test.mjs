@@ -88,6 +88,36 @@ test('resolveRepoIdentity derives identity from git metadata', async () => {
   assert.deepEqual(calls[1], ['git', '--no-pager', 'config', '--get', 'remote.origin.url']);
 });
 
+test('independent metadata reads overlap without returning before both finish', async () => {
+  const releases = [];
+  const run = (_command, args) => new Promise((resolve) => {
+    releases.push(() => resolve({ stdout: args.includes('--git-common-dir')
+      ? '/repo/.git\n' : 'https://example.invalid/team/repo.git\n' }));
+  });
+  let completed = false;
+  const result = resolveRepoIdentity({ repoRoot: '/repo', run }).then((value) => {
+    completed = true;
+    return value;
+  });
+  await Promise.resolve();
+  assert.equal(releases.length, 2);
+  releases[1]();
+  await Promise.resolve();
+  assert.equal(completed, false);
+  releases[0]();
+  assert.equal(await result, identityHash({ remoteUrl: 'https://example.invalid/team/repo.git' }));
+});
+
+test('overlapping metadata failures preserve common-dir error precedence', async () => {
+  const calls = [];
+  await assert.rejects(resolveRepoIdentity({ repoRoot: '/repo', run: (_command, args) => {
+    calls.push(args);
+    throw new Error(args.includes('--git-common-dir') ? 'common-dir failed' : 'origin failed');
+  } }), (error) => error.code === 'E_GIT_METADATA' &&
+    error.cause.message === 'common-dir failed' && /could not read the git common dir/.test(error.message));
+  assert.equal(calls.length, 2);
+});
+
 test('resolveRepoIdentity fails closed when git metadata is unreadable', async () => {
   const run = async () => { throw new Error('fatal: not a git repository'); };
   await assert.rejects(

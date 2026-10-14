@@ -84,10 +84,15 @@ export async function resolveRepoIdentity({ repoRoot, run = execute } = {}) {
   const git = (args) => run('git', ['--no-pager', ...args], {
     cwd: repoRoot, encoding: 'utf8', timeout: 10_000,
   });
+  const [commonQuery, originQuery] = await Promise.allSettled([
+    ['rev-parse', '--git-common-dir'],
+    ['config', '--get', 'remote.origin.url'],
+  ].map((args) => Promise.resolve().then(() => git(args))));
 
   let commonDir;
   try {
-    commonDir = (await git(['rev-parse', '--git-common-dir'])).stdout.trim();
+    if (commonQuery.status === 'rejected') throw commonQuery.reason;
+    commonDir = commonQuery.value.stdout.trim();
   } catch (error) {
     throw new RepoIdentityError(
       `could not read the git common dir for ${repoRoot}: ${error.message}. ` +
@@ -101,7 +106,8 @@ export async function resolveRepoIdentity({ repoRoot, run = execute } = {}) {
 
   let remoteUrl;
   try {
-    remoteUrl = (await git(['config', '--get', 'remote.origin.url'])).stdout.trim();
+    if (originQuery.status === 'rejected') throw originQuery.reason;
+    remoteUrl = originQuery.value.stdout.trim();
   } catch (error) {
     throw new RepoIdentityError(
       `could not read the origin remote for ${repoRoot}: ${error.message}. ` +
