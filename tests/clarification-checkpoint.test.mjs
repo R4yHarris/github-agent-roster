@@ -252,3 +252,15 @@ test('cancelling prepared clarification revokes Enter and retry authorization', 
   await assert.rejects(paused.dispatch('/retry'), /cancelled or changed/);
   assert.equal(calls, 1);
 });
+
+test('saving a checkpoint validates private storage once, not once per read and write', async (t) => {
+  const root = fixture(t);
+  const trace = join(root, 'trace2.json');
+  const env = { ...process.env, GIT_TRACE2_EVENT: trace };
+  const record = await saveClarification(vague, { repoRoot: root, env });
+  const started = readFileSync(trace, 'utf8').split('\n').filter(Boolean)
+    .map((line) => JSON.parse(line)).filter((event) => event.event === 'start')
+    .map((event) => event.argv.filter((part) => ['ls-files', 'check-ignore'].includes(part))[0]).filter(Boolean);
+  assert.deepEqual(started.sort(), ['check-ignore', 'check-ignore', 'ls-files']);
+  assert.equal((await readClarification({ repoRoot: root })).id, record.id);
+});

@@ -27,14 +27,17 @@ async function privatePath(repoRoot, env) {
   });
   if (marker) {
     try {
-      const { stdout } = await execute('git', ['ls-files', '--', relativeFile, relativeFile + '.*'], {
-        cwd: repoRoot, env, encoding: 'utf8', timeout: 10000,
-      });
-      if (stdout.trim()) throw new Error('Tracked intake checkpoint');
-      await Promise.all([relativeFile, relativeFile + '.tmp'].map((name) =>
-        execute('git', ['check-ignore', '--quiet', '--', name], {
+      // The checks are independent; running them together costs one process latency, not three.
+      const [{ stdout }] = await Promise.all([
+        execute('git', ['ls-files', '--', relativeFile, relativeFile + '.*'], {
           cwd: repoRoot, env, encoding: 'utf8', timeout: 10000,
-        })));
+        }),
+        ...[relativeFile, relativeFile + '.tmp'].map((name) =>
+          execute('git', ['check-ignore', '--quiet', '--', name], {
+            cwd: repoRoot, env, encoding: 'utf8', timeout: 10000,
+          })),
+      ]);
+      if (stdout.trim()) throw new Error('Tracked intake checkpoint');
     } catch {
       throw new Error('Clarification storage must be untracked and gitignored; ignore .roster/asks/. No execution started.');
     }
@@ -62,7 +65,10 @@ function validate(record, env, apiKeyEnv) {
 }
 
 export async function readClarification({ repoRoot, env = process.env, apiKeyEnv }) {
-  const file = await privatePath(repoRoot, env);
+  return readCheckpoint(await privatePath(repoRoot, env), env, apiKeyEnv);
+}
+
+async function readCheckpoint(file, env, apiKeyEnv) {
   let handle;
   try {
     handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
@@ -91,14 +97,14 @@ export async function readClarification({ repoRoot, env = process.env, apiKeyEnv
 export async function saveClarification(ask, { repoRoot, env = process.env, apiKeyEnv }) {
   const originalAsk = cleanAskText(redactEvidence(cleanAskText(ask), { env, apiKeyEnv }));
   if (classifyAsk(originalAsk).kind !== 'clarify') throw new TypeError('Only ambiguous intake can create a clarification checkpoint');
-  const previous = await readClarification({ repoRoot, env, apiKeyEnv });
+  const file = await privatePath(repoRoot, env);
+  const previous = await readCheckpoint(file, env, apiKeyEnv);
   if (previous) {
     if (previous.originalAsk === originalAsk) return previous;
     throw new Error('A clarification checkpoint is already pending. Use /clarify or roster ask --pending; resume or cancel it before replacing it.');
   }
   const { interpretation, assumptions, questions } = clarificationResult(originalAsk);
   const record = { version: 1, id: randomUUID(), originalAsk, interpretation, assumptions, questions, answer: null };
-  const file = await privatePath(repoRoot, env);
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   await ensureLocalPath(file, repoRoot);
   await fs.writeFile(file, JSON.stringify(record) + '\n', { encoding: 'utf8', flag: 'wx', mode: 0o600 });
