@@ -62,9 +62,10 @@ test('the exact human prompt executes the public local shell planner→coder→r
   const head = git('rev-parse', 'HEAD');
   const seats = [];
   const uploadStep = 'In Netlify choose manual deploy and drop the folder containing index.html into the upload area.';
+  const cloneStep = 'git clone https://example.invalid/template.git site';
   const files = {
     'new-design/DESIGN.md': '# One-page design\n\nSecurity and Risk Analysis consulting: hero, services, trust and contact.\n',
-    'new-design/SETUP.md': `# Setup instructions\n\nUse a prepared index.html. ${uploadStep}\n` +
+    'new-design/SETUP.md': `# Setup instructions\n\nObtain the page: ${cloneStep}\n\n${uploadStep}\n` +
       'Open the assigned public URL before sharing it. Obtain and serve the page only after human approval.\n',
   };
   let coderTurns = 0;
@@ -85,6 +86,12 @@ test('the exact human prompt executes the public local shell planner→coder→r
         return reply(JSON.stringify({ verdict: 'pass', reasons: [], security_notes: [],
           operation: { kind: 'ui', controls: ['upload area'] },
           checks: [{ id: 1, met: true, evidence: uploadStep }] }));
+      }
+      if (system.includes('how the artifact to be served is obtained')) {
+        seats.push('reviewer-acquisition-audit');
+        return reply(JSON.stringify({ verdict: 'pass', reasons: [], security_notes: [],
+          acquisition: { origin: 'guide_steps', controls: ['git clone'] },
+          checks: [{ id: 1, met: true, evidence: cloneStep }] }));
       }
       seats.push(system.includes('independent Original Ask audit') ? 'reviewer-ask-audit' : 'reviewer');
       return reply(passingReview(body));
@@ -112,7 +119,8 @@ test('the exact human prompt executes the public local shell planner→coder→r
     } });
   await instance.dispatch(directoryAsk);
   const result = instance.state.lastRun;
-  assert.deepEqual(seats, ['planner', 'coder', 'reviewer-ask-audit', 'reviewer-procedure-audit', 'reviewer']);
+  assert.deepEqual(seats, ['planner', 'coder', 'reviewer-ask-audit', 'reviewer-procedure-audit',
+    'reviewer-acquisition-audit', 'reviewer']);
   assert.equal(result.local, true);
   assert.equal(result.failed, false);
   assert.equal(result.review.verdict, 'pass');

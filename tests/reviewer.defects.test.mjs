@@ -186,10 +186,111 @@ function directoryFixture(context) {
   writeFileSync(path.join(options.worktree, 'TASK.md'), '# Task: Marketing setup\n\n' +
     'difficulty: 1\ntask_class: docs\n\n## Acceptance checks\n- The guide explains local preview\n\n' +
     '## Files allowed\n- `new-design/guide.md`\n\n## Ask\n' +
-    'Write setup instructions for obtaining and serving a public web page to market a business. ' +
+    'Write setup instructions for serving a public web page to market a business. ' +
     'Output it in a new "new-design" directory\n');
   return options;
 }
+
+const cloneStep = 'git clone https://example.invalid/template.git site';
+
+function acquisitionRun(context, { guide, ask = '', origin, controls = [], met = true, evidence, replies }) {
+  const options = directoryFixture(context);
+  const taskPath = path.join(options.worktree, 'TASK.md');
+  writeFileSync(taskPath, readFileSync(taskPath, 'utf8').replace('serving a public web page',
+    `obtaining and serving a public web page${ask}`));
+  writeFileSync(path.join(options.worktree, 'new-design', 'guide.md'), guide);
+  const seen = [];
+  return runReviewer({ ...options, config, env: {}, askKind: 'slice',
+    fetchImpl: async (_url, request) => {
+      const system = JSON.parse(request.body).messages[0].content;
+      const kind = system.includes('how the artifact to be served is obtained') ? 'acquisition' :
+        system.includes('focused ONLY on the written transition') ? 'transition' : 'ask';
+      seen.push(kind);
+      const reply = replies?.[seen.length - 1];
+      const fields = kind === 'acquisition' ? { acquisition: { origin, controls } } :
+        kind === 'transition' ? { operation: { kind: 'ui', controls: ['upload area'] } } : {};
+      return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant',
+        content: reply ?? JSON.stringify({ verdict: kind === 'acquisition' && !met ? 'fail' : 'pass',
+          reasons: kind === 'acquisition' && !met ? ['The artifact is never obtained.'] : [], security_notes: [], ...fields,
+          checks: [{ id: 1, met: kind === 'acquisition' ? met : true,
+            evidence: kind === 'transition' ? transferStep : kind === 'acquisition' ? evidence : 'new-design/guide.md fulfills the Ask.' }] }),
+      } }] });
+    } }).then((result) => ({ result, seen }));
+}
+
+test('an obtain-and-serve Ask fails when the guide only transfers a Markdown file', async (context) => {
+  const { result, seen } = await acquisitionRun(context, { guide: `# Upload\n${transferStep}\n`,
+    origin: 'missing', met: false, evidence: 'No step obtains the page; only an upload is described.' });
+  assert.deepEqual(seen, ['ask', 'transition', 'acquisition', 'ask']);
+  assert.equal(result.verdict, 'fail');
+  assert.match(result.content, /Acquisition: The artifact is never obtained/);
+});
+
+test('a transfer step cannot be reused as the acquisition evidence', async (context) => {
+  const { result } = await acquisitionRun(context, { guide: `# Upload\n${transferStep}\n`,
+    origin: 'guide_steps', controls: ['upload area'], evidence: transferStep });
+  assert.equal(result.verdict, 'fail');
+  assert.match(result.content, /No source-grounded acquisition command or named UI action/);
+});
+
+test('a guide-invented prepared page does not satisfy an obtain Ask', async (context) => {
+  const guide = `# Setup\nHave your finished page ready.\n\n${transferStep}\n`;
+  const missing = await acquisitionRun(context, { guide, origin: 'missing', met: false, evidence: 'The guide assumes a ready page.' });
+  assert.equal(missing.result.verdict, 'fail');
+  const claimed = await acquisitionRun(context, { guide, origin: 'ask_supplied', evidence: 'Have your finished page ready.' });
+  assert.equal(claimed.seen.length, 4, 'one bounded correction, then explicit incomplete failure');
+  assert.equal(claimed.result.verdict, 'fail');
+  assert.equal(claimed.result.completed, false);
+});
+
+test('a human-supplied prepared artifact is accepted without guide acquisition steps', async (context) => {
+  const { result } = await acquisitionRun(context, { guide: `# Upload\n${transferStep}\n`,
+    ask: '. The page is already prepared', origin: 'ask_supplied', evidence: 'The page is already prepared' });
+  assert.equal(result.verdict, 'pass', result.content);
+  assert.match(result.content, /Verdict: pass/);
+});
+
+test('an ask_supplied claim must say the artifact exists', async (context) => {
+  const { result } = await acquisitionRun(context, { guide: `# Upload\n${transferStep}\n`,
+    origin: 'ask_supplied', evidence: 'serving a public web page' });
+  assert.equal(result.verdict, 'fail');
+  assert.match(result.content, /does not state that the artifact already exists/);
+});
+
+test('an ask_supplied claim cannot rest on a negated or nonexistent artifact', async (context) => {
+  for (const [ask, evidence] of [['. The page is not already prepared', 'already prepared'],
+    ['. I do not have a page ready', 'have a page ready'], ['. There is no finished page yet', 'finished page']]) {
+    const { result } = await acquisitionRun(context, { guide: `# Upload\n${transferStep}\n`, ask, origin: 'ask_supplied', evidence });
+    assert.equal(result.verdict, 'fail', ask);
+    assert.match(result.content, /does not already exist/);
+  }
+});
+
+test('a fragment of the transfer step cannot stand in as acquisition', async (context) => {
+  const { result } = await acquisitionRun(context, { guide: `# Upload\n${transferStep}\n`,
+    origin: 'guide_steps', controls: ['upload area'], evidence: 'drop the folder containing index.html into the upload area.' });
+  assert.equal(result.verdict, 'fail');
+  assert.match(result.content, /No source-grounded acquisition command or named UI action/);
+});
+
+test('a concrete acquisition command followed by the transfer path is accepted', async (context) => {
+  const { result, seen } = await acquisitionRun(context, { guide: `# Setup\n\`\`\`sh\n${cloneStep}\n\`\`\`\n\n${transferStep}\n`,
+    origin: 'guide_steps', controls: ['git clone'], evidence: cloneStep });
+  assert.deepEqual(seen, ['ask', 'transition', 'acquisition', 'ask']);
+  assert.equal(result.verdict, 'pass', result.content);
+});
+
+test('invented or control-less acquisition evidence is denied', async (context) => {
+  const guide = `# Setup\n${cloneStep}\n\n${transferStep}\n`;
+  const invented = await acquisitionRun(context, { guide, origin: 'guide_steps', controls: ['git clone'],
+    evidence: 'git clone https://example.invalid/other.git' });
+  assert.equal(invented.seen.length, 4);
+  assert.equal(invented.result.verdict, 'fail');
+  assert.equal(invented.result.completed, false);
+  const wrongControl = await acquisitionRun(context, { guide, origin: 'guide_steps', controls: ['npm create'], evidence: cloneStep });
+  assert.equal(wrongControl.result.verdict, 'fail');
+  assert.match(wrongControl.result.content, /No source-grounded acquisition command/);
+});
 
 test('directory Ask audit is independent of planner checks and a failed audit overrides checklist pass', async (context) => {
   const options = directoryFixture(context);
@@ -286,7 +387,7 @@ test('a directory design Ask without setup keeps one audit check and does not de
   const options = directoryFixture(context);
   const taskPath = path.join(options.worktree, 'TASK.md');
   writeFileSync(taskPath, readFileSync(taskPath, 'utf8').replace(
-    'Write setup instructions for obtaining and serving a public web page to market a business.',
+    'Write setup instructions for serving a public web page to market a business.',
     'Write a Markdown layout and sample copy for a marketing page; do not implement it.'));
   let requests = 0;
   const result = await runReviewer({ ...options, config, env: {}, askKind: 'slice',
