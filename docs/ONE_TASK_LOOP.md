@@ -142,6 +142,12 @@ document gate follows artifact intent regardless of opening verb and fails
 closed unless an implementation artifact is explicitly requested. The
 no-endpoint stub still writes a summary without implementing anything.
 
+An ambiguous Ask saves a private clarification checkpoint before the shell
+returns to idle. Each save validates the storage path once, including all
+untracked/gitignored checks, then reads and exclusively creates the checkpoint.
+The independent Git privacy checks run concurrently; this avoids duplicate
+subprocess work without bypassing storage validation (FEATURE_SPEC §5.7, §5.8).
+
 Manual handoff remains available explicitly:
 
 `runIssue(issueNumber)` in `src/lib/issue.mjs` implements
