@@ -70,14 +70,57 @@ export function validateDirectoryFiles(files, directory) {
   }
 }
 
+const documentNouns = 'docs?|documentation|documents?|designs?|setup|set-up|instructions?|guides?|manuals?|specifications?|reports?|proposals?|readme|plans?|pseudocode|outlines?|summar(?:y|ies)|tutorials?|notes';
+const outputDirective = /(?:^|[.!?\n]\s*)(?:output|save|put|place)\s+(?:(?:it|them|the (?:output|documents|files))\s+)?(?:in|into|to)\s+(?:(?:a|an|the)\s+)?(?:new\s+)?(?:"[^"\n]+"|'[^'\n]+'|`[^`\n]+`|[^\s"'`]+)\s+directory\b/gi;
+
+// The destination name is not the deliverable: "temperature-guide" must not turn a code Ask into a document Ask.
+function withoutOutputDirective(text) {
+  return String(text ?? '').replace(outputDirective, (match) => match.match(/^[.!?\n]\s*/)?.[0] ?? '');
+}
+
+const artifactNouns = 'scripts?|programs?|applications?|apps?|code|websites?|web pages?|utility|utilities|modules?|functions?|librar(?:y|ies)|cli|packages?|converters?|calculators?';
+const askVerbs = 'implement|build|develop|code|write|generate|create|make';
+const testsDeliverable = /(?:^|\band\s+|,\s*)(?:please\s+)?(?:include|add|write|provide)\s+(?:(?:node|node:test|built-?in|unit|automated|executable|runnable)\s+){1,3}tests?\b(?!\s+(?:as|for)\s+(?:examples?|samples?|illustrations?|demonstrations?)\b)(?!\s+(?:are|is)\s+(?:examples?|samples?|illustrative)\b)/i;
+const documentLead = new RegExp(`^(?:please\\s+)?(?:${askVerbs}|compose|draft|document|prepare|give)\\s+(?:me\\s+)?` +
+  `(?:(?!(?:${artifactNouns})\\b)[\\w.:-]+\\s+){0,6}?(?:${documentNouns})\\b`, 'i');
+
+function askSentences(ask) {
+  return withoutOutputDirective(withoutReferenceUrls(String(ask ?? ''))).split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter(Boolean);
+}
+
+// Explicit runnable intent: an imperative whose direct object is an executable artifact, or built-in/unit tests
+// requested as a deliverable. Documents that merely describe, sketch or use tests as examples do not qualify.
+export function requestsExecutableArtifact(ask) {
+  const artifact = new RegExp(`^(?:please\\s+)?(?:${askVerbs})\\s+(?:me\\s+)?` +
+    `(?:(?!(?:${documentNouns})\\b)[\\w.:-]+\\s+){0,6}?(?:${artifactNouns})\\b`, 'i');
+  return askSentences(ask).some((sentence) => artifact.test(sentence) ||
+    !documentLead.test(sentence) && testsDeliverable.test(sentence));
+}
+
+function requestsTestDeliverable(ask) {
+  return askSentences(ask).some((sentence) => !documentLead.test(sentence) && testsDeliverable.test(sentence));
+}
+
 export function isDirectoryDocumentAsk(ask) {
   if (!outputDirectoryFromAsk(ask)) return false;
-  const text = String(ask).trim();
-  const documentIntent = /\b(?:docs?|documentation|documents?|designs?|setup|set-up|instructions?|guides?|manuals?|specifications?|reports?|proposals?|readme)\b/i;
+  const text = withoutOutputDirective(String(ask).trim());
+  const documentIntent = new RegExp(`\\b(?:${documentNouns})\\b`, 'i');
   if (!documentIntent.test(text)) return false;
   // Documentation language fails closed unless the human explicitly requests an implementation artifact.
-  const implementation = /(?:^|[.!?\n]\s*)(?:please\s+)?(?:implement|build|develop|code|write|generate|create)\s+(?:me\s+)?(?:(?:a|an|the|new|simple|working|executable|static|shell|node|python)\s+)*(?:script|program|application|app|code|website|web page)\b/i;
-  return !implementation.test(text);
+  return !requestsExecutableArtifact(ask);
+}
+
+// A code Ask keeps its runnable intent: a Markdown-only plan or docs task class weakens it and must not reach the coder.
+export function validateDirectoryExecutablePlan(ask, files, { taskClass } = {}) {
+  if (!outputDirectoryFromAsk(ask) || !requestsExecutableArtifact(ask)) return;
+  if (taskClass === 'docs' || files.every((file) => /\.md$/i.test(file))) {
+    throw new TypeError('The Ask requests a runnable utility; the plan must include executable code files, ' +
+      'not Markdown-only documents or a docs task class');
+  }
+  if (requestsTestDeliverable(ask) &&
+      !files.some((file) => !/\.md$/i.test(file) && /(?:^|[/.-])(?:tests?|spec)(?:[/.-]|$)/i.test(file))) {
+    throw new TypeError('The Ask requests tests; the plan must include an executable (non-Markdown) test file among the allowed files');
+  }
 }
 
 export function validateDirectoryDocumentPlan(ask, files, checks) {
@@ -294,6 +337,8 @@ export function parseTaskDocument(task, { expectedAsk, issueTitle, issueBody } =
   if (outputDirectory) {
     validateDirectoryFiles(files_allowed, outputDirectory);
     validateDirectoryDocumentPlan(authoritativeAsk ?? ask, files_allowed, acceptance_checks);
+    validateDirectoryExecutablePlan(authoritativeAsk ?? ask, files_allowed,
+      { taskClass: /^(?:-[ \t]+)?task_class:[ \t]*(\w+)/im.exec(task)?.[1]?.toLowerCase() });
     if (files_allowed.every((file) => file.endsWith('.md')) &&
         acceptance_checks.every((check) => /node --test/.test(check))) {
       throw new TypeError('Directory documentation requires document-content acceptance checks');
