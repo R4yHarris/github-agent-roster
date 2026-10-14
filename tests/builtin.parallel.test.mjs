@@ -2,12 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { runBuiltinIssue, fixture, git, llmConfig, stubConfig } from './helpers/builtin.mjs';
 import { passingReview } from './helpers/review.mjs';
 import { planStub } from '../src/planner/stub.mjs';
 import { renderPlan, validatePlan } from '../src/planner/plan.mjs';
 import { acquireRepoLock } from '../src/lib/repo-locks.mjs';
 import { formatFleet } from '../src/lib/fleet.mjs';
+
+// Async git lets concurrent children overlap; a synchronous fake would serialize them on the event loop.
+const execFileAsync = promisify(execFile);
 
 function featureFixture(t) {
   const options = fixture(t);
@@ -25,7 +30,7 @@ function featureFixture(t) {
   const children = [];
   const command = async (program, args, cwd) => {
     if (program === 'git' && args[0] === 'fetch') return '';
-    if (program === 'git') return git(cwd, ...args);
+    if (program === 'git') return (await execFileAsync('git', args, { cwd, encoding: 'utf8' })).stdout.trim();
     if (args[0] === 'issue' && args[1] === 'view') {
       return JSON.stringify(Number(args[2]) === 42 ? options.issue : children.find((item) => item.number === Number(args[2])));
     }
@@ -55,14 +60,20 @@ test('parallel feature runs real coder seats in separate Git worktrees with over
   const starts = new Map();
   const ends = new Map();
   let release;
-  const gate = new Promise((resolve) => { release = resolve; });
+  let fail;
+  let overlapTimer;
+  const gate = new Promise((resolve, reject) => { release = resolve; fail = reject; });
+  gate.catch(() => {});
+  t.after(() => clearTimeout(overlapTimer));
   const logs = [];
   const result = await runBuiltinIssue(42, { ...options, config: llmConfig,
     autoModel: true, metricsLoader: () => [], parallel: 5, log: (text) => logs.push(text),
     onRunEvent(event) {
       if (event.seat === 'coder' && event.type === 'seat-start') {
         starts.set(event.issue, performance.now());
-        if (starts.size === 2) release();
+        // Setup git latency is machine-dependent; only a second coder that never starts is a real overlap failure.
+        if (starts.size === 1) overlapTimer = setTimeout(() => fail(new Error('Second coder did not start while the first was waiting')), 30_000);
+        if (starts.size === 2) { clearTimeout(overlapTimer); release(); }
       }
       if (event.seat === 'coder' && event.type === 'seat-end') ends.set(event.issue, performance.now());
     },

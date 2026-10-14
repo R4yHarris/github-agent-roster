@@ -155,6 +155,13 @@ untracked/gitignored checks, then reads and exclusively creates the checkpoint.
 The independent Git privacy checks run concurrently; this avoids duplicate
 subprocess work without bypassing storage validation (FEATURE_SPEC §5.7, §5.8).
 
+Parallel execution tests use asynchronous Git subprocesses so their fixture
+does not serialize otherwise concurrent children. Both real coder intervals
+must overlap in separate worktrees; a bounded barrier fails if the second coder
+never starts. The original 30-second test deadline remains unchanged. A passing
+controlled run is not proof of timing reliability on a contended Windows host
+(FEATURE_SPEC §5.4, §5.8).
+
 Manual handoff remains available explicitly:
 
 `runIssue(issueNumber)` in `src/lib/issue.mjs` implements
