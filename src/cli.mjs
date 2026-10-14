@@ -16,6 +16,7 @@ const help = `Usage:
   roster init
   roster onboard [--discover]
   roster fleet list
+  roster fleet discover [--wsl] [--save]
   roster fleet assist
   roster fleet add --id NAME --base-url URL [--model MODEL] [--context N] [--concurrency N] [--hardware TEXT] [--task-class feat,fix,docs,test]
   roster fleet probe ID [--set-model [MODEL]]
@@ -140,7 +141,8 @@ async function main(args) {
     process.stdout.write(formatInit(await initializeRoster()));
   } else if (args[0] === 'onboard' && args.length <= 2 && (args.length === 1 || args[1] === '--discover')) {
     const { runOnboard } = await import('./onboard/wizard.mjs');
-    process.exitCode = (await runOnboard({ installationRoot: rosterRoot, discover: args[1] === '--discover' })).exitCode;
+    process.exitCode = (await runOnboard({ installationRoot: rosterRoot,
+      discover: args[1] === '--discover' ? true : 'local' })).exitCode;
   } else if (args[0] === 'fleet') {
     const { runFleet } = await import('./lib/fleet-cli.mjs');
     const result = await runFleet(args.slice(1), { installationRoot: rosterRoot });

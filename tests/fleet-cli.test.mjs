@@ -31,6 +31,31 @@ function fixture(t, profiles = []) {
 
 const models = (...ids) => async () => Response.json({ data: ids.map((id) => ({ id })) });
 
+test('discovery previews without writes, then additively saves observed models without changing config', async (t) => {
+  const options = fixture(t, [first]);
+  const configFile = join(options.cwd, '.roster', 'config.yml');
+  writeFileSync(configFile, example);
+  const before = readFileSync(options.file, 'utf8');
+  const endpoints = [{ baseUrl: 'http://127.0.0.1:11435/v1',
+    models: [{ id: 'qwen-local', context_max: 65536 }, { id: 'unknown-limit' }] }];
+  const discover = async ({ candidates }) => {
+    assert.ok(candidates.includes(first.base_url));
+    assert.ok(candidates.includes('http://192.168.1.48:8000/v1'));
+    return endpoints;
+  };
+  const discovery = { ...options, discover, env: { ROSTER_DISCOVER_HOSTS: 'http://192.168.1.48:8000/v1' } };
+  await runFleet(['discover'], discovery);
+  assert.equal(readFileSync(options.file, 'utf8'), before);
+  assert.equal(readFileSync(configFile, 'utf8'), example);
+  const saved = await runFleet(['discover', '--save'], discovery);
+  assert.equal(saved.fleet.profiles.length, 2);
+  assert.deepEqual(saved.fleet.profiles[0], first);
+  assert.equal(readFileSync(configFile, 'utf8'), example);
+  assert.match(options.text, /unreported; use fleet add --context/);
+  await runFleet(['discover', '--save'], discovery);
+  assert.equal((await loadFleet({ cwd: options.cwd })).profiles.length, 2);
+});
+
 test('non-TTY add registers explicit endpoint/model/capacity without changing the default', async (t) => {
   const options = fixture(t);
   let requests = 0;

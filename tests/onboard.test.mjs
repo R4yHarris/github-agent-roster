@@ -36,6 +36,7 @@ function fixture(t, answers = [], contextMax = 0, continueSetup = true) {
   const prompts = [];
   return {
     cwd, installationRoot, output, errorOutput, prompts,
+    discover: false,
     input: { isTTY: true }, env: {},
     question: async (prompt) => {
       prompts.push(prompt);
@@ -88,7 +89,7 @@ for (const platform of ['win32', 'linux', 'darwin']) {
     assert.deepEqual(config.loop, { turns: 12 });
     assert.deepEqual(config.context, { budget: 200000 });
     assert.equal(config.seat.turn_budget, 12);
-    assert.doesNotMatch(readFileSync(result.configPath, 'utf8'), /^  internet:/m);
+    assert.match(readFileSync(result.configPath, 'utf8'), /^  internet: false$/m);
     assert.match(options.output.text, /These flags do not grant contracts policy\./);
     assert.match(options.output.text, new RegExp(`OS: ${platform}`));
     assert.match(options.output.text, /1\. Platform[\s\S]*2\. LLM endpoint[\s\S]*3\. Permissions[\s\S]*4\. Review/);
@@ -411,10 +412,12 @@ test('existing config needs confirmation and keeps unrelated settings on a confi
   const changed = fixture(t, ['yes', '', '1', '', '', '', '', '']);
   mkdirSync(join(changed.cwd, '.roster'));
   writeFileSync(join(changed.cwd, '.roster', 'config.yml'),
-    example.replace('context_chars: 200000', 'context_chars: 16000').replace('effort: m', 'effort: h'));
+    example.replace('context_chars: 200000', 'context_chars: 16000').replace('effort: m', 'effort: h')
+      .replace('internet: false', 'internet: true'));
   const result = await runOnboard({ ...changed, fetchImpl: models('selected-model') });
   assert.equal(result.config.seat.context_chars, 16000);
   assert.equal(result.config.llm.effort, 'h');
+  assert.equal(result.config.tools.internet, true);
   assert.equal(parseConfig(readFileSync(result.configPath, 'utf8')).llm.model, 'selected-model');
 });
 
@@ -445,6 +448,31 @@ test('onboarding seeds known context and preserves other registered endpoints', 
   assert.equal(result.fleet.profiles[0].id, 'default');
   assert.deepEqual(result.fleet.profiles[1], other);
   assert.deepEqual(await loadFleet({ cwd: options.cwd }), result.fleet);
+});
+
+test('ordinary onboarding discovers local servers and saves observed extra models only after confirmation', async (t) => {
+  const options = fixture(t);
+  const found = [
+    { baseUrl: 'http://127.0.0.1:8000/v1', models: [{ id: 'selected-model', context_max: 65536 }] },
+    { baseUrl: 'http://127.0.0.1:11435/v1', models: [{ id: 'other-model', context_max: 32768 }] },
+  ];
+  const result = await runOnboard({ ...options, platform: 'linux', discover: 'local',
+    question: async (prompt) => {
+      if (prompt.startsWith('Use ') || prompt.startsWith('Allow publish') ||
+          prompt.startsWith('Show advanced')) return 'no';
+      return '';
+    },
+    discoverModels: async ({ candidates }) => {
+      assert.ok(candidates.includes('http://127.0.0.1:11435/v1'));
+      assert.ok(!candidates.includes('http://192.168.1.48:8000/v1'));
+      return found;
+    },
+    fetchImpl: async () => Response.json({ data: [{ id: 'selected-model', max_model_len: 65536 }] }),
+  });
+  assert.equal(result.saved, true);
+  assert.equal(result.fleet.profiles.length, 2);
+  assert.equal(result.fleet.profiles[0].model, 'selected-model');
+  assert.equal(result.fleet.profiles[1].model, 'other-model');
 });
 
 test('declining the fleet Continue question writes no private settings or ignore rules', async (t) => {

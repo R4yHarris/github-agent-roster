@@ -81,6 +81,8 @@ write confirmation `[yes]` saves the default profile without retyping yes.
 
 ```sh
 roster fleet list
+roster fleet discover
+roster fleet discover --wsl --save
 roster fleet add --id sample --base-url https://gpu.example.invalid/v1 --model fictional/coder --context 32768 --concurrency 2 --hardware fictional-gpu --task-class feat,fix
 roster fleet probe sample
 roster fleet probe sample --set-model fictional/new-coder
@@ -89,6 +91,28 @@ roster fleet remove sample
 ```
 
 Replace fictional endpoints and models with actual reachable values.
+`discover` previews local/LAN candidates, registered endpoints and explicitly
+supplied comma-separated base URLs in `ROSTER_DISCOVER_HOSTS`. It sends no
+ambient environment or Vault credentials. `--wsl` also enumerates running
+non-Docker WSL distributions and probes their IPv4 addresses; it does not start
+stopped distributions or require curl inside WSL. Each `/models` probe is capped
+at five seconds. No model prompts or package installation are performed.
+
+`--save` adds missing endpoint/model pairs with reported positive context limits,
+without replacing existing profiles or touching the default config. Repeat
+discovery is idempotent. Models with unreported limits are displayed but require
+an explicit `fleet add --context` declaration before registration. Hardware is
+`unspecified`, never guessed from a port. Ollama's metadata-only `/api/show`
+request uses explicit `num_ctx` when available, not arbitrary numeric model
+fields or the architecture maximum. `/models` is an available-model catalog,
+not proof that every listed Ollama model is currently loaded on the GPU.
+
+Changed private settings retain their previous bytes in ignored
+`.roster/config.yml.*.bak` or `.roster/fleet.yml.*.bak` files before replacement.
+Identical saves create no backup. These private backups may contain sensitive
+settings: do not commit or upload them. They complement, rather than bypass,
+confirmation, concurrent-change refusal and paired-write rollback.
+
 `add` GETs `/models`, prints the served IDs, and requires a model in that
 inventory. In a TTY, omitting `--model` asks for a selection (first served
 ID by default); omitting `--context` uses the selected model's reported

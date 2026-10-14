@@ -72,6 +72,17 @@ Run onboarding from the target project if it differs from this clone.
 A local or DGX vLLM endpoint uses the same prompts and `/v1/models`
 discovery; configure a reachable secured host if it is not on loopback.
 
+## Local and WSL discovery
+
+On every supported platform, ordinary onboarding discovers local and registered
+endpoints before selecting a default. `onboard --discover` additionally includes
+bounded LAN candidates and `ROSTER_DISCOVER_HOSTS`; Windows asks before inspecting
+running WSL distributions. Discovery never supplies publishing or inference
+credentials to candidate servers. Confirmed onboarding adds discovered models
+with reported context limits while retaining existing profiles; missing limits
+are reported rather than guessed. For discovery without reconfiguring the
+default or permissions, use `fleet discover --wsl --save` on Windows.
+
 ## macOS
 
 Use a user-managed Node 20+ installation, Git, and GitHub CLI:
@@ -105,7 +116,8 @@ Do not run onboarding with `sudo` to work around global-bin PATH setup.
 4. Review the endpoint, model, permissions, and destination. Answer
    `Confirm write .roster/config.yml? [yes]` before any config or ignore
    rule is written. Existing config also requires explicit overwrite
-   consent; declining either confirmation preserves it.
+   consent; declining either confirmation preserves it. Changed private files
+   keep timestamped ignored `.bak` copies of their previous bytes.
 5. After a confirmed atomic write, read the doctor result. Ctrl+C before
    write confirmation exits 0 without a half-finished config.
 
