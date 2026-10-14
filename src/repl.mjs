@@ -824,13 +824,13 @@ export function createDispatcher({
       case 'fleet': {
         const words = splitArguments(args);
         const command = words[0] ?? 'list';
-        if (command === 'add') {
+        if (['add', 'discover'].includes(command)) {
           await api.runFleet(words, { cwd: currentRoot(), installationRoot: repoRoot, env,
             input, output: { isTTY: output.isTTY, write: safeWrite }, errorOutput,
             ...(askInput ? { question: askInput } : {}) });
           return true;
         }
-        if (!['list', 'use', 'probe'].includes(command)) throw new TypeError('Use /fleet [list|use ID|probe [ID] [--set-model [MODEL]]|add FLAGS].');
+        if (!['list', 'use', 'probe'].includes(command)) throw new TypeError('Use /fleet [list|use ID|probe [ID] [--set-model [MODEL]]|add FLAGS|discover [--wsl] [--save]].');
         const fleet = await api.loadFleet({ cwd: currentRoot() });
         if (command === 'list') {
           if (words.length > 1) throw new TypeError('Use /fleet or /fleet list.');

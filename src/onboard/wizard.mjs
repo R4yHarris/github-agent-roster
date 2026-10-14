@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { formatConfig, parseConfig, readConfigFile, validateBaseUrl } from '../lib/config.mjs';
 import { checkDoctor, formatDoctor } from '../lib/doctor.mjs';
 import { formatFleet, normalizeFleetBaseUrl, parseFleet, validateFleet } from '../lib/fleet.mjs';
-import { discoverEndpoints, discoveryCandidates, wslCandidates } from './discover.mjs';
+import { discoverEndpoints, discoveryCandidates, localCandidates, wslCandidates } from './discover.mjs';
 import { ensurePrivateFilesIgnored, readPrivateFile, writePrivateDocuments } from '../lib/private-files.mjs';
 import { ensureLocalPath, resolveProjectRoot } from '../lib/paths.mjs';
 import { resolvePublishModel } from '../metrics/run.mjs';
@@ -38,7 +38,12 @@ function modelId(value, env, apiKeyEnv) {
 export async function probeModelDetails(baseUrl, {
   fetchImpl = globalThis.fetch, env = process.env, schedule = setTimeout, cancel = clearTimeout,
   apiKeyEnv = 'ROSTER_API_KEY',
+  timeoutMs,
+  authenticate = true,
 } = {}) {
+  if (timeoutMs !== undefined && (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000)) {
+    throw new TypeError('Model probe timeout must be a positive integer of at most 60000 ms');
+  }
   const url = new URL(validateBaseUrl(publicSetting(baseUrl, env, apiKeyEnv)));
   url.pathname = `${url.pathname.replace(/\/+$/, '')}/models`;
   const controller = new AbortController();
@@ -47,14 +52,14 @@ export async function probeModelDetails(baseUrl, {
     timer = schedule(() => {
       controller.abort();
       reject(new ModelProbeError('timeout'));
-    }, url.hostname === '127.0.0.1' || url.hostname === 'localhost' ? probeTimeoutMs : 60_000);
+    }, timeoutMs ?? (url.hostname === '127.0.0.1' || url.hostname === 'localhost' ? probeTimeoutMs : 60_000));
   });
   const request = async () => {
     const aperture = url.hostname.includes('aperture');
     const names = aperture ? ['APERTURE_API_KEY', 'ROSTER_API_KEY'] : [apiKeyEnv];
     let source = 'missing';
     let key;
-    for (const name of names) {
+    for (const name of authenticate ? names : []) {
       try {
         key = await resolveSecret(name, { env });
       } catch {
@@ -122,9 +127,10 @@ function renderConfig(base, { baseUrl, model, contextMax, publish, internet, run
     llm: { ...base.llm, profile: 'vllm-local', base_url: baseUrl, model, context_max: contextMax,
       api_key_env: base.profiles['vllm-local'].api_key_env, api_key_optional: true, provider: 'vllm' },
     seat: { ...base.seat, turn_budget: turns, context_chars: budget },
-    publish: { enabled: publish },
-    tools: { ...(internet === undefined ? {} : { internet }), run_test: runTest },
-    review: { required: reviewer }, loop: { turns }, context: { budget },
+    publish: { ...base.publish, enabled: publish },
+    tools: { ...base.tools, ...(internet === undefined ? {} : { internet }), run_test: runTest },
+    review: { ...base.review, required: reviewer }, loop: { ...base.loop, turns },
+    context: { ...base.context, budget },
   };
   return formatConfig(config);
 }
@@ -133,7 +139,8 @@ export async function runOnboard({
   cwd = process.cwd(), installationRoot = installation,
   input = process.stdin, output = process.stdout, errorOutput = process.stderr,
   platform = process.platform, env = process.env, fetchImpl = globalThis.fetch,
-  question, doctor = checkDoctor, discover = false,
+  question, doctor = checkDoctor, discover = 'local', discoverModels = discoverEndpoints,
+  discoverWsl = wslCandidates,
 } = {}) {
   if (!input.isTTY || !output.isTTY) {
     errorOutput.write('roster onboard needs a terminal\n');
@@ -205,21 +212,31 @@ export async function runOnboard({
     }
     output.write('\n2. LLM endpoint\n');
     output.write('WSL talking to a Windows-hosted server may need the Windows host IP, not localhost.\n');
-    let discoveredDefault = defaultBaseUrl;
+    let discoveredDefault = base.llm.base_url || defaultBaseUrl;
+    let found = [];
     if (discover) {
-      output.write('Scanning local, LAN, and ROSTER_DISCOVER_HOSTS endpoints.\n');
+      output.write(discover === true
+        ? 'Scanning local, LAN, and ROSTER_DISCOVER_HOSTS endpoints (unauthenticated metadata probes only).\n'
+        : 'Scanning local and configured endpoints (unauthenticated metadata probes only).\n');
       let extraUrls = [];
-      if (platform === 'win32' && await yesNo('Allow a read-only model probe inside WSL', false)) {
+      if (platform === 'win32' && await yesNo('Allow discovery of running WSL addresses', false)) {
         try {
-          extraUrls = await wslCandidates();
+          extraUrls = await discoverWsl();
           output.write(extraUrls.length
-            ? `WSL answered on ${extraUrls.join(', ')}.\n`
-            : 'WSL probe found no local OpenAI-compatible server.\n');
+            ? `WSL candidate addresses: ${extraUrls.join(', ')}.\n`
+            : 'No running WSL IPv4 addresses found.\n');
         } catch (error) {
           output.write(`WSL probe skipped: ${error instanceof Error ? error.message : 'unavailable'}.\n`);
         }
       }
-      const found = await discoverEndpoints({ env, fetchImpl, candidates: discoveryCandidates(env, extraUrls) });
+      const failures = [];
+      found = await discoverModels({ env, fetchImpl, onFailure: (failure) => failures.push(failure),
+        candidates: [...new Set([
+          ...(discover === true ? discoveryCandidates(env, extraUrls) : [...localCandidates(), ...extraUrls]),
+          ...fleet.profiles.map(({ base_url }) => base_url),
+          ...(base.llm.base_url ? [base.llm.base_url] : []),
+        ])] });
+      if (failures.length) output.write(`${failures.length} discovery probe(s) failed or timed out.\n`);
       if (!found.length) output.write('No OpenAI-compatible server answered. Enter a base URL manually.\n');
       found.forEach((entry, index) => {
         output.write(`  ${index + 1}. ${entry.baseUrl} models=${entry.models.map(({ id, context_max: limit }) =>
@@ -228,9 +245,7 @@ export async function runOnboard({
       if (found.length) {
         output.write('Name the hardware for each server. Detection cannot see the GPU.\n');
         for (const entry of found) {
-          const fallback = entry.baseUrl.includes(':8888') ? 'DGX Spark'
-            : entry.baseUrl.includes('aperture') ? 'RTX 6000'
-              : entry.baseUrl.includes(':11435') ? 'RTX 3090' : 'unspecified';
+          const fallback = fleet.profiles.find(({ base_url }) => base_url === entry.baseUrl)?.hardware ?? 'unspecified';
           entry.hardware = await answer(`Hardware for ${entry.baseUrl} [${fallback}]: `, fallback);
         }
       }
@@ -312,13 +327,24 @@ export async function runOnboard({
     }
     const next = renderConfig(base, { baseUrl, model, contextMax, publish, internet, runTest, reviewer, turns, budget });
     const config = parseConfig(next);
+    const { mergeDiscoveredProfiles } = await import('../lib/fleet-discovery.mjs');
+    const expanded = mergeDiscoveredProfiles(fleet, found.map((entry) => ({
+      ...entry, models: entry.models.filter((item) =>
+        normalizeFleetBaseUrl(entry.baseUrl) !== baseUrl || item.id !== model),
+    })));
+    const existingDefault = expanded.profiles.find(({ id }) => id === 'default');
+    const preservedDefault = existingDefault?.base_url === baseUrl ? existingDefault : undefined;
     const seeded = validateFleet({ profiles: [{
-      id: 'default', base_url: baseUrl, model, provider: 'vllm', context_max: contextMax,
-      concurrency: 1, hardware: 'unspecified', notes: 'Default endpoint selected during onboarding.',
-    }, ...fleet.profiles.filter(({ id }) => id !== 'default')] });
+      ...preservedDefault, id: 'default', base_url: baseUrl, model, provider: 'vllm', context_max: contextMax,
+      concurrency: preservedDefault?.concurrency ?? 1,
+      hardware: found.find((entry) => normalizeFleetBaseUrl(entry.baseUrl) === baseUrl)?.hardware ??
+        preservedDefault?.hardware ?? 'unspecified',
+      notes: preservedDefault?.notes ?? 'Default endpoint selected during onboarding.',
+    }, ...expanded.profiles.filter(({ id }) => id !== 'default')] });
     const appStatus = publish ? await checkAppIdentity({ cwd: projectRoot, env }) : null;
     if (appStatus) output.write(`\nApp identity (environment only)\n${formatAppIdentity(appStatus)}`);
     output.write(`\n4. Review\nConfig: ${configPath}\nFleet: ${fleetPath} (default profile; other profiles kept)\n` +
+      'Discovered models with reported context limits are added; unreported limits require fleet add --context.\n' +
       `Endpoint: ${baseUrl}\nModel: ${model}\nModels probe: ${models ? 'succeeded' : 'failed; model supplied manually'}\n` +
       `Model context tokens: ${contextMax || 'unknown'}\n` +
       `Publish enabled: ${publish}\nrun_test allowed: ${runTest}\nReviewer required: ${reviewer}\n` +

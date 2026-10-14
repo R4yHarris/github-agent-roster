@@ -66,6 +66,25 @@ test('fleet use updates only session endpoint, model and capacity and provider p
   assert.match(shell.text, /Profile: spark-4\nHost: spark\.example\.invalid/);
 });
 
+test('fleet discover passes through CLI flags without changing the session model or starting seats', async (t) => {
+  const root = fixture(t);
+  let called = false;
+  const shell = createDispatcher({ cwd: root.root, config, env: {},
+    services: { repositoryRoot: () => root.root, repositoryBranch: () => 'main',
+      runFleet: async (args, options) => {
+        called = true;
+        assert.deepEqual(args, ['discover', '--wsl', '--save']);
+        assert.equal(options.cwd, root.root);
+        options.output.write('discovery completed\n');
+      } },
+    output: { write() {} }, errorOutput: { write() {} } });
+  const before = shell.state.config;
+  await shell.dispatch('/fleet discover --wsl --save');
+  assert.equal(called, true);
+  assert.equal(shell.state.config, before);
+  assert.equal(shell.state.lastRun, null);
+});
+
 test('probe uses a read-only models GET and prints ids/context without secrets or writes', async (t) => {
   const root = fixture(t);
   const env = { ROSTER_API_KEY: 'secret-probe-marker' };

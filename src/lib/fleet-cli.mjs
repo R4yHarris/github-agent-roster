@@ -7,7 +7,7 @@ import { resolveProjectRoot } from './paths.mjs';
 import { ensurePrivateFilesIgnored, readPrivateFile, writePrivateDocuments } from './private-files.mjs';
 
 const installation = fileURLToPath(new URL('../../', import.meta.url));
-const usage = 'Use roster fleet list, add --id NAME --base-url URL [--model MODEL] [--context N] ' +
+const usage = 'Use roster fleet list, discover [--wsl] [--save], add --id NAME --base-url URL [--model MODEL] [--context N] ' +
   '[--concurrency N] [--hardware TEXT] [--task-class feat,fix,docs,test], ' +
   'probe ID [--set-model [MODEL]], hardware ID SKU, default ID, remove ID, or assist.';
 
@@ -17,6 +17,10 @@ function argumentsFor(args) {
   }
   const [command, ...rest] = args;
   if (command === 'list' && !rest.length) return { command };
+  if (command === 'discover' && rest.every((flag) => ['--wsl', '--save'].includes(flag)) &&
+      new Set(rest).size === rest.length) {
+    return { command, wsl: rest.includes('--wsl'), save: rest.includes('--save') };
+  }
   if (command === 'assist' && !rest.length) return { command };
   if (command === 'hardware' && rest.length === 2) {
     return { command, id: validateFleetId(rest[0]), hardware: rest[1] };
@@ -65,6 +69,7 @@ export async function runFleet(args, {
   cwd = process.cwd(), installationRoot = installation, env = process.env,
   input = process.stdin, output = process.stdout, errorOutput = process.stderr,
   fetchImpl = globalThis.fetch, vault, question,
+  discover, discoverWsl,
 } = {}) {
   const options = argumentsFor(args);
   if (options.command === 'assist') {
@@ -104,6 +109,24 @@ export async function runFleet(args, {
     }
   };
   try {
+    if (options.command === 'discover') {
+      const { discoverFleet } = await import('./fleet-discovery.mjs');
+      output.write('Discovery uses unauthenticated model inventory/metadata probes; no model prompts or default changes.\n');
+      const failures = [];
+      const result = await discoverFleet(fleet, { env, fetchImpl, wsl: options.wsl, discover, discoverWsl,
+        onFailure: (failure) => failures.push(failure) });
+      for (const endpoint of result.endpoints) {
+        output.write(`${endpoint.baseUrl}: ${endpoint.models.map(({ id, context_max }) =>
+          `${id} (context=${context_max ?? 'unreported; use fleet add --context'})`).join(', ')}\n`);
+      }
+      if (!result.endpoints.length) output.write('No model endpoint answered. Check server bind address, firewall and ROSTER_DISCOVER_HOSTS.\n');
+      if (failures.length) output.write(`${failures.length} endpoint probe(s) failed or timed out; no credentials sent.\n`);
+      if (options.save && result.fleet.profiles.length !== fleet.profiles.length) {
+        await writeFleet(result.fleet, { repoRoot, expectedSource: previousFleet });
+        output.write(`Added ${result.fleet.profiles.length - fleet.profiles.length} profiles; existing profiles and default config unchanged.\n`);
+      } else output.write('Private settings unchanged. Use --save to add newly observed profiles.\n');
+      return { command: options.command, ...result, failures };
+    }
     if (options.command === 'list') {
       if (!fleet.profiles.length) output.write('No fleet profiles configured. Run roster onboard or roster fleet add.\n');
       else {

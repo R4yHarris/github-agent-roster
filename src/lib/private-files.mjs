@@ -80,6 +80,7 @@ export async function writePrivateDocuments(documents, { repoRoot, fileSystem = 
       if (document.expectedSource !== undefined && previous !== document.expectedSource) {
         throw new Error('Private settings changed during setup; refusing to overwrite them');
       }
+      if (previous === document.source) continue;
       const temporary = `${file}.${randomBytes(8).toString('hex')}.tmp`;
       prepared.push({ ...document, file, previous, temporary });
     }
@@ -87,6 +88,12 @@ export async function writePrivateDocuments(documents, { repoRoot, fileSystem = 
     for (const document of prepared) {
       await ensureLocalPath(document.file, repoRoot);
       await fileSystem.writeFile(document.temporary, document.source, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    }
+    for (const document of prepared) {
+      if (document.previous !== null) {
+        const backup = `${document.file}.${Date.now()}.${randomBytes(8).toString('hex')}.bak`;
+        await fileSystem.writeFile(backup, document.previous, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+      }
     }
     for (const document of prepared) {
       if (await readPrivateFile(repoRoot, document.name) !== document.previous) {
