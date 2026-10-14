@@ -23,6 +23,13 @@ Markdown-guide examples and document-content-only checks are supplied only for
 documentation intent; code-directory Asks retain their requested executable
 and test obligations without being instructed to add an unrequested guide.
 The strict granted-directory boundary is unchanged.
+Document intent is read from the Ask itself, never from the destination
+directory name (`temperature-guide` is not a guide request). An explicit request
+for a runnable artifact or built-in/unit tests keeps that intent through
+planning: a `task_class: docs`, Markdown-only, or Markdown-named test plan is
+rejected before the coder runs, while documentation Asks that only sketch an
+implementation or use tests as examples stay Markdown. Reviewer failure and the
+publication gate are unaffected.
 
 Planner checks and Design must preserve the Original Ask and agree on expected
 results, including the ordinary semantics of worked examples. The critic checks

@@ -6,7 +6,7 @@ import test from 'node:test';
 import { parseConfig } from '../src/lib/config.mjs';
 import { buildPlan, cleanAskText, planAsk, planFromTask, planStub } from '../src/planner/stub.mjs';
 import { deterministicPlanDefects } from '../src/planner/critic.mjs';
-import { ensureAllowedFiles, parseTaskDocument, taskFilesAllowed, validateDirectoryFiles } from '../src/planner/task.mjs';
+import { ensureAllowedFiles, isDirectoryDocumentAsk, parseTaskDocument, requestsExecutableArtifact, taskFilesAllowed, validateDirectoryFiles } from '../src/planner/task.mjs';
 import { readTaskMetadata, updateTaskMetadata } from '../src/runtime/estimate.mjs';
 import { runPlanner } from '../src/seats/planner.mjs';
 
@@ -144,6 +144,72 @@ test('directory handoffs preserve captured whitespace and CRLF except normalized
     plan.task.replace('one page', 'one  page')]) {
     assert.throws(() => parseTaskDocument(task, { expectedAsk: raw }), /unchanged original Ask/);
   }
+});
+
+const temperatureAsk = 'Create a tiny Node 20 ESM utility that converts Celsius to Fahrenheit. Accept only finite numeric inputs and throw TypeError for other inputs. Include Node built-in tests for freezing, boiling, negative temperatures, zero, strings, null, NaN and infinity. No dependencies, network, installation or publication. Output it in a new "temperature-guide" directory';
+const codePlan = { title: 'Celsius to Fahrenheit utility', task_class: 'feat',
+  files_allowed: ['temperature-guide/convert.mjs', 'temperature-guide/convert.test.mjs'],
+  acceptance_checks: ['node --test temperature-guide/convert.test.mjs exits 0',
+    'The utility converts finite numbers and throws TypeError otherwise'] };
+
+test('a directory name containing a document word does not turn a runnable utility Ask into documentation', async () => {
+  assert.equal(isDirectoryDocumentAsk(temperatureAsk), false);
+  assert.equal(requestsExecutableArtifact(temperatureAsk), true);
+  const docsPlan = { ...codePlan, task_class: 'docs', files_allowed: ['temperature-guide/README.md'],
+    acceptance_checks: ['The guide contains a code sample converting Celsius to Fahrenheit'] };
+  assert.throws(() => buildPlan(temperatureAsk, { ...directoryOptions, title: docsPlan.title,
+    filesAllowed: docsPlan.files_allowed, acceptanceChecks: docsPlan.acceptance_checks, metadata: { task_class: 'docs' } }),
+  /runnable utility/);
+  assert.throws(() => buildPlan(temperatureAsk, { ...directoryOptions, filesAllowed: codePlan.files_allowed,
+    acceptanceChecks: codePlan.acceptance_checks, metadata: { task_class: 'docs' } }), /docs task class/);
+  assert.throws(() => buildPlan(temperatureAsk, { ...directoryOptions, filesAllowed: ['temperature-guide/convert.mjs'],
+    acceptanceChecks: codePlan.acceptance_checks }), /test file/);
+  const plan = buildPlan(temperatureAsk, { ...directoryOptions, title: codePlan.title,
+    filesAllowed: codePlan.files_allowed, acceptanceChecks: codePlan.acceptance_checks, metadata: { task_class: 'feat' } });
+  const parsed = parseTaskDocument(plan.task, { expectedAsk: temperatureAsk });
+  assert.equal(parsed.ask, temperatureAsk);
+  assert.deepEqual(parsed.files_allowed, codePlan.files_allowed);
+  // A hand-edited or model-written TASK.md cannot weaken the plan to Markdown-only or docs.
+  assert.throws(() => parseTaskDocument(plan.task.replace('task_class: feat', 'task_class: docs'),
+    { expectedAsk: temperatureAsk }), /runnable utility/);
+  assert.throws(() => parseTaskDocument(plan.task.replaceAll('convert.mjs', 'README.md')
+    .replaceAll('convert.test.mjs', 'GUIDE.md'), { expectedAsk: temperatureAsk }), /runnable utility/);
+});
+
+test('the public planner rejects a docs-only model plan for the runnable utility Ask before any coder runs', async () => {
+  const reply = (body) => async () => Response.json({ choices: [{ finish_reason: 'stop', message: {
+    role: 'assistant', content: JSON.stringify(body) } }] });
+  await assert.rejects(planAsk(temperatureAsk, { config, env: {}, fetchImpl: reply({
+    title: 'Temperature guide', task_class: 'docs', files_allowed: ['temperature-guide/README.md'],
+    acceptance_checks: ['The guide contains code samples for the conversion'] }) }), /runnable utility/);
+  const plan = await planAsk(temperatureAsk, { config, env: {}, fetchImpl: reply(codePlan) });
+  assert.deepEqual(parseTaskDocument(plan.task, { expectedAsk: temperatureAsk }).files_allowed, codePlan.files_allowed);
+});
+
+test('documentation Asks that describe or sketch an implementation stay documentation', () => {
+  for (const ask of ['Write a design document for a Celsius converter utility with pseudocode. Output it in a new "temperature-guide" directory',
+    'Write a guide explaining how to write unit tests for a module. Output it in a new "guides" directory',
+    'Create an implementation plan for the converter. Output it in a new "plans" directory',
+    'Document the utility function and its built-in tests. Output it in a new "docs" directory',
+    'Write documentation for the CLI. Output it in a new "temperature-guide" directory',
+    'Write a guide, with unit tests as examples. Output it in a new docs directory',
+    'Write a guide and include unit tests as examples. Output it in a new "docs" directory',
+    'Write a design document. Include built-in tests for illustration. Output it in a new "docs" directory']) {
+    assert.equal(requestsExecutableArtifact(ask), false, ask);
+    assert.equal(isDirectoryDocumentAsk(ask), true, ask);
+  }
+  const guideAsk = 'Write a guide, with unit tests as examples. Output it in a new docs directory';
+  const markdown = buildPlan(guideAsk, { ...directoryOptions, filesAllowed: ['docs/GUIDE.md'],
+    acceptanceChecks: ['The guide contains unit test examples'], metadata: { task_class: 'docs' } });
+  assert.deepEqual(parseTaskDocument(markdown.task, { expectedAsk: guideAsk }).files_allowed, ['docs/GUIDE.md']);
+});
+
+test('a Markdown test filename never satisfies requested runnable tests', () => {
+  assert.throws(() => buildPlan(temperatureAsk, { ...directoryOptions,
+    filesAllowed: ['temperature-guide/convert.mjs', 'temperature-guide/README.test.md'],
+    acceptanceChecks: codePlan.acceptance_checks }), /non-Markdown\) test file/);
+  assert.throws(() => buildPlan(temperatureAsk, { ...directoryOptions,
+    filesAllowed: ['temperature-guide/README.test.md'], acceptanceChecks: codePlan.acceptance_checks }), /runnable utility/);
 });
 
 test('critic revisions cannot exchange concrete directory files', async () => {

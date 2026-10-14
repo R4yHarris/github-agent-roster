@@ -8,7 +8,7 @@ import { isAllowedFile, plannerToolDefinitions } from '../runtime/tools.mjs';
 import { plannerMemoryText, redactSecrets } from '../runtime/memory.mjs';
 import { applyFeedback } from './feedback.mjs';
 import { parsePlannerToolCalls } from './tool-calls.mjs';
-import { acceptanceCheck, allowedFile, checkedList, ensureAcceptanceChecks, ensureAllowedFiles, ensureOriginalAsk, ensureTitleHeading, isDirectoryDocumentAsk, oneLine, outputDirectoryFromAsk, parseTaskDocument, validateDirectoryDocumentPlan, validateDirectoryFiles } from './task.mjs';
+import { acceptanceCheck, allowedFile, checkedList, ensureAcceptanceChecks, ensureAllowedFiles, ensureOriginalAsk, ensureTitleHeading, isDirectoryDocumentAsk, oneLine, outputDirectoryFromAsk, parseTaskDocument, requestsExecutableArtifact, validateDirectoryDocumentPlan, validateDirectoryExecutablePlan, validateDirectoryFiles } from './task.mjs';
 import { selectReasoning } from '../llm/reasoning.mjs';
 import { isLlmTimeout, localRequestTimeoutMs, resolveRequestTimeout } from '../llm/request.mjs';
 import { issueWave } from '../lib/wave-labels.mjs';
@@ -100,6 +100,7 @@ export function buildPlan(ask, { reference, title, acceptanceChecks, filesAllowe
   }
   checkAskScope(files, requirements);
   validateDirectoryDocumentPlan(cleanAsk, files, checks);
+  validateDirectoryExecutablePlan(cleanAsk, files, { taskClass: metadata.task_class });
   const design = grounding && !docsOnly && isCodeSlice(files) ? normalizeDesign(plannedDesign) : null;
   const unknown = groundingErrors({ checks, design, filesAllowed: files, askText: `${title ?? ''}\n${cleanAsk}`, index: grounding?.index });
   if (unknown.length) throw new TypeError(`Plan cites names that do not exist: ${unknown.slice(0, 6).join('; ')}`);
@@ -270,7 +271,10 @@ export async function planAsk(ask, {
         'For safety use "The guide states the examples are illustrative only". Negative execution claims such as ' +
         '"no commands run" or "no files modified" are still operational checks, not document contents; ' +
         'keep the original safety obligations in the Ask and notes, enforced by scope and tools. ' +
-        'Avoid pairing command names with execution assertions even when quoting or negating them. ' : '') +
+        'Avoid pairing command names with execution assertions even when quoting or negating them. ' :
+        outputDirectoryFromAsk(cleanAsk) && requestsExecutableArtifact(cleanAsk) ?
+          'The Ask requests a runnable utility and tests: choose concrete code and test files beneath the output directory ' +
+          '(not Markdown-only), keep task_class feat or test (never docs), and keep checks that run the tests. ' : '') +
       (grounding ? 'Existing definitions below are real repository code. In acceptance_checks, name real exports in backticks ' +
         '(for example `openStore`) instead of concepts; the harness rejects backticked names that do not exist. ' +
         'For a code task add design: {extend:[{file,exports}], new_exports:[{file,name}], outline:[steps], ' +
