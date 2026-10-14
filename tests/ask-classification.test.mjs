@@ -9,11 +9,52 @@ import { askRequirements } from '../src/planner/stub.mjs';
 import { planOutline, validatePlan } from '../src/planner/plan.mjs';
 import { parsePlanDocument } from '../src/planner/plan-document.mjs';
 import { createTools, isForbiddenWrite, isManagedFile } from '../src/runtime/tools.mjs';
+import { allowedFile, isDirectoryDocumentAsk, validateDirectoryDocumentPlan, validateDirectoryFiles } from '../src/planner/task.mjs';
 
 const example = readFileSync(new URL('../roster.config.example.yml', import.meta.url), 'utf8');
 const stub = parseConfig(example);
 const configured = parseConfig(example.replace('base_url: ""', 'base_url: http://localhost:8000/v1')
   .replace('model: ""', 'model: plan-model'));
+
+const marketingAsk = 'Lets create a design, plan and execution of a marketing site applicaiton that creates a marketing static web page scaffold and design, and implementation of a business marketing page for my Security Risk Analysis and SaaS consultation business, offerring security reviews and consultations for businesses that have purchased their own software solutions for their businesses and do not know how secure it is and what their risk-state is. THe output should be several markdown files with the design plan, static web page pseudo code, navigation/routing, implmeentation plan, timeline, and project management scaffold of agile development and timelines, all in a docs/design and implementation plan directory.';
+
+test('marketing document deliverables grant their exact space-containing directory without website execution', () => {
+  assert.equal(classifyAsk(marketingAsk).kind, 'slice');
+  assert.equal(askRequirements(marketingAsk).outputDirectory, 'docs/design and implementation plan');
+  assert.equal(isDirectoryDocumentAsk(marketingAsk), true);
+  const files = ['docs/design and implementation plan/DESIGN.md',
+    'docs/design and implementation plan/IMPLEMENTATION.md'];
+  for (const file of files) assert.equal(allowedFile(file), file);
+  validateDirectoryFiles(files, 'docs/design and implementation plan');
+  validateDirectoryDocumentPlan(marketingAsk, files, ['DESIGN describes the business services and navigation']);
+  assert.throws(() => validateDirectoryFiles(['docs/design/README.md'],
+    'docs/design and implementation plan'), /not permitted/);
+  assert.throws(() => validateDirectoryDocumentPlan(marketingAsk,
+    ['docs/design and implementation plan/index.html'], ['Page describes the business']), /Markdown/);
+  assert.throws(() => validateDirectoryDocumentPlan(marketingAsk, files,
+    ['IMPLEMENTATION outlines the site and npm run deploy succeeds']), /document-content/);
+});
+
+test('deliverable destination prose still excludes examples, multiple grants and unsafe path whitespace', () => {
+  for (const ask of [
+    'Explain this example: "The output should be Markdown files, all in a docs/design plan directory."',
+    '> The output should be Markdown files, all in a docs/design plan directory.',
+    'Explain:\n```\nThe output should be Markdown files, all in a docs/design plan directory.\n```',
+    'Documents mention all in a docs/design plan directory.',
+  ]) assert.equal(askRequirements(ask, { allowMissing: true }).outputDirectory, undefined);
+  assert.throws(() => askRequirements('The output should be Markdown files, all in a docs/design plan directory. Output it in a new other directory.'), /one output directory/);
+  for (const path of ['docs/../escape', 'docs/.git', 'docs/vendor', 'docs/space  name', 'docs/trailing ', 'C:/outside',
+    '.github/workflows', 'agent-policy.yml', 'docs/.env', 'docs/keys.pem', 'docs/name.']) {
+    assert.throws(() => askRequirements(`The output should be Markdown files, all in a "${path}" directory.`),
+      /Output directory/, path);
+  }
+  const explicit = `${marketingAsk}\n\n## Allowed Files\n- README.md`;
+  assert.deepEqual(askRequirements(explicit).files, ['README.md']);
+  assert.equal(askRequirements(explicit).outputDirectory, undefined);
+  for (const file of ['docs/name  two.md', 'docs/trailing .md ', 'docs/../escape.md', 'docs/tab\tname.md']) {
+    assert.throws(() => allowedFile(file), /Files allowed/);
+  }
+});
 
 test('ordinary output-directory asks are executable without classifier-invented filenames', () => {
   const ask = 'Write me a one page design of a simple marketing web page for a Security and Risk Analaysis consulting business and setup instructions for obtaining a web page and serving the web page to market the business. Output it in a new "new-design" directory';

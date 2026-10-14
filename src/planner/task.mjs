@@ -23,8 +23,9 @@ export function acceptanceCheck(value, index = 0) {
 }
 
 export function allowedFile(value) {
-  const file = oneLine(value, 'Files allowed entry');
-  if (!/^(?:\*\*\/\*|[A-Za-z0-9_.-]+(?:\/[A-Za-z0-9_.-]+)*(?:\/\*\*)?)$/.test(file) ||
+  const file = value;
+  if (typeof file !== 'string' || file.length > 240 ||
+      !/^(?:\*\*\/\*|[A-Za-z0-9_.-]+(?: [A-Za-z0-9_.-]+)*(?:\/[A-Za-z0-9_.-]+(?: [A-Za-z0-9_.-]+)*)*(?:\/\*\*)?)$/.test(file) ||
       file.split('/').some((part) => part === '.' || part === '..') || isForbiddenWrite(file)) {
     throw new TypeError('Files allowed entries must stay inside the worktree and exclude protected files');
   }
@@ -37,14 +38,15 @@ export function outputDirectoryFromAsk(ask) {
     return undefined;
   }
   const directive = /(?:^|[.!?\n]\s*)(?:output|save|put|place)\s+(?:(?:it|them|the (?:output|documents|files))\s+)?(?:in|into|to)\s+(?:(?:a|an|the)\s+)?(?:new\s+)?(?:"([^"\n]+)"|'([^'\n]+)'|`([^`\n]+)`|([^\s"'`]+))\s+directory\b/gi;
+  const deliverablesDirective = /(?:^|[.!?\n]\s*)the output\s+(?:should|must|will)\s+be\s+[^.!?\n]*?\b(?:all\s+)?in\s+(?:a|an|the)\s+(?:new\s+)?(?:"([^"\n]+)"|'([^'\n]+)'|`([^`\n]+)`|([A-Za-z0-9_/-][A-Za-z0-9_. /-]*?))\s+directory(?=\s*(?:[.!?\n]|$))/gi;
   const text = withoutReferenceUrls(String(ask ?? '')).replace(/<!--[\s\S]*?-->/g, '')
     .replace(/^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ {0,3}\1[ \t]*$/gm, '')
     .replace(/^[ \t]*>.*$/gm, '')
     .replace(/(["'`])((?:(?!\1)[^\n])*)\1/g, (span, _quote, content) =>
       /\b(?:output|save|put|place)\s+/i.test(content) ? '' : span);
-  const directories = [...text.matchAll(directive)].map((match) => {
+  const directories = [...text.matchAll(directive), ...text.matchAll(deliverablesDirective)].map((match) => {
     const directory = match.slice(1).find((value) => value !== undefined);
-    if (!/^[A-Za-z0-9_-][A-Za-z0-9_.-]*(?:\/[A-Za-z0-9_-][A-Za-z0-9_.-]*)*$/.test(directory) ||
+    if (!/^[A-Za-z0-9_-][A-Za-z0-9_.-]*(?: [A-Za-z0-9_.-]+)*(?:\/[A-Za-z0-9_-][A-Za-z0-9_.-]*(?: [A-Za-z0-9_.-]+)*)*$/.test(directory) ||
         directory.split('/').some((part) => part.endsWith('.') || part.toLowerCase() === 'vendor') ||
         isForbiddenWrite(directory) || isForbiddenWrite(`${directory}/output.md`)) {
       throw new TypeError('Output directory must be relative, bounded, and exclude protected paths');

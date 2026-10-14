@@ -161,6 +161,73 @@ test('public directory runs reject invalid planner files or checks without invok
   }
 });
 
+test('reported marketing Ask reaches public shell seats and writes only Markdown under its exact directory', async (t) => {
+  const ask = 'Lets create a design, plan and execution of a marketing site applicaiton that creates a marketing static web page scaffold and design, and implementation of a business marketing page for my Security Risk Analysis and SaaS consultation business, offerring security reviews and consultations for businesses that have purchased their own software solutions for their businesses and do not know how secure it is and what their risk-state is. THe output should be several markdown files with the design plan, static web page pseudo code, navigation/routing, implmeentation plan, timeline, and project management scaffold of agile development and timelines, all in a docs/design and implementation plan directory.';
+  const directory = 'docs/design and implementation plan';
+  const { root, repoRoot, git, env } = directoryFixture(t);
+  const head = git('rev-parse', 'HEAD');
+  const documents = {
+    [`${directory}/DESIGN.md`]: '# Marketing design\n\nSecurity Risk Analysis and SaaS consultation services, audience, risk-state assessment and business messaging.\n',
+    [`${directory}/SCAFFOLD.md`]: '# Static page pseudocode\n\nHero, services, risk assessment, consultation contact. Navigation and routing map these sections to anchors.\n',
+    [`${directory}/IMPLEMENTATION.md`]: '# Implementation plan\n\nAgile project scaffold: backlog, acceptance criteria, sprint milestones, timeline estimates and dependencies. This document is a plan, not deployed software.\n',
+  };
+  const plan = { title: 'Marketing site design and implementation documentation',
+    files_allowed: Object.keys(documents), task_class: 'docs', difficulty: 2, estimate_min: 15,
+    acceptance_checks: [
+      'DESIGN describes Security Risk Analysis and SaaS consultation business messaging and audience',
+      'SCAFFOLD contains static page pseudocode and navigation/routing',
+      'IMPLEMENTATION outlines the implementation plan, agile project management scaffold and timeline',
+    ] };
+  const seats = [];
+  let coderTurns = 0;
+  const fetchImpl = async (_url, request) => {
+    const body = JSON.parse(request.body);
+    const system = body.messages[0].content;
+    const reply = (content) => Response.json({ model: 'fake-directory-model',
+      choices: [{ finish_reason: 'stop', message: { role: 'assistant', content } }] });
+    if (system.includes('builtin planner seat')) {
+      seats.push('planner');
+      assert.ok(body.messages[1].content.startsWith(ask));
+      assert.ok(system.includes(`only the output directory "${directory}"`));
+      return reply(JSON.stringify(plan));
+    }
+    if (system.includes('independent Original Ask audit') || system.startsWith('You are the builtin reviewer seat.')) {
+      seats.push(system.includes('independent Original Ask audit') ? 'ask-audit' : 'reviewer');
+      return reply(passingReview(body));
+    }
+    if (coderTurns++ === 0) {
+      seats.push('coder');
+      return Response.json({ model: 'fake-directory-model', choices: [{ finish_reason: 'tool_calls',
+        message: { role: 'assistant', tool_calls: Object.entries(documents).map(([file, content], index) => ({
+          id: `document-${index}`, type: 'function', function: { name: 'write_file',
+            arguments: JSON.stringify({ path: file, content }) },
+        })) } }] });
+    }
+    return reply('The three Markdown documents cover design, pseudocode/navigation, implementation, timeline and agile project scaffolding. Docs-only; no site implementation or deployment.');
+  };
+  const instance = createDispatcher({ cwd: root, repoRoot, config: localConfig, env,
+    output: { write() {} }, errorOutput: { write() {} }, services: {
+      repositoryBranch: () => 'main',
+      submitAsk: () => assert.fail('Local shell must not create a GitHub issue'),
+      runBuiltinAsk: (text, options) => runBuiltinAsk(text, { ...options, autoModel: false, fetchImpl,
+        publisher: () => assert.fail('Document run must not publish'),
+        runTestCommand: () => assert.fail('Document run must not execute commands') }),
+    } });
+  await instance.dispatch(ask);
+  const result = instance.state.lastRun;
+  assert.deepEqual(seats, ['planner', 'coder', 'ask-audit', 'reviewer']);
+  assert.equal(result.failed, false);
+  assert.equal(result.review.verdict, 'pass');
+  assert.equal(result.result.testsSkipped, true);
+  assert.equal(parseTaskDocument(readFileSync(result.taskPath, 'utf8')).ask, ask);
+  for (const [file, content] of Object.entries(documents)) {
+    assert.equal(readFileSync(path.join(result.worktreePath, file), 'utf8'), content);
+    assert.equal(existsSync(path.join(root, file)), false);
+  }
+  assert.equal(git('rev-parse', 'HEAD'), head);
+  assert.equal(git('status', '--porcelain'), '');
+});
+
 test('public documentation intent denies unsafe plans across verbs and noun-only requests', async (t) => {
   const { root, repoRoot, env } = directoryFixture(t);
   for (const ask of [

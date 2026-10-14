@@ -97,6 +97,23 @@ start `roster` inside the target Git repository and enter this exact example:
 Write me a one page design of a simple marketing web page for a Security and Risk Analaysis consulting business and setup instructions for obtaining a web page and serving the web page to market the business. Output it in a new "new-design" directory
 ```
 
+Intake also recognizes declarative deliverable destinations, for example:
+
+```text
+Create the marketing site design documents, page pseudocode, navigation, implementation plan and agile timeline. The output should be several Markdown files, all in a docs/design and implementation plan directory.
+```
+
+This grants the exact relative directory `docs/design and implementation plan`;
+Roster does not silently rename it or require the human to enumerate every
+document. Single internal ASCII spaces are supported in directory components
+and concrete planned file paths. Leading/trailing or repeated spaces, traversal,
+protected destinations, multiple different directory grants, and directives in
+quoted examples, blockquotes, code fences or references do not grant authority.
+The requested bundle is one documentation outcome: the planner chooses bounded
+Markdown filenames and content checks for design, pseudocode, routing, execution
+planning, timelines and project scaffolding. The word "implementation" inside
+the requested documents does not authorize building or deploying the website.
+
 Planner → coder → read-only reviewer run sequentially in one isolated
 `.worktrees/local-<id>` worktree. Planner preserves the human Ask verbatim
 (CRLF line endings normalized, captured leading/trailing whitespace retained),
