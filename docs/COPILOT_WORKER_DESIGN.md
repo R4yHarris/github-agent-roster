@@ -1,6 +1,6 @@
 # Optional Copilot full-agent worker: design proposal
 
-**Status: DESIGN ONLY, 2026-10-13.** Preparation for #571 under #569; neither
+**Status: OFFLINE PREPARATION ONLY, 2026-10-14.** Preparation for #571 under #569; neither
 issue is declared complete. Ray delegated the architecture choice on 2026-10-13;
 the parent selected preparation of an explicitly selected external
 **full-agent worker**, not a Copilot transport substituted into the builtin
@@ -298,6 +298,80 @@ after I/O failure. A synthetic host receipt is not independent live model
 review, and no passing mock authorizes publication. Gates C/D, actual supported
 CLI capability wiring, account/data/spend/dependency approval and #570's
 publication gate remain separate. No real worker adapter is delivered here.
+
+## 9. Offline capability assessment (separate from Gate B's event protocol)
+
+The #645 pure [capability assessment](../src/lib/copilot-worker-capabilities.mjs)
+exposes `assessCopilotWorkerCapabilities(report)` for offline preparation only.
+It is not imported by the CLI, builtin seat loop or worker mock, and provides
+no transport, launch, authentication, artifact import, review or publication
+operation. It implements the fail-closed capability declaration prerequisite
+in sections 3, 5 and 7 of this design, tracing to FEATURE_SPEC sections
+5.2, 5.4, 5.5 and 5.8 while preserving principles 3 and non-goals 7.
+
+Schema 1 accepts exactly these fields:
+
+- `schema: 1`, `kind: 'external-full-agent'`, `evidence: 'synthetic'`,
+  `concurrency: 1` and `tools: ['read_file']`. Only Gate B's existing read
+  callback is recognized; unknown, automatic or expanded tools fail rather
+  than being filtered or granted.
+- `authority`: `launch`, `network`, `auth`, `shell`, `git` and `publisher`
+  must each be explicitly `false`. No environment, credential, model,
+  transport or physical-containment fields are accepted.
+- `limits`: `files`, `bytes`, `callbacks`, `events` and `duration` must each
+  be finite positive safe integers. `duration` is milliseconds. These are
+  declarations, not enforced budgets or proof of a hard spend ceiling.
+- `controls`: `immutableTask`, `exactScope`, `boundedCallbacks`,
+  `candidateHashes`, `cancellation`, `deadline`, `exitAndCleanup`,
+  `separateProvenance` and `independentReview`. Values are `true`, `false`
+  or `null`; omitted controls remain explicitly unknown.
+
+Malformed records throw `TypeError`. Missing/null and explicitly unsupported
+controls produce a `blocked` assessment with separate `unknownControls` and
+`unsupportedControls` lists. All controls declared true yield
+`offline-contract-compatible`, meaning **descriptor compatibility only**.
+Declarations are not observations of actual worker behavior. The returned
+snapshot is deeply frozen and independent of caller mutation.
+
+Every assessment has `liveDispatchEligible: false` and
+`publicationEligible: false`. Live blockers separately identify the
+unqualified production bridge, physical containment, inference auth,
+account/data/model/spend approval, remote cancellation, authoring provenance
+and unresolved dependency gate. This schema cannot clear those gates,
+fabricate served-model usage, qualify an executable or produce builtin
+attribution. #570's original #596 remains a separate dependency; its
+installation-permission blocker is not repaired or accepted here.
+
+The [focused descriptor tests](../tests/copilot-worker-capabilities.test.mjs)
+exercise closed records, unknown/unsupported controls, forbidden authority,
+tools, finite limits, nonexecuted accessors and immutable results. They do not
+repeat Gate B's artifact/event protocol tests or prove Gates C/D. The next
+safe step is independent review of this bounded offline slice, not enabling
+production dispatch or claiming #571 complete.
+
+Child verification on Windows Node `v20.19.5`, 2026-10-14:
+
+```powershell
+& 'C:\Users\harrr\AppData\Local\nvm\v20.19.5\node.exe' --test --test-reporter=tap `
+  tests\copilot-worker-capabilities.test.mjs tests\copilot-worker-contract.test.mjs `
+  tests\capabilities.test.mjs
+```
+
+Result: **97 tests, 97 passed, zero failures/skips**, **2176.0346 ms**.
+This selector combines the new descriptor tests with the unchanged Gate B
+protocol and model-prior tests; it is not the earlier 121-test parent selector.
+Preliminary Node `v24.19.0` verification ran only descriptor/model-prior tests:
+13 passed, zero failures/skips, 574.7498 ms, before the final test additions.
+The child author's actual served model remains unknown. This evidence is not
+independent parent review, publication, merge, human acceptance or live proof.
+
+Independent parent review on Windows Node `v20.19.5` reran the same selector:
+**97 tests, 97 passed, zero failures/skips**, **1467.8426 ms**. Review covered
+the complete three-file staged diff, closed-record validation, denied authority,
+missing versus unsupported controls, independent frozen snapshots and the
+absence of production wiring. No blocking defects were identified in this
+descriptor-only scope. Parent review does not identify the unknown child model
+or discharge any live qualification, publication or human acceptance gate.
 
 ## Sources and preparation record
 
