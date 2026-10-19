@@ -326,6 +326,61 @@ installed Node 20 input. No retired Roster implementation, new dependency,
 live model, actual GitHub query or default/full-suite retry is involved.
 The existing default local-delivery result remains **93/100**.
 
+## Native App issue observation controls
+
+Product trace: FEATURE_SPEC **5.1**, **5.7** and **5.8**. Use explicit installed
+Git and Node20 images through `ROSTER_TEST_GIT` and `ROSTER_TEST_NODE`, then:
+
+```powershell
+cargo test --lib --test analytics --locked --offline -- github::tests:: status::tests:: offline_status_cli_ online_status_cli_ analytics_read_only_acceptance_runs_the_actual_compiled_cli_and_invalid_option_controls --test-threads=1
+```
+
+Owned fixtures create isolated consumer/installation repositories and a pinned
+synthetic SDK interface. They execute the actual owned Node20 adapter with a
+dummy JSON key, not a real PEM, App credential or copied SDK source. The mock
+native HTTP transport verifies the exact App token/header, fixed GitHub scope,
+GET and revocation sequence; it cannot contact GitHub. No live signing or App
+installation permission is claimed by this interface simulation.
+
+Controls cover missing credentials before repository access, no ambient human
+auth or SDK-CLI auto-execution, exact issue/URL/state shape, PR refusal, secret
+exclusion, the exact 1 MiB response bound, mandatory empty revocation
+acknowledgement, failures without metadata, origin drift and first-reason
+cancellation at actual SDK/HTTP readiness barriers. Returned context rechecks
+the original repository and reviewed dependency after later awaits.
+Real CLI negative controls preserve owned files and refuse missing App
+credentials before local/private providers; existing offline CLI/e2e controls
+continue to execute the real binary without auth or networking.
+
+A native counterexample reproduced App key growth after the preflight size
+check: the initial SDK-side unbounded read accepted it. The adapter now uses a
+bounded regular single-link handle read and clears its buffer. Both the
+counterexample and exact 65,536-byte/+1-byte controls pass on stable GNU;
+metadata-only size checks are not accepted as actual-read proof.
+Successful reads require revocation acknowledgement; a dropped future is not
+proof of remote revocation or writer cleanup and returns no issue authority.
+The default local-delivery, vault identity, owner CI and native platform/live
+acceptance gates remain separate and open.
+
+Independent review found two App-observation bugs. Owned native counterexamples
+failed before both repairs: a key inside a linked consumer source tree was
+accepted, and cancellation during successful token cleanup lost to the earlier
+HTTP failure. Key exclusion now checks current and canonical roots for both the
+consumer and installation, including linked-installation fallback. After any
+acknowledged revocation, cancellation is rechecked before propagating the
+earlier result, with that provider failure retained as a cause. Both new controls
+pass on stable GNU and Rust 1.85; the shared Tokio skill captures the
+cleanup/error ordering. Re-review cleared both repairs.
+
+The repaired source passes **44 targeted checks per compiler** on stable GNU
+1.99.1 and GNU 1.85.0: 28 library cases, seven actual CLI/e2e cases, six CLI,
+two guidance and one selection control. Format checking and strict all-target
+Clippy pass on both. Actual discovery is **766 tests**, not 766 executed passes.
+Before these two review repairs the 42-case affected matrix also passed in
+optimized stable mode. Both newly added review controls also pass in optimized
+stable mode after the repairs. All App validation remains synthetic/offline; the
+default delivery and platform/live acceptance gates have not changed.
+
 ## Native offline fleet listing controls
 
 Product trace: FEATURE_SPEC **5.2** and **5.7**. The focused selectors are:

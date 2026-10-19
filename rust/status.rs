@@ -18,13 +18,17 @@ fn error(message: &str) -> Error {
 #[derive(Debug, Clone)]
 pub struct Options {
     pub issue: u64,
+    pub offline: bool,
     pub json: bool,
 }
 
 impl Options {
     pub fn parse(args: &[String]) -> Result<Self, Error> {
-        let usage =
-            || error("Use status --issue N --offline [--json]. Status never contacts GitHub.");
+        let usage = || {
+            error(
+                "Use status --issue N [--offline] [--json]. Online status requires GitHub App authentication.",
+            )
+        };
         let mut issue = None;
         let mut offline = false;
         let mut json = false;
@@ -58,11 +62,9 @@ impl Options {
             }
             position += 1;
         }
-        if !offline {
-            return Err(usage());
-        }
         Ok(Self {
             issue: issue.ok_or_else(usage)?,
+            offline,
             json,
         })
     }
@@ -88,14 +90,33 @@ impl Snapshot {
                 .map_or_else(|| Ok(Text::from("unknown")), domain::string)
                 .and_then(|value| value.to_utf8())
         };
-        Ok(format!(
+        let mut output = format!(
             "Issue: {}\nLocal log: {}\nLast seat: {}\nLast complete event: {}\nObserved state: {}\nEvidence: local metadata only; worker liveness, verification, publication and acceptance remain unknown.\n",
             display("issue")?,
             display("log")?,
             display("seat")?,
             display("event")?,
             display("state")?
-        ))
+        );
+        if let Some(issue) = self.value.get("github_issue") {
+            let field = |name| -> Result<String, Error> {
+                domain::string(
+                    issue
+                        .get(name)
+                        .ok_or_else(|| error("GitHub observation omitted a metadata field"))?,
+                )?
+                .to_utf8()
+            };
+            output.push_str(&format!(
+                "GitHub issue: #{} {} ({}) {}\nGitHub App: {}\nOpen PR: unknown (not queried)\n",
+                field("number")?,
+                field("title")?,
+                field("state")?,
+                field("url")?,
+                field("app")?
+            ));
+        }
+        Ok(output)
     }
 }
 
@@ -245,6 +266,9 @@ pub async fn observe(
     token: &CancellationToken,
 ) -> Result<Snapshot, Error> {
     let outcome = async {
+        if !options.offline {
+            return Err(error("The local-only status API requires explicit offline mode; no authentication was attempted"));
+        }
         if options.issue == 0 || options.issue > crate::MAX_SAFE_INTEGER {
             return Err(error("Status requires a positive safe issue number"));
         }
@@ -339,6 +363,42 @@ pub async fn observe(
     })
 }
 
+pub async fn read<T: crate::llm::http::Transport>(
+    transport: &mut T,
+    installation: &Path,
+    cwd: &Path,
+    environment: &Value,
+    options: &Options,
+    token: &CancellationToken,
+) -> Result<Snapshot, Error> {
+    if options.offline {
+        return observe(cwd, environment, options, token).await;
+    }
+    let issue = crate::github::read_issue(
+        transport,
+        installation,
+        cwd,
+        environment,
+        options.issue,
+        token,
+    )
+    .await?;
+    let mut observed = observe(
+        cwd,
+        environment,
+        &Options {
+            offline: true,
+            ..options.clone()
+        },
+        token,
+    )
+    .await?;
+    issue.require_current(token).await?;
+    domain::put(&mut observed.value, "github_issue", issue.metadata())?;
+    token.check()?;
+    Ok(observed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -352,10 +412,11 @@ mod tests {
     -> Result<(), Error> {
         let options = Options::parse(&args(&["--issue", "42", "--offline", "--json"]))?;
         assert_eq!(options.issue, 42);
+        assert!(options.offline);
         assert!(options.json);
+        assert!(!Options::parse(&args(&["--issue", "42"]))?.offline);
         for input in [
             args(&[]),
-            args(&["--issue", "42"]),
             args(&["--issue", "0", "--offline"]),
             args(&["--issue", "042", "--offline"]),
             args(&["--issue", "9007199254740992", "--offline"]),
@@ -476,6 +537,7 @@ mod tests {
             &Value::object(Vec::<(&str, Value)>::new()),
             &Options {
                 issue: 42,
+                offline: true,
                 json: true,
             },
             &cancellation.token(),

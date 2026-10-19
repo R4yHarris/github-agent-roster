@@ -27,8 +27,20 @@ git submodule update --init --recursive
 
 This branch builds the native Rust binary with Cargo. The former npm entry
 point has been removed; the contracts publishing SDK remains a separate Node
-tool. The first native local TASK/Ask CLI is implemented; GitHub issue and
-publication adapters remain pending.
+tool. Native local TASK/Ask delivery and App-authenticated read-only issue/status
+observations are implemented; GitHub task delivery and publication adapters
+remain pending.
+
+Online issue observations use a small owned identity adapter around the SDK's
+public `parseOrigin` and `mintInstallationToken` exports, never a copied crypto
+or policy implementation. `ROSTER_NODE20` is explicit and version-checked by
+the adapter. It receives bounded input without setting the SDK module as the
+CLI entry point, and does not inherit human tokens. Rust owns subsequent
+fixed-scope HTTPS, validation, cancellation and token revocation.
+The SDK's existing contents/PR-write token baseline remains unchanged; only
+additional `issues: read` is requested. This does not grant a local policy
+capability or change installation permissions. Missing App credentials or
+unaccepted permissions fail without a human-authentication fallback.
 
 Native worktree preparation does **not** fetch `.gitmodules` URLs or blindly run
 recursive update. Every declared gitlink needs an explicit approved absolute

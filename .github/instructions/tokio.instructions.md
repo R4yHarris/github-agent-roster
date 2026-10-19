@@ -1,6 +1,6 @@
 ---
 description: "Use when implementing or reviewing Tokio cancellation, timers, process ownership and async transport."
-applyTo: "rust/process.rs,rust/cancel.rs,rust/identity.rs,rust/llm/**/*.rs,rust/execution/**/*.rs,rust/seats/**/*.rs"
+applyTo: "rust/process.rs,rust/cancel.rs,rust/identity.rs,rust/github.rs,rust/github/**/*.rs,rust/status.rs,rust/llm/**/*.rs,rust/execution/**/*.rs,rust/seats/**/*.rs"
 ---
 
 # Tokio runtime

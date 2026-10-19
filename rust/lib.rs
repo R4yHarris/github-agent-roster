@@ -9,6 +9,7 @@ mod domain;
 pub mod evaluation;
 pub mod execution;
 pub mod fleet;
+pub mod github;
 pub mod host;
 pub mod identity;
 pub mod json;

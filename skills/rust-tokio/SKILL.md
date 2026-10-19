@@ -14,8 +14,8 @@ Select for asynchronous process ownership, transport, cancellation and timers.
 1. Read root AGENTS.md, prompt 04 and the scoped Tokio instructions.
 2. Use the existing current-thread runtime; never create an executor per
    request, tool call or seat. Keep synchronous leaves executor-independent.
-3. Register notifications before checking state. Recheck cancellation before
-   side effects and terminal success; first cancellation reason wins.
+3. Register notifications before checking state. Recheck cancellation after
+   cleanup and before effects, errors or success; first cancellation reason wins.
 4. Own every child/task through cleanup. Close stdin, bound both output
    streams, kill and await owned children on interruption, and report unknown
    cleanup without claiming release. Child exit is not descendant containment.

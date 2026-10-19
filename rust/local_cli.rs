@@ -21,7 +21,7 @@ pub const HELP: &str = "Usage:
   roster init
   roster doctor
   roster fleet list
-  roster status --issue N --offline [--json]
+  roster status --issue N [--offline] [--json]
   roster stats [--json] [--ref REVISION_OR_RANGE] [--evals PATH]
   roster recommend --task-class feat|fix|docs|test [--difficulty 1-5] [--json]
   roster eval TARGET accept|reject|rework 1-5 y|n --local|--post [--minutes N] [--comment TEXT]
@@ -38,7 +38,7 @@ GitHub issue delivery, publication, resume, routing and review repair are unavai
 Those exclusions concern GitHub-backed runs; local fixed-profile continuations above are implemented.
 Unimplemented commands fail explicitly; there is no Node runtime fallback.
 Stats and recommendations read bounded local evidence without recording, publishing or changing a route.
-Status requires an explicit issue and --offline; it reports local native-log observations, not liveness or passing authority.
+Status requires an explicit issue; --offline stays local, otherwise complete App authentication and the reviewed SDK are required. Observations are not liveness or passing authority.
 Fleet list reads checked canonical private settings without probing, warming, writing or selecting a route; other fleet commands remain unavailable.
 Human eval requires explicit --local or --post and a separate human invocation; posting requires approved human GitHub credentials.
 Delivery stats, onboarding and the interactive shell remain unavailable.

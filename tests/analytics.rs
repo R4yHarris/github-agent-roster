@@ -2326,6 +2326,48 @@ fn offline_status_cli_missing_log_is_unknown_and_never_reads_private_configurati
 }
 
 #[test]
+fn online_status_cli_requires_complete_app_credentials_before_any_local_provider_or_human_auth()
+-> Result<(), Error> {
+    let fixture = Fixture::new(false)?;
+    fixture.commit(None, "base")?;
+    fixture.write(".roster/config.yml", "not-valid [test-only-private-config")?;
+    fixture.write(
+        ".roster/runs/roster-42-coder.log",
+        "not-json test-only-private-log\n",
+    )?;
+    let before = snapshot(&fixture.container)?;
+    for app_id in [None, Some("123")] {
+        let mut command = fixture.command(&["status", "--issue", "42", "--json"], &fixture.root);
+        command
+            .env_remove("GITHUB_APP_ID")
+            .env_remove("GITHUB_APP_PRIVATE_KEY_PATH")
+            .env("GH_TOKEN", "test-only-human-token-not-an-app")
+            .env("GITHUB_TOKEN", "test-only-human-token-not-an-app")
+            .env("ROSTER_GIT", "not-an-approved-image")
+            .env("ROSTER_NODE20", "not-an-approved-image");
+        if let Some(app_id) = app_id {
+            command.env("GITHUB_APP_ID", app_id);
+        }
+        let output = command.output().map_err(io)?;
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(
+            utf8(&output.stderr)?
+                .contains("requires complete GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH")
+        );
+        for private in [
+            "test-only-private",
+            "test-only-human-token",
+            "not-an-approved-image",
+        ] {
+            assert!(!utf8(&output.stderr)?.contains(private));
+        }
+    }
+    assert_eq!(snapshot(&fixture.container)?, before);
+    fixture.finish()
+}
+
+#[test]
 fn offline_status_cli_reads_only_complete_native_metadata_and_ignores_the_active_tail()
 -> Result<(), Error> {
     let fixture = Fixture::new(false)?;
@@ -2527,7 +2569,7 @@ fn offline_status_cli_preserves_the_exact_native_writer_byte_limit_and_rejects_u
     assert_eq!(snapshot(&fixture.container)?, before);
     for args in [
         vec!["status", "--issue", "42", "--offline", "--unknown-option"],
-        vec!["status", "--issue", "42"],
+        vec!["status", "--issue", "42", "--unknown-option"],
         vec!["status", "--issue", "042", "--offline"],
     ] {
         let invalid = fixture

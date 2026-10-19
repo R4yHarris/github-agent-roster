@@ -167,7 +167,21 @@ async fn native(
                 Ok(Output::success(recorded.format()))
             }
             local_cli::Command::Status(options) => {
-                let observed = status::observe(cwd, environment, &options, &token).await?;
+                let observed = if options.offline {
+                    status::observe(cwd, environment, &options, &token).await?
+                } else {
+                    let mut transport =
+                        llm::http::HttpTransport::new().map_err(|failure| *failure.error)?;
+                    status::read(
+                        &mut transport,
+                        installation,
+                        cwd,
+                        environment,
+                        &options,
+                        &token,
+                    )
+                    .await?
+                };
                 Ok(Output::success(observed.format(options.json)?))
             }
             local_cli::Command::Doctor => {

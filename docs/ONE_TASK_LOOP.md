@@ -78,10 +78,14 @@ line, even while a seat is active, without contacting GitHub. Missing logs
 are shown as unknown/none. Live logs are local managed files, not evidence
 that tests or human AI-Eval passed, and are never staged by the coder.
 
-On the native rewrite branch this command requires the explicit issue number
-and `--offline`. It projects bounded schema-one log metadata, not raw detail
-bodies, and exposes optional `--json`. Online/cache/artifact status and automatic
-issue inference are not implemented yet; see [native status](RUST.md#native-offline-issue-observations).
+On the native rewrite branch status requires the explicit issue number.
+`--offline` projects bounded schema-one local log metadata without credentials
+or GitHub access. Without it, complete App credentials and the reviewed SDK
+identity adapter are required for native issue observations and acknowledged
+token revocation; no human authentication is substituted. Optional `--json`
+preserves the distinction between local metadata and the observed issue.
+PR/cache/artifact status and automatic issue inference remain unported; see
+[native status](RUST.md#native-app-scoped-issue-observations).
 
 When no LLM endpoint
 is configured, the deterministic stub writes only the result summary and

@@ -25,8 +25,9 @@ The [native CLI](rust/main.rs) currently exposes:
 - `roster doctor` — offline configuration, approved-image and contracts checks.
 - `roster fleet list` — read-only configured profile metadata, without endpoint
   discovery, credential-file access, warming, default changes or automatic routing.
-- `roster status --issue N --offline [--json]` — bounded native issue-log
-  metadata; unknown liveness, verification and PR state stay unknown.
+- `roster status --issue N [--offline] [--json]` — bounded native issue-log
+  metadata, plus App-authenticated issue observations online. Unknown liveness,
+  verification and PR state stay unknown.
 - `roster stats [--json] [--ref REVISION_OR_RANGE] [--evals PATH]` — bounded,
   read-only local Git/run/evaluation aggregates.
 - `roster recommend --task-class feat|fix|docs|test [--difficulty 1-5] [--json]`
@@ -63,8 +64,13 @@ GitHub, loads endpoint configuration or records history. It selects a registered
 base issue worktree, ignores an unfinished trailing record and never emits raw
 log details. Only a missing log permits canonical-repository fallback; corrupt,
 linked or unreadable logs fail explicitly. This is local observation, not a
-review or acceptance receipt. Online status, automatic issue inference, retry
-selection and the broader cached-issue/artifact display remain incomplete.
+review or acceptance receipt. Without `--offline`, status additionally requires
+complete App credentials, the clean reviewed contracts dependency and an
+absolute approved `ROSTER_NODE20` for its identity adapter. Native Rust performs
+the fixed GitHub HTTPS read and acknowledged token revocation; human tokens or
+authentication stores are never substituted. This observes the issue only, not
+its PR, acceptance or task execution. Automatic issue inference, retry selection
+and the broader cached-issue/artifact display remain incomplete.
 
 Fleet listing uses the same checked canonical private settings as native
 delivery, including from linked worktrees. It preserves the tabular profile,

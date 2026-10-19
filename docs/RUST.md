@@ -159,12 +159,55 @@ publication or human acceptance.
 
 The real native CLI and read-only acceptance path are connected; acceptance
 adds `--offline` before implementation checking and preserves the argument cap.
-Status does not load endpoint configuration, credentials, default user history
-or a GitHub client and performs no filesystem mutation. Online status, automatic
-issue inference, retry/winner selection and the broader cached issue, artifacts
-and measured-run display are still unavailable. This is not complete legacy
+Offline status does not load endpoint configuration, credentials, default user
+history or a GitHub client and performs no filesystem mutation. Online issue
+observations are implemented separately below. Automatic issue inference,
+retry/winner selection and the broader cached issue, artifacts and measured-run
+display are still unavailable. This is not complete legacy
 status parity or an interactive status rail.
 See [the native controls](TESTING.md#native-offline-status-controls).
+
+## Native App-scoped issue observations
+
+FEATURE_SPEC **5.1**, **5.7** and **5.8** now have
+`roster status --issue N [--json]` and the native
+[`github::read_issue`](../rust/github.rs) API. The only Node adapter calls the
+required contracts SDK's public origin/authentication exports; it is not a
+Roster worker, delivery loop or fallback. GitHub HTTP, issue validation,
+cancellation, token revocation and status composition remain Rust, using the
+existing HTTP transport without redirects, proxies or retries.
+
+The adapter requires complete App credentials and absolute approved Git/Node20
+images, with the clean dependency sealed at the installation's reviewed
+gitlink. It does not import the SDK as its CLI entry point or forward ambient
+human tokens. The App key must be a bounded unlinked regular file outside both
+repositories. Its actual SDK-side handle read is capped at 64 KiB, not merely a
+preflight metadata check; the buffer is cleared. The existing SDK token baseline
+includes contents/PR write permissions; this path requests only additional
+issues read and performs no task, issue, PR or policy write.
+
+Only an exact repository/number issue is returned; PR-shaped, foreign,
+incomplete and oversized responses fail. Completed reads require acknowledged
+token revocation. Cancellation preserves its first reason while bounded
+revocation still runs; an unacknowledged cleanup never becomes a successful
+observation. Dropping an unfinished read provides no issue or task authority
+and is not proof of remote token revocation. No writer is acquired or released
+by this read-only intake path.
+
+An observed issue retains the original repository identities, approved Git
+provider and reviewed SDK seal. `require_current` rechecks them across later
+awaits; online status revalidates after its local-log read before returning.
+Output excludes the issue body and token, distinguishes local/remote facts,
+and explicitly leaves PR state unknown because no PR query ran.
+`status::observe` remains strictly local and refuses online options; read-only
+seat acceptance always adds `--offline`.
+
+Native GitHub task delivery, publication/resume and the rest of status parity
+remain unported. Tests use an owned synthetic SDK interface, a dummy non-PEM
+key and controlled native HTTP responses, not real credentials or GitHub calls.
+This does not prove live App installation permissions, platform release,
+worker cleanup or FEATURE_SPEC section 8 acceptance.
+See [the controls](TESTING.md#native-app-issue-observation-controls).
 
 ## Native offline fleet listing
 
