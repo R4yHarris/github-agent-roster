@@ -1,82 +1,36 @@
 ---
 name: run-tests
-description: Verify TASK.md acceptance checks using only Node's built-in node --test runner and report exact results without installing dependencies.
+description: "Use when verifying TASK.md acceptance checks with the task language's approved native runner and recording actual evidence."
 ---
 
 # Run tests
 
 ## When to use
 
-Use this skill in the assigned worktree after reading its `TASK.md` and
-repository instructions. The runner is **`node --test` only**, on Node 20+.
-Do not install packages, introduce another runner, or substitute lint, build,
-or live network workflows for the acceptance checks.
-
-In the builtin runtime, use the `run_test` tool: it runs the tests that cover
-the changed files (including every `tests/<module>.<topic>.test.mjs` shard of a
-split module test) and accepts no arbitrary shell commands. The harness runs
-the full suite as final verification. The focused command examples below
-apply to a manual worker with shell access.
-
-## Stop condition
-
-Stop after the final edit has passing test evidence, or report the first
-failure, missing prerequisite, or exhausted turn budget. Never mark unrun
-or skipped acceptance checks as passed.
+Use in the assigned worktree after reading TASK.md and repository instructions.
+Roster is Rust: its own changes require Cargo checks, not a Node Roster suite.
+JavaScript consumer tasks may use approved Node 20 checks; that does not verify
+Rust changes or authorize arbitrary commands, network access or publication.
 
 ## Procedure
 
-1. Map acceptance IDs to the relevant existing or newly added test files and
-   named assertions. Check expected outputs and forbidden side effects, not just
-   whether code ran. Report acceptance checks without test coverage so the
-   caller can add tests or perform an explicitly planned manual check.
-2. From the assigned worktree's repository root, run the smallest invocation
-   covering the change. Name test files explicitly and combine related files
-   rather than running the same suite repeatedly. Use existing fixtures and
-   mocks; do not supply credentials or perform live GitHub actions.
-3. If the task requires the full suite, or the change affects behavior beyond
-   the focused tests, run `node --test`. Do not claim a focused run covered the
-   full suite.
-4. Capture the exact command, exit code, test names, and pass/fail/skip counts.
-   Confirm the intended tests actually ran. Zero matched tests, skipped tests,
-   cancelled tests, and todo tests are not evidence of a passed acceptance check.
-5. For a failure, retain the failing test and diagnostic, identify whether the
-   cause is the change, a prerequisite, or a pre-existing problem, and return
-   that evidence to the implementation step. Rerun after in-scope fixes. Never
-   hide failure by skipping tests or relaxing the task's expected behavior.
-6. Record evidence for each acceptance ID in the final handoff. The builtin
-   runner writes `RESULT.md`; do not edit protected generated task files.
-   Missing prerequisites,
-   unsupported verification requirements, and unrun checks remain explicit
-   blockers; do not fabricate success or install tooling to work around them.
+1. Map each acceptance ID to named assertions, expected outputs and forbidden
+   side effects. Port prior cases from Git history without weakening them.
+2. Run the smallest approved invocation covering the change. Combine related
+   selectors, use existing fixtures and do not contact live services.
+3. For Roster, run formatting, strict all-target Clippy and relevant Cargo
+   unit/integration tests with locked/offline dependencies. Run the full native
+   suite when required; do not claim a focused run covered it.
+4. Record command, compiler/platform, exit code, actual tests and pass/fail/
+   skip/cancel counts. Missing matches, skips and unavailable checks are not
+   passes. A passing Node consumer test is not native verification.
+5. Retain failures and diagnostics, repair the cause within scope and rerun.
+   Never relax an assertion, skip a failing case or call removed coverage green.
+6. Report uncovered checks and platform limitations. Harness-written RESULT.md
+   remains protected; no publishing, policy or workflow authority is granted.
 
-## Commands
+## Stop condition
 
-These examples use test files already in this repository. Choose files matching
-the actual task. Put runner options before file arguments; avoid shell-dependent
-wildcards.
-
-```sh
-node --test tests/issue.test.mjs
-node --test tests/issue.test.mjs tests/recipe.test.mjs
-node --test --test-name-pattern="rejects invalid issue numbers" tests/issue.test.mjs
-node --test
-```
-
-A name-filtered run is useful for diagnosis but proves only matched tests.
-Run all cases needed by the acceptance plan, not just the first passing match.
-
-## Result format
-
-```text
-Acceptance IDs: <checks covered>
-Command: <exact node --test invocation>
-Exit code: <actual exit code>
-Tests: <passed / failed / skipped / cancelled / todo counts>
-Evidence: <test names and the behavior their assertions verified>
-Uncovered checks or blockers: <details, or None>
-```
-
-Report manual verification separately; this skill does not turn a Node test
-result into proof of a manual check. Do not publish, merge, or alter policy as
-part of running tests.
+Stop after the final edits have actual passing evidence, or report the first
+unresolved failure, missing prerequisite or exhausted budget. Removal of the
+old implementation does not prove the replacement complete.

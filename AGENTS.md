@@ -47,6 +47,28 @@ over GHCP environment declarations, model flags, and later LLM configuration.
 Never replace measured seat model/usage with this Copilot session's settings.
 See [metrics](docs/METRICS.md) and the [GHCP example](docs/GHCP.md).
 
+## Rust migration
+
+Ray approved the full Rust rewrite on 2026-10-15; follow
+[the current migration prompt](prompts/04-rust-migration.md) and
+[FEATURE_SPEC 5.4](docs/FEATURE_SPEC.md). Ray subsequently directed this branch
+to remove the Node implementation and oracle-preservation changes. Main and Git
+history preserve the legacy implementation; do not copy it here or maintain a
+parallel runtime, frozen checkout or Node fallback. Implement and test the Rust
+replacement directly, porting behavioral checks without weakening expectations.
+Deletion does not prove equivalent behavior or a completed rewrite.
+
+For Rust work, read the [Rust language instructions](.github/instructions/rust.instructions.md)
+and [Cargo instructions](.github/instructions/cargo.instructions.md).
+Select the `rust-implementation` and `rust-cargo` task skills explicitly,
+plus `rust-tokio` for asynchronous process/transport work. Read the
+[Tokio instructions](.github/instructions/tokio.instructions.md) for that work.
+New Rust code has no comments except required license/copyright notices.
+Use clear types and tests, minimal dependencies and measured performance.
+Never trade cancellation, containment, truthful provenance or independent
+verification for speed. This approval grants no live experiment, workflow,
+policy, vendor or publishing bypass.
+
 ## Contracts dependency
 
 Use the required [`vendor/github-agent-contracts`](vendor/github-agent-contracts)
@@ -54,7 +76,7 @@ Git submodule, pinned to the latest reviewed contracts commit. Clone with `git c
 or initialize an existing checkout with `git submodule update --init --recursive`.
 Do not copy contracts source into this tree or rewrite files in the submodule.
 
-Use [`resolveContractsPath`](src/lib/paths.mjs): submodule first, then
+Use [`resolve_contracts_path`](rust/paths.rs): submodule first, then
 `GITHUB_AGENT_CONTRACTS`, then the sibling `../github-agent-contracts`.
 Fail if no candidate contains the `scripts/agent-pr.mjs` file. See
 [the dependency guide](docs/DEPENDENCY.md).
@@ -74,7 +96,7 @@ Roster runs do this automatically (`start.base`/`start.sync`, `--base`,
 2. Stub or configured LLM planner reads its own recent memory and writes a three-seat RECIPE and one TASK in the issue worktree, without app-code tools.
 3. Builtin coder loads AGENTS.md, TASK.md, skills, and its own recent memory into a separate bounded loop in that worktree.
 4. Builtin reviewer reads the task checks, coder RESULT.md, and diff with read-only requests only, plus a harness run of the read-only CLI paths the checks name, then writes REVIEW.md in the same process. It cannot write, merge, or publish.
-5. Configured coder runs `node --test`; Roster-managed publication requires a passing REVIEW.md unless `--skip-review` is explicit. It uses `agent-pr.mjs` only on explicit request and comments with the verified PR URL, real model ID, and coder AI-Run. It does not close the issue.
+5. Configured coder runs the approved checks for the task language; Roster's own Rust changes require Cargo checks. Roster-managed publication requires a passing REVIEW.md unless `--skip-review` is explicit. It uses `agent-pr.mjs` only on explicit request and comments with the verified PR URL, real model ID, and coder AI-Run. It does not close the issue.
 6. Human posts `AI-Eval:` on the PR, then closes the issue.
 
 With no LLM endpoint, the deterministic stub writes a RESULT summary and does
@@ -84,8 +106,9 @@ board. See [same-session seats](docs/MULTIAGENT.md) and [SDLC](docs/SDLC.md).
 GHCP subagent names `planner` and `coder` map to these sequential builtin seats
 in one run/worktree; reviewer is a later read-only builtin seat, not another
 chat, queue, or runtime. The parent Copilot calls
-`node src/cli.mjs run --issue N --runtime builtin --seats planner,coder,reviewer`
-for the issue, then the App publisher for reviewed changes. It must not
+the native run API for the issue once its CLI integration is implemented, then
+the App publisher for reviewed changes. The delivery CLI is currently incomplete.
+It must not
 `git commit` as R4yHarris when `GITHUB_APP_*` is set. Follow the
 [GHCP bridge](docs/GHCP.md) for publication and HTTP 422 handling.
 

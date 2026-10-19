@@ -2,14 +2,21 @@ Follow root [AGENTS.md](../AGENTS.md). Implement only the current prompt in
 [prompts/](../prompts/). Ground all work in the product spec,
 [docs/FEATURE_SPEC.md](../docs/FEATURE_SPEC.md): tie each change to a section 5
 feature, honor sections 3 and 7, cite the section in the PR body, and do not
-contradict the spec.  Do not add a Kanban DB. Zero runtime deps unless a prompt
-says otherwise. Node 20 ESM.
+contradict the spec. Do not add a Kanban DB. Zero runtime deps unless a prompt
+says otherwise. Ray approved the full incremental Rust migration on 2026-10-15;
+follow [the migration prompt](../prompts/04-rust-migration.md). This branch is
+Rust-only: remove the Node implementation and oracle-retention scaffolding.
+Use main/Git history as the behavioral reference, not a parallel Node runtime
+or frozen checkout. Port acceptance checks into native tests; removal is not
+proof of completeness. Read the scoped
+[Rust](instructions/rust.instructions.md) and
+[Cargo](instructions/cargo.instructions.md) instructions for Rust work.
 
 Require the latest reviewed Git submodule at
 [`vendor/github-agent-contracts`](../vendor/github-agent-contracts). Clone with
 `git clone --recurse-submodules` or run `git submodule update --init --recursive`.
 Do not copy contracts source into this tree or rewrite files in the submodule.
-Use [`resolveContractsPath`](../src/lib/paths.mjs) to check the submodule, then
+Use [`resolve_contracts_path`](../rust/paths.rs) to check the submodule, then
 `GITHUB_AGENT_CONTRACTS`, then `../github-agent-contracts`. Fail if no candidate
 contains the `scripts/agent-pr.mjs` file. See
 [the dependency guide](../docs/DEPENDENCY.md).

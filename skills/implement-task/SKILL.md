@@ -42,12 +42,14 @@ a blocker prevents safe in-scope progress. State which checks remain unmet.
    test that exposes it before the fix when feasible. The builtin coder uses
    `list_dir` and `read_file` to inspect, then `write_file` for permitted edits.
 3. Make the smallest complete change that meets the agreed checks, including
-   affected tests and documentation. Keep Node 20+ ESM compatibility and add no
-   runtime dependencies unless the task explicitly authorizes them. Do not make
+   affected tests and documentation. Preserve the task language's contracts;
+   Roster itself is Rust. Add no runtime dependencies without the current
+   prompt's capability/license/lockfile justification. Do not make
    unrelated refactors or bypass errors with silent fallbacks.
-4. Follow [run-tests](../run-tests/SKILL.md). Use only `node --test` for automated
-   verification. In the builtin runtime, call `run_test` after the last edit;
-   it runs the full suite. A manual shell-based worker can combine focused test
+4. Follow [run-tests](../run-tests/SKILL.md). Roster changes require Cargo
+   verification; JavaScript consumers may use approved Node checks. In the
+   builtin runtime, call the approved verification tool after the last edit.
+   A manual shell-based worker can combine focused test
    files before broadening. Label separately specified manual evidence as manual.
 5. Record evidence in the final summary with actual commands, exit codes, test
    names and counts, and observed results for each acceptance ID. The builtin

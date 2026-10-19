@@ -172,6 +172,16 @@ Every target artifact carries or is governed by one schema version and one clean
 No run/eval/history copy remains in repo state after migration; repository state contains only
 configuration and operational indexes/checkpoints needed by that repository.
 
+The native [file vault](RUST.md#native-file-vault-and-selected-endpoint-credentials)
+keeps the legacy `~/.roster/vault` location and version-one AES-256-GCM wire
+format. It is a separate credential store, never a history/state fallback.
+Native local runs resolve only selected primary/effective-critic endpoint keys;
+missing reads create nothing and failures never become optional-auth success.
+Owned legacy **vault** objects are hardened before use, preserving the original
+vault contract. This narrow exception does not change sections 4/9/10:
+wider machine-history/state roots remain refused. Windows vault ACL proof
+does not prove or replace existing state/settings privacy providers.
+
 ### 5.1 Repository scope
 
 `<canonical-repo-root>/.roster/` is shared logically by linked worktrees through the state
