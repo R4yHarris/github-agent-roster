@@ -103,7 +103,10 @@ fn text(value: Option<&Value>, label: &str, empty: bool, maximum: usize) -> Resu
     if (!empty && trim(&value.0).is_empty())
         || value.0 != trim(&value.0)
         || value.0.len() > maximum
-        || value.0.iter().any(|unit| matches!(unit, 0..=31 | 127))
+        || value
+            .0
+            .iter()
+            .any(|unit| matches!(unit, 0..=31 | 127..=159 | 8232 | 8233))
     {
         return Err(failure());
     }
@@ -420,9 +423,64 @@ pub fn with_profile(config: &Value, profile: &Value) -> Result<Value, Error> {
     Ok(result)
 }
 
+pub fn list(fleet: &Fleet) -> Result<Text, Error> {
+    if fleet.profiles().is_empty() {
+        return Ok(Text::from(
+            "No fleet profiles configured. Run roster onboard or roster fleet add.\n",
+        ));
+    }
+    let mut output =
+        Text::from("ID\tMODEL\tBASE_URL\tCONTEXT_MAX\tCONCURRENCY\tHARDWARE\tTASK_CLASS\n");
+    for profile in fleet.profiles() {
+        let profile = profile.as_value();
+        let mut fields = Vec::new();
+        for name in [
+            "id",
+            "model",
+            "base_url",
+            "context_max",
+            "concurrency",
+            "hardware",
+        ] {
+            let value = profile.get(name).ok_or_else(|| {
+                Error::type_error("Validated fleet profile omitted a listed field")
+            })?;
+            fields.push(if name == "context_max" && value == &Value::Number(0.0) {
+                Text::from("unknown")
+            } else {
+                domain::string(value)?
+            });
+        }
+        let mut classes = Text::default();
+        if let Some(values) = profile.get("task_class") {
+            for (index, class) in items(values)
+                .ok_or_else(|| Error::type_error("Fleet task hints must be an array"))?
+                .iter()
+                .enumerate()
+            {
+                if index != 0 {
+                    classes.push_str(",");
+                }
+                classes.0.extend(domain::string(class)?.0);
+            }
+        } else {
+            classes.push_str("-");
+        }
+        fields.push(classes);
+        for (index, field) in fields.iter().enumerate() {
+            if index != 0 {
+                output.push_str("\t");
+            }
+            output.0.extend_from_slice(&field.0);
+        }
+        output.push_str("\n");
+    }
+    Ok(output)
+}
+
 pub fn load(repo_root: &Path) -> Result<Fleet, Error> {
-    match config::read_private_source(repo_root, settings::Name::Fleet)? {
-        Some(source) => parse(&source),
+    match config::private_settings(repo_root, settings::Name::Fleet)? {
+        Some((source, _)) => parse(&source),
         None => Ok(Fleet {
             profiles: Vec::new(),
         }),
@@ -434,6 +492,62 @@ mod tests {
     use super::*;
 
     const EXAMPLE: &str = include_str!("../examples/fleet.yml");
+
+    #[test]
+    fn listed_fleet_text_keeps_validated_fields_and_lossless_internal_text() -> Result<(), Error> {
+        let fleet = parse(&Text::from(EXAMPLE))?;
+        let output = list(&fleet)?;
+        assert!(output.0.starts_with(
+            &Text::from("ID\tMODEL\tBASE_URL\tCONTEXT_MAX\tCONCURRENCY\tHARDWARE\tTASK_CLASS\n").0
+        ));
+        for profile in fleet.profiles() {
+            assert!(
+                output.to_utf8()?.contains(
+                    &domain::string(
+                        profile
+                            .as_value()
+                            .get("id")
+                            .ok_or_else(|| Error::type_error("Missing owned profile ID"))?
+                    )?
+                    .to_utf8()?
+                )
+            );
+        }
+        let mut profile = fleet
+            .profiles()
+            .first()
+            .ok_or_else(|| Error::type_error("Missing owned profile"))?
+            .as_value()
+            .clone();
+        put(&mut profile, "hardware", Value::String(Text(vec![0xd800])))?;
+        let fleet = validate(&Value::object(vec![(
+            "profiles",
+            Value::Array(vec![profile]),
+        )]))?;
+        let output = list(&fleet)?;
+        assert!(output.0.contains(&0xd800));
+        assert!(output.to_utf8().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn single_line_fleet_fields_refuse_terminal_controls_and_unicode_line_separators()
+    -> Result<(), Error> {
+        let fleet = parse(&Text::from(EXAMPLE))?;
+        let original = fleet
+            .profiles()
+            .first()
+            .ok_or_else(|| Error::type_error("Missing owned profile"))?
+            .as_value();
+        for field in ["hardware", "notes"] {
+            for unit in [27, 127, 133, 155, 8232, 8233] {
+                let mut profile = original.clone();
+                put(&mut profile, field, Value::String(Text(vec![unit])))?;
+                assert!(validate_profile(&profile).is_err(), "{field}: {unit}");
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn fictional_profiles_round_trip_without_registering_endpoints() -> Result<(), Error> {

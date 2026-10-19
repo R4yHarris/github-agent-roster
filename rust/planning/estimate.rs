@@ -97,6 +97,14 @@ pub fn excellence_failed(input: &Value) -> bool {
 }
 
 pub fn validate_evaluation(input: &Value) -> Result<(), Error> {
+    validate_history(input, true)
+}
+
+pub(crate) fn validate_run(input: &Value) -> Result<(), Error> {
+    validate_history(input, false)
+}
+
+fn validate_history(input: &Value, evaluation: bool) -> Result<(), Error> {
     let fail = |message: &str| Error::new("Error", format!("Estimation history: {message}"));
     if domain::members(input).is_none() {
         return Err(fail("expected a JSON object"));
@@ -106,7 +114,11 @@ pub fn validate_evaluation(input: &Value) -> Result<(), Error> {
             .get("session")
             .is_none_or(|value| value == &Value::Null)
     {
-        return Err(fail("an evaluation needs a sha or session"));
+        return Err(fail(if evaluation {
+            "an evaluation needs a sha or session"
+        } else {
+            "a run needs a sha or session"
+        }));
     }
     if let Some(sha) = input.get("sha").filter(|value| **value != Value::Null) {
         if !sha.as_string().is_some_and(|value| {
@@ -131,19 +143,21 @@ pub fn validate_evaluation(input: &Value) -> Result<(), Error> {
             }
         }
     }
-    if !["accept", "reject", "rework"]
-        .iter()
-        .any(|expected| domain::is_text(input.get("verdict"), expected))
-    {
-        return Err(fail("verdict must be accept, reject, or rework"));
-    }
-    if !domain::safe_integer(input.get("difficulty"))
-        .is_some_and(|number| (1..=5).contains(&number))
-    {
-        return Err(fail("difficulty must be an integer from 1 to 5"));
-    }
-    if !matches!(input.get("again"), Some(Value::Boolean(_))) {
-        return Err(fail("again must be a boolean"));
+    if evaluation {
+        if !["accept", "reject", "rework"]
+            .iter()
+            .any(|expected| domain::is_text(input.get("verdict"), expected))
+        {
+            return Err(fail("verdict must be accept, reject, or rework"));
+        }
+        if !domain::safe_integer(input.get("difficulty"))
+            .is_some_and(|number| (1..=5).contains(&number))
+        {
+            return Err(fail("difficulty must be an integer from 1 to 5"));
+        }
+        if !matches!(input.get("again"), Some(Value::Boolean(_))) {
+            return Err(fail("again must be a boolean"));
+        }
     }
     if let Some(value) = input.get("model").filter(|value| **value != Value::Null) {
         if !value
@@ -386,7 +400,7 @@ fn validate_attempt(input: &Value) -> Result<(), Error> {
     Ok(())
 }
 
-fn timestamp(input: &Value) -> Option<i64> {
+pub(crate) fn timestamp(input: &Value) -> Option<i64> {
     let source = input.as_string()?.to_utf8().ok()?;
     let year_length = match source.len() {
         24 => 4,

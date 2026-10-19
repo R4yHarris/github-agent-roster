@@ -684,7 +684,7 @@ async fn retained_input_late_terminal_join_does_not_unquarantine_an_abandoned_re
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    let mut child = windows::Child::spawn(command)
+    let mut child = windows::Child::spawn(command, None)
         .map_err(|error| Error::new("RetainedInputControlError", error.to_string()))?;
     let stdin = child
         .inner_mut()
@@ -809,6 +809,8 @@ async fn passive_owned_noinput_observes_real_spawn_drain_and_existing_kernel_set
         "noinput.caller-dispatch",
         "noinput.preflight",
         "noinput.spawn.sync",
+        "noinput.spawn.job-create",
+        "noinput.spawn.wrapped",
         "noinput.leader-observed",
         "noinput.job-zero-observed",
         "noinput.members-settled-observed",

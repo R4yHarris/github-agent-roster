@@ -6,16 +6,25 @@ use crate::Error;
 use crate::cancel::CancellationToken;
 use crate::config::{self, Source};
 use crate::delivery::Input;
+use crate::evaluation;
+use crate::fleet;
 use crate::host;
 use crate::json::Value;
+use crate::metrics;
 use crate::paths;
 use crate::start::{self, Sync};
-use crate::state::secure;
+use crate::state::{redaction, secure};
+use crate::status;
 
 pub const HELP: &str = "Usage:
   roster --help
   roster init
   roster doctor
+  roster fleet list
+  roster status --issue N --offline [--json]
+  roster stats [--json] [--ref REVISION_OR_RANGE] [--evals PATH]
+  roster recommend --task-class feat|fix|docs|test [--difficulty 1-5] [--json]
+  roster eval TARGET accept|reject|rework 1-5 y|n --local|--post [--minutes N] [--comment TEXT]
   roster run --seat coder --runtime builtin [--skip-review]
   roster run --ask-file PATH --runtime builtin [--base trunk|current|REF] [--no-fetch|--fetch] [--skip-review]
   roster catalog parse ROOT FIELD... < catalog.yml
@@ -28,6 +37,11 @@ Local fixed-profile delivery supports at most two rescopings, two fresh perspect
 GitHub issue delivery, publication, resume, routing and review repair are unavailable.
 Those exclusions concern GitHub-backed runs; local fixed-profile continuations above are implemented.
 Unimplemented commands fail explicitly; there is no Node runtime fallback.
+Stats and recommendations read bounded local evidence without recording, publishing or changing a route.
+Status requires an explicit issue and --offline; it reports local native-log observations, not liveness or passing authority.
+Fleet list reads checked canonical private settings without probing, warming, writing or selecting a route; other fleet commands remain unavailable.
+Human eval requires explicit --local or --post and a separate human invocation; posting requires approved human GitHub credentials.
+Delivery stats, onboarding and the interactive shell remain unavailable.
 ";
 
 #[derive(Debug, Clone)]
@@ -39,14 +53,115 @@ pub struct Run {
 }
 
 #[derive(Debug, Clone)]
+pub struct Stats {
+    pub metrics: metrics::Options,
+    pub json: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct Recommend {
+    pub task_class: String,
+    pub difficulty: Option<u8>,
+    pub json: bool,
+}
+
+#[derive(Debug, Clone)]
 pub enum Command {
     Help,
     Init,
     Doctor,
+    FleetList,
+    Status(status::Options),
+    Stats(Stats),
+    Recommend(Recommend),
+    Eval(evaluation::Decision),
     Run(Run),
     Recipe(PathBuf),
     Arguments,
     Catalog { root: String, fields: Vec<String> },
+}
+
+fn parse_stats(args: &[String]) -> Result<Stats, Error> {
+    let usage =
+        || Error::type_error("Use roster stats [--json] [--ref REVISION_OR_RANGE] [--evals PATH].");
+    let mut seen = BTreeSet::new();
+    let mut result = Stats {
+        metrics: metrics::Options::default(),
+        json: false,
+    };
+    let mut position = 0;
+    while let Some(flag) = args.get(position) {
+        if !seen.insert(flag) {
+            return Err(usage());
+        }
+        match flag.as_str() {
+            "--json" => result.json = true,
+            "--ref" | "--evals" => {
+                position += 1;
+                let value = args
+                    .get(position)
+                    .filter(|value| !value.is_empty() && !value.starts_with('-'))
+                    .ok_or_else(usage)?;
+                if flag == "--ref" {
+                    result.metrics.reference = Some(value.clone());
+                } else {
+                    result.metrics.evals_path = Some(PathBuf::from(value));
+                }
+            }
+            "--delivery" => return Err(Error::new(
+                "NativeIntegrationError",
+                "Delivery-dimension stats are not implemented; no learning summary was substituted",
+            )
+            .coded("ROSTER_NATIVE_UNSUPPORTED")),
+            _ => return Err(usage()),
+        }
+        position += 1;
+    }
+    result.metrics.validate()?;
+    Ok(result)
+}
+
+fn parse_recommend(args: &[String]) -> Result<Recommend, Error> {
+    let usage = || {
+        Error::type_error(
+            "Use recommend --task-class feat|fix|docs|test [--difficulty 1-5] [--json].",
+        )
+    };
+    let mut seen = BTreeSet::new();
+    let mut task_class = None;
+    let mut difficulty = None;
+    let mut json = false;
+    let mut position = 0;
+    while let Some(flag) = args.get(position) {
+        if !seen.insert(flag) {
+            return Err(usage());
+        }
+        match flag.as_str() {
+            "--json" => json = true,
+            "--task-class" | "--difficulty" => {
+                position += 1;
+                let value = args.get(position).ok_or_else(usage)?;
+                if flag == "--task-class" && crate::learning::TASK_CLASSES.contains(&value.as_str())
+                {
+                    task_class = Some(value.clone());
+                } else if flag == "--difficulty"
+                    && value.len() == 1
+                    && matches!(value.as_bytes().first(), Some(b'1'..=b'5'))
+                {
+                    difficulty = Some(value.parse::<u8>().map_err(|_| usage())?);
+                } else {
+                    return Err(usage());
+                }
+            }
+            _ => return Err(usage()),
+        }
+        position += 1;
+    }
+    Ok(Recommend {
+        task_class: task_class.ok_or_else(usage)?,
+        difficulty,
+        json,
+    })
 }
 
 fn invalid_run() -> Error {
@@ -152,6 +267,17 @@ pub fn parse(args: &[String]) -> Result<Command, Error> {
     match args {
         [command] if command == "init" => Ok(Command::Init),
         [command] if command == "doctor" => Ok(Command::Doctor),
+        [command, operation] if command == "fleet" && operation == "list" => Ok(Command::FleetList),
+        [command, flags @ ..] if command == "status" => {
+            Ok(Command::Status(status::Options::parse(flags)?))
+        }
+        [command, flags @ ..] if command == "stats" => Ok(Command::Stats(parse_stats(flags)?)),
+        [command, flags @ ..] if command == "recommend" => {
+            Ok(Command::Recommend(parse_recommend(flags)?))
+        }
+        [command, flags @ ..] if command == "eval" => {
+            Ok(Command::Eval(evaluation::Decision::parse(flags)?))
+        }
         [command, flags @ ..] if command == "run" => Ok(Command::Run(parse_run(flags)?)),
         [command, operation, file] if command == "recipe" && operation == "validate" => {
             Ok(Command::Recipe(PathBuf::from(file)))
@@ -171,6 +297,49 @@ pub fn parse(args: &[String]) -> Result<Command, Error> {
         )
         .coded("ROSTER_NATIVE_UNSUPPORTED")),
     }
+}
+
+pub fn list_fleet(cwd: &Path, environment: &Value) -> Result<String, Error> {
+    let result = (|| {
+        if !matches!(environment, Value::Object(_)) {
+            return Err(Error::type_error(
+                "Fleet environment must be a typed mapping",
+            ));
+        }
+        let root = config::shared_config_root(cwd)?;
+        let catalog = fleet::load(&root)?;
+        let mut redaction = redaction::Config {
+            environment: environment.clone(),
+            ..Default::default()
+        };
+        for profile in catalog.profiles() {
+            if let Some(name) = profile
+                .as_value()
+                .get("api_key_env")
+                .and_then(Value::as_string)
+            {
+                if let Some(value) = config::environment_entry(environment, &name.to_utf8()?)? {
+                    let value = value.as_string().ok_or_else(|| {
+                        Error::type_error("Selected fleet credential declaration must be text")
+                    })?;
+                    if !value.0.is_empty() {
+                        redaction.credential_values.push(value.clone());
+                    }
+                }
+            }
+        }
+        redaction::diagnostic(&fleet::list(&catalog)?, &redaction).to_utf8()
+    })();
+    result.map_err(|cause: Error| {
+        let mut safe = Error::new(cause.name, "Private fleet provider details were omitted");
+        safe.code = cause.code;
+        Error::new(
+            "FleetListError",
+            "Fleet listing could not read a checked local catalog; private settings were preserved.",
+        )
+        .coded("ROSTER_FLEET_LIST")
+        .caused_by(safe)
+    })
 }
 
 pub fn initialize(cwd: &Path) -> Result<String, Error> {

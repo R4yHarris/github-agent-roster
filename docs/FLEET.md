@@ -1,5 +1,24 @@
 # Endpoint fleet catalog
 
+## Native scope
+
+The native Rust CLI implements `roster fleet list` only. It reads the checked
+canonical repository's private catalog, including from subdirectories and
+linked worktrees, and preserves the tabular ID/model/base URL/capacity/
+concurrency/hardware/task-class display. An onboard-default capacity of zero
+prints `unknown`. Missing or explicitly empty catalogs retain the existing
+empty message; its setup suggestions are not evidence that native onboarding
+or fleet registration has shipped.
+
+Listing never probes or warms an endpoint, reads a vault or credential file,
+changes a default/route, or writes settings/history. Notes and API-key names
+are not displayed; known environment credential values are redacted. Windows
+credential-name case aliases use the normal configuration resolver, and
+ambiguous aliases fail without output. Other
+fleet CLI, onboarding, discovery and automatic-routing sections below describe
+remaining migration behavior, not implemented native commands.
+See [native runtime scope](RUST.md#native-offline-fleet-listing).
+
 Onboarding still selects one default endpoint. The fleet is a private catalog
 of other available model endpoints, not a task queue, worker swarm, or
 concurrency runtime. GitHub Issues and PRs remain the board and forge.
@@ -27,13 +46,14 @@ never credentials in URLs or notes. The tracked [example](../examples/fleet.yml)
 uses fictional names and is **not** automatically loaded as a live fleet.
 An absent private catalog means no fleet is configured.
 
-[`fleet.mjs`](../src/lib/fleet.mjs) validates unique opaque IDs, an actual model,
+[`fleet`](../rust/fleet.rs) validates unique opaque IDs, an actual model,
 HTTP(S) base URLs without credentials/query/fragment, positive safe-integer
 `context_max`, and `concurrency >= 1`. A URL's trailing slash is removed;
 `/v1` is appended if missing. Full `/models` or `/chat/completions` request
 URLs are refused. `task_class` is optional and, when supplied, contains
 distinct `feat`, `fix`, `docs`, or `test` hints. Hardware and notes are
-single-line metadata, not benchmark evidence or permission grants. Optional
+single-line metadata, without terminal controls or Unicode line separators,
+not benchmark evidence or permission grants. Optional
 `request_timeout_ms` overrides the request deadline when that profile is
 routed, so gateways backed by cold local inference can use the documented
 20-minute cold-start allowance without changing every endpoint.
@@ -49,12 +69,14 @@ setting for the default endpoint.
 The small YAML subset supports one root, two-space list items, four-space
 fields, double-quoted strings, decimal integers, and inline task-class lists.
 Unknown/duplicate fields, duplicate IDs, malformed values, symlinks,
-non-file catalog paths, and files over 64 KiB fail explicitly. Load from the
-current worktree root, including when invoked from a nested directory.
+non-file/hardlinked catalog paths, and files over 64 KiB fail explicitly. Native
+listing uses the canonical shared configuration root, including from nested
+directories and linked issue worktrees; issue-local scratch does not replace it.
 Use `profiles: []` for an explicitly empty catalog.
 
 No endpoint is contacted by parsing or loading the catalog. Test the schema
-with `node --test tests/fleet.test.mjs`. Catalog registration does not change
+with `cargo test --lib --locked --offline fleet::tests::` and native listing with
+`cargo test --test analytics --locked --offline fleet_list_`. Catalog registration does not change
 App identity, human-owned policy, publication rights, or the default model.
 
 ## Onboarding default

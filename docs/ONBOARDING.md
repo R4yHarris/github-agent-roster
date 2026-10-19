@@ -1,5 +1,12 @@
 # Onboarding wizard
 
+**Native migration status:** Roster is now a Rust executable; `roster onboard`
+and discovery are not implemented yet. The Node installation/wizard flows
+below are historical compatibility requirements, not commands for this branch.
+Use [native installation](INSTALL.md) and the current
+[read-only fleet listing](FLEET.md#native-scope) for existing private catalogs.
+Listing never starts onboarding or contacts a model endpoint.
+
 Roster is a Node 20+ ESM executable with no runtime npm dependencies.
 Install from a persistent clone with its contracts submodule, then run
 the wizard in the project you want to configure. Git and `gh` are needed

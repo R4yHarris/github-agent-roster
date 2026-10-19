@@ -349,6 +349,195 @@ impl RunRecord {
     }
 }
 
+pub const MAX_AI_RUN_BYTES: usize = 16 * 1024;
+
+fn invalid_compact(field: &str) -> Error {
+    Error::new(
+        "AgentRunError",
+        format!("Invalid AI-Run {field}; see docs/METRICS.md."),
+    )
+    .coded("ROSTER_AI_RUN_INVALID")
+}
+
+fn compact_count(value: &str, field: &str) -> Result<crate::json::Value, Error> {
+    use crate::json::Value;
+    if value == "-" {
+        return Ok(Value::Null);
+    }
+    if value.is_empty() || !value.bytes().all(|unit| unit.is_ascii_digit()) {
+        return Err(invalid_compact(field));
+    }
+    Ok(value
+        .parse::<u64>()
+        .ok()
+        .filter(|count| *count <= MAX_SAFE_INTEGER)
+        .map_or_else(|| Value::string(value), |count| Value::Number(count as f64)))
+}
+
+pub fn parse_compact(
+    value: &Text,
+    expected_model: Option<&Text>,
+) -> Result<Option<crate::json::Value>, Error> {
+    use crate::json::Value;
+    if value.0.is_empty() {
+        return Ok(None);
+    }
+    if value.utf8_len() > MAX_AI_RUN_BYTES {
+        return Err(invalid_compact("value exceeds 16 KiB"));
+    }
+    let source = value.to_utf8().map_err(|_| invalid_compact("encoding"))?;
+    let fields = source.split('|').collect::<Vec<_>>();
+    let [
+        schema,
+        provider,
+        model_version,
+        effort,
+        context,
+        output,
+        session,
+        task,
+        ..,
+    ] = fields.as_slice()
+    else {
+        return Err(invalid_compact("columns (expected at least eight)"));
+    };
+    if *schema != "1" {
+        return Err(invalid_compact("schema (expected 1)"));
+    }
+    if fields.iter().take(8).any(|field| {
+        let text = Text::from(*field);
+        crate::text::trim(&text.0) != text.0
+    }) {
+        return Err(invalid_compact("delimiter spacing"));
+    }
+    if *provider != "-"
+        && !Provider::parse(provider).is_some_and(|provider| provider != Provider::Vllm)
+    {
+        return Err(invalid_compact("provider"));
+    }
+    let (model, version) = model_version
+        .rsplit_once('@')
+        .filter(|(model, version)| {
+            !model.is_empty()
+                && !model.encode_utf16().any(crate::text::is_space)
+                && !model.contains(['|', '@', '`'])
+                && !version.is_empty()
+                && version
+                    .bytes()
+                    .all(|unit| unit.is_ascii_alphanumeric() || matches!(unit, b'.' | b'_' | b'-'))
+        })
+        .ok_or_else(|| invalid_compact("model@version"))?;
+    if expected_model.is_some_and(|expected| expected != &Text::from(model)) {
+        return Err(invalid_compact("model@version"));
+    }
+    if !["l", "m", "h", "x", "-"].contains(effort) {
+        return Err(invalid_compact("effort"));
+    }
+    let (used, capacity) = context
+        .split_once('/')
+        .filter(|(_, capacity)| !capacity.contains('/'))
+        .ok_or_else(|| invalid_compact("in/max"))?;
+    for (field, value) in [("session", *session), ("task", *task)] {
+        if !opaque_id(value) {
+            return Err(invalid_compact(field));
+        }
+    }
+    Ok(Some(Value::object(vec![
+        ("model", Value::string(model)),
+        ("schema", Value::Number(1.0)),
+        (
+            "provider",
+            if *provider == "-" {
+                Value::Null
+            } else {
+                Value::string(provider)
+            },
+        ),
+        ("model_version", Value::string(version)),
+        (
+            "effort",
+            if *effort == "-" {
+                Value::Null
+            } else {
+                Value::string(effort)
+            },
+        ),
+        ("context_used", compact_count(used, "in")?),
+        ("context_max", compact_count(capacity, "max")?),
+        ("context_out", compact_count(output, "out")?),
+        (
+            "session",
+            if *session == "-" {
+                Value::Null
+            } else {
+                Value::string(session)
+            },
+        ),
+        (
+            "task",
+            if *task == "-" {
+                Value::Null
+            } else {
+                Value::string(task)
+            },
+        ),
+    ])))
+}
+
+pub fn parse_message(message: &Text, sha: &str) -> Result<Option<crate::json::Value>, Error> {
+    if !matches!(sha.len(), 40 | 64) || !sha.bytes().all(|unit| unit.is_ascii_hexdigit()) {
+        return Err(invalid_compact("commit SHA"));
+    }
+    let message = message.normalized_lines();
+    let message = crate::text::trim_end(&message.0);
+    let lines = message.split(|unit| *unit == 10).collect::<Vec<_>>();
+    let mut run = None;
+    let mut model = None;
+    let mut separator = false;
+    for line in lines.iter().rev() {
+        if crate::text::trim(line).is_empty() {
+            separator = true;
+            break;
+        }
+        let Some(colon) = line.iter().position(|unit| *unit == 58) else {
+            break;
+        };
+        let name = line
+            .get(..colon)
+            .ok_or_else(|| invalid_compact("trailer"))?;
+        if !name
+            .first()
+            .is_some_and(|unit| matches!(unit, 48..=57 | 65..=90 | 97..=122))
+            || !name
+                .iter()
+                .all(|unit| matches!(unit, 45 | 48..=57 | 65..=90 | 97..=122))
+        {
+            break;
+        }
+        let value = Text(
+            crate::text::trim(
+                line.get(colon + 1..)
+                    .ok_or_else(|| invalid_compact("trailer"))?,
+            )
+            .to_vec(),
+        );
+        if crate::text::ascii(name, "AI-Run") && run.is_none() {
+            run = Some(value);
+        } else if crate::text::ascii(name, "AI-Model") && model.is_none() {
+            model = Some(value);
+        }
+    }
+    if !separator {
+        return Ok(None);
+    }
+    let Some(run) = run else { return Ok(None) };
+    let Some(mut record) = parse_compact(&run, model.as_ref())? else {
+        return Ok(None);
+    };
+    crate::domain::put(&mut record, "sha", crate::json::Value::string(sha))?;
+    Ok(Some(record))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

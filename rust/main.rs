@@ -5,8 +5,8 @@ use std::process::ExitCode;
 
 use github_agent_roster::text::Text;
 use github_agent_roster::{
-    Error, arguments, cancel, catalog, config, delivery, execution, host, json, llm, local_cli,
-    recipe, start,
+    Error, arguments, cancel, catalog, config, delivery, evaluation, execution, host, json,
+    learning, llm, local_cli, metrics, recipe, start, status,
 };
 
 const MAX_INPUT_BYTES: u64 = 4 * 1024 * 1024;
@@ -76,6 +76,100 @@ async fn native(
     let token = source.token();
     let operation = async {
         match command {
+            local_cli::Command::Stats(flags) => {
+                let evidence = metrics::load(cwd, environment, &flags.metrics, &token).await?;
+                let groups = evidence.groups()?;
+                let output = if flags.json {
+                    learning::bounded_output(format!("{}\n", json::Value::Array(groups).pretty()))?
+                } else {
+                    learning::format_metrics(&groups)?
+                };
+                tokio::task::yield_now().await;
+                token.check()?;
+                Ok(Output::success(output))
+            }
+            local_cli::Command::Recommend(flags) => {
+                let evidence =
+                    metrics::load(cwd, environment, &metrics::Options::default(), &token).await?;
+                let recommendation =
+                    evidence.recommendation(&flags.task_class, flags.difficulty)?;
+                let defaults_only = config::environment_value(
+                    environment,
+                    "ROSTER_ANALYTICS_CONFIG_DEFAULTS_ONLY",
+                )?;
+                if defaults_only.is_some_and(|value| value != &Text::from("true")) {
+                    return Err(Error::type_error(
+                        "ROSTER_ANALYTICS_CONFIG_DEFAULTS_ONLY must be true when set",
+                    ));
+                }
+                let configured = if recommendation.is_some() || defaults_only.is_some() {
+                    config::defaults()?
+                } else {
+                    config::load(installation, cwd, environment)
+                        .map_err(|cause| {
+                            let mut safe = Error::new(
+                                cause.name,
+                                "Configuration diagnostics were omitted; existing bytes were preserved.",
+                            );
+                            safe.code = cause.code;
+                            Error::new(
+                                "LearningError",
+                                "Could not load recommendation defaults; verify checked configuration files and permissions",
+                            )
+                            .coded("ROSTER_ANALYTICS_CONFIG")
+                            .caused_by(safe)
+                        })?
+                        .config
+                };
+                let output = if flags.json {
+                    if let Some(recommendation) = recommendation {
+                        learning::bounded_output(format!("{}\n", recommendation.pretty()))?
+                    } else {
+                        let default = learning::format_recommendation(
+                            None,
+                            &flags.task_class,
+                            configured.as_value(),
+                            environment,
+                        )?;
+                        learning::bounded_output(format!(
+                            "{}\n",
+                            json::Value::object(vec![
+                                ("recommendation", json::Value::Null),
+                                (
+                                    "message",
+                                    json::Value::string(default.trim_end_matches('\n'))
+                                ),
+                            ])
+                            .pretty()
+                        ))?
+                    }
+                } else {
+                    learning::format_recommendation(
+                        recommendation.as_ref(),
+                        &flags.task_class,
+                        configured.as_value(),
+                        environment,
+                    )?
+                };
+                let safe = github_agent_roster::state::redaction::diagnostic(
+                    &Text::from(output.as_str()),
+                    &github_agent_roster::state::redaction::Config {
+                        environment: environment.clone(),
+                        ..Default::default()
+                    },
+                );
+                tokio::task::yield_now().await;
+                token.check()?;
+                Ok(Output::success(safe.to_utf8()?))
+            }
+            local_cli::Command::Eval(decision) => {
+                let recorded = evaluation::record(cwd, environment, &decision, &token).await?;
+                Ok(Output::success(recorded.format()))
+            }
+            local_cli::Command::Status(options) => {
+                let observed = status::observe(cwd, environment, &options, &token).await?;
+                Ok(Output::success(observed.format(options.json)?))
+            }
             local_cli::Command::Doctor => {
                 let result = local_cli::doctor(installation, cwd, environment, &token).await?;
                 Ok(Output {
@@ -205,7 +299,17 @@ fn run(args: &[String]) -> Result<Output, Error> {
             )
             .map(Output::success);
         }
-        local_cli::Command::Doctor | local_cli::Command::Run(_) => {
+        local_cli::Command::FleetList => {
+            let cwd = env::current_dir()
+                .map_err(|_| Error::new("Error", "Cannot resolve the invocation directory"))?;
+            return local_cli::list_fleet(&cwd, &environment()?).map(Output::success);
+        }
+        local_cli::Command::Doctor
+        | local_cli::Command::Status(_)
+        | local_cli::Command::Run(_)
+        | local_cli::Command::Stats(_)
+        | local_cli::Command::Recommend(_)
+        | local_cli::Command::Eval(_) => {
             let environment = environment()?;
             let installation = host::selected_path(&environment, "ROSTER_INSTALLATION_ROOT")?
                 .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf());

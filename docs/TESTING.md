@@ -117,6 +117,151 @@ fixture pass, select the installed 1.85 GNU toolchain there as well as in the
 outer Cargo command. Do not install a toolchain or acquire packages as a
 side effect of an ordinary test.
 
+## Native analytics controls
+
+Use the smallest analytics selectors; do not interpret a targeted pass as
+the entire migration or the pre-existing 642-test baseline being green.
+The previous default local-delivery result remains **93/100**, with seven
+existing 600-second guard failures. Analytics does not change those guards,
+test assertions, resource policies or the owned-process runtime and does not
+blindly rerun that default 100/full campaign.
+
+```powershell
+$env:ROSTER_TEST_GIT = (Get-Command git).Source
+cargo test --lib --locked --offline learning::
+cargo test --lib --locked --offline metrics::
+cargo test --test analytics --locked --offline -- --nocapture
+cargo test --test cli --locked --offline
+cargo fmt --all -- --check
+cargo clippy --all-targets --locked --offline -- -D warnings
+```
+
+Repeat the targeted commands with an installed Rust 1.85 compiler and
+`ROSTER_TEST_CARGO_TOOLCHAIN` selecting that same compiler. The read-only
+negative probe is an owned dependency-free Rust consumer, compiled offline
+with that selection; successful acceptance always executes the actual
+compiled `roster`, including its unknown-option control. No mocked passing
+JSON, Node oracle, live endpoint, GitHub query or publication is used.
+
+The native checks port the independent `learn`, `metrics` and route-evidence
+expectations from Git history: distinct SHA/session samples and corrections,
+sticky defects, known-only medians, unknown versus zero, MAX_SAFE_INTEGER and
+large decimal counts, real SHA-1/SHA-256 objects/trailers, requested capacity,
+per-seat/model ceiling streaks, timestamps and deterministic ties. They also
+cover exact byte/line/row/entry/output bounds, secret-free errors, explicit
+ref/evaluation precedence, canonical linked-worktree state, foreign identity
+denial, corruption preservation and real sharing/hard-link failures.
+
+Every new CLI fixture injects dedicated HOME, USERPROFILE, installation and
+ROSTER_STATE_HOME **before invocation**, including missing/invalid cases.
+Readonly commands are checked against complete owned file/directory snapshots.
+No real operator history, vault, configuration, credentials or other
+repository's record is inspected. Seat acceptance refuses external/private,
+dash-shaped and linked evaluation operands before any CLI execution, while
+valid TASK-scoped inputs run the real binary.
+
+New fixtures are exact `.roster/analytics-tests-<pid>-<nonce>` owners, never a
+system temporary directory. Successful cases explicitly remove their owner;
+failed cases retain the exact root and print it for hashing/archival before
+repair. Do not sweep `.roster`, old forensic roots or sibling synthetic homes.
+Windows GNU evidence is not MSVC, POSIX or independent-review acceptance.
+
+The analytics checkpoint passes **56 new tests** (31 learning, nine metrics
+and 16 native CLI/e2e) plus **20 unchanged affected controls** on both stable
+GNU Rust 1.99.1 and GNU Rust 1.85.0. Both compilers pass format checking and
+strict all-target Clippy. Discovery is **698**, not a full-suite pass.
+Stable release runs pass all 16 analytics and six unchanged CLI cases.
+The preserved controls include three run-metadata, three provenance, six
+lossless-planning, six CLI and two guidance cases. The unchanged recipe-file
+CLI case creates and removes its own nonce-named temporary root; no fixture
+or assertion was rewritten for these results. New analytics fixtures stay
+under their recorded repository-owned roots.
+
+Independent source review found four analytics issues. Bounded native
+counterexamples reproduced all four before fixes: joined metadata fan-out,
+lost human-decision ordering, a SHA correction erasing another commit's
+session evaluation, and private paths in recommendation configuration errors.
+The repaired controls cover an exact 16 MiB joined snapshot and one-byte
+overflow for both metadata and evaluation expansion, existing 32 MiB combined
+inputs that deduplicate safely, absent/partial/tied timestamps, independent
+SHA/session corrections, ordinal validation and unchanged owned configuration
+on text/JSON errors. No multi-gigabyte exhaustion probe was run.
+No default local-delivery 100-case or full 698-case execution was used to
+overwrite the known blocked result.
+
+## Native human evaluation controls
+
+This implements FEATURE_SPEC **5.6**, **5.7** and **5.8** without permitting
+agent-generated human acceptance. Remote human feedback is explicit:
+
+```powershell
+$env:ROSTER_TEST_GIT = (Get-Command git -CommandType Application).Source
+cargo test --lib --locked --offline evaluation::tests::
+cargo test --test analytics --locked --offline human_eval_ -- --test-threads=1
+cargo test --test analytics --locked --offline human_post_ -- --test-threads=1
+```
+
+The owned fixtures cover full SHA1/SHA256, real abbreviation resolution,
+reported model attribution, zero/unknown minutes, missing final newlines,
+append-only corrections and deduplication, canonical state scope, redacted
+comments, unchanged malformed/hardlinked ledgers, serialized writers, exact
+16 MiB/+1-byte and 10,000/+1-row limits. Explicit durable lookup covers
+same-identity source references, operational attempt lineage, ambiguous
+attempts, missing served models and local evidence preceding a poisoned
+machine store. No actual operator history, vault or human evaluation is read
+or written by these tests.
+
+Independent review found conflicting local-session model attribution. Its
+native CLI counterexample and a coupled private-model URL counterexample both
+failed before fixes. The shared ambiguity helper now runs before session
+selection, while explicit SHAs retain their exact model. Prior human model
+metadata uses the same privacy guard as other sources.
+
+The read-only mutation denial checks the actual `Report::passed() == false`,
+`unavailable` status, no executed runs, a specific denial and an absent
+native-probe marker. `Ok(Report)` alone is not passing authority. Its initial
+new test incorrectly expected an error variant; only that test was corrected
+to the existing report contract, with no production admission change.
+
+The local-only checkpoint's affected matrix passed **91/91** on stable GNU Rust 1.99.1 and
+GNU Rust 1.85.0, with strict all-target Clippy and format checks. Thirty
+unchanged owned-process/timing controls also passed on each compiler. Its
+optimized validation passed **27 analytics/feedback integrations + 6 CLI**.
+At that checkpoint both compilers discovered **713** tests, not an executed suite.
+The default local-delivery campaign remains independently blocked.
+
+The posting fixtures compile a dependency-free owned Rust GitHub CLI and
+isolate its config, home and fake token. They do not call GitHub or load real
+human credentials. Controls verify exact compact posted bodies, zero minutes,
+private-comment exclusion, explicit credential selection, actual-principal
+rejection, ambiguous/foreign/malformed associations and no-SHA/no-PR outcomes.
+Errors after a local save retain the row, state uncertainty and never retry;
+origin drift makes no POST. Real submission barriers cover cooperative
+cancellation/owned cleanup and immediate future Drop retaining writer
+authority. The original read-probe fixture still verifies execution denial
+and now shares a compiler helper that checks the actual compiler exit.
+
+The completed explicit-post checkpoint passed **101 affected tests** on each
+compiler, strict all-target Clippy and format checks. Stable optimized runs
+passed **33 analytics/feedback integrations + 6 CLI**. Both compilers discovered
+**723 tests**; this was not a full-suite run. Independent review found that a
+metadata/origin Git cleanup failure could release the evaluation writer despite
+unknown cleanup. The failing native counterexample uses a real physical lock
+and a trusted cleanup-error input, not a manufactured kernel failure. Final
+recording now retains ownership for either provider uncertainty or
+`ROSTER_PROCESS_CLEANUP`, including Git failures outside the GitHub client.
+The paired known-settled failure still releases its marker. Re-review cleared
+the repair; no real human credential, operator evaluation or GitHub write was
+used.
+
+The isolated unchanged failed-full workflow also passes **1/1 in 189.45s**.
+Two additional passive intervals show 316 first-layer owned job creations taking
+**9,667 us**, versus **81,871,297 us** in the wrapped spawn calls. The locked
+process wrapper's resume implementation enumerates a global Windows thread
+snapshot. This is a concrete candidate, not proof of intrinsic OS, scheduler
+or security-software cause. No unsafe resume path, MSRV increase, containment
+skip, image/thread/deadline change or default 100-case replay follows it.
+
 The strict owned-process unit controls use actual Windows Jobs and detached
 descendants. Cancellation waits for an observed live descendant readiness
 barrier; success, timeout and overflow check real descendant liveness after
@@ -134,6 +279,105 @@ fetches submodule URLs or implicitly acquires images/dependencies.
 The native CLI tests run with an empty `PATH`, exercise real files and stdin,
 compare exact stdout/stderr and exits, test malformed input, and measure the
 exact 4 MiB stdin boundary. No model, GitHub or Docker service is required.
+
+## Native offline status controls
+
+Product trace: FEATURE_SPEC **5.7** and **5.8**. The smallest selectors are:
+
+```powershell
+$env:ROSTER_TEST_GIT = (Get-Command git -CommandType Application).Source
+cargo test --lib --test analytics --locked --offline -- status::tests:: offline_status_cli_ analytics_read_only_acceptance_runs_the_actual_compiled_cli_and_invalid_option_controls --test-threads=1
+cargo test --test execution_backends --locked --offline read_only_selection_maps_legacy_spelling_to_native_intent_without_a_source_fallback
+```
+
+The first stable GNU run passed six native units and six real CLI/acceptance
+cases. They cover required offline/issue flags, safe numbers, cancellation
+before discovery, missing observations, safe complete-record projection,
+partial UTF-8 tails, canonical/subdirectory/linked-worktree selection, corrupt
+complete records, hard links, directories, actual Windows sharing denial and
+unchanged complete owned file/directory snapshots. Poisoned endpoint config,
+GitHub-image selection and App inputs do not affect a successful status read.
+Exact 2 MiB records remain readable; one extra byte fails, while a valid
+10,001-record native log remains readable. Large detail bodies never appear
+in output. Unknown-option controls invoke the actual CLI.
+
+Read-only acceptance now runs status with automatic `--offline`, alongside the
+unchanged stats/recommendation obligations and their negative controls.
+Selection checks retain legacy-spelling mapping, unsupported bare-status
+refusal and the 32-argument cap after normalization. These controls do not prove
+online status, retry selection, artifact/gate display, interactive rails,
+cross-platform containment or full migration acceptance.
+
+The affected stable GNU 1.99.1 and GNU 1.85.0 checks pass **113 cases per
+compiler**: 66 library cases, 38 analytics/feedback/status integrations, six CLI
+cases, two guidance cases and one preserved selection control. Both compilers
+pass format checking and strict all-target Clippy and discover **734 tests**,
+not 734 executed passes. Rust 1.85 Clippy caught an allocation-heavy iterator
+in the new record-count fixture; it was changed to direct checked writes into
+one string, without suppressing the lint or changing production behavior.
+Stable's six status units were replayed after this test-only repair.
+
+Optimized stable checks pass **51 cases**: six status units, all 38 integrations,
+all six CLI cases and the selection control. An initial overbroad release
+filter also selected an unchanged JavaScript-consumer hook control without its
+required explicit `ROSTER_TEST_NODE`; that setup failure is preserved. Precise
+selectors pass, and the exact hook control also passes with its existing
+installed Node 20 input. No retired Roster implementation, new dependency,
+live model, actual GitHub query or default/full-suite retry is involved.
+The existing default local-delivery result remains **93/100**.
+
+## Native offline fleet listing controls
+
+Product trace: FEATURE_SPEC **5.2** and **5.7**. The focused selectors are:
+
+```powershell
+$env:ROSTER_TEST_GIT = (Get-Command git -CommandType Application).Source
+cargo test --lib --test analytics --locked --offline -- fleet::tests:: fleet_list_ --test-threads=1
+cargo test --test guidance --locked --offline
+```
+
+The first repaired stable GNU run passes five library cases and seven actual
+CLI/read-only-acceptance cases. Controls preserve exact empty and tabular
+outputs, configured rather than environment-overridden models, unknown default
+capacity, task hints, canonical/subdirectory/linked-worktree scope, no writes,
+custom credential redaction and exclusion of notes/key declarations.
+Malformed, directory, hardlink, actual sharing-denial and over-limit sources
+fail without private content or paths. The exact 65,536-byte file succeeds;
+one additional byte fails. Unknown flags and unimplemented fleet mutations
+refuse before private settings access. The real CLI runs with an empty `PATH`;
+bad tool, endpoint-config and installation selections do not affect listing.
+
+Initial new fixtures incorrectly used single-quoted empty text outside the
+catalog's restricted YAML and expected typed error codes in the CLI's
+message-only stderr. Those failures are preserved. The fixtures now validate
+their source and assert the exact existing stderr contract plus typed codes
+through the public API; production CLI error formatting was not changed.
+Read-only acceptance runs the actual binary and its unknown-option control.
+
+Terminal controls/Unicode line separators are rejected as invalid single-line
+metadata. Internal lone-surrogate text remains lossless; console conversion
+fails explicitly instead of silently substituting characters. Guidance checks
+also retain the shared Tokio skill's cleanup-quarantine learning and its
+existing 40-line limit. No discovery, live model, GitHub, vault access, default
+local-delivery replay or full-suite pass is implied.
+
+The pre-review combined affected matrix passed **128 cases per compiler** on stable GNU
+Rust 1.99.1 and GNU Rust 1.85.0: 74 library cases, 45 real integrations, six CLI
+cases, two guidance cases and one selection control. Both pass format checking
+and strict all-target Clippy. Both discover **743 tests**, not 743 executed
+passes. Optimized stable passes **65 cases**: 11 status/fleet units, all 45
+integrations, six CLI, two guidance and the selection control. The default
+local-delivery campaign remains **93/100**, with its seven existing guard
+failures and original assertions/deadlines unchanged.
+
+Independent checkpoint review found a Windows environment-case mismatch in
+fleet credential redaction. The actual-CLI lowercase-alias control and a typed
+ambiguous-alias refusal control both failed before the fix. Listing now reuses
+the existing `config::environment_entry` resolver rather than an exact-name
+lookup. Both GNU compilers pass **23 targeted post-repair checks**: eight
+config/fleet units, all nine fleet integrations and six unchanged CLI cases,
+plus strict all-target Clippy and format checks. Both now discover **745**
+tests, not a full executed suite. No real credential was used in the controls.
 
 ## Native builtin chat controls
 

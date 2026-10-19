@@ -26,6 +26,13 @@ Select for asynchronous process ownership, transport, cancellation and timers.
 7. Run real cancellation/overflow/late-result controls through native Cargo
    tests. Consumer Node checks cannot substitute for Rust verification.
 
+## Learnings
+
+Wrong: release the writer because the primary transport reports no uncertainty.
+Right: any trusted `ROSTER_PROCESS_CLEANUP`, including metadata/origin Git,
+keeps ownership quarantined. Pair a real-lock retention control with settled
+failure release, and label injected errors as boundary tests, not OS-failure proof.
+
 ## Stop condition
 
 Stop on failed ownership, unknown cleanup, policy denial or missing checks.

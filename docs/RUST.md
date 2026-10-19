@@ -43,6 +43,154 @@ GitHub issue delivery/publication and automatic fleet recovery/routing are
 not integrated. Unsupported commands return an
 explicit error rather than invoke the old runtime or claim success.
 
+## Native read-only analytics checkpoint
+
+FEATURE_SPEC **5.6**, **5.2**, **5.7** and **5.8** now have native learning
+validation, Git/local joins, distinct-sample aggregation, known-only medians,
+advisory recommendations, actual seat/model difficulty ceilings and scoped
+routing-evidence summaries. The planner reuses the same recommendation core.
+No history is automatically promoted into model context or curated memory.
+
+The real CLI paths are:
+
+```text
+roster stats [--json] [--ref REVISION_OR_RANGE] [--evals PATH]
+roster recommend --task-class feat|fix|docs|test [--difficulty 1-5] [--json]
+```
+
+They require an absolute `ROSTER_GIT` and use the existing hardened,
+cancellable owned Git transport, not Node or an SDK exporter. Ref endpoints
+become exact commit IDs before logging. Inputs are bounded and read-only;
+malformed/ambiguous evidence, provider errors, unsafe files and identity drift
+fail without partial output or storage mutation. Explicit refs exclude local
+unpublished samples. Explicit legacy eval files override matching SHAs only.
+The canonical repository's shared layout is used from subdirectories and
+linked worktrees; issue scratch and foreign repositories are not history.
+
+`learning` exposes parsing, joining, summary, recommendation, ceiling and
+evidence functions. `metrics::load` / `load_with_store` return `Analytics`,
+whose raw rows remain private. Existing provenance can be read only from an
+explicit identity-scoped machine root or injected same-identity store.
+No default user-root discovery, new durable writer, state migration, database,
+policy grant or automatic human evaluation is introduced.
+
+CLI recommendations are coder advice with three human samples, sufficient
+median difficulty and an earned ceiling, not a fleet/profile assignment.
+Automatic fleet/prior routing and the legacy profile/context/hardware suffix
+are not implemented by this checkpoint. Automatic run recording,
+`stats --delivery`, recurring proposals, onboarding, shell, GitHub delivery
+and publication remain explicitly unavailable.
+
+ASCII en-US collation and UTF-16/table/number contracts are covered natively.
+Non-ASCII locale ordering is refused as unproven rather than byte-sorted.
+Windows GNU checks do not prove MSVC, POSIX containment, filesystem ACL
+providers, complete legacy coverage or FEATURE_SPEC section 8 acceptance.
+See [METRICS](METRICS.md#native-stats-and-recommendations) and
+[the focused tests](TESTING.md#native-analytics-controls).
+
+On Windows GNU, the checkpoint's **56 new tests** pass on stable Rust
+**1.99.1** and Rust **1.85.0**: 40 library cases and 16 real CLI/acceptance
+cases. Twenty preserved affected controls also pass on each compiler.
+Format checking and strict all-target Clippy pass on both; discovery reports
+**698 tests**, not 698 executed passes. Stable optimized controls pass all
+16 analytics cases and all six preserved CLI cases.
+The unchanged recipe-file CLI fixture still owns and removes its nonce-named
+temporary root; its source/assertions were not weakened. New analytics
+fixtures use only their recorded repository-owned roots.
+
+Four independent review findings were reproduced and repaired: bounded
+join expansion, human-ledger chronology, SHA/session correction isolation
+and secret-free fallback configuration errors. Joined compact-JSONL bytes
+are checked incrementally at 16 MiB while retaining the existing 32 MiB
+combined input allowance. Human decisions retain real source ordinals;
+missing timestamps do not silently substitute Git/run order.
+
+The pre-existing 642-test baseline is not a current full-green claim:
+its last default local-delivery run passed 93/100 with seven existing
+600-second guard failures. Those guards, assertions and runtime/performance
+policies are unchanged by analytics; the default 100/full suite is not
+replayed as an analytics gate. Storage-ownership review and native CI/release
+remain separate open gates. Component checks and review do not establish
+full migration or cross-platform acceptance.
+
+## Native human evaluation
+
+FEATURE_SPEC **5.6**, **5.7** and **5.8** now have an explicit native human
+writer: `roster eval TARGET accept|reject|rework 1-5 y|n --local|--post`, with optional
+`--minutes` and `--comment`. This does not evaluate a seat automatically or
+authorize policy. Declared App/agent invocations and
+read-only seat acceptance refuse it before execution.
+
+The writer preserves the existing shared-state resolver, JSONL history,
+unknown measurements and actual source attribution. Full SHA1/SHA256 and
+commit abbreviations are supported; ambiguous session metadata requires a
+specific SHA or attempt. Local/Git evidence precedes explicit same-identity
+durable lookup, with exact source references and no requested-model or
+starting-commit substitution. Comments are redacted data. Existing locks,
+bounded checked reads, atomic replacement and explicit cleanup are reused;
+uncooperative vault storage ownership is not solved or weakened by this path.
+Optional posting uses an explicitly approved GitHub CLI and pinned explicit
+human credential, verifies its actual human principal and one exact-SHA PR
+association, and sends only compact `AI-Eval`/`Minutes` after local saving.
+No private comment is sent, no PR is guessed, and no uncertain write is
+retried. Origin drift, cancellation and unknown child cleanup fail explicitly;
+dropped submissions retain the lock. `record_local` remains strictly
+network-free even when passed a posting decision.
+See [human evaluation](LEARNING.md#native-human-evaluation).
+
+## Native offline issue observations
+
+FEATURE_SPEC **5.7** and **5.8** now have
+`roster status --issue N --offline [--json]`. This path uses an absolute approved
+`ROSTER_GIT` and the native registered-worktree inventory. It reads the selected
+base issue worktree's schema-one session log, falling back to the canonical
+repository only when that log is missing. Ambiguous issue ownership, foreign
+common directories, linked/nonregular/hardlinked/unreadable files and corrupt
+complete records fail explicitly without partial output.
+
+The reader preserves the native writer's exact 2 MiB bound, including a single
+large record and more than 10,000 small records. It validates schema, sequence
+and metadata labels in complete UTF-8 records; an active unfinished trailing
+record is explicitly ignored. Output projects only issue, safe seat/event/state
+labels and complete-record metadata, never raw detail bodies, model text or
+credentials. Missing observations stay unknown. Neither a recorded `pass` label
+nor the existence of a log proves worker liveness, current verification,
+publication or human acceptance.
+
+The real native CLI and read-only acceptance path are connected; acceptance
+adds `--offline` before implementation checking and preserves the argument cap.
+Status does not load endpoint configuration, credentials, default user history
+or a GitHub client and performs no filesystem mutation. Online status, automatic
+issue inference, retry/winner selection and the broader cached issue, artifacts
+and measured-run display are still unavailable. This is not complete legacy
+status parity or an interactive status rail.
+See [the native controls](TESTING.md#native-offline-status-controls).
+
+## Native offline fleet listing
+
+FEATURE_SPEC **5.2** and **5.7** now have `roster fleet list`. The synchronous
+native leaf reuses canonical shared configuration scope and the checked private
+settings reader, not an executor, Git process, endpoint client or new catalog
+store. Missing catalog and explicit empty catalog retain the existing empty
+message; configured profiles retain their original tabular field order and
+unknown onboard-default capacity. No profile, default, route, credential file
+or repository history is changed.
+
+Catalogs retain the exact 64 KiB bound and must be stable single-link regular
+files in unlinked checked directories. Malformed input, sharing denial and
+unsafe files fail without partial tables or private provider details.
+Single-line metadata refuses terminal control characters and Unicode line
+separators. Lossless internal UTF-16 remains intact; unencodable console output
+fails rather than silently replacing data. Known configured credential values
+are redacted; notes and credential declarations are not listed.
+
+CLI parsing and real read-only acceptance both recognize only `fleet list`;
+discovery, probing, warming, mutation, onboarding and automatic routing are
+still unavailable. Listing configured metadata is not endpoint discovery,
+measured capacity or response-backed run evidence.
+See [fleet scope](FLEET.md#native-scope) and
+[the native controls](TESTING.md#native-offline-fleet-listing-controls).
+
 ## Native verification
 
 Use Cargo formatting, strict all-target Clippy and native unit/integration

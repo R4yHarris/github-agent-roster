@@ -78,6 +78,11 @@ line, even while a seat is active, without contacting GitHub. Missing logs
 are shown as unknown/none. Live logs are local managed files, not evidence
 that tests or human AI-Eval passed, and are never staged by the coder.
 
+On the native rewrite branch this command requires the explicit issue number
+and `--offline`. It projects bounded schema-one log metadata, not raw detail
+bodies, and exposes optional `--json`. Online/cache/artifact status and automatic
+issue inference are not implemented yet; see [native status](RUST.md#native-offline-issue-observations).
+
 When no LLM endpoint
 is configured, the deterministic stub writes only the result summary and
 does **not** implement the ask or run tests. With an endpoint, the coder uses

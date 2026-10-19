@@ -210,6 +210,10 @@ pub fn commit_new(path: &Path, bytes: &[u8]) -> Result<(), Error> {
 }
 
 pub fn entries(path: &Path) -> Result<Vec<String>, Error> {
+    entries_bounded(path, usize::MAX)
+}
+
+pub(crate) fn entries_bounded(path: &Path, maximum: usize) -> Result<Vec<String>, Error> {
     check_components(path)?;
     let directory = match fs::read_dir(path) {
         Ok(directory) => directory,
@@ -218,6 +222,12 @@ pub fn entries(path: &Path) -> Result<Vec<String>, Error> {
     };
     let mut entries = Vec::new();
     for entry in directory {
+        if entries.len() == maximum {
+            return Err(
+                Error::new("Error", "State directory exceeds its bounded entry limit")
+                    .coded("E_STATE_SIZE"),
+            );
+        }
         let entry = entry.map_err(|error| io_error("Read state entry", path, error))?;
         entries.push(
             entry

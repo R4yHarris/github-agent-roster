@@ -1126,6 +1126,28 @@ fn read_only_selection_maps_legacy_spelling_to_native_intent_without_a_source_fa
     assert!(rendered.contains("--offline"));
     assert!(rendered.contains("\"implemented\":false"));
     assert!(!rendered.contains("src/cli.mjs"));
+    let status = e2e::selected_commands(&[Text::from(
+        "`roster status --issue 42 --json` reports local observed metadata.",
+    )])?;
+    assert!(status.json().contains("\"implemented\":true"));
+    assert!(
+        status
+            .json()
+            .contains("roster status --issue 42 --json --offline")
+    );
+    let overflowing = format!(
+        "`roster status --issue 42 {}` reports metadata.",
+        ["--json"; 29].join(" ")
+    );
+    let refused = e2e::selected_commands(&[Text::from(overflowing.as_str())])
+        .err()
+        .ok_or_else(|| Error::type_error("Status normalization must retain argument bounds"))?;
+    assert_eq!(refused.code, Some("ROSTER_TOOL_DENIED"));
+    assert!(
+        refused
+            .message
+            .contains("normalization exceeds argument bounds")
+    );
     assert!(e2e::selected_commands(&[Text::from("`roster publish` publishes.")]).is_err());
     Ok(())
 }

@@ -17,6 +17,11 @@ fn rust_skills_are_complete_discoverable_and_native_first() -> TestResult {
         assert!(source.lines().count() <= 40);
         assert!(!source.contains("npm run test:rust"));
         assert!(!source.contains("Keep Node operational"));
+        if name == "rust-tokio" {
+            assert!(source.contains("ROSTER_PROCESS_CLEANUP"));
+            assert!(source.contains("metadata/origin Git"));
+            assert!(source.contains("not OS-failure proof"));
+        }
         let discovery = fs::read_to_string(
             root.join(".github")
                 .join("skills")

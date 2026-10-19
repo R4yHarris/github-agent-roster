@@ -353,6 +353,14 @@ impl Store {
     }
 
     pub fn read_all(&self) -> Result<ReadAll, Error> {
+        self.read_records(false)
+    }
+
+    pub(crate) fn read_all_bounded(&self) -> Result<ReadAll, Error> {
+        self.read_records(true)
+    }
+
+    fn read_records(&self, bounded: bool) -> Result<ReadAll, Error> {
         secure::private_directory_if_present(&self.root)?;
         secure::private_directory_if_present(&self.root.join(LOG_DIRNAME))?;
         let mut result = ReadAll {
@@ -361,7 +369,12 @@ impl Store {
         };
         let mut total = 0_u64;
         let mut count = 0;
-        for name in secure::entries(&self.root.join(LOG_DIRNAME))? {
+        let names = if bounded {
+            secure::entries_bounded(&self.root.join(LOG_DIRNAME), MAX_RECORDS)?
+        } else {
+            secure::entries(&self.root.join(LOG_DIRNAME))?
+        };
+        for name in names {
             if name.starts_with('.') || !name.ends_with(".json") {
                 continue;
             }
@@ -373,6 +386,12 @@ impl Store {
                 ));
             }
             let path = self.root.join(LOG_DIRNAME).join(&name);
+            if bounded && paths::file_information(&path)?.links != 1 {
+                return Err(error(
+                    "E_INVALID_RECORD",
+                    "Bounded provenance reads require real single-link records",
+                ));
+            }
             let Some(snapshot) = secure::read(&path, MAX_RECORD_BYTES)? else {
                 return Err(error(
                     "E_RECORD_CHANGED",
