@@ -1,0 +1,59 @@
+[package]
+name = "github-agent-roster"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+publish = false
+
+[dependencies]
+aes = { version = "=0.8.4", default-features = false, features = ["zeroize"] }
+aes-gcm = { version = "=0.10.3", default-features = false, features = ["aes", "zeroize"] }
+base64 = "=0.23.1"
+fs4 = { version = "=0.13.1", default-features = false, features = ["sync"] }
+getrandom = "=0.4.3"
+ghash = { version = "=0.5.1", default-features = false, features = ["zeroize"] }
+polyval = { version = "=0.6.2", default-features = false, features = ["zeroize"] }
+reqwest = { version = "=0.13.5", default-features = false, features = ["native-tls-no-alpn", "gzip", "deflate", "brotli"] }
+regex-lite = "=0.1.8"
+ryu-js = "=1.0.3"
+serde_json = { version = "=1.0.154", features = ["raw_value"] }
+sha1 = "=0.10.6"
+sha2 = "=0.10.9"
+time = { version = "=0.3.44", default-features = false, features = ["std", "formatting", "parsing", "macros"] }
+tokio = { version = "=1.53.3", default-features = false, features = ["rt", "macros", "process", "time", "io-util", "sync", "net", "signal"] }
+url = "=2.5.7"
+zeroize = { version = "=1.9.1", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+tokio = { version = "=1.53.3", default-features = false, features = ["test-util"] }
+
+[target.'cfg(windows)'.dependencies]
+process-wrap = { version = "=8.0.0", default-features = false, features = ["tokio1", "job-object", "creation-flags", "kill-on-drop"] }
+win32job = { version = "=2.0.2", default-features = false }
+winapi-util = "=0.1.11"
+winsafe = { version = "=0.0.24", default-features = false, features = ["kernel", "advapi"] }
+windows-permissions = "=0.2.4"
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "=1.1.5", default-features = false, features = ["std", "process", "fs"] }
+
+[lib]
+path = "rust/lib.rs"
+
+[[bin]]
+name = "roster"
+path = "rust/main.rs"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"

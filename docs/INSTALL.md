@@ -1,169 +1,190 @@
-# Install and bootstrap
+# Build the native Rust application
 
-Roster uses Node 20+ ESM, Git, and `gh`; it has no runtime npm dependencies.
-For the complete task loop and App publication, install from a persistent
-source checkout with its pinned fail-closed contracts submodule:
+This feature branch is a Rust rewrite, not the old Node/npm application.
+There is no npm package entry point, parallel Node implementation or legacy
+oracle checkout. Main and Git history retain the former application.
+
+The native CLI implements help, recipe validation, catalog parsing, argument
+splitting, offline `init`/`doctor`, and the first Windows-native local TASK/Ask
+delivery path, including fixed-profile rescoping, fresh-context perspectives
+and independent review repairs. GitHub issue delivery/publication, onboarding,
+interactive shell, resume and automatic fleet recovery/routing remain unavailable.
+
+## Prerequisites
+
+- Rust 1.85 or later with Cargo, rustfmt and Clippy.
+- Git and the reviewed contracts submodule.
+- The selected Rust target's normal compiler/linker prerequisites.
+- Node 20 only for JavaScript consumer test fixtures and the independent
+  contracts publishing SDK, not for the Roster binary.
 
 ## Windows PowerShell
 
-With Node 20+, Git, and GitHub CLI available in PowerShell:
-
 ```powershell
 git clone --recurse-submodules https://github.com/R4yHarris/github-agent-roster.git
 cd github-agent-roster
-npm install -g .
+cargo fetch --locked
+cargo build --release --locked --offline
+.\target\release\roster.exe --help
 ```
 
-Then run:
+Select this feature branch in the checkout when evaluating the rewrite.
+`cargo fetch` restores the declared locked dependencies during setup;
+ordinary build, lint and test commands remain offline.
 
-```powershell
-roster --help
-roster doctor
-roster onboard
-```
+## Linux, macOS and WSL
 
-## WSL
-
-Install Node 20+, Git, and GitHub CLI **inside WSL**. Windows and WSL use
-separate Node installs and global npm bins; a Windows install is not a WSL
-runtime.
+Install the Rust toolchain and linker prerequisites inside that environment,
+then build the same Cargo package:
 
 ```sh
 git clone --recurse-submodules https://github.com/R4yHarris/github-agent-roster.git
 cd github-agent-roster
-npm install -g .
+cargo fetch --locked
+cargo build --release --locked --offline
+./target/release/roster --help
 ```
 
-Then run:
+Windows execution does not establish Linux/macOS/WSL support. Native platform
+verification and binary distribution remain release gates.
 
-```sh
-roster --help
-roster doctor
-roster onboard
-```
+## Verification and resources
 
-## Linux
+See [TESTING](TESTING.md) for formatting, strict Clippy, native unit/integration
+tests, minimum-compiler checks and external consumer fixture requirements.
+Use a persistent source checkout while resource installation and the remaining
+CLI are being implemented. This branch does not claim a completed packaged
+installation, model onboarding, cross-platform delivery or GitHub delivery loop.
 
-Use a user-managed Node 20+ installation on PATH:
+## Explicit local host configuration
 
-```sh
-git clone --recurse-submodules https://github.com/R4yHarris/github-agent-roster.git
-cd github-agent-roster
-npm install -g .
-```
+`ROSTER_INSTALLATION_ROOT`, when set, must be an absolute native development
+installation containing skills, principals, guidance and the reviewed contracts
+gitlink. The current development binary otherwise uses its build-time checkout.
+Resource bundling/relocatable release installation is still pending.
 
-Then run:
-
-```sh
-roster --help
-roster doctor
-roster onboard
-```
-
-## macOS
-
-Use a user-managed Node 20+ installation on PATH:
-
-```sh
-git clone --recurse-submodules https://github.com/R4yHarris/github-agent-roster.git
-cd github-agent-roster
-npm install -g .
-```
-
-Then run:
-
-```sh
-roster --help
-roster doctor
-roster onboard
-```
-
-The global `roster` bin needs both Node 20+ and npm's global bin directory
-on the current terminal's PATH. Restart the shell after changing PATH.
-Doctor may initially report missing model or publishing prerequisites;
-onboarding is the next setup step, not a policy or credential installer.
-
-## After installation
-
-Run `roster` in an interactive terminal to open the human shell; `/quit` or
-Ctrl+C exits. Run `node --test` in the clone to check the source.
-
-For an existing checkout or new worktree, run
-`git submodule update --init --recursive` from its root. The publisher is
-resolved by [`resolveContractsPath`](../src/lib/paths.mjs): initialized
-submodule first, then `GITHUB_AGENT_CONTRACTS`, then the sibling clone.
-None of these paths authorizes copying or changing contracts sources.
-See [the dependency guide](DEPENDENCY.md).
-
-## Local npm executable
-
-The package declares `roster` as its bin and requires Node >=20. A local
-checkout can exercise the packaged CLI without installing dependencies:
-
-```sh
-npm exec --yes --package . -- roster --help
-```
-
-The npm `files` list includes the CLI, templates, skills, docs, tracked
-config example, and pinned contracts scripts. It excludes roster and
-vendor test directories. `npm pack --dry-run --json` shows the actual file
-list without producing a tarball. If a human publishes a package to a
-registry later, `npx` can use the same bin; this repository does not
-assume that version `0.0.0` is published.
-
-`roster init` works in the **current directory**, including when invoked
-through the packaged bin. It exclusively copies
-`roster.config.example.yml` and `ROSTER-POLICY-NOTE.md`, reporting existing
-files as kept. It does **not** create or overwrite `agent-policy.yml`, a
-workflow, credentials, or a private config. The note is for human policy
-review, not a policy file. A transient `npx` installation does not provide
-a stable location for private runtime settings; use a persistent roster
-checkout for the configured coder loop.
-
-Run `roster onboard` in a terminal from your target project to choose a
-vLLM endpoint, probe model IDs, and save ignored private settings there.
-See [onboarding on Windows, WSL, Linux, and macOS](ONBOARDING.md).
-CLI commands prefer that project's private config over installation
-settings; the package itself is not modified. Non-interactive setup can
-still copy the reviewed example into an ignored private config:
+For Windows local delivery, choose installed images explicitly:
 
 ```powershell
-New-Item -ItemType Directory -Force .roster
-if (-not (Test-Path .\.roster\config.yml)) {
-  Copy-Item .\roster.config.example.yml .\.roster\config.yml
-}
+$env:ROSTER_GIT = 'C:\Program Files\Git\cmd\git.exe'
+$env:ROSTER_NODE20 = 'C:\approved-node20\node.exe'
+.\target\release\roster.exe doctor
+.\target\release\roster.exe run --seat coder --runtime builtin
+.\target\release\roster.exe run --ask-file ASK.md --runtime builtin --no-fetch
 ```
 
-Do not put API key values, App PEMs, or tokens in either config. Use
-[endpoint profiles](ENDPOINTS.md) and the [file vault](LLM.md) for LLM
-keys; keep the App key outside Git.
+These paths are examples, not executable discovery or installation commands.
+Only select images actually installed and approved on the host. Node is an
+optional consumer-language engine, never a Roster fallback.
 
-## Preflight and publication
+For a Rust consumer set an absolute `ROSTER_CARGO`, the installed toolchain's
+`CARGO_HOME`/`RUSTUP_HOME` and, where needed, `RUSTUP_TOOLCHAIN` and `RUSTFLAGS`.
+Set `CARGO_TARGET_DIR` to owned output **outside** the consumer worktree.
+Cargo checks run formatting, strict all-target Clippy and locked/offline
+all-target tests. Roster does not acquire a compiler, packages or images.
+Mixed written Node/Rust scope needs both effective engines.
 
-From the target repository root, `roster doctor` checks Node 20, the vendor
-contracts publisher, opted-in App variables and private-key file,
-regular root `agent-policy.yml` and trailer workflow when publishing is
-enabled, and a saved private model when run/publish is expected. It makes no
-network call and never prints App values or private-key paths. A failed
-check exits nonzero; it does not repair human-owned policy or workflows.
+Both local run forms use the same bounded fixed-profile continuation loop:
+at most two scope rescopings, two fresh-context perspectives and two completed
+semantic review repairs. Correct source edits and the earliest baseline stay
+in the same worktree/writer lease. Each repair gets a new read-only reviewer;
+malformed/incomplete reviews, policy denials, cancellation and source/config
+drift cannot authorize retries. A fresh context does not reset the whole-task
+deadline or `llm.max_requests`. There is no silent model switch.
 
-After tests and review, publish only from the current feature worktree's
-repository root with the GitHub App:
+Expansion budgets grow only from actual recorded unprotected blocked paths,
+up to 16. A strict zero remains zero. Exhausted scope policy prints
+`Mode: planning-escalation`, returns a non-success exit and requires a later
+explicit human/planner handoff; it does not rewrite TASK or claim acceptance.
+Summaries list actual continuation counters, scope expansions and owned
+artifact archive paths. Existing TASK/RECIPE/ESTIMATE identity is preserved.
+`--skip-review` still requires private `reviewer.required: false` and never
+claims publishable independent review. Unsupported routing, resume, issue and
+publication flags remain rejected before effects.
+
+`roster init` creates only `roster.config.example.yml` and
+`ROSTER-POLICY-NOTE.md`, keeping existing regular files. It does not create
+private configuration, ignore rules, credentials, `agent-policy.yml` or
+workflows. Before a local run, a human must review ignore rules for the
+runtime/private subpaths under `.roster/` (not a blanket rule hiding tracked
+shared setup), the configured worktree directory and managed root artifacts (ASSIGNMENT,
+TASK, RECIPE, ESTIMATE, CONTEXT, RESULT, REVIEW, PLAN and RESEARCH).
+
+### Configuration and environment
+
+Target canonical repository private config precedes installation private
+config; linked worktrees do not acquire a separate private overlay. With no
+required private file, embedded, parsed defaults select an offline stub.
+Malformed, unreadable, linked, multi-link or changed private settings fail,
+never fall back to defaults. Unix private directories/files require 0700/0600;
+Windows path/identity checks are not a claim of a new ACL provider.
+
+| Host override | Meaning |
+| --- | --- |
+| `ROSTER_LLM_BASE_URL`, `ROSTER_LLM_MODEL` | Explicit endpoint/model overrides; a configured endpoint needs a model. |
+| `ROSTER_LLM_API_KEY_ENV` | Name of the selected environment key, not its value; App credential names are refused. |
+| `ROSTER_LLM_REQUEST_TIMEOUT_MS` | Validated native request timeout override. |
+| `ROSTER_TASK_TIMEOUT_MS` | Whole native task cap, 1–2147483647 ms. |
+| `ROSTER_START_BASE`, `ROSTER_START_SYNC` | `trunk`/`current`/tracked ref or complete SHA; `fetch`/`offline`. |
+| `ROSTER_ALLOW_FETCH` | `true` explicitly permits credential-free HTTP(S) origin fetch; default is deny. |
+| `ROSTER_BACKEND_TIMEOUT_MS` | Host backend cap, 1–900000 ms; default 30000. Hook and matching-check guards still apply. |
+| `ROSTER_LOCAL_SUBMODULES` | At most 16 explicit local-source approvals, JSON described below. |
+
+Blank or malformed selected overrides fail. No command changes the process's
+global environment or working directory. Keys named by the selected LLM or
+named critic profile are read only from the injected invocation environment.
+Selected private critic fleet settings are validated and sealed with the config.
+There is no automatic cloud discovery or real vault-provider claim.
+
+An omitted critic `api_key_env` is valid. The effective configuration is resolved
+through the existing fleet-profile semantics: explicit profile key name first,
+otherwise the configured `vllm-local` key-name fallback; optional auth follows
+the inherited LLM preference or that named local-profile default. Only those
+effective selected environment names are read. Optional keyless local profiles
+remain usable; missing required, blank or invalid selected credentials fail.
+Selected values are secret regardless of names such as `CRITIC_AUTH`. No
+credential value is written to private settings, managed artifacts or logs.
+Timeout/stall/callback diagnostics conceal normalized primary and critic
+authorities, not just the full configured URL.
+
+Retention overrides retain the existing `ROSTER_RETENTION_OPT_OUT` boolean
+and positive `ROSTER_RETENTION_WINDOW_MS_{MACHINE,REPO,WORKTREE,RUN}` contract.
+Defaults are 90, 14, 7 and 1 days respectively. Loading these preferences does
+not enable cleanup or silently delete history.
+
+### Worktrees and dependencies
+
+An Ask-file run creates a new Git worktree and host-generated opaque local ID;
+it does not copy the caller's dirty working files. Trunk resolves origin's
+default ref, then origin/main or origin/master; absent origin/default refs
+fall back to current HEAD with freshness explicitly unknown. Explicit refs
+must be unambiguous existing tracked refs or complete commit SHAs. Existing
+worktrees and branches are never reset, force-moved or removed.
+
+No preparation fetches `.gitmodules` URLs. Approve each declared gitlink's
+absolute local source explicitly, including nested paths:
 
 ```powershell
-node vendor\github-agent-contracts\scripts\agent-pr.mjs --message "<subject plus Model, Summary, and how-to-test sections>" --model GPT-6.1-Sol --merge-when-green
+$env:ROSTER_LOCAL_SUBMODULES = '[{"path":"vendor/github-agent-contracts","source":"D:\\approved\\github-agent-contracts"}]'
 ```
 
-Set the real model first; this GHCP agent uses `AI_MODEL=GPT-6.1-Sol`.
-See the complete [GHCP publication example](GHCP.md). Missing or unknown
-models cannot publish. Never commit or push as the signed-in human when App credentials are set.
-The SDK enforces reviewed policy and required checks; do not edit
-`agent-policy.yml` or `.github/workflows/*` to bypass a denial. See
-[trailer CI](CI.md), the [interactive shell](REPL.md), and the
-[GitHub board](BOARD.md).
+Every source HEAD must exactly match its captured gitlink. Materialization is
+Git-only, local, bounded and pinned; the source pack and `.gitmodules` are not
+rewritten. Omitted, extra, stale or nonlocal approvals fail. Production origin
+fetch and local submodule materialization are separate permissions.
 
-The GitHub App manifest may grant read-only `actions`, `deployments`,
-`environments`, `variables`, and project permissions when the installation
-needs project-management or deployment inspection. These App permissions are
-separate from the human-owned `agent-policy.yml`; keep the policy default-deny
-and request only the scopes required by the task.
+The first checkpoint uses the strict Windows owned-process backend. Strict
+Unix/macOS Git/engine execution remains unavailable rather than silently
+falling back to direct-child ownership. Pure leaves and offline initialization
+do not imply cross-platform delivery acceptance.
+
+Initialize an existing checkout's contracts dependency from its own root:
+
+```powershell
+git submodule update --init --recursive
+```
+
+The native [contracts resolver](../rust/paths.rs) checks the initialized
+submodule, `GITHUB_AGENT_CONTRACTS`, then the sibling clone; every candidate
+must contain `scripts/agent-pr.mjs`. Do not copy or edit vendor sources.
+See [DEPENDENCY](DEPENDENCY.md) for App-only publishing and policy boundaries.

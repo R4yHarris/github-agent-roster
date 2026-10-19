@@ -141,6 +141,32 @@ Taken from Claude Code, OpenHands, and Aider.
   escalations (a different fleet profile when eligible) that keep worktree edits. Policy denials still stop.
 - Stream a transcript for the human. Do not treat the transcript as the result.
 
+#### Runtime language migration
+
+On 2026-10-15 Ray approved the full migration of Roster's JavaScript runtime
+to Rust, superseding the earlier prohibition on beginning a rewrite before
+slice-loop acceptance. Deliver it incrementally under sections 5.3, 5.4 and
+5.5, not as an unverified big-bang replacement. Existing JavaScript behavior,
+independent checks, persisted formats and authority boundaries remain the
+behavioral reference. Ray subsequently directed the migration branch to remove
+the Node implementation and Node oracle-preservation changes, rather than keep
+a parallel working application. Main and Git history retain that reference.
+The branch uses the native Rust entry point and native acceptance tests; missing
+commands fail explicitly, with no Node fallback or frozen legacy checkout.
+Removing old source or tests is not proof of equivalent behavior or completion.
+
+New Rust code contains no explanatory or documentation comments; required
+license and copyright notices remain. Names, types, tests and separate user
+documentation carry intent. Prefer the smallest correct design and standard
+library; dependencies and process boundaries need a concrete justification.
+Measure performance rather than attributing topology or model latency changes
+to the implementation language.
+
+The authorization does not accept the frozen reliability campaign, change
+section 8, grant live model/hardware experiments, or authorize agent edits to
+policy, workflows or the contracts dependency. The App publishing SDK remains
+independent. Release, review, App identity and human acceptance gates still apply.
+
 ### 5.5 Review and gates
 
 Taken from GitHub rulesets and missing in crew chat.
@@ -203,7 +229,9 @@ These are the bets that make roster the answer when someone asks how to give an 
 - A general chatbot crew. Research and writing crews are a different product.
 - Autonomous merge to production as the default.
 - Fake metrics. If the endpoint does not return usage, record unknown.
-- A rewrite in another language before the slice loop is reliable.
+- An unapproved or behavior-breaking rewrite. The full Rust migration approved
+  on 2026-10-15 follows the incremental compatibility gates in section 5.4;
+  it does not waive reliable-slice-loop acceptance.
 
 ## 8. Acceptance for the harness itself
 

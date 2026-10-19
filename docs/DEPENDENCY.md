@@ -25,15 +25,23 @@ from that checkout's root:
 git submodule update --init --recursive
 ```
 
-See [installation and bootstrap](INSTALL.md) for the local npm bin,
-private configuration, and preflight checks.
+This branch builds the native Rust binary with Cargo. The former npm entry
+point has been removed; the contracts publishing SDK remains a separate Node
+tool. The first native local TASK/Ask CLI is implemented; GitHub issue and
+publication adapters remain pending.
 
-Roster runs `git submodule update --init --recursive` from every new issue or
-local-ask worktree root before writing the assignment or starting seats.
-Reused issue worktrees are initialized too. A worktree with no `.gitmodules`
-declares no submodules, so Roster skips the command there. A declared contracts submodule
-must then contain `scripts/agent-pr.mjs`; an environment or sibling fallback
-does not replace that local file for tests with worktree-relative imports.
+Native worktree preparation does **not** fetch `.gitmodules` URLs or blindly run
+recursive update. Every declared gitlink needs an explicit approved absolute
+local source (`ROSTER_LOCAL_SUBMODULES` in [INSTALL](INSTALL.md)); its HEAD must
+exactly equal the selected gitlink. Git-only local materialization finishes under
+the owned root lease before assignment/planning. Nested paths are explicit and
+bounded, source packs and URLs remain unchanged, and missing/stale approvals
+stop. A worktree with no declared gitlinks needs no submodule operation.
+
+The installation dependency must contain `scripts/agent-pr.mjs`, be clean at
+the installation's reviewed gitlink and retain its physical source identity.
+A configured/sibling fallback must meet the same reviewed pin. It does not
+replace a worktree-relative declared dependency needed by consumer tests.
 
 If tests are blocked only by missing contracts scripts, the harness prints
 `Contracts submodule was not initialized`, not a vendor directory listing.
@@ -44,7 +52,7 @@ missing modules retain normal failed-test handling.
 
 ## Resolution
 
-[`resolveContractsPath`](../src/lib/paths.mjs) returns the first usable contracts
+[`resolve_contracts_path`](../rust/paths.rs) returns the first usable contracts
 directory in this order:
 
 1. `vendor/github-agent-contracts` inside the roster checkout.
@@ -77,12 +85,14 @@ The publisher also requires a feature branch and a human-owned root
 origin's default branch. Do not create or edit policy as part of dependency
 setup.
 
-A manually created worktree needs `git submodule update --init --recursive`
-from its own root; Roster-created worktrees already do this during preparation.
-The builtin `--publish` path
-requires a passing REVIEW.md (or explicit `--skip-review`), initializes it,
-selects reviewed task files, and invokes the SDK from that
-root; without the flag, it prints the next command but does not invoke it.
+A human may explicitly initialize a manually created worktree with
+`git submodule update --init --recursive` from its root. Native-created local
+worktrees use only the approved local-source path described above, not URL
+fetch. The native CLI's `--publish`/GitHub issue paths are currently unavailable
+before effects; no SDK call, draft PR or model-free publication command is
+substituted. Eventual managed publication still requires current passing
+private REVIEW authority (or an explicitly allowed skip), reviewed task files,
+the complete App credentials and SDK execution from the feature worktree root.
 Every Roster publish path passes `--model` explicitly. Completed seats supply
 their actual response-backed model and usage. Without a completed seat, GHCP
 publication requires `AI_MODEL` or explicit `/publish --model MODEL`, uses
@@ -138,6 +148,75 @@ permission HTTP 422 is likewise a stop, not permission to use another token
 or human fallback.
 Merge remains separately authorized and conservative cleanup can report a
 confirmed remote merge with incomplete local worktree cleanup.
+
+## Native vault capability dependencies
+
+FEATURE_SPEC 5.8 requires a real encrypted endpoint-key vault; 5.2/5.4 require
+selected credentials in native delivery. The standard library provides neither
+AES-256-GCM, a fallible OS CSPRNG, guaranteed key erasure nor safe Windows token
+and handle-bound ACL operations. Prompt 04 section 6 authorizes the following
+specific dependencies, not a framework or a production helper subprocess.
+
+- RustCrypto `aes-gcm =0.10.3`, `aes =0.8.4`, `ghash =0.5.1` and
+  `polyval =0.6.2`: MIT OR Apache-2.0, declared minimum Rust 1.56.
+  Defaults and the older RNG graph are disabled. Detached in-place AEAD uses
+  the existing allocator. Explicit zeroize feature unification is necessary:
+  AES-GCM's own feature clears its temporary GHASH key, but alone does not
+  clear expanded AES or POLYVAL/GHASH state. Exact published implementations
+  were inspected through docs.rs before acquisition. The NCC audit reported
+  no significant findings; this is not proof for every CPU. Constant-time
+  multiplication remains a hardware requirement.
+- `getrandom =0.4.3` (fallible OS fill) and `zeroize =1.9.1` (RAII raw-key
+  buffers), both MIT OR Apache-2.0, minimum Rust 1.85; `base64 =0.23.1`,
+  MIT OR Apache-2.0, minimum Rust 1.71. These versions were already locked
+  transitively and are promoted directly rather than duplicated.
+- Windows-only Daniel Dulaney `windows-permissions =0.2.4`, MIT, edition
+  2018 with no declared MSRV. Its exact 2021 published source provides safe
+  direct `GetSecurityInfo`/`SetSecurityInfo` wrappers over owned file handles
+  and SDDL conversion. Its age and limited maintenance are explicit risks.
+  The higher-level `WindowsSecure` helper is not used: its group-dependent
+  DACL/SACL flags and unknown object type are unsuitable. External null
+  DACLs are inspected through SDDL, not the wrapper's panicking DACL getter.
+  Token identity comes from the already pinned `winsafe =0.0.24` effective
+  thread token with its additional `advapi` feature, never an environment
+  username or file owner. No application unsafe/FFI is introduced.
+- Already pinned Unix `rustix =1.1.5` gains `fs` for no-follow,
+  directory-relative operations and exclusive complete-file rename. This is
+  confined to vault consumers; existing state/settings privacy is unchanged.
+
+The crypto graph adds AEAD/cipher/CTR/GHASH/POLYVAL and their small primitive
+dependencies; the Windows wrapper adds `winapi 0.3.9`, `bitflags 1` and the
+target-specific GNU import archives.
+`subtle 2.6.1` is BSD-3-Clause; its copyright, redistribution and disclaimer
+conditions were reviewed alongside the MIT/Apache-2.0 primitive licenses.
+The first native GNU link exposed a missing SDK `ktmw32` import-library name
+when enabling WinSafe's `advapi` feature. The package's tiny GNU-only build
+script supplies a linker-script alias to the **real, unchanged**
+`libwinapi_ktmw32.a` already shipped by locked `winapi`'s GNU dependency.
+It defines no FFI or fake symbols, executes no helper and changes no system
+toolchain. The real archive remains required; MSVC uses its normal SDK.
+The locked graph/checksums precede package acquisition. Network access is
+limited to this explicit registry acquisition; normal checks remain locked
+and offline. Compiler/platform validation and the measured incremental graph
+are recorded in [RUST](RUST.md) and [TESTING](TESTING.md), not assumed from
+crate metadata.
+
+The final lock contains **199 package versions including the application**
+(198 registry versions). Resolving the byte-verified prior direct manifest
+with retained existing versions gives 183, so this capability adds **16**
+registry versions: 11 AEAD/cipher/hash primitive packages, `bitflags 1`,
+`windows-permissions`, `winapi`, and its two target-specific GNU import
+archives. `getrandom`, `zeroize` and `base64` are direct promotions of already
+locked versions, not additional duplicate families. All previous direct
+version pins reproduce their original manifest hash when only these additions
+and the two justified feature extensions are removed.
+
+Exact checksums, published source URLs, licenses, declared/undeclared MSRVs
+and acquisition status are retained in `.vault-evidence/dependency-review.json`.
+Both stable 1.99.1 and Rust 1.85.0 GNU pass the frozen 523-case all-target
+suite and strict Clippy; optimized native vault and actual CLI/local controls
+also pass. This verifies the selected GNU graph, not unexecuted platform or
+hardware claims.
 
 ## Trailer CI
 
