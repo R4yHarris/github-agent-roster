@@ -1508,6 +1508,578 @@ pub fn parse_model_inventory_response(
         .collect())
 }
 
+pub async fn probe_model_details<T: crate::llm::http::Transport>(
+    base_url: &str,
+    transport: &mut T,
+    env: Option<&Value>,
+    api_key_env: Option<&str>,
+    authenticate: bool,
+    timeout_ms: Option<u64>,
+) -> Result<Vec<Value>, Error> {
+    use crate::llm::http::{Body, Request};
+    if let Some(ms) = timeout_ms {
+        if !(1..=60_000).contains(&ms) {
+            return Err(Error::type_error(
+                "Model probe timeout must be a positive integer of at most 60000 ms",
+            ));
+        }
+    }
+    let env_value = env
+        .cloned()
+        .unwrap_or_else(crate::ask::environment_value_from_process);
+    let mut redaction_cfg = crate::state::redaction::Config {
+        environment: env_value.clone(),
+        ..crate::state::redaction::Config::default()
+    };
+    if let Some(key) = api_key_env.filter(|s| !s.is_empty()) {
+        redaction_cfg.api_key_env = Text::from(key);
+    }
+    redaction_cfg.validate()?;
+    if base_url
+        .chars()
+        .any(|ch| matches!(ch, '\x00'..='\x1f' | '\x7f'))
+        || crate::state::redaction::evidence(&Text::from(base_url), &redaction_cfg).to_utf8()?
+            != base_url
+    {
+        return Err(Error::type_error(
+            "Enter a public URL or model ID, not a secret",
+        ));
+    }
+    let validated = config::validate_base_url(&Text::from(base_url), "llm.base_url")?.to_utf8()?;
+    let mut url = url::Url::parse(&validated)
+        .map_err(|_| Error::type_error("Invalid URL").coded("ERR_INVALID_URL"))?;
+    let trimmed_path = url.path().trim_end_matches('/').to_owned();
+    url.set_path(&format!("{trimmed_path}/models"));
+    let hostname = url.host_str().unwrap_or("");
+    let effective_timeout =
+        timeout_ms.unwrap_or(if hostname == "127.0.0.1" || hostname == "localhost" {
+            5_000
+        } else {
+            60_000
+        });
+    let mut auth_source = "missing";
+    let mut resolved_key = None;
+    if authenticate {
+        let key_names = if hostname.contains("aperture") {
+            vec!["APERTURE_API_KEY".to_owned(), "ROSTER_API_KEY".to_owned()]
+        } else {
+            vec![api_key_env.unwrap_or("ROSTER_API_KEY").to_owned()]
+        };
+        for name in key_names {
+            if let Ok(Some(val)) = config::environment_value(&env_value, &name) {
+                if let Ok(s) = val.to_utf8() {
+                    if !s.is_empty() {
+                        auth_source = "env";
+                        resolved_key = Some(s);
+                        break;
+                    }
+                }
+            }
+            if let Ok(vault) = crate::vault::FileVault::from_environment(&env_value) {
+                if let Ok(Some(s)) = vault.get(&name) {
+                    if !s.is_empty() {
+                        auth_source = "vault";
+                        resolved_key = Some(s);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    let mut headers = vec![("Accept".to_owned(), "application/json".to_owned())];
+    if let Some(ref k) = resolved_key {
+        headers.push(("Authorization".to_owned(), format!("Bearer {k}")));
+    }
+    let req = Request {
+        url: url.as_str().to_owned(),
+        method: "GET".to_owned(),
+        headers,
+        body: Vec::new(),
+    };
+    let response = match tokio::time::timeout(
+        std::time::Duration::from_millis(effective_timeout),
+        transport.send(&req),
+    )
+    .await
+    {
+        Ok(Ok(res)) => res,
+        Ok(Err(_)) => return Err(Error::new("ModelProbeError", "network")),
+        Err(_) => return Err(Error::new("ModelProbeError", "timeout")),
+    };
+    if !(200..300).contains(&response.status) {
+        return Err(Error::new(
+            "ModelProbeError",
+            format!("HTTP {} auth={auth_source}", response.status),
+        ));
+    }
+    let mut body_bytes = Vec::new();
+    if let Some(mut body) = response.body {
+        while let Some(chunk) = body
+            .read()
+            .await
+            .map_err(|_| Error::new("ModelProbeError", "invalid response"))?
+        {
+            body_bytes.extend_from_slice(&chunk);
+        }
+    }
+    let text = String::from_utf8(body_bytes)
+        .map_err(|_| Error::new("ModelProbeError", "invalid response"))?;
+    let payload = crate::json::parse(&Text::from(text.as_str()))
+        .map_err(|_| Error::new("ModelProbeError", "invalid response"))?;
+    parse_model_inventory_response(&payload, Some(&env_value), api_key_env)
+}
+
+pub async fn probe_models<T: crate::llm::http::Transport>(
+    base_url: &str,
+    transport: &mut T,
+    env: Option<&Value>,
+    api_key_env: Option<&str>,
+    authenticate: bool,
+    timeout_ms: Option<u64>,
+) -> Result<Vec<String>, Error> {
+    let details = probe_model_details(
+        base_url,
+        transport,
+        env,
+        api_key_env,
+        authenticate,
+        timeout_ms,
+    )
+    .await?;
+    details
+        .into_iter()
+        .map(|entry| {
+            entry
+                .get("id")
+                .and_then(Value::as_string)
+                .ok_or_else(|| Error::new("ModelProbeError", "invalid response"))?
+                .to_utf8()
+        })
+        .collect()
+}
+
+pub async fn run_fleet_cli<T: crate::llm::http::Transport>(
+    cmd: &FleetCliCommand,
+    cwd: &Path,
+    installation: &Path,
+    environment: &Value,
+    is_tty: bool,
+    transport: &mut T,
+    token: Option<&crate::cancel::CancellationToken>,
+) -> Result<String, Error> {
+    if matches!(cmd, FleetCliCommand::Assist) && !is_tty {
+        return Err(Error::new("Error", "roster fleet assist needs a terminal"));
+    }
+    if let FleetCliCommand::Add { model: None, .. } = cmd {
+        if !is_tty {
+            return Err(Error::type_error(
+                "Non-TTY fleet add requires --id, --base-url, and --model",
+            ));
+        }
+    }
+    if let FleetCliCommand::Probe {
+        set_model: true,
+        model: None,
+        ..
+    } = cmd
+    {
+        if !is_tty {
+            return Err(Error::type_error(
+                "Non-TTY fleet probe --set-model requires a model ID",
+            ));
+        }
+    }
+    let repo_root = crate::paths::resolve_project_root(cwd)?;
+    let previous_fleet = settings::read_private_file(&repo_root, settings::Name::Fleet)?;
+    let fleet_val = match &previous_fleet {
+        Some(src) => parse(src)?,
+        None => validate(&Value::object(vec![("profiles", Value::Array(Vec::new()))]))?,
+    };
+    let current_cfg = || -> Result<(Option<Text>, Value), Error> {
+        let prev = settings::read_private_file(&repo_root, settings::Name::Config)?;
+        let cfg = match &prev {
+            Some(src) => config::parse(src)?.as_value().clone(),
+            None => config::load(installation, cwd, environment)?
+                .config
+                .as_value()
+                .clone(),
+        };
+        Ok((prev, cfg))
+    };
+    match cmd {
+        FleetCliCommand::List => list(&fleet_val)?.to_utf8(),
+        FleetCliCommand::Hardware { id, hardware } => {
+            let (updated, _, msg) = apply_fleet_hardware(&fleet_val, id, hardware)?;
+            settings::ensure_private_files_ignored(&repo_root, &[settings::Name::Fleet], token)
+                .await?;
+            settings::write_private_documents(
+                &repo_root,
+                &[settings::Document {
+                    name: settings::Name::Fleet,
+                    source: format(&updated.as_value())?,
+                    expected_source: Some(previous_fleet),
+                }],
+            )?;
+            Ok(msg)
+        }
+        FleetCliCommand::Default { id } => {
+            let (prev_cfg, cfg_val) = current_cfg()?;
+            let (_, formatted_cfg, msg) = apply_fleet_default(&cfg_val, &fleet_val, id)?;
+            settings::ensure_private_files_ignored(&repo_root, &[settings::Name::Config], token)
+                .await?;
+            settings::write_private_documents(
+                &repo_root,
+                &[settings::Document {
+                    name: settings::Name::Config,
+                    source: formatted_cfg,
+                    expected_source: Some(prev_cfg),
+                }],
+            )?;
+            Ok(msg)
+        }
+        FleetCliCommand::Remove { id } => {
+            let (_, cfg_val) = current_cfg()?;
+            let (updated, msg) = apply_fleet_remove(&cfg_val, &fleet_val, id)?;
+            settings::ensure_private_files_ignored(&repo_root, &[settings::Name::Fleet], token)
+                .await?;
+            settings::write_private_documents(
+                &repo_root,
+                &[settings::Document {
+                    name: settings::Name::Fleet,
+                    source: format(&updated.as_value())?,
+                    expected_source: Some(previous_fleet),
+                }],
+            )?;
+            Ok(msg)
+        }
+        FleetCliCommand::Discover { wsl: _, save } => {
+            let mut out = String::from(
+                "Discovery uses unauthenticated model inventory/metadata probes; no model prompts or default changes.\n",
+            );
+            let candidates = discovery_candidates(Some(environment), &[]);
+            let mut endpoints = Vec::new();
+            let mut failures = 0_usize;
+            for base_url in candidates {
+                match probe_model_details(
+                    &base_url,
+                    transport,
+                    Some(environment),
+                    None,
+                    false,
+                    Some(5_000),
+                )
+                .await
+                {
+                    Ok(models) => {
+                        let model_strs = models
+                            .iter()
+                            .filter_map(|m| {
+                                let id = m.get("id")?.as_string()?.to_utf8().ok()?;
+                                let ctx = domain::safe_integer(m.get("context_max")).map_or_else(
+                                    || "unreported; use fleet add --context".to_owned(),
+                                    |n| n.to_string(),
+                                );
+                                Some(format!("{id} (context={ctx})"))
+                            })
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        out.push_str(&format!("{base_url}: {model_strs}\n"));
+                        endpoints.push(Value::object(vec![
+                            ("baseUrl", Value::string(&base_url)),
+                            ("models", Value::Array(models)),
+                        ]));
+                    }
+                    Err(_) => failures += 1,
+                }
+            }
+            if endpoints.is_empty() {
+                out.push_str(
+                    "No model endpoint answered. Check server bind address, firewall and ROSTER_DISCOVER_HOSTS.\n",
+                );
+            }
+            if failures > 0 {
+                out.push_str(&format!(
+                    "{failures} endpoint probe(s) failed or timed out; no credentials sent.\n"
+                ));
+            }
+            let merged = merge_discovered_profiles(&fleet_val.as_value(), &endpoints)?;
+            if *save && merged.profiles().len() != fleet_val.profiles().len() {
+                settings::ensure_private_files_ignored(&repo_root, &[settings::Name::Fleet], token)
+                    .await?;
+                settings::write_private_documents(
+                    &repo_root,
+                    &[settings::Document {
+                        name: settings::Name::Fleet,
+                        source: format(&merged.as_value())?,
+                        expected_source: Some(previous_fleet),
+                    }],
+                )?;
+                out.push_str(&format!(
+                    "Added {} profiles; existing profiles and default config unchanged.\n",
+                    merged.profiles().len() - fleet_val.profiles().len()
+                ));
+            } else {
+                out.push_str(
+                    "Private settings unchanged. Use --save to add newly observed profiles.\n",
+                );
+            }
+            Ok(out)
+        }
+        FleetCliCommand::Add {
+            id,
+            base_url,
+            model,
+            context,
+            concurrency,
+            hardware,
+            task_class,
+        } => {
+            if fleet_val
+                .profiles()
+                .iter()
+                .any(|p| domain::is_text(p.as_value().get("id"), id))
+            {
+                return Err(Error::new("Error", "Fleet profile ID already exists"));
+            }
+            let (_, cfg_val) = current_cfg()?;
+            let api_key_env = cfg_val
+                .get("llm")
+                .and_then(|l| l.get("api_key_env"))
+                .and_then(Value::as_string)
+                .and_then(|t| t.to_utf8().ok());
+            let models = probe_model_details(
+                base_url,
+                transport,
+                Some(environment),
+                api_key_env.as_deref(),
+                true,
+                None,
+            )
+            .await?;
+            let mut out = String::from("Available models:\n");
+            for (idx, m) in models.iter().enumerate() {
+                if let Some(m_id) = m
+                    .get("id")
+                    .and_then(Value::as_string)
+                    .and_then(|t| t.to_utf8().ok())
+                {
+                    out.push_str(&format!("  {}. {m_id}\n", idx + 1));
+                }
+            }
+            let selected_model = model.clone().ok_or_else(|| {
+                Error::type_error("Fleet questions need a terminal or explicit flags")
+            })?;
+            let matched = models
+                .iter()
+                .find(|m| domain::is_text(m.get("id"), &selected_model))
+                .ok_or_else(|| {
+                    Error::new(
+                        "Error",
+                        "Requested model is not in the endpoint models list",
+                    )
+                })?;
+            let reported_ctx = domain::safe_integer(matched.get("context_max"));
+            let ctx_str = match (context.as_deref(), reported_ctx) {
+                (Some(c), _) => c.to_owned(),
+                (None, Some(rc)) => {
+                    out.push_str(&format!(
+                        "Using context_max={rc} reported by /v1/models for {selected_model}.\n"
+                    ));
+                    rc.to_string()
+                }
+                (None, None) => {
+                    return Err(Error::type_error(
+                        "Non-TTY fleet add requires --context when /v1/models does not report a context limit",
+                    ));
+                }
+            };
+            let parse_pos = |raw: &str, field: &str| -> Result<u64, Error> {
+                if !raw.bytes().all(|b| b.is_ascii_digit()) || raw.starts_with('0') {
+                    return Err(Error::type_error(format!(
+                        "Fleet {field} must be a positive safe integer"
+                    )));
+                }
+                raw.parse::<u64>()
+                    .ok()
+                    .filter(|n| (1..=crate::MAX_SAFE_INTEGER).contains(n))
+                    .ok_or_else(|| {
+                        Error::type_error(format!("Fleet {field} must be a positive safe integer"))
+                    })
+            };
+            let ctx_val = parse_pos(&ctx_str, "context")?;
+            let conc_val = match concurrency.as_deref() {
+                Some(c) => parse_pos(c, "concurrency")?,
+                None => 1,
+            };
+            let mut prof_fields = vec![
+                ("id", Value::string(id)),
+                ("base_url", Value::string(base_url)),
+                ("model", Value::string(&selected_model)),
+                ("provider", Value::string("vllm")),
+                ("context_max", Value::Number(ctx_val as f64)),
+                ("concurrency", Value::Number(conc_val as f64)),
+                (
+                    "hardware",
+                    Value::string(hardware.as_deref().unwrap_or("unspecified")),
+                ),
+                ("notes", Value::string("")),
+            ];
+            if let Some(tc) = task_class.as_deref() {
+                prof_fields.push((
+                    "task_class",
+                    Value::Array(tc.split(',').map(Value::string).collect()),
+                ));
+            }
+            let validated_prof = validate_profile(&Value::object(prof_fields))?;
+            let mut all_profiles = fleet_val
+                .profiles()
+                .iter()
+                .map(|p| p.as_value().clone())
+                .collect::<Vec<_>>();
+            all_profiles.push(validated_prof.as_value().clone());
+            let updated = validate(&Value::object(vec![(
+                "profiles",
+                Value::Array(all_profiles),
+            )]))?;
+            settings::ensure_private_files_ignored(&repo_root, &[settings::Name::Fleet], token)
+                .await?;
+            settings::write_private_documents(
+                &repo_root,
+                &[settings::Document {
+                    name: settings::Name::Fleet,
+                    source: format(&updated.as_value())?,
+                    expected_source: Some(previous_fleet),
+                }],
+            )?;
+            out.push_str(&format!(
+                "Added fleet profile: {id}. Default config unchanged.\n"
+            ));
+            Ok(out)
+        }
+        FleetCliCommand::Probe {
+            id,
+            set_model,
+            model,
+        } => {
+            let profile = get_profile(&fleet_val, &Value::string(id))?;
+            let base_url = profile
+                .as_value()
+                .get("base_url")
+                .and_then(Value::as_string)
+                .ok_or_else(|| Error::type_error("Fleet profile missing base_url"))?
+                .to_utf8()?;
+            let saved_model = profile
+                .as_value()
+                .get("model")
+                .and_then(Value::as_string)
+                .ok_or_else(|| Error::type_error("Fleet profile missing model"))?
+                .to_utf8()?;
+            let (prev_cfg, cfg_val) = current_cfg()?;
+            let api_key_env = cfg_val
+                .get("llm")
+                .and_then(|l| l.get("api_key_env"))
+                .and_then(Value::as_string)
+                .and_then(|t| t.to_utf8().ok());
+            let models = probe_model_details(
+                &base_url,
+                transport,
+                Some(environment),
+                api_key_env.as_deref(),
+                true,
+                None,
+            )
+            .await?;
+            if !*set_model {
+                let mut out = String::from("Available models:\n");
+                for m in &models {
+                    if let Some(m_id) = m
+                        .get("id")
+                        .and_then(Value::as_string)
+                        .and_then(|t| t.to_utf8().ok())
+                    {
+                        if let Some(ctx) = domain::safe_integer(m.get("context_max")) {
+                            out.push_str(&format!("  {m_id} (context_max={ctx})\n"));
+                        } else {
+                            out.push_str(&format!("  {m_id}\n"));
+                        }
+                    }
+                }
+                out.push_str(&format!("Saved model unchanged: {saved_model}\n"));
+                return Ok(out);
+            }
+            let mut out = String::from("Available models:\n");
+            for (idx, m) in models.iter().enumerate() {
+                if let Some(m_id) = m
+                    .get("id")
+                    .and_then(Value::as_string)
+                    .and_then(|t| t.to_utf8().ok())
+                {
+                    out.push_str(&format!("  {}. {m_id}\n", idx + 1));
+                }
+            }
+            let selected_model = model.clone().ok_or_else(|| {
+                Error::type_error("Fleet questions need a terminal or explicit flags")
+            })?;
+            let matched = models
+                .iter()
+                .find(|m| domain::is_text(m.get("id"), &selected_model))
+                .ok_or_else(|| {
+                    Error::new(
+                        "Error",
+                        "Requested model is not in the endpoint models list",
+                    )
+                })?;
+            let reported_ctx = domain::safe_integer(matched.get("context_max"));
+            let mut updated_prof = profile.as_value().clone();
+            domain::put(&mut updated_prof, "model", Value::string(&selected_model))?;
+            if let Some(ctx) = reported_ctx {
+                domain::put(&mut updated_prof, "context_max", Value::Number(ctx as f64))?;
+            }
+            let updated_profiles = fleet_val
+                .profiles()
+                .iter()
+                .map(|item| {
+                    if item.as_value().get("id") == profile.as_value().get("id") {
+                        updated_prof.clone()
+                    } else {
+                        item.as_value().clone()
+                    }
+                })
+                .collect::<Vec<_>>();
+            let updated_fleet = validate(&Value::object(vec![(
+                "profiles",
+                Value::Array(updated_profiles),
+            )]))?;
+            let mut docs = vec![settings::Document {
+                name: settings::Name::Fleet,
+                source: format(&updated_fleet.as_value())?,
+                expected_source: Some(previous_fleet),
+            }];
+            let mut names = vec![settings::Name::Fleet];
+            if matches_default(&cfg_val, profile.as_value()) {
+                let next_cfg = with_profile(&cfg_val, &updated_prof)?;
+                docs.push(settings::Document {
+                    name: settings::Name::Config,
+                    source: config::format(&next_cfg)?,
+                    expected_source: Some(prev_cfg),
+                });
+                names.push(settings::Name::Config);
+            }
+            settings::ensure_private_files_ignored(&repo_root, &names, token).await?;
+            settings::write_private_documents(&repo_root, &docs)?;
+            out.push_str(&format!(
+                "Updated saved model for {id}. {}",
+                match reported_ctx {
+                    Some(ctx) => format!("Using context_max={ctx} reported by /v1/models.\n"),
+                    None => "Recheck its declared context limit for the new model.\n".to_owned(),
+                }
+            ));
+            Ok(out)
+        }
+        FleetCliCommand::Assist => Err(Error::new("Error", "roster fleet assist needs a terminal")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

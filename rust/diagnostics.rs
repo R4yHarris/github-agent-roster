@@ -1692,6 +1692,153 @@ pub fn redact_line(value: &str) -> String {
         .join(" ")
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WarmDoctorReport {
+    pub skipped: bool,
+    pub status: Option<u16>,
+    pub stderr_log: String,
+}
+
+pub async fn warm_doctor<T: crate::llm::http::Transport>(
+    config_val: &Value,
+    environment: &Value,
+    transport: &mut T,
+    token: &crate::cancel::CancellationToken,
+) -> Result<WarmDoctorReport, Error> {
+    use crate::llm::http::{Body, Request};
+    token.check()?;
+    let llm_val = config_val
+        .get("llm")
+        .ok_or_else(|| Error::type_error("Configuration requires llm"))?;
+    let base_url_text = llm_val
+        .get("base_url")
+        .and_then(Value::as_string)
+        .cloned()
+        .unwrap_or_default();
+    let base_url_str = base_url_text.to_utf8()?;
+    if base_url_str.is_empty() {
+        return Ok(WarmDoctorReport {
+            skipped: true,
+            status: None,
+            stderr_log: "SKIP warming: empty LLM endpoint uses the deterministic stub\n".to_owned(),
+        });
+    }
+    let validated_base = config::validate_base_url(&base_url_text, "llm.base_url")?.to_utf8()?;
+    let mut url = url::Url::parse(&validated_base)
+        .map_err(|_| Error::type_error("Invalid LLM base_url").coded("ERR_INVALID_URL"))?;
+    let trimmed_path = url.path().trim_end_matches('/').to_owned();
+    url.set_path(&format!("{trimmed_path}/models"));
+    let api_key_env = llm_val
+        .get("api_key_env")
+        .and_then(Value::as_string)
+        .cloned();
+    let redactor = Redactor::new(environment, api_key_env.as_ref());
+    let raw_host = match url.port() {
+        Some(port) => format!("{}:{port}", url.host_str().unwrap_or("")),
+        None => url.host_str().unwrap_or("").to_owned(),
+    };
+    let host = redactor
+        .redact(&Text::from(raw_host.as_str()), None)
+        .to_utf8()?;
+    let hostname = url.host_str().unwrap_or("");
+    let timeout_ms = crate::request::request_timeout(
+        hostname,
+        llm_val.get("request_timeout_ms").and_then(Value::as_number),
+        llm_val.get("timeout_ms").and_then(Value::as_number),
+    )?;
+    let key_name = api_key_env
+        .as_ref()
+        .and_then(|t| t.to_utf8().ok())
+        .unwrap_or_else(|| "ROSTER_API_KEY".to_owned());
+    let env_key = config::environment_value(environment, &key_name)?
+        .and_then(|t| t.to_utf8().ok())
+        .filter(|s| !s.is_empty());
+    let key = match env_key {
+        Some(v) => Some(v),
+        None => crate::vault::FileVault::from_environment(environment)
+            .ok()
+            .and_then(|v| v.get(&key_name).ok().flatten()),
+    };
+    if key.is_none() && llm_val.get("api_key_optional") == Some(&Value::Boolean(false)) {
+        return Err(Error::new("ChatError", "An LLM API key is required.").coded("authentication"));
+    }
+    let mut stderr_log = format!("warming host={host} timeout_ms={timeout_ms}\n");
+    let mut headers = vec![("Accept".to_owned(), "application/json".to_owned())];
+    if let Some(ref k) = key {
+        headers.push(("Authorization".to_owned(), format!("Bearer {k}")));
+    }
+    let req = Request {
+        url: url.as_str().to_owned(),
+        method: "GET".to_owned(),
+        headers,
+        body: Vec::new(),
+    };
+    let response = match tokio::time::timeout(
+        std::time::Duration::from_millis(u64::from(timeout_ms)),
+        transport.send(&req),
+    )
+    .await
+    {
+        Ok(Ok(res)) => res,
+        Ok(Err(_)) => {
+            token.check()?;
+            return Err(Error::new(
+                "ChatError",
+                "Warming probe request failed. Check the endpoint and connection.",
+            )
+            .coded("network"));
+        }
+        Err(_) => {
+            token.check()?;
+            let local = crate::request::is_local_llm_host(hostname);
+            let msg = crate::request::timeout_hint(
+                &host,
+                timeout_ms,
+                local,
+                Some("roster doctor --warm"),
+            );
+            return Err(Error::new("ChatError", msg).coded("ROSTER_LLM_TIMEOUT"));
+        }
+    };
+    if !(200..=299).contains(&response.status) {
+        return Err(Error::new(
+            "ChatError",
+            format!("Warming probe failed (HTTP {}).", response.status),
+        )
+        .coded("http"));
+    }
+    let mut body_bytes = Vec::new();
+    if let Some(mut body) = response.body {
+        while let Some(chunk) = body
+            .read()
+            .await
+            .map_err(|_| Error::new("ChatError", "Warming probe did not return model JSON."))?
+        {
+            body_bytes.extend_from_slice(&chunk);
+        }
+    }
+    let text = String::from_utf8(body_bytes)
+        .map_err(|_| Error::new("ChatError", "Warming probe did not return model JSON."))?;
+    let payload = json::parse(&Text::from(text.as_str()))
+        .map_err(|_| Error::new("ChatError", "Warming probe did not return model JSON."))?;
+    let has_models = payload
+        .get("data")
+        .and_then(domain::items)
+        .is_some_and(|items| !items.is_empty());
+    if !has_models {
+        return Err(Error::new("ChatError", "Warming probe returned no models."));
+    }
+    stderr_log.push_str(&format!(
+        "warming probe ok host={host} status={}\n",
+        response.status
+    ));
+    Ok(WarmDoctorReport {
+        skipped: false,
+        status: Some(response.status),
+        stderr_log,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
