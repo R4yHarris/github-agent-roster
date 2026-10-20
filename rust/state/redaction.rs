@@ -694,10 +694,11 @@ mod tests {
     #[test]
     fn nested_redaction_retains_unknown_and_lone_surrogates() -> Result<(), Error> {
         let input = crate::json::parse(&Text::from(
-            r#"{"note":"api_key='test-only-private-api-key'","surrogate":"\ud800","metric":null}"#,
+            r#"{"note":"api_key='test-only-private-api-key'","upper":"API_KEY=\"escaped\\\"secret_value_1234\"","surrogate":"\ud800","metric":null}"#,
         ))?;
         let output = record(&input, &Config::default())?;
         assert!(!output.json().contains("test-only-private-api-key"));
+        assert!(!output.json().contains("secret_value_1234"));
         assert_eq!(output.get("surrogate"), input.get("surrogate"));
         assert_eq!(output.get("metric"), Some(&Value::Null));
         Ok(())

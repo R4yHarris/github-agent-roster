@@ -925,6 +925,121 @@ pub fn parse_diff_names(raw: &str) -> Vec<String> {
         .collect()
 }
 
+pub fn inspect_local_issue_worktree(number: u64, worktree_path: &Path) -> Result<Value, Error> {
+    if !(1..=crate::MAX_SAFE_INTEGER).contains(&number) {
+        return Err(Error::type_error(
+            "Issue number must be a positive safe integer",
+        ));
+    }
+    let assignment = read_recap_artifact(worktree_path, "ASSIGNMENT.md")?.ok_or_else(|| {
+        Error::new(
+            "Error",
+            "Local assignment does not match the requested issue",
+        )
+    })?;
+    let re = regex_lite::Regex::new(
+        r"(?s)^# Assignment\n\n- Issue URL: (https://github\.com/[^\s]+/issues/([1-9]\d*))\n- Issue number: ([1-9]\d*)\n- Title: ([^\n]+)\n\n(?:- Wave: ([1-8])\n\n)?## Ask\n\n(.+)$",
+    )
+    .map_err(|error| Error::new("Error", error.to_string()))?;
+    let Some(caps) = re.captures(&assignment) else {
+        return Err(Error::new(
+            "Error",
+            "Local assignment does not match the requested issue",
+        ));
+    };
+    let url = caps
+        .get(1)
+        .map(|m| m.as_str().to_owned())
+        .unwrap_or_default();
+    let url_num = caps.get(2).and_then(|m| m.as_str().parse::<u64>().ok());
+    let num = caps.get(3).and_then(|m| m.as_str().parse::<u64>().ok());
+    if url_num != Some(number) || num != Some(number) {
+        return Err(Error::new(
+            "Error",
+            "Local assignment does not match the requested issue",
+        ));
+    }
+    let title = caps
+        .get(4)
+        .map(|m| m.as_str().to_owned())
+        .unwrap_or_default();
+    let wave = caps.get(5).and_then(|m| m.as_str().parse::<u64>().ok());
+    let raw_body = caps
+        .get(6)
+        .map(|m| m.as_str().strip_suffix('\n').unwrap_or(m.as_str()))
+        .unwrap_or("");
+    let parsed_body = crate::planning::intake::parse_issue_body(&Value::string(raw_body))?;
+    let ask_str = parsed_body.ask.to_utf8()?;
+    let classified = crate::planning::intake::classify(
+        &Value::string(&ask_str),
+        Some(&Value::string(&title)),
+        &[],
+    )?;
+    let ask_kind = classified
+        .get("kind")
+        .and_then(Value::as_string)
+        .map(|t| t.to_utf8())
+        .transpose()?
+        .unwrap_or_else(|| "slice".to_owned());
+    let review = read_recap_artifact(worktree_path, "REVIEW.md")?;
+    let result = read_recap_artifact(worktree_path, "RESULT.md")?;
+    let verdict = review.as_deref().and_then(|src| {
+        regex_lite::Regex::new(r"(?m)^Verdict: (pass|fail)$")
+            .ok()
+            .and_then(|r| r.captures(src))
+            .and_then(|c| c.get(1).map(|m| m.as_str().to_owned()))
+    });
+    let state = match verdict.as_deref() {
+        Some("pass") => "passed",
+        Some("fail") => "failed",
+        _ if result
+            .as_deref()
+            .is_some_and(|s| s.contains("Checks: FAIL")) =>
+        {
+            "failed"
+        }
+        _ => "idle",
+    };
+    let has_plan = read_recap_artifact(worktree_path, "PLAN.md")?.is_some();
+    let has_task = read_recap_artifact(worktree_path, "TASK.md")?.is_some();
+    let has_recipe = read_recap_artifact(worktree_path, "RECIPE.yml")?.is_some();
+    let plan_mode = ask_kind == "slice" && has_plan && !has_task && !has_recipe;
+    let mut issue_fields = vec![
+        ("number", Value::Number(number as f64)),
+        ("title", Value::string(&title)),
+        ("body", Value::string(raw_body)),
+        ("url", Value::string(&url)),
+        ("state", Value::string("UNKNOWN")),
+    ];
+    if let Some(w) = wave {
+        issue_fields.push((
+            "labels",
+            Value::Array(vec![Value::object(vec![(
+                "name",
+                Value::string(&format!("wave:{w}")),
+            )])]),
+        ));
+    }
+    Ok(Value::object(vec![
+        ("issue", Value::object(issue_fields)),
+        ("ask", Value::string(&ask_str)),
+        ("metadata", parsed_body.metadata.unwrap_or(Value::Null)),
+        ("task", Value::string(&format!("issue-{number}"))),
+        ("session", Value::string(&format!("roster-{number}-coder"))),
+        ("reused", Value::Boolean(true)),
+        (
+            "state",
+            Value::string(if plan_mode { "planning" } else { state }),
+        ),
+        (
+            "reviewVerdict",
+            verdict.map_or(Value::Null, |v| Value::string(&v)),
+        ),
+        ("askKind", Value::string(&ask_kind)),
+        ("planMode", Value::Boolean(plan_mode)),
+    ]))
+}
+
 pub fn parse_issue_branch(branch: &str) -> Option<IssueBranch> {
     let tail = branch
         .strip_prefix("agents/")
