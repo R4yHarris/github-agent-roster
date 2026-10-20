@@ -972,7 +972,7 @@ pub fn inspect_local_issue_worktree(number: u64, worktree_path: &Path) -> Result
     let ask_str = parsed_body.ask.to_utf8()?;
     let classified = crate::planning::intake::classify(
         &Value::string(&ask_str),
-        Some(&Value::string(&title)),
+        Some(&Text::from(title.as_str())),
         &[],
     )?;
     let ask_kind = classified
