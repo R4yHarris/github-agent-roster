@@ -737,10 +737,12 @@ fn read_metadata(header: &str) -> Result<Value, Error> {
                     "Task {field} must be an integer"
                 )));
             }
-            Value::Number(
-                raw.parse::<f64>()
-                    .map_err(|_| Error::type_error(format!("Task {field} must be an integer")))?,
-            )
+            let int_val = raw
+                .parse::<u64>()
+                .ok()
+                .filter(|v| *v <= crate::MAX_SAFE_INTEGER)
+                .ok_or_else(|| Error::type_error(format!("Task {field} must be an integer")))?;
+            Value::Number(int_val as f64)
         } else {
             value(raw)
         };

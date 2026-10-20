@@ -287,6 +287,11 @@ fn every_utf8_crlf_split_and_bom_boundary_preserves_completion() -> Result<(), E
             "width {width}"
         );
     }
+    let mut done_only = StreamDecoder::new(Text::from("m"));
+    done_only
+        .push(b"data: [DONE]\r\n\r\n")
+        .map_err(|failure| *failure.error)?;
+    assert!(done_only.finish().is_err());
     Ok(())
 }
 
