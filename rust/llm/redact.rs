@@ -52,12 +52,16 @@ fn replace(text: &Text, needle: &Text) -> Text {
 fn value_end(units: &[u16], start: usize) -> Option<usize> {
     let first = *units.get(start)?;
     if matches!(first, 34 | 39) {
-        if let Some(relative) = units
-            .get(start + 1..)?
-            .iter()
-            .position(|unit| *unit == first)
-        {
-            return Some(start + relative + 2);
+        let mut index = start + 1;
+        while let Some(&unit) = units.get(index) {
+            if unit == 92 {
+                index += 2;
+                continue;
+            }
+            if unit == first {
+                return Some(index + 1);
+            }
+            index += 1;
         }
     }
     let end = units
@@ -202,7 +206,13 @@ impl Redactor {
                     let name = String::from_utf16_lossy(text.0.get(index..end).unwrap_or(&[]))
                         .to_ascii_lowercase();
                     if [
-                        "apikey", "api_key", "api-key", "password", "secret", "token",
+                        "apikey",
+                        "api_key",
+                        "api-key",
+                        "password",
+                        "secret",
+                        "token",
+                        "authorization",
                     ]
                     .iter()
                     .any(|keyword| name.contains(keyword))

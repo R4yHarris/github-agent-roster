@@ -222,7 +222,7 @@ computed as follows:
    absolute checkout paths are never identity inputs because they collide or break on moves.
    Identity never depends on the checkout directory, so a reclone or replaced checkout of
    the same remote keeps reading prior machine history. `ROSTER_REPO_ID`, when set,
-   overrides the derived id (`resolveRepositoryIdentity` in `src/lib/paths.mjs`) for
+   overrides the derived id (`resolve_repository_identity` in [identity.rs](../rust/identity.rs)) for
    checkouts without a usable remote.
 4. **Forks are distinct repositories.** Identity includes the owner, so
    `owner/name` and `other-fork/name` never share machine history or memory. There is no
@@ -313,7 +313,7 @@ On read, if `schema_version` is older than current:
 
 #### Legacy layout to split layout
 
-`migrate(root)` in `src/lib/repo-migrate.mjs` moves the pre-split `.roster` layout toward
+`migrate(root)` in [migrate.rs](../rust/state/migrate.rs) moves the pre-split `.roster` layout toward
 the split `.roster-state` layout. It is **copy-only**. It copies only the declared
 per-worktree state subtrees (`checkpoints/`, `runs/`) into
 `.roster-state/worktrees/<key>/` and never deletes, renames, or rewrites a legacy file.
@@ -365,12 +365,12 @@ Private config, fleet and capability declarations, memory, history, and locks st
 | Issue/worktree state | Deleted when worktree pruned | `git worktree remove` + `roster state prune-worktree <id>` |
 | Session | Gone at process exit | N/A |
 
-`RETENTION_POLICIES` in `src/lib/paths.mjs` declares one policy per scope (`machine`, `repo`,
+`RETENTION_POLICIES` in [roots.rs](../rust/state/roots.rs) declares one policy per scope (`machine`, `repo`,
 `worktree`, `run`) with a distinct root and default window (machine history: 90 days).
-`resolveRetentionConfig(env)` in `src/lib/config.mjs` reads `ROSTER_RETENTION_OPT_OUT`
+`retention(env)` in [config.rs](../rust/config.rs) reads `ROSTER_RETENTION_OPT_OUT`
 (`true`/`false`) and positive-integer `ROSTER_RETENTION_WINDOW_MS_<SCOPE>` overrides, rejecting
-anything else. `evaluateRetention(policy, { nowMs, windowMs, optOut, createdAtMs })` in
-`src/lib/repo-state.mjs` is pure over an injected clock; it keeps everything when opted out
+anything else. `evaluate_retention(policy, now_ms, window_ms, opt_out, created_at_ms)` in
+[state.rs](../rust/state.rs) is pure over an injected clock; it keeps everything when opted out
 and throws on a missing or invalid record age rather than treating it as expired.
 
 `roster clean --target <target>` is the shipped cleanup surface (#278). It is a dry-run preview

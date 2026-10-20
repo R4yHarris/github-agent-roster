@@ -109,7 +109,7 @@ impl Decision {
                                 .ok_or_else(usage)?,
                         );
                     } else {
-                        if value.len() > 4096 {
+                        if value.encode_utf16().count() > 4096 {
                             return Err(usage());
                         }
                         comment = Some(Text::from(value.as_str()));
