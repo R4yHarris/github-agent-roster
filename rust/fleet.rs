@@ -1345,6 +1345,169 @@ pub fn parse_fleet_cli_args(args: &[String]) -> Result<FleetCliCommand, Error> {
     })
 }
 
+pub fn matches_default(config_val: &Value, profile: &Value) -> bool {
+    let Some(llm) = config_val.get("llm") else {
+        return false;
+    };
+    let Some(cfg_url) = llm.get("base_url").filter(|v| domain::truthy(v)) else {
+        return false;
+    };
+    let Ok(norm_cfg_url) = normalize_base_url(cfg_url) else {
+        return false;
+    };
+    let prof_url = profile.get("base_url").and_then(Value::as_string);
+    llm.get("model") == profile.get("model") && prof_url == Some(&norm_cfg_url)
+}
+
+pub fn apply_fleet_hardware(
+    fleet: &Fleet,
+    id: &str,
+    hardware_sku: &str,
+) -> Result<(Fleet, Value, String), Error> {
+    let hw = describe_hardware(hardware_sku)?;
+    let hw_id = hw
+        .get("id")
+        .and_then(Value::as_string)
+        .ok_or_else(|| Error::type_error("Hardware descriptor missing id"))?
+        .to_utf8()?;
+    let memory_gb = domain::safe_integer(hw.get("memory_gb")).unwrap_or(0);
+    let nodes = domain::safe_integer(hw.get("nodes")).unwrap_or(1);
+    let profile = get_profile(fleet, &Value::string(id))?;
+    let mut updated_profiles = Vec::with_capacity(fleet.profiles().len());
+    for item in fleet.profiles() {
+        let mut val = item.as_value().clone();
+        if val.get("id") == profile.as_value().get("id") {
+            domain::put(&mut val, "hardware", Value::string(&hw_id))?;
+        }
+        updated_profiles.push(val);
+    }
+    let updated = validate(&Value::object(vec![(
+        "profiles",
+        Value::Array(updated_profiles),
+    )]))?;
+    let selected = get_profile(&updated, &Value::string(id))?
+        .as_value()
+        .clone();
+    let msg = format!(
+        "Hardware for {id}: {hw_id} ({memory_gb}GB, {nodes} node(s)). Endpoint unchanged.\n"
+    );
+    Ok((updated, selected, msg))
+}
+
+pub fn apply_fleet_default(
+    config_val: &Value,
+    fleet: &Fleet,
+    id: &str,
+) -> Result<(Value, Text, String), Error> {
+    let profile = get_profile(fleet, &Value::string(id))?;
+    let updated_cfg = with_profile(config_val, profile.as_value())?;
+    let formatted = config::format(&updated_cfg)?;
+    let msg = format!("Default endpoint/model selected: {id}\n");
+    Ok((updated_cfg, formatted, msg))
+}
+
+pub fn apply_fleet_remove(
+    config_val: &Value,
+    fleet: &Fleet,
+    id: &str,
+) -> Result<(Fleet, String), Error> {
+    let profile = get_profile(fleet, &Value::string(id))?;
+    if fleet.profiles().len() == 1 {
+        return Err(Error::new("Error", "Cannot remove the last fleet profile"));
+    }
+    if matches_default(config_val, profile.as_value()) {
+        return Err(Error::new(
+            "Error",
+            "Select another fleet default before removing the currently configured endpoint",
+        ));
+    }
+    let remaining = fleet
+        .profiles()
+        .iter()
+        .filter(|item| item.as_value().get("id") != profile.as_value().get("id"))
+        .map(|item| item.as_value().clone())
+        .collect::<Vec<_>>();
+    let updated = validate(&Value::object(vec![("profiles", Value::Array(remaining))]))?;
+    Ok((updated, format!("Removed fleet profile: {id}\n")))
+}
+
+pub fn parse_model_inventory_response(
+    payload: &Value,
+    env: Option<&Value>,
+    api_key_env: Option<&str>,
+) -> Result<Vec<Value>, Error> {
+    let Some(data) = payload
+        .get("data")
+        .and_then(items)
+        .filter(|d| !d.is_empty())
+    else {
+        return Err(Error::new("ModelProbeError", "invalid response"));
+    };
+    let env_value = env
+        .cloned()
+        .unwrap_or_else(crate::ask::environment_value_from_process);
+    let mut redaction_cfg = crate::state::redaction::Config {
+        environment: env_value,
+        ..crate::state::redaction::Config::default()
+    };
+    if let Some(key) = api_key_env.filter(|s| !s.is_empty()) {
+        redaction_cfg.api_key_env = Text::from(key);
+    }
+    redaction_cfg.validate()?;
+    let model_re = regex_lite::Regex::new(r"^[A-Za-z0-9][A-Za-z0-9._:/-]*$")
+        .map_err(|error| Error::new("Error", error.to_string()))?;
+    let mut seen: Vec<(String, Option<u64>)> = Vec::new();
+    for entry in data {
+        let Some(raw_id) = entry
+            .get("id")
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+        else {
+            return Err(Error::new("ModelProbeError", "invalid response"));
+        };
+        if raw_id
+            .chars()
+            .any(|ch| matches!(ch, '\x00'..='\x1f' | '\x7f'))
+        {
+            return Err(Error::new("ModelProbeError", "invalid response"));
+        }
+        let redacted =
+            crate::state::redaction::evidence(&Text::from(raw_id.as_str()), &redaction_cfg)
+                .to_utf8()?;
+        if redacted != raw_id {
+            return Err(Error::new("ModelProbeError", "invalid response"));
+        }
+        let resolved = run::resolve_publish_model(
+            None,
+            Some(&Value::object(vec![("AI_MODEL", Value::string(&raw_id))])),
+            None,
+            false,
+        )
+        .map_err(|_| Error::new("ModelProbeError", "invalid response"))?;
+        if resolved == "builtin-stub" || !model_re.is_match(&resolved) {
+            return Err(Error::new("ModelProbeError", "invalid response"));
+        }
+        let ctx_max = crate::llm::window::reported_context_max(entry);
+        if let Some(existing) = seen.iter_mut().find(|(id, _)| *id == resolved) {
+            if existing.1.is_none() && ctx_max.is_some() {
+                existing.1 = ctx_max;
+            }
+        } else {
+            seen.push((resolved, ctx_max));
+        }
+    }
+    Ok(seen
+        .into_iter()
+        .map(|(id, ctx)| {
+            let mut fields = vec![("id", Value::string(&id))];
+            if let Some(c) = ctx {
+                fields.push(("context_max", Value::Number(c as f64)));
+            }
+            Value::object(fields)
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1691,6 +1854,25 @@ mod tests {
                 task_class: None,
             }
         );
+        let (hw_fleet, _, hw_msg) = apply_fleet_hardware(&merged, "steady", "rtx-3090-24gb")?;
+        assert!(hw_msg.contains("Hardware for steady: rtx-3090-24gb (24GB, 1 node(s))."));
+        let base_cfg = config::defaults()?;
+        let (def_cfg, _, def_msg) = apply_fleet_default(base_cfg.as_value(), &hw_fleet, "steady")?;
+        assert_eq!(def_msg, "Default endpoint/model selected: steady\n");
+        assert!(apply_fleet_remove(&def_cfg, &hw_fleet, "steady").is_err());
+        let (after_rm, rm_msg) = apply_fleet_remove(&def_cfg, &hw_fleet, "fast")?;
+        assert_eq!(rm_msg, "Removed fleet profile: fast\n");
+        assert_eq!(after_rm.profiles().len(), 2);
+
+        let inv = parse_model_inventory_response(
+            &crate::json::parse(&Text::from(
+                r#"{"data":[{"id":"owner/model"},{"id":"owner/model","max_model_len":32768}]}"#,
+            ))?,
+            Some(&Value::object(Vec::new())),
+            None,
+        )?;
+        assert_eq!(inv.len(), 1);
+        assert_eq!(inv[0].get("context_max"), Some(&Value::Number(32_768.0)));
         Ok(())
     }
 }
