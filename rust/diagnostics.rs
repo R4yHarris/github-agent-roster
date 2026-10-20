@@ -1641,6 +1641,57 @@ pub fn read_issue_logs(
     Ok(logs)
 }
 
+pub fn redact_root(root: &str, home: Option<&str>) -> String {
+    if root.is_empty() {
+        return "<unknown>".to_owned();
+    }
+    let sep = if root.contains('\\') { '\\' } else { '/' };
+    let mut display = root.to_owned();
+    if let Some(home) = home.filter(|h| !h.is_empty()) {
+        let prefix = if home.ends_with(sep) {
+            home.to_owned()
+        } else {
+            format!("{home}{sep}")
+        };
+        if root == home || root.starts_with(&prefix) {
+            display = format!("~{}", &root[home.len()..]);
+        }
+    }
+    let segments = display
+        .split(['\\', '/'])
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>();
+    if segments.len() <= 2 {
+        return display;
+    }
+    let last = segments.last().copied().unwrap_or_default();
+    if display.starts_with('~') {
+        format!("~{sep}\u{2026}{sep}{last}")
+    } else {
+        format!("{}\u{2026}{last}", segments[0])
+    }
+}
+
+pub fn redact_line(value: &str) -> String {
+    let Ok(re) = regex_lite::Regex::new(
+        r"(?i)(api[_-]?key|secret|token|password|passwd|credential|bearer|private[_-]?key|authorization)",
+    ) else {
+        return value.to_owned();
+    };
+    value
+        .split_whitespace()
+        .map(|word| {
+            if let Some((prefix, _)) = word.split_once('=') {
+                if re.is_match(word) {
+                    return format!("{prefix}=<redacted>");
+                }
+            }
+            word.to_owned()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1870,6 +1921,14 @@ mod tests {
         assert_eq!(snap.lines.len(), 2);
         let issue_logs = read_issue_logs(&map_root, 42, Some(&Value::object(Vec::new())), None, 5)?;
         assert_eq!(issue_logs.len(), 1);
+        assert_eq!(
+            redact_root("/Users/me/projects/roster", Some("/Users/me")),
+            "~/\u{2026}/roster"
+        );
+        assert_eq!(
+            redact_line("failed with api_key=secret123456 ok=1"),
+            "failed with api_key=<redacted> ok=1"
+        );
         Ok(())
     }
 }

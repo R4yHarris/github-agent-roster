@@ -867,6 +867,64 @@ pub fn format_run_recap(
     ))
 }
 
+pub fn parse_open_issues_json(raw: &str) -> Result<Vec<Value>, Error> {
+    let parsed = crate::json::parse(&Text::from(raw))
+        .map_err(|_| Error::new("Error", "GitHub issue list returned invalid metadata JSON"))?;
+    let Some(items) = crate::domain::items(&parsed) else {
+        return Err(Error::new(
+            "Error",
+            "GitHub issue list returned invalid numbers or titles",
+        ));
+    };
+    if items.len() > 100 {
+        return Err(Error::new(
+            "Error",
+            "GitHub issue list returned invalid numbers or titles",
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    let mut result = Vec::with_capacity(items.len());
+    for item in items {
+        let Some(number) = crate::domain::safe_integer(item.get("number")).filter(|n| *n >= 1)
+        else {
+            return Err(Error::new(
+                "Error",
+                "GitHub issue list returned invalid numbers or titles",
+            ));
+        };
+        let Some(title) = item
+            .get("title")
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .filter(|s| !s.trim().is_empty())
+        else {
+            return Err(Error::new(
+                "Error",
+                "GitHub issue list returned invalid numbers or titles",
+            ));
+        };
+        if !seen.insert(number) {
+            return Err(Error::new(
+                "Error",
+                "GitHub issue list returned invalid numbers or titles",
+            ));
+        }
+        result.push(Value::object(vec![
+            ("number", Value::Number(number as f64)),
+            ("title", Value::string(&title)),
+            ("state", Value::string("OPEN")),
+        ]));
+    }
+    Ok(result)
+}
+
+pub fn parse_diff_names(raw: &str) -> Vec<String> {
+    raw.split('\0')
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
 pub fn parse_issue_branch(branch: &str) -> Option<IssueBranch> {
     let tail = branch
         .strip_prefix("agents/")
@@ -2932,6 +2990,16 @@ mod repository_path_tests {
         assert!(recap.contains("Last test: node --test (exit 0)"));
         assert!(recap.contains("Review: pass"));
         assert!(recap.contains("Finish reason: stop"));
+        let open_issues = parse_open_issues_json(r#"[{"number":42,"title":"Add status"}]"#)?;
+        assert_eq!(open_issues.len(), 1);
+        assert!(
+            parse_open_issues_json(r#"[{"number":42,"title":"A"},{"number":42,"title":"B"}]"#)
+                .is_err()
+        );
+        assert_eq!(
+            parse_diff_names("README.md\0src/app.rs\0"),
+            vec!["README.md".to_owned(), "src/app.rs".to_owned()]
+        );
         Ok(())
     }
 }

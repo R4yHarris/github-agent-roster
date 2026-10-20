@@ -1214,6 +1214,137 @@ pub fn remediation_task(files: &[String], workspace: &str) -> Result<Value, Erro
     ]))
 }
 
+pub const FLEET_CLI_USAGE: &str = "Use roster fleet list, discover [--wsl] [--save], add --id NAME --base-url URL [--model MODEL] [--context N] [--concurrency N] [--hardware TEXT] [--task-class feat,fix,docs,test], probe ID [--set-model [MODEL]], hardware ID SKU, default ID, remove ID, or assist.";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FleetCliCommand {
+    List,
+    Discover {
+        wsl: bool,
+        save: bool,
+    },
+    Assist,
+    Hardware {
+        id: String,
+        hardware: String,
+    },
+    Default {
+        id: String,
+    },
+    Remove {
+        id: String,
+    },
+    Probe {
+        id: String,
+        set_model: bool,
+        model: Option<String>,
+    },
+    Add {
+        id: String,
+        base_url: String,
+        model: Option<String>,
+        context: Option<String>,
+        concurrency: Option<String>,
+        hardware: Option<String>,
+        task_class: Option<String>,
+    },
+}
+
+pub fn parse_fleet_cli_args(args: &[String]) -> Result<FleetCliCommand, Error> {
+    let usage = || Error::type_error(FLEET_CLI_USAGE);
+    let Some((command, rest)) = args.split_first() else {
+        return Err(usage());
+    };
+    if command == "list" && rest.is_empty() {
+        return Ok(FleetCliCommand::List);
+    }
+    if command == "discover"
+        && rest
+            .iter()
+            .all(|flag| matches!(flag.as_str(), "--wsl" | "--save"))
+    {
+        let mut seen = HashSet::new();
+        if rest.iter().all(|f| seen.insert(f.as_str())) {
+            return Ok(FleetCliCommand::Discover {
+                wsl: seen.contains("--wsl"),
+                save: seen.contains("--save"),
+            });
+        }
+    }
+    if command == "assist" && rest.is_empty() {
+        return Ok(FleetCliCommand::Assist);
+    }
+    if command == "hardware" && rest.len() == 2 {
+        let id = validate_id(Some(&Value::string(&rest[0])))?.to_utf8()?;
+        return Ok(FleetCliCommand::Hardware {
+            id,
+            hardware: rest[1].clone(),
+        });
+    }
+    if (command == "default" || command == "remove") && rest.len() == 1 {
+        let id = validate_id(Some(&Value::string(&rest[0])))?.to_utf8()?;
+        return Ok(if command == "default" {
+            FleetCliCommand::Default { id }
+        } else {
+            FleetCliCommand::Remove { id }
+        });
+    }
+    if command == "probe"
+        && (1..=3).contains(&rest.len())
+        && (rest.len() == 1
+            || (rest[1] == "--set-model" && !rest.get(2).is_some_and(|m| m.starts_with("--"))))
+    {
+        let id = validate_id(Some(&Value::string(&rest[0])))?.to_utf8()?;
+        return Ok(FleetCliCommand::Probe {
+            id,
+            set_model: rest.len() > 1,
+            model: rest.get(2).cloned(),
+        });
+    }
+    if command != "add" || rest.len() % 2 != 0 {
+        return Err(usage());
+    }
+    let mut id = None;
+    let mut base_url = None;
+    let mut model = None;
+    let mut context = None;
+    let mut concurrency = None;
+    let mut hardware = None;
+    let mut task_class = None;
+    let mut idx = 0;
+    while idx < rest.len() {
+        let flag = rest[idx].as_str();
+        let val = &rest[idx + 1];
+        if val.is_empty() || val.starts_with("--") {
+            return Err(usage());
+        }
+        match flag {
+            "--id" if id.is_none() => id = Some(val.clone()),
+            "--base-url" if base_url.is_none() => base_url = Some(val.clone()),
+            "--model" if model.is_none() => model = Some(val.clone()),
+            "--context" if context.is_none() => context = Some(val.clone()),
+            "--concurrency" if concurrency.is_none() => concurrency = Some(val.clone()),
+            "--hardware" if hardware.is_none() => hardware = Some(val.clone()),
+            "--task-class" if task_class.is_none() => task_class = Some(val.clone()),
+            _ => return Err(usage()),
+        }
+        idx += 2;
+    }
+    let raw_id = id.ok_or_else(usage)?;
+    let raw_url = base_url.ok_or_else(usage)?;
+    let valid_id = validate_id(Some(&Value::string(&raw_id)))?.to_utf8()?;
+    let normalized_url = normalize_base_url(&Value::string(&raw_url))?.to_utf8()?;
+    Ok(FleetCliCommand::Add {
+        id: valid_id,
+        base_url: normalized_url,
+        model,
+        context,
+        concurrency,
+        hardware,
+        task_class,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1531,6 +1662,35 @@ mod tests {
             Some(&Value::Array(vec![Value::string("tests/app.test.mjs")]))
         );
         assert!(remediation_task(&["src/app.js".to_owned()], "repo").is_err());
+        assert_eq!(
+            parse_fleet_cli_args(&[
+                "discover".to_owned(),
+                "--wsl".to_owned(),
+                "--save".to_owned()
+            ])?,
+            FleetCliCommand::Discover {
+                wsl: true,
+                save: true
+            }
+        );
+        assert_eq!(
+            parse_fleet_cli_args(&[
+                "add".to_owned(),
+                "--id".to_owned(),
+                "local-gpu".to_owned(),
+                "--base-url".to_owned(),
+                "http://127.0.0.1:8000/v1/".to_owned(),
+            ])?,
+            FleetCliCommand::Add {
+                id: "local-gpu".to_owned(),
+                base_url: "http://127.0.0.1:8000/v1".to_owned(),
+                model: None,
+                context: None,
+                concurrency: None,
+                hardware: None,
+                task_class: None,
+            }
+        );
         Ok(())
     }
 }

@@ -1222,6 +1222,42 @@ pub fn check_pull_request_trailers(
     Ok(results)
 }
 
+pub const RUN_STATUS_LABELS: &[(&str, &str, &str, &str)] = &[
+    (
+        "in-progress",
+        "roster:in-progress",
+        "1d76db",
+        "A Roster run has claimed this issue",
+    ),
+    (
+        "review",
+        "roster:review",
+        "0e8a16",
+        "Roster delivered a reviewed result; awaiting human AI-Eval",
+    ),
+    (
+        "blocked",
+        "roster:blocked",
+        "d93f0b",
+        "The last Roster run stopped; see the latest status comment",
+    ),
+];
+
+pub fn format_issue_run_status_lines(lines: &[String]) -> Vec<String> {
+    lines
+        .iter()
+        .map(|line| {
+            line.replace(['\r', '\n'], " ")
+                .trim()
+                .chars()
+                .take(300)
+                .collect::<String>()
+        })
+        .filter(|s| !s.is_empty())
+        .take(8)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
