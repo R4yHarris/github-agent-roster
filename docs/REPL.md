@@ -486,6 +486,13 @@ explicit number, status uses the current `agents/N` or legacy `issue-N` branch o
 worktree; multiple candidates require `--issue N`. `--offline` never calls
 GitHub and does not turn unknown PR state into `none`.
 
+The native rewrite implements
+`roster status --issue N [--offline] [--json]`. Offline mode reads bounded
+schema-one logs only; online mode additionally requires complete App credentials
+and the reviewed SDK identity adapter for native issue observations. PR state,
+automatic issue inference and the shell rail described here remain unported;
+see [native status](RUST.md#native-app-scoped-issue-observations).
+
 ## Publish
 
 Review the worktree changes before `/publish`. When both `GITHUB_APP_ID` and

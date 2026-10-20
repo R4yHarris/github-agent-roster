@@ -40,7 +40,8 @@ pub fn resolve_project_root(cwd: &Path) -> Result<PathBuf, Error> {
     loop {
         match fs::symlink_metadata(current.join(".git")) {
             Ok(marker) => {
-                if marker.file_type().is_symlink() || (!marker.is_file() && !marker.is_dir()) {
+                if crate::state::secure::linked(&marker) || (!marker.is_file() && !marker.is_dir())
+                {
                     return Err(Error::new(
                         "Error",
                         "Git worktree marker must be a regular file or directory",
@@ -347,7 +348,7 @@ pub fn ensure_local_path(file: &Path, repo_root: &Path) -> Result<(), Error> {
             continue;
         }
         match fs::symlink_metadata(&current) {
-            Ok(entry) if entry.file_type().is_symlink() => {
+            Ok(entry) if crate::state::secure::linked(&entry) => {
                 return Err(Error::new("Error", "Roster path may not contain symlinks"));
             }
             Ok(_) => nearest = Some(current.clone()),

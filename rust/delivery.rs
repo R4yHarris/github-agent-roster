@@ -1,6 +1,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use crate::Error;
 use crate::cancel::CancellationToken;
@@ -30,6 +31,72 @@ pub use continuation::{
 pub enum Input {
     ExistingTask,
     AskFile(PathBuf),
+    GitHubIssue(u64),
+    FetchedIssue(Rc<IssueIntake>),
+}
+
+pub struct IssueIntake {
+    issue: crate::github::Issue,
+    original: start::Repository,
+}
+
+impl std::fmt::Debug for IssueIntake {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("IssueIntake")
+            .field("number", &self.issue.number())
+            .finish_non_exhaustive()
+    }
+}
+
+pub async fn resolve_issue<T: Transport>(
+    transport: &mut T,
+    installation: &Path,
+    cwd: &Path,
+    environment: &Value,
+    host: &tools::Host,
+    number: u64,
+    token: &CancellationToken,
+) -> Result<Input, Error> {
+    token.check()?;
+    start::issue_branch(number, None)?;
+    crate::github::validate_app_configuration(environment)?;
+    let paths = paths::repository_paths(cwd)?;
+    let git = start::Git::new(
+        host.clone(),
+        paths.common_dir.join("roster-local").join("no-hooks"),
+    )?;
+    let original = start::Repository::inspect(cwd, &git, token).await?;
+    let issue =
+        crate::github::read_issue(transport, installation, cwd, environment, number, token).await?;
+    if !issue.is_open() {
+        return Err(Error::new(
+            "IssueClosed",
+            "The requested GitHub issue is not open; no worktree or task was started",
+        )
+        .coded("ROSTER_ISSUE_CLOSED"));
+    }
+    let parsed = intake::parse_issue_body(&Value::String(issue.body().clone()))?;
+    if parsed.ask.to_utf8()?.contains("{{ASK}}") {
+        return Err(Error::type_error(
+            "The issue ask contains an unresolved {{ASK}} placeholder",
+        ));
+    }
+    intake::classify(&Value::String(parsed.ask), Some(issue.title()), &[])?;
+    issue.require_current_with_git(&git, token).await?;
+    original.require_current(&git, token).await?;
+    if !git.cleanup_certain() {
+        return Err(Error::new(
+            "OwnedProcessCleanupError",
+            "Issue intake Git cleanup is unverified; no worktree or task was started",
+        )
+        .coded("ROSTER_PROCESS_CLEANUP"));
+    }
+    token.check()?;
+    Ok(Input::FetchedIssue(Rc::new(IssueIntake {
+        issue,
+        original,
+    })))
 }
 
 pub struct Options<'a> {
@@ -69,6 +136,7 @@ impl Status {
 
 pub struct Outcome {
     status: Status,
+    issue: Option<IssueReference>,
     pub worktree: PathBuf,
     pub task: String,
     pub session: String,
@@ -91,9 +159,20 @@ pub struct Outcome {
     pub start: Option<start::Start>,
 }
 
+struct IssueReference {
+    number: u64,
+    url: String,
+}
+
 impl Outcome {
     pub fn status(&self) -> Status {
         self.status
+    }
+
+    pub fn issue(&self) -> Option<(u64, &str)> {
+        self.issue
+            .as_ref()
+            .map(|issue| (issue.number, issue.url.as_str()))
     }
 
     pub fn succeeded(&self) -> bool {
@@ -109,6 +188,9 @@ impl Outcome {
             self.ask_kind.as_str(),
             self.worktree.display()
         );
+        if let Some(issue) = &self.issue {
+            output.push_str(&format!("Issue: #{} {}\n", issue.number, issue.url));
+        }
         if let Some(start) = &self.start {
             output.push_str(&format!("{}\n", start.format()));
         }
@@ -874,6 +956,11 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
             .timings()
             .start(execution::timing::Label::Preparation);
         token.check()?;
+        if matches!(options.input, Input::GitHubIssue(_)) {
+            return Err(execution::unsupported(
+                "GitHub issue requests require App-authenticated resolve_issue before delivery; no local Ask was substituted",
+            ));
+        }
         if ownership.root().is_some() {
             return Err(Error::type_error(
                 "This invocation still owns a local writer; settle its cleanup before starting another task",
@@ -907,9 +994,22 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
             .ok_or_else(|| Error::type_error("Invocation has no owned Git host"))?;
         let contracts =
             start::Contracts::open(options.installation, &contracts, git, &token).await?;
-        let repository = start::Repository::inspect(options.cwd, git, &token).await?;
+        let repository = if let Input::FetchedIssue(intake) = &options.input {
+            if paths::file_information(&paths.worktree)?.identity
+                != paths::file_information(&intake.original.paths.worktree)?.identity
+            {
+                return Err(execution::denied(
+                    "The issue intake belongs to another calling worktree",
+                ));
+            }
+            intake.original.clone()
+        } else {
+            start::Repository::inspect(options.cwd, git, &token).await?
+        };
         let existing = matches!(options.input, Input::ExistingTask);
-        let (ask, original_task, original_recipe) = match &options.input {
+        let (ask, original_task, original_recipe, issue_title, issue_metadata) = match &options
+            .input
+        {
             Input::ExistingTask => {
                 no_foreign_artifacts(&paths.worktree, true)?;
                 let source = read_text(
@@ -920,7 +1020,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                 let document =
                     task::parse(&Value::String(source.clone()), &task::Authority::default())?;
                 let recipe = artifacts::read(&paths.worktree, "RECIPE.yml")?;
-                (document.ask, Some(source), recipe)
+                (document.ask, Some(source), recipe, None, None)
             }
             Input::AskFile(path) => {
                 let path = paths::resolve(options.cwd, path)?;
@@ -932,7 +1032,29 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                         "Ask file contains an unresolved {{ASK}} placeholder",
                     ));
                 }
-                (Text::from(ask.as_str()), None, None)
+                (Text::from(ask.as_str()), None, None, None, None)
+            }
+            Input::FetchedIssue(intake) => {
+                intake.issue.require_current_with_git(git, &token).await?;
+                intake.original.require_current(git, &token).await?;
+                let parsed = intake::parse_issue_body(&Value::String(intake.issue.body().clone()))?;
+                if parsed.ask.to_utf8()?.contains("{{ASK}}") {
+                    return Err(Error::type_error(
+                        "The issue ask contains an unresolved {{ASK}} placeholder",
+                    ));
+                }
+                (
+                    parsed.ask,
+                    None,
+                    None,
+                    Some(intake.issue.title().clone()),
+                    parsed.metadata,
+                )
+            }
+            Input::GitHubIssue(_) => {
+                return Err(execution::unsupported(
+                    "Unresolved GitHub issue input is unavailable",
+                ));
             }
         };
         let configured = options
@@ -947,7 +1069,8 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
             .map(|source| task::files_allowed(&Value::String(source.clone())))
             .transpose()?
             .unwrap_or_default();
-        let classified = intake::classify(&Value::String(ask.clone()), None, &files)?;
+        let classified =
+            intake::classify(&Value::String(ask.clone()), issue_title.as_ref(), &files)?;
         let kind = intake::Kind::parse(
             &classified
                 .get("kind")
@@ -958,7 +1081,11 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
         if kind == intake::Kind::Clarify {
             return Err(Error::type_error(intake::CLARIFICATION_HINT));
         }
-        let original_reference = original_recipe.as_ref().map(reference).transpose()?;
+        let original_reference = if let Input::FetchedIssue(intake) = &options.input {
+            Some(format!("issue:{}", intake.issue.number()))
+        } else {
+            original_recipe.as_ref().map(reference).transpose()?
+        };
         let (worktree, task_id, session, selected_start) = if existing {
             if repository.dirty {
                 return Err(Error::new("DirtyWorktree", "Existing-TASK execution requires clean product source; preserve or commit human changes before running this seat").coded("ROSTER_DIRTY_WORKTREE"));
@@ -980,17 +1107,33 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
         } else {
             let selected =
                 start::resolve(&repository, git, &options.start, &options.fetch, &token).await?;
-            let prepared = start::prepare_local(
-                &repository,
-                git,
-                &options.loaded.config,
-                selected,
-                &options.approval,
-                redaction.clone(),
-                token.clone(),
-                &mut ownership.preparation,
-            )
-            .await?;
+            let prepared = if let Input::FetchedIssue(intake) = &options.input {
+                intake.issue.require_current_with_git(git, &token).await?;
+                start::prepare_issue(
+                    &repository,
+                    git,
+                    &options.loaded.config,
+                    selected,
+                    &options.approval,
+                    redaction.clone(),
+                    token.clone(),
+                    &mut ownership.preparation,
+                    intake.issue.number(),
+                )
+                .await?
+            } else {
+                start::prepare_local(
+                    &repository,
+                    git,
+                    &options.loaded.config,
+                    selected,
+                    &options.approval,
+                    redaction.clone(),
+                    token.clone(),
+                    &mut ownership.preparation,
+                )
+                .await?
+            };
             (
                 prepared.worktree,
                 prepared.task,
@@ -1000,7 +1143,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
         };
         let assignment = lifecycle::Assignment {
             ask,
-            title: None,
+            title: issue_title,
             reference: original_reference.unwrap_or_else(|| format!("local:{task_id}")),
             task: task_id.clone(),
             session: session.clone(),
@@ -1015,6 +1158,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
             &mut ownership.handoff_pending,
             &contracts,
             &assignment,
+            issue_metadata.as_ref(),
             kind,
             configured,
             original_task.as_ref(),
@@ -1024,6 +1168,16 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
         .await;
         if let Ok(outcome) = &mut result {
             outcome.start = selected_start;
+            if let Input::FetchedIssue(intake) = &options.input {
+                if let Err(error) = intake.issue.require_current_with_git(git, &token).await {
+                    result = Err(error);
+                } else {
+                    outcome.issue = Some(IssueReference {
+                        number: intake.issue.number(),
+                        url: intake.issue.url().to_owned(),
+                    });
+                }
+            }
         }
         result.map_err(|error| {
             let mut message = planning::memory::redact(&Text::from(error.message.as_str()), &redaction);
@@ -1043,6 +1197,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
         handoff_pending: &'a mut bool,
         contracts: &'a start::Contracts,
         assignment: &'a lifecycle::Assignment,
+        issue_metadata: Option<&'a Value>,
         kind: intake::Kind,
         configured: bool,
         original_task: Option<&'a Text>,
@@ -1057,6 +1212,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
             handoff_pending,
             contracts,
             assignment,
+            issue_metadata,
             kind,
             configured,
             original_task,
@@ -1075,6 +1231,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
         handoff_pending: &mut bool,
         contracts: &start::Contracts,
         assignment: &lifecycle::Assignment,
+        issue_metadata: Option<&Value>,
         kind: intake::Kind,
         configured: bool,
         original_task: Option<&Text>,
@@ -1161,7 +1318,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                     repo_root: &options.loaded.root,
                     assignment,
                     config: options.loaded.config.as_value(),
-                    metadata: None,
+                    metadata: issue_metadata,
                     locked_model: None,
                     kind: Some(kind),
                     plan_mode: false,
@@ -1184,6 +1341,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                     observed.log.write("invocation-end", "unverified", None)?;
                     return Ok(Outcome {
                         status: Status::Unverified,
+                        issue: None,
                         worktree: worktree.clone(),
                         task: assignment.task.clone(),
                         session: assignment.session.clone(),
@@ -1242,7 +1400,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                 observed.log.seat = "host";
                 observed.log.write("invocation-end", "unverified", None)?;
                 return Ok(Outcome {
-                    status: Status::Unverified, worktree: worktree.clone(),
+                    status: Status::Unverified, issue: None, worktree: worktree.clone(),
                     task: assignment.task.clone(), session: assignment.session.clone(), ask_kind: kind,
                     artifacts: present_artifacts(&worktree, &[("RECIPE", "RECIPE.yml"), ("TASK", "TASK.md"), ("ESTIMATE", "ESTIMATE.md")])?,
                     log: log_path, planner_run, coder_run: None, reviewer_run: None,
@@ -1296,6 +1454,9 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
         source.require_current(git, owner.token()).await?;
         if kind != intake::Kind::Slice {
             contracts.require_current(git, &token).await?;
+            if let Input::FetchedIssue(intake) = &options.input {
+                intake.issue.require_current_with_git(git, &token).await?;
+            }
             options.loaded.require_current()?;
             source.require_current(git, owner.token()).await?;
             observed.log.seat = "host";
@@ -1304,6 +1465,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                 .write("invocation-end", "planning-only", None)?;
             return Ok(Outcome {
                 status: Status::PlanningOnly,
+                issue: None,
                 worktree: worktree.clone(),
                 task: assignment.task.clone(),
                 session: assignment.session.clone(),
@@ -1477,6 +1639,9 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                     let status = if coder.status() == finalization::Status::Stub { Status::Stub }
                     else if coder.status() == finalization::Status::Pass {
                         contracts.require_current(git, &token).await?;
+                        if let Input::FetchedIssue(intake) = &options.input {
+                            intake.issue.require_current_with_git(git, &token).await?;
+                        }
                         options.loaded.require_current()?;
                         coder.require_current(boundary, &projection).await?;
                         Status::ReviewSkipped
@@ -1551,6 +1716,9 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                     continue;
                 }
                 contracts.require_current(git, &token).await?;
+                if let Input::FetchedIssue(intake) = &options.input {
+                    intake.issue.require_current_with_git(git, &token).await?;
+                }
                 options.loaded.require_current()?;
                 let mut failure = continuation_blocked.or_else(|| coder.failure().cloned());
                 let status = if coder.status() == finalization::Status::Stub {
@@ -1599,6 +1767,9 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                 artifacts.push(("REVIEW", review.review_path(boundary)?));
             }
             token.check()?;
+            if let Input::FetchedIssue(intake) = &options.input {
+                intake.issue.require_current_with_git(git, &token).await?;
+            }
             options.loaded.require_current()?;
             seats.observer.authority.as_ref().ok_or_else(|| Error::type_error("Immutable delivery authority disappeared"))?.check()?;
             boundary.check()?;
@@ -1609,6 +1780,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                 .write_details("invocation-end", status.as_str(), None, Some(budget.snapshot()))?;
             Ok(Outcome {
                 status,
+                issue: None,
                 worktree: worktree.clone(),
                 task: assignment.task.clone(),
                 session: assignment.session.clone(),

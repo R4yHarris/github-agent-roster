@@ -473,7 +473,8 @@ fn help_only_advertises_actual_native_commands_and_keeps_unavailable_outer_runti
     assert!(matches!(parsed, local_cli::Command::Run(_)));
     assert!(local_cli::HELP.contains("roster run --seat coder --runtime builtin"));
     assert!(
-        local_cli::HELP.contains("publication, resume, routing and review repair are unavailable")
+        local_cli::HELP
+            .contains("GitHub publication, resume and automatic routing are unavailable")
     );
     assert!(!local_cli::HELP.contains("src/cli.mjs"));
     Ok(())

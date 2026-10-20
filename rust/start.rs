@@ -6,7 +6,7 @@ use std::time::Duration;
 use crate::Error;
 use crate::cancel::CancellationToken;
 use crate::config::Config;
-use crate::execution::{backend, owned, policy, tools};
+use crate::execution::{backend, checkpoints::IndexSeal, owned, policy, tools};
 use crate::host::Image;
 use crate::json::Value;
 use crate::paths::{self, FileIdentity, RepositoryPaths};
@@ -71,19 +71,858 @@ pub struct IssueBranch {
     pub attempt: Option<u8>,
 }
 
-pub fn issue_branch(number: u64, attempt: Option<u8>) -> Result<String, Error> {
-    if number == 0
-        || number > crate::MAX_SAFE_INTEGER
-        || attempt.is_some_and(|attempt| !(1..=16).contains(&attempt))
-    {
+pub fn parse_issue_number(value: &str) -> Result<u64, Error> {
+    let number = value.parse::<u64>().ok().filter(|number| {
+        !value.starts_with('0')
+            && value.bytes().all(|byte| byte.is_ascii_digit())
+            && (1..=crate::MAX_SAFE_INTEGER).contains(number)
+    });
+    number.ok_or_else(|| Error::type_error("Issue number must be a positive safe decimal integer"))
+}
+
+pub fn issue_task(number: u64) -> Result<String, Error> {
+    if number == 0 || number > crate::MAX_SAFE_INTEGER {
         return Err(Error::type_error(
-            "Issue number must be a positive safe integer and attempt must be between 1 and 16",
+            "Issue number must be a positive safe integer",
         ));
+    }
+    Ok(format!("issue-{number}"))
+}
+
+pub fn issue_branch(number: u64, attempt: Option<u8>) -> Result<String, Error> {
+    issue_task(number)?;
+    if attempt.is_some_and(|attempt| !(1..=16).contains(&attempt)) {
+        return Err(Error::type_error("Attempt index must be between 1 and 16"));
     }
     Ok(format!(
         "agents/{number}{}",
         attempt.map_or_else(String::new, |attempt| format!("-a{attempt}"))
     ))
+}
+
+pub fn issue_branches(number: u64, attempt: Option<u8>) -> Result<[String; 2], Error> {
+    let canonical = issue_branch(number, attempt)?;
+    let task = issue_task(number)?;
+    let suffix = attempt.map_or_else(String::new, |attempt| format!("-a{attempt}"));
+    Ok([canonical, format!("{task}{suffix}")])
+}
+
+pub fn select_issue_branch(
+    number: u64,
+    branches: &[String],
+    attempt: Option<u8>,
+) -> Result<String, Error> {
+    let candidates = issue_branches(number, attempt)?;
+    let found = candidates
+        .iter()
+        .filter(|candidate| branches.iter().any(|branch| branch == *candidate))
+        .collect::<Vec<_>>();
+    if found.len() > 1 {
+        return Err(Error::new(
+            "Error",
+            format!(
+                "Ambiguous issue branch namespaces for #{number}; preserve both branches and resolve ownership explicitly"
+            ),
+        ));
+    }
+    Ok(found
+        .first()
+        .map_or_else(|| candidates[0].clone(), |branch| (*branch).clone()))
+}
+
+pub const DEFAULT_STALE_THRESHOLD_MS: u64 = 30 * 60 * 1000;
+
+fn stranded_timestamp(value: Option<&Value>, label: &str) -> Result<f64, Error> {
+    let fail = || Error::type_error(format!("{label} must be a valid timestamp"));
+    let Some(value) = value else {
+        return Err(fail());
+    };
+    match value {
+        Value::Number(number) if number.is_finite() => Ok(*number),
+        Value::String(text) => {
+            let trimmed = crate::text::trim(&text.0);
+            if trimmed.is_empty() {
+                return Err(fail());
+            }
+            let normalized_raw = Text(trimmed.to_vec()).to_utf8().map_err(|_| fail())?;
+            let normalized = if normalized_raw.len() == 20
+                && normalized_raw.ends_with('Z')
+                && normalized_raw.as_bytes().get(10) == Some(&b'T')
+            {
+                format!("{}.000Z", &normalized_raw[..19])
+            } else if normalized_raw.len() == 10
+                && normalized_raw.as_bytes().get(4) == Some(&b'-')
+                && normalized_raw.as_bytes().get(7) == Some(&b'-')
+            {
+                format!("{normalized_raw}T00:00:00.000Z")
+            } else {
+                normalized_raw
+            };
+            crate::planning::estimate::timestamp(&Value::string(&normalized))
+                .or_else(|| {
+                    time::OffsetDateTime::parse(
+                        &normalized,
+                        &time::format_description::well_known::Rfc3339,
+                    )
+                    .ok()
+                    .and_then(|parsed| {
+                        i64::try_from(parsed.unix_timestamp_nanos() / 1_000_000).ok()
+                    })
+                    .filter(|millis| {
+                        (-8_640_000_000_000_000..=8_640_000_000_000_000).contains(millis)
+                    })
+                })
+                .map(|millis| millis as f64)
+                .ok_or_else(fail)
+        }
+        _ => Err(fail()),
+    }
+}
+
+pub fn classify_stranded_work(input: &Value) -> Result<Vec<Value>, Error> {
+    if crate::domain::members(input).is_none() {
+        return Err(Error::type_error(
+            "Stranded-work detection requires issue, worktree, branch, and heartbeat arrays",
+        ));
+    }
+    let Some(issues) = input.get("issues").and_then(crate::domain::items) else {
+        return Err(Error::type_error(
+            "Stranded-work detection requires issue, worktree, branch, and heartbeat arrays",
+        ));
+    };
+    let empty = Vec::new();
+    let worktrees = match input.get("worktrees") {
+        None => &empty[..],
+        Some(value) => crate::domain::items(value).ok_or_else(|| {
+            Error::type_error(
+                "Stranded-work detection requires issue, worktree, branch, and heartbeat arrays",
+            )
+        })?,
+    };
+    let branches = match input.get("branches") {
+        None => &empty[..],
+        Some(value) => crate::domain::items(value).ok_or_else(|| {
+            Error::type_error(
+                "Stranded-work detection requires issue, worktree, branch, and heartbeat arrays",
+            )
+        })?,
+    };
+    let heartbeats = match input.get("heartbeats") {
+        None => &empty[..],
+        Some(value) => crate::domain::items(value).ok_or_else(|| {
+            Error::type_error(
+                "Stranded-work detection requires issue, worktree, branch, and heartbeat arrays",
+            )
+        })?,
+    };
+    let current = stranded_timestamp(input.get("now"), "now")?;
+    let threshold_ms = match input.get("thresholdMs") {
+        None => DEFAULT_STALE_THRESHOLD_MS,
+        Some(value) => crate::domain::safe_integer(Some(value))
+            .filter(|threshold| *threshold > 0)
+            .ok_or_else(|| {
+                Error::type_error(
+                    "Heartbeat threshold must be a positive safe integer in milliseconds",
+                )
+            })?,
+    };
+    let mut claims = BTreeSet::new();
+    for branch in branches {
+        let name = branch
+            .as_string()
+            .filter(|text| !text.0.is_empty())
+            .ok_or_else(|| Error::type_error("Branches must be nonempty strings"))?
+            .to_utf8()?;
+        claims.insert(name);
+    }
+    for worktree in worktrees {
+        let name = worktree
+            .get("branch")
+            .and_then(Value::as_string)
+            .ok_or_else(|| Error::type_error("Worktree must name its branch"))?;
+        if name.0.is_empty() {
+            return Err(Error::type_error("Branches must be nonempty strings"));
+        }
+        claims.insert(name.to_utf8()?);
+    }
+    let claim_list = claims.iter().cloned().collect::<Vec<_>>();
+    let mut latest = std::collections::BTreeMap::<u64, f64>::new();
+    for heartbeat in heartbeats {
+        let issue = crate::domain::safe_integer(heartbeat.get("issue"))
+            .filter(|number| *number > 0)
+            .ok_or_else(|| Error::type_error("Heartbeat must name a positive safe issue number"))?;
+        let time = stranded_timestamp(heartbeat.get("timestamp"), "Heartbeat")?;
+        let entry = latest.entry(issue).or_insert(f64::NEG_INFINITY);
+        if time > *entry {
+            *entry = time;
+        }
+    }
+    let mut results = Vec::new();
+    for issue in issues {
+        let number = crate::domain::safe_integer(issue.get("number"))
+            .filter(|number| *number > 0)
+            .ok_or_else(|| {
+                Error::type_error(
+                    "Issue must have a positive safe number, open/closed state, and assignees",
+                )
+            })?;
+        let state = issue
+            .get("state")
+            .and_then(Value::as_string)
+            .and_then(|text| text.to_utf8().ok())
+            .filter(|state| ["OPEN", "CLOSED", "open", "closed"].contains(&state.as_str()))
+            .ok_or_else(|| {
+                Error::type_error(
+                    "Issue must have a positive safe number, open/closed state, and assignees",
+                )
+            })?;
+        let assignees = issue
+            .get("assignees")
+            .and_then(crate::domain::items)
+            .ok_or_else(|| {
+                Error::type_error(
+                    "Issue must have a positive safe number, open/closed state, and assignees",
+                )
+            })?;
+        if !state.eq_ignore_ascii_case("open") || assignees.is_empty() {
+            continue;
+        }
+        let branch = select_issue_branch(number, &claim_list, None)?;
+        let last_heartbeat = latest.get(&number).copied();
+        let has_claim = issue_branches(number, None)?
+            .iter()
+            .any(|candidate| claims.contains(candidate));
+        let status = if !has_claim {
+            "stranded"
+        } else if last_heartbeat.is_none_or(|last| current - last > threshold_ms as f64) {
+            "stale"
+        } else {
+            "healthy"
+        };
+        results.push(Value::object(vec![
+            ("issue", issue.clone()),
+            ("branch", Value::string(&branch)),
+            ("status", Value::string(status)),
+            (
+                "lastHeartbeat",
+                last_heartbeat.map_or(Value::Null, Value::Number),
+            ),
+        ]));
+    }
+    Ok(results)
+}
+
+pub fn issue_wave(issue: &Value) -> Result<Option<u64>, Error> {
+    if crate::domain::members(issue).is_none() {
+        return Err(Error::type_error("Issue must be a JSON object"));
+    }
+    let mut waves = Vec::new();
+    if let Some(labels) = issue.get("labels") {
+        let items = crate::domain::items(labels)
+            .ok_or_else(|| Error::new("Error", "Issue wave labels must be an array"))?;
+        for label in items {
+            let name = if let Some(text) = label.as_string() {
+                Some(text.to_utf8()?)
+            } else {
+                label
+                    .get("name")
+                    .and_then(Value::as_string)
+                    .map(Text::to_utf8)
+                    .transpose()?
+            };
+            if let Some(wave) = name
+                .as_deref()
+                .and_then(|name| name.strip_prefix("wave:"))
+                .filter(|digits| digits.len() == 1)
+                .and_then(|digits| digits.parse::<u64>().ok())
+                .filter(|wave| (1..=8).contains(wave))
+            {
+                if !waves.contains(&wave) {
+                    waves.push(wave);
+                }
+            }
+        }
+    }
+    if let Some(body) = issue.get("body").and_then(Value::as_string) {
+        let body = body.to_utf8()?;
+        for marker in body.split("<!-- Roster-Wave: ").skip(1) {
+            if let Some((digits, _)) = marker.split_once(" -->") {
+                if digits.len() == 1 {
+                    if let Some(wave) = digits
+                        .parse::<u64>()
+                        .ok()
+                        .filter(|wave| (1..=8).contains(wave))
+                    {
+                        if !waves.contains(&wave) {
+                            waves.push(wave);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    if waves.len() > 1 {
+        return Err(Error::new("Error", "Issue has conflicting wave metadata"));
+    }
+    Ok(waves.first().copied())
+}
+
+pub fn issue_dependencies(issue: &Value) -> Result<Option<Vec<u64>>, Error> {
+    if crate::domain::members(issue).is_none() {
+        return Err(Error::type_error("Issue must be a JSON object"));
+    }
+    let body = issue
+        .get("body")
+        .and_then(Value::as_string)
+        .map(Text::to_utf8)
+        .transpose()?
+        .unwrap_or_default();
+    let lines = body
+        .replace("\r\n", "\n")
+        .split('\n')
+        .filter(|line| {
+            line.get(..11)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("depends on:"))
+        })
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if lines.is_empty() {
+        return Ok(None);
+    }
+    if lines.len() != 1 {
+        return Err(Error::new(
+            "Error",
+            "Issue dependency links must be declared once.",
+        ));
+    }
+    let value = lines[0]
+        .get(11..)
+        .map(|s| Text(crate::text::trim(&Text::from(s).0).to_vec()).to_utf8())
+        .transpose()?
+        .unwrap_or_default();
+    if value == "none" {
+        return Ok(Some(Vec::new()));
+    }
+    let pattern = regex_lite::Regex::new(r"^#[1-9]\d*(?:,\s*#[1-9]\d*)*$")
+        .map_err(|error| Error::new("Error", error.to_string()))?;
+    if !pattern.is_match(&value) {
+        return Err(Error::new(
+            "Error",
+            "Issue dependency links must be comma-separated #numbers or none.",
+        ));
+    }
+    let self_number = crate::domain::safe_integer(issue.get("number"));
+    let mut numbers = Vec::new();
+    let mut seen = BTreeSet::new();
+    for part in value.split(',') {
+        let trimmed = part.trim();
+        let digits = trimmed.strip_prefix('#').unwrap_or(trimmed);
+        let Some(num) = digits
+            .parse::<u64>()
+            .ok()
+            .filter(|n| (1..=crate::MAX_SAFE_INTEGER).contains(n))
+        else {
+            return Err(Error::new("Error", "Issue dependency links are invalid."));
+        };
+        if self_number == Some(num) || !seen.insert(num) {
+            return Err(Error::new("Error", "Issue dependency links are invalid."));
+        }
+        numbers.push(num);
+    }
+    Ok(Some(numbers))
+}
+
+#[derive(Debug, Clone)]
+pub struct WavePlan {
+    pub source: String,
+    pub key: String,
+    pub plan: Value,
+}
+
+pub fn read_wave_plan(worktree: &Path) -> Result<WavePlan, Error> {
+    let file = worktree.join("PLAN.md");
+    paths::ensure_local_path(&file, worktree)?;
+    let entry = std::fs::symlink_metadata(&file).map_err(|_| {
+        Error::new(
+            "Error",
+            "Wave plan must be a bounded regular single-link file",
+        )
+    })?;
+    let links = paths::file_information(&file).map_or(0, |info| info.links);
+    if !entry.is_file() || secure::linked(&entry) || links != 1 || entry.len() > 65_536 {
+        return Err(Error::new(
+            "Error",
+            "Wave plan must be a bounded regular single-link file",
+        ));
+    }
+    let Some(snapshot) = secure::read(&file, 65_536)? else {
+        return Err(Error::new(
+            "Error",
+            "Wave plan must be a bounded regular single-link file",
+        ));
+    };
+    let source = String::from_utf8(snapshot.bytes).map_err(|_| {
+        Error::new(
+            "Error",
+            "Wave plan must be a bounded regular single-link file",
+        )
+    })?;
+    let normalized = source.replace("\r\n", "\n");
+    let key = crate::identity::sha256_hex(normalized.as_bytes());
+    let plan = crate::planning::outline::parse_document(&Value::string(&source))?;
+    Ok(WavePlan { source, key, plan })
+}
+
+pub fn parallel_limit(value: Option<&Value>) -> Result<u64, Error> {
+    let Some(value) = value else {
+        return Ok(1);
+    };
+    let number = match value {
+        Value::String(text) => {
+            let s = text
+                .to_utf8()
+                .map_err(|_| Error::type_error("--parallel must be a positive safe integer"))?;
+            if s.is_empty() || s.starts_with('0') || !s.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(Error::type_error(
+                    "--parallel must be a positive safe integer",
+                ));
+            }
+            s.parse::<u64>()
+                .ok()
+                .filter(|n| (1..=crate::MAX_SAFE_INTEGER).contains(n))
+        }
+        other => crate::domain::safe_integer(Some(other)).filter(|n| *n >= 1),
+    };
+    number.ok_or_else(|| Error::type_error("--parallel must be a positive safe integer"))
+}
+
+pub fn format_issue_summary(cached: &Value, env: Option<&Value>) -> Result<String, Error> {
+    let issue = cached
+        .get("issue")
+        .ok_or_else(|| Error::type_error("Issue summary requires cached issue metadata"))?;
+    let number = crate::domain::safe_integer(issue.get("number"))
+        .filter(|n| *n >= 1)
+        .ok_or_else(|| Error::type_error("Issue summary requires cached issue metadata"))?;
+    let redaction_cfg = crate::state::redaction::Config {
+        environment: env
+            .cloned()
+            .unwrap_or_else(crate::ask::environment_value_from_process),
+        ..crate::state::redaction::Config::default()
+    };
+    redaction_cfg.validate()?;
+    let safe = |raw: &str| -> Result<String, Error> {
+        let redacted =
+            crate::state::redaction::evidence(&Text::from(raw), &redaction_cfg).to_utf8()?;
+        let stripped = crate::ask::strip_vt_and_controls(&redacted);
+        Ok(stripped
+            .chars()
+            .map(|ch| {
+                if matches!(ch, '\x00'..='\x1f' | '\x7f') {
+                    '?'
+                } else {
+                    ch
+                }
+            })
+            .collect())
+    };
+    let field_or = |val: Option<&Value>, default: &str| -> Result<String, Error> {
+        match val.filter(|v| **v != Value::Null) {
+            Some(Value::String(text)) => text.to_utf8(),
+            Some(other) => Ok(other.json()),
+            None => Ok(default.to_owned()),
+        }
+    };
+    let title = safe(&field_or(issue.get("title"), "-")?)?;
+    let state = safe(&field_or(issue.get("state"), "UNKNOWN")?)?;
+    let default_branch = format!("agents/{number}");
+    let branch = safe(&field_or(cached.get("branch"), &default_branch)?)?;
+    let pr_raw = match cached.get("openPr") {
+        Some(Value::Null) => "(none)".to_owned(),
+        Some(open_pr) => field_or(open_pr.get("url"), "(not cached)")?,
+        None => "(not cached)".to_owned(),
+    };
+    let pr = safe(&pr_raw)?;
+    Ok(format!(
+        "Issue: #{number} {title}\nState: {state}\nBranch: {branch}\nPR: {pr}\n"
+    ))
+}
+
+pub fn attempt_limit(value: Option<&Value>, maximum: Option<&Value>) -> Result<u64, Error> {
+    let max_val = match maximum {
+        None => Some(3),
+        Some(val) => crate::domain::safe_integer(Some(val)).filter(|n| (1..=16).contains(n)),
+    };
+    let shown_max = maximum.map_or_else(|| "3".to_owned(), Value::json);
+    let invalid = || {
+        Error::type_error(format!(
+            "--attempts must be an integer from 1 to seat.max_attempts ({shown_max}); maximum is 16"
+        ))
+    };
+    let max_val = max_val.ok_or_else(invalid)?;
+    let num = match value {
+        None => 1,
+        Some(val) => crate::domain::safe_integer(Some(val))
+            .filter(|n| (1..=max_val).contains(n))
+            .ok_or_else(invalid)?,
+    };
+    Ok(num)
+}
+
+pub fn attempt_gates(result: Option<&Value>) -> Value {
+    let tests = if result
+        .and_then(|r| r.get("testsSkipped"))
+        .is_some_and(crate::domain::truthy)
+    {
+        "skipped"
+    } else if result
+        .and_then(|r| r.get("tests"))
+        .and_then(|t| crate::domain::safe_integer(t.get("exit_code")))
+        == Some(0)
+    {
+        "pass"
+    } else {
+        "fail"
+    };
+    let excellence = if result
+        .and_then(|r| r.get("excellence"))
+        .and_then(|e| e.get("pass"))
+        .is_some_and(crate::domain::truthy)
+    {
+        "pass"
+    } else {
+        "fail"
+    };
+    let red_green_obj = result
+        .and_then(|r| r.get("redGreen"))
+        .filter(|v| **v != Value::Null);
+    let red_green = match red_green_obj {
+        Some(rg) if crate::domain::is_text(rg.get("status"), "unavailable") => "fail",
+        Some(rg) if crate::domain::is_text(rg.get("status"), "checked") => {
+            if rg
+                .get("notRed")
+                .and_then(crate::domain::items)
+                .is_some_and(|items| !items.is_empty())
+            {
+                "fail"
+            } else {
+                "pass"
+            }
+        }
+        _ => "skipped",
+    };
+    let shadow_obj = result
+        .and_then(|r| r.get("shadow"))
+        .filter(|v| **v != Value::Null);
+    let shadow = match shadow_obj {
+        Some(sh) if crate::domain::is_text(sh.get("status"), "unavailable") => "fail",
+        None => "skipped",
+        Some(sh)
+            if crate::domain::is_text(sh.get("status"), "skipped")
+                || crate::domain::is_text(sh.get("status"), "none") =>
+        {
+            "skipped"
+        }
+        Some(sh) => {
+            if sh
+                .get("findings")
+                .and_then(crate::domain::items)
+                .is_some_and(|items| !items.is_empty())
+            {
+                "fail"
+            } else {
+                "pass"
+            }
+        }
+    };
+    Value::object(vec![
+        ("tests", Value::string(tests)),
+        ("excellence", Value::string(excellence)),
+        ("red_green", Value::string(red_green)),
+        ("shadow", Value::string(shadow)),
+    ])
+}
+
+pub fn select_attempt(attempts: &[Value]) -> Option<Value> {
+    let mut eligible = attempts
+        .iter()
+        .filter(|attempt| {
+            let has_error = attempt.get("error").is_some_and(crate::domain::truthy);
+            let completed = attempt.get("completed");
+            let failed = completed
+                .and_then(|c| c.get("failed"))
+                .is_some_and(crate::domain::truthy);
+            let llm_mode = completed
+                .and_then(|c| c.get("result"))
+                .is_some_and(|r| crate::domain::is_text(r.get("mode"), "llm"));
+            let evidence = attempt.get("evidence");
+            let gates_ok = evidence
+                .and_then(|e| e.get("gates"))
+                .and_then(crate::domain::members)
+                .is_some_and(|entries| {
+                    !entries.is_empty()
+                        && entries
+                            .iter()
+                            .all(|(_, verdict)| !crate::domain::is_text(Some(verdict), "fail"))
+                });
+            let review_ok =
+                evidence.is_some_and(|e| crate::domain::is_text(e.get("review"), "pass"));
+            !has_error && !failed && llm_mode && gates_ok && review_ok
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    eligible.sort_by(|left, right| {
+        let num = |val: &Value, key: &str| {
+            val.get("evidence")
+                .and_then(|e| crate::domain::safe_integer(e.get(key)))
+                .unwrap_or(u64::MAX)
+        };
+        num(left, "changed_lines")
+            .cmp(&num(right, "changed_lines"))
+            .then_with(|| num(left, "duration_ms").cmp(&num(right, "duration_ms")))
+            .then_with(|| num(left, "index").cmp(&num(right, "index")))
+    });
+    eligible.into_iter().next()
+}
+
+pub fn attempt_summary(run: &Value) -> Result<String, Error> {
+    let winner = crate::domain::safe_integer(run.get("winner"))
+        .ok_or_else(|| Error::type_error("Attempt summary requires winner"))?;
+    let total = crate::domain::safe_integer(run.get("attempts"))
+        .ok_or_else(|| Error::type_error("Attempt summary requires attempts"))?;
+    let results = run
+        .get("attemptResults")
+        .and_then(crate::domain::items)
+        .ok_or_else(|| Error::type_error("Attempt summary requires attemptResults"))?;
+    let str_field = |obj: &Value, key: &str| -> Result<String, Error> {
+        match obj.get(key) {
+            Some(Value::String(text)) => text.to_utf8(),
+            Some(Value::Number(n)) => Ok((*n as u64).to_string()),
+            _ => Err(Error::type_error(format!("Attempt result requires {key}"))),
+        }
+    };
+    let mut rows = Vec::new();
+    for attempt in results {
+        let index = str_field(attempt, "index")?;
+        let profile = str_field(attempt, "profile")?;
+        let hardware = str_field(attempt, "hardware")?;
+        let review = str_field(attempt, "review")?;
+        let changed_lines = str_field(attempt, "changed_lines")?;
+        let duration_ms = str_field(attempt, "duration_ms")?;
+        let gates = attempt
+            .get("gates")
+            .and_then(crate::domain::members)
+            .ok_or_else(|| Error::type_error("Attempt result requires gates"))?
+            .iter()
+            .map(|(k, v)| {
+                let k_str = k.to_utf8()?;
+                let v_str = v
+                    .as_string()
+                    .ok_or_else(|| Error::type_error("Gate verdict must be text"))?
+                    .to_utf8()?;
+                Ok(format!("{k_str}:{v_str}"))
+            })
+            .collect::<Result<Vec<_>, Error>>()?
+            .join(",");
+        rows.push(format!(
+            "- {index}: profile={profile}; hardware={hardware}; gates={gates}; review={review}; changed_lines={changed_lines}; duration_ms={duration_ms}"
+        ));
+    }
+    Ok(format!(
+        "\n\n## Attempts\n\nSelected attempt {winner} of {total}; only the winner is published.\n\n{}",
+        rows.join("\n")
+    ))
+}
+
+pub fn assert_isolated_issue_branches(worktrees: &[Worktree]) -> Result<(), Error> {
+    let mut seen = BTreeSet::new();
+    for entry in worktrees {
+        let Some(branch) = entry.branch.as_deref() else {
+            continue;
+        };
+        let Some(parsed) = parse_issue_branch(branch) else {
+            continue;
+        };
+        let key = (parsed.number, parsed.attempt);
+        if !seen.insert(key) {
+            return Err(Error::new(
+                "Error",
+                "Two issues cannot share a worktree branch; isolation is refused.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub fn provenance_opt_out(env: Option<&Value>) -> bool {
+    let check_val = |val: &Value| -> bool {
+        match val {
+            Value::Boolean(b) => *b,
+            Value::String(text) => text.to_utf8().ok().is_some_and(|s| {
+                matches!(
+                    s.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            }),
+            _ => false,
+        }
+    };
+    if let Some(env) = env {
+        if let Some(val) = env
+            .get("ROSTER_PROVENANCE_OPT_OUT")
+            .filter(|v| **v != Value::Null)
+            .or_else(|| {
+                env.get("ROSTER_PROVENANCE_DISABLED")
+                    .filter(|v| **v != Value::Null)
+            })
+        {
+            return check_val(val);
+        }
+        return false;
+    }
+    for key in ["ROSTER_PROVENANCE_OPT_OUT", "ROSTER_PROVENANCE_DISABLED"] {
+        if let Ok(raw) = std::env::var(key) {
+            return matches!(
+                raw.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            );
+        }
+    }
+    false
+}
+
+fn read_recap_artifact(worktree_path: &Path, name: &str) -> Result<Option<String>, Error> {
+    let file = worktree_path.join(name);
+    paths::ensure_local_path(&file, worktree_path)?;
+    let Some(snapshot) = secure::read(&file, 65_536)? else {
+        return Ok(None);
+    };
+    if paths::file_information(&file)?.links != 1 {
+        return Err(Error::type_error("Artifact must be a single-link file"));
+    }
+    let text = String::from_utf8(snapshot.bytes)
+        .map_err(|error| Error::new("Error", error.to_string()))?;
+    Ok(Some(text.replace("\r\n", "\n")))
+}
+
+pub fn format_run_recap(
+    worktree_path: &Path,
+    issue_title: Option<&str>,
+    finish_reason: Option<&str>,
+    env: Option<&Value>,
+) -> Result<String, Error> {
+    let redaction_cfg = crate::state::redaction::Config {
+        environment: env
+            .cloned()
+            .unwrap_or_else(crate::ask::environment_value_from_process),
+        ..crate::state::redaction::Config::default()
+    };
+    redaction_cfg.validate()?;
+    let safe = |raw: Option<&str>| -> Result<String, Error> {
+        let value = raw.filter(|s| !s.is_empty()).unwrap_or("-");
+        let redacted =
+            crate::state::redaction::evidence(&Text::from(value), &redaction_cfg).to_utf8()?;
+        let stripped = crate::ask::strip_vt_and_controls(&redacted);
+        Ok(stripped
+            .chars()
+            .map(|ch| {
+                if matches!(ch, '\x00'..='\x1f' | '\x7f') {
+                    '?'
+                } else {
+                    ch
+                }
+            })
+            .collect())
+    };
+    let task_doc = read_recap_artifact(worktree_path, "TASK.md")?
+        .map(|src| {
+            crate::planning::task::parse(
+                &Value::string(&src),
+                &crate::planning::task::Authority::default(),
+            )
+        })
+        .transpose()?;
+    let doc_title = task_doc.as_ref().and_then(|d| d.title.to_utf8().ok());
+    let outcome = safe(doc_title.as_deref().or(issue_title))?;
+    let files_joined = task_doc.as_ref().map(|d| d.files_allowed.join(", "));
+    let files_str = safe(files_joined.as_deref())?;
+    let review_source = read_recap_artifact(worktree_path, "REVIEW.md")?.unwrap_or_default();
+    let review_verdict = regex_lite::Regex::new(r"(?m)^Verdict: (pass|fail)$")
+        .ok()
+        .and_then(|re| re.captures(&review_source))
+        .and_then(|cap| cap.get(1).map(|m| m.as_str().to_owned()));
+    let result_source = read_recap_artifact(worktree_path, "RESULT.md")?.unwrap_or_default();
+    let test_exit = regex_lite::Regex::new(r"- node --test exited (\d+)")
+        .ok()
+        .and_then(|re| re.captures(&result_source))
+        .and_then(|cap| cap.get(1).map(|m| m.as_str().to_owned()));
+    let last_test = match test_exit {
+        Some(code) => format!("node --test (exit {code})"),
+        None => "-".to_owned(),
+    };
+    let finish_str = safe(finish_reason)?;
+    Ok(format!(
+        "Outcome: {outcome} | Files: {files_str} | Last test: {last_test} | Review: {} | Finish reason: {finish_str}\n",
+        review_verdict.as_deref().unwrap_or("-")
+    ))
+}
+
+pub fn parse_open_issues_json(raw: &str) -> Result<Vec<Value>, Error> {
+    let parsed = crate::json::parse(&Text::from(raw))
+        .map_err(|_| Error::new("Error", "GitHub issue list returned invalid metadata JSON"))?;
+    let Some(items) = crate::domain::items(&parsed) else {
+        return Err(Error::new(
+            "Error",
+            "GitHub issue list returned invalid numbers or titles",
+        ));
+    };
+    if items.len() > 100 {
+        return Err(Error::new(
+            "Error",
+            "GitHub issue list returned invalid numbers or titles",
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    let mut result = Vec::with_capacity(items.len());
+    for item in items {
+        let Some(number) = crate::domain::safe_integer(item.get("number")).filter(|n| *n >= 1)
+        else {
+            return Err(Error::new(
+                "Error",
+                "GitHub issue list returned invalid numbers or titles",
+            ));
+        };
+        let Some(title) = item
+            .get("title")
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .filter(|s| !s.trim().is_empty())
+        else {
+            return Err(Error::new(
+                "Error",
+                "GitHub issue list returned invalid numbers or titles",
+            ));
+        };
+        if !seen.insert(number) {
+            return Err(Error::new(
+                "Error",
+                "GitHub issue list returned invalid numbers or titles",
+            ));
+        }
+        result.push(Value::object(vec![
+            ("number", Value::Number(number as f64)),
+            ("title", Value::string(&title)),
+            ("state", Value::string("OPEN")),
+        ]));
+    }
+    Ok(result)
+}
+
+pub fn parse_diff_names(raw: &str) -> Vec<String> {
+    raw.split('\0')
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 pub fn parse_issue_branch(branch: &str) -> Option<IssueBranch> {
@@ -527,6 +1366,7 @@ pub struct Repository {
     status: Vec<u8>,
     config: Vec<u8>,
     source_digest: String,
+    indexes: IndexSeal,
 }
 
 async fn source_digest(git: &Git, root: &Path, token: &CancellationToken) -> Result<String, Error> {
@@ -631,6 +1471,17 @@ fn reject_git_execution_config(bytes: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
+fn require_index_seal(indexes: &IndexSeal) -> Result<(), Error> {
+    indexes.require_current().map_err(|cause| {
+        Error::new(
+            "StaleRepository",
+            "Original worktree Git index changed or cannot be verified; no stale preparation is accepted",
+        )
+        .coded("ROSTER_STALE_SOURCE")
+        .caused_by(cause)
+    })
+}
+
 impl Repository {
     pub async fn inspect(cwd: &Path, git: &Git, token: &CancellationToken) -> Result<Self, Error> {
         let paths = paths::repository_paths(cwd)?;
@@ -653,6 +1504,24 @@ impl Repository {
                 "Git and filesystem repository ownership disagree",
             ));
         }
+        let primary = git
+            .text(
+                &paths.worktree,
+                &["rev-parse", "--git-path", "index"],
+                token,
+            )
+            .await?;
+        let mut indexes = IndexSeal::capture(&paths.worktree, &primary)?;
+        let shared = git
+            .text(
+                &paths.worktree,
+                &["rev-parse", "--shared-index-path"],
+                token,
+            )
+            .await?;
+        indexes.include_shared(&paths.worktree, &shared)?;
+        token.check()?;
+        require_index_seal(&indexes)?;
         let head = git
             .text(
                 &paths.worktree,
@@ -708,6 +1577,8 @@ impl Repository {
                 "Current checkout has no unique registered worktree owner",
             ));
         }
+        token.check()?;
+        require_index_seal(&indexes)?;
         Ok(Self {
             paths,
             head,
@@ -720,11 +1591,19 @@ impl Repository {
             status,
             config,
             source_digest,
+            indexes,
         })
     }
 
+    fn require_indexes_current(&self) -> Result<(), Error> {
+        require_index_seal(&self.indexes)
+    }
+
     pub async fn require_current(&self, git: &Git, token: &CancellationToken) -> Result<(), Error> {
+        token.check()?;
         let current = Self::inspect(&self.paths.worktree, git, token).await?;
+        token.check()?;
+        self.require_indexes_current()?;
         if self.root != current.root
             || self.common != current.common
             || self.git_dir != current.git_dir
@@ -740,7 +1619,7 @@ impl Repository {
             )
             .coded("ROSTER_STALE_SOURCE"));
         }
-        Ok(())
+        token.check()
     }
 }
 
@@ -1515,6 +2394,59 @@ pub async fn prepare_local(
     token: CancellationToken,
     preparation: &mut Preparation,
 ) -> Result<Prepared, Error> {
+    prepare_task(
+        repository,
+        git,
+        config,
+        start,
+        approval,
+        redaction,
+        token,
+        preparation,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn prepare_issue(
+    repository: &Repository,
+    git: &Git,
+    config: &Config,
+    start: Start,
+    approval: &backend::Approval,
+    redaction: redaction::Config,
+    token: CancellationToken,
+    preparation: &mut Preparation,
+    number: u64,
+) -> Result<Prepared, Error> {
+    issue_branch(number, None)?;
+    prepare_task(
+        repository,
+        git,
+        config,
+        start,
+        approval,
+        redaction,
+        token,
+        preparation,
+        Some(number),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn prepare_task(
+    repository: &Repository,
+    git: &Git,
+    config: &Config,
+    start: Start,
+    approval: &backend::Approval,
+    redaction: redaction::Config,
+    token: CancellationToken,
+    preparation: &mut Preparation,
+    issue: Option<u64>,
+) -> Result<Prepared, Error> {
     token.check()?;
     approval.validate()?;
     if preparation.root().is_some() {
@@ -1534,9 +2466,19 @@ pub async fn prepare_local(
         &token,
     )
     .await?;
-    let task = format!("local-{}", files::nonce()?);
-    let session = format!("roster-{}", files::nonce()?);
-    let branch = format!("agents/{task}");
+    let (task, session, branch) = match issue {
+        Some(number) => (
+            format!("issue-{number}"),
+            format!("roster-{number}-coder"),
+            issue_branch(number, None)?,
+        ),
+        None => {
+            let task = format!("local-{}", files::nonce()?);
+            let session = format!("roster-{}", files::nonce()?);
+            let branch = format!("agents/{task}");
+            (task, session, branch)
+        }
+    };
     let worktrees = config
         .as_value()
         .get("paths")
@@ -1554,6 +2496,8 @@ pub async fn prepare_local(
     git.run(&repository.paths.worktree, &["check-ignore", "--no-index", "--quiet", "--", &format!("{worktrees}/{task}/")], &token).await
         .map_err(|error| Error::new("WorktreeOwnershipError", "Managed worktree paths must already be Git-ignored; update ignore rules as a human before local preparation").caused_by(error))?;
     let namespace = repository.paths.common_dir.join("roster-local");
+    token.check()?;
+    repository.require_indexes_current()?;
     secure::private_directory(&namespace, true)?;
     let target = namespace.join("prepare.lock");
     let mut lock = locks::acquire(
@@ -1571,8 +2515,29 @@ pub async fn prepare_local(
         lock.check()?;
         repository.require_current(git, &token).await?;
         start.require_current(git, &repository.paths.worktree, &token).await?;
-        let branches = git.text(&repository.paths.worktree, &["for-each-ref", "--format=%(refname)", &format!("refs/heads/{branch}")], &token).await?;
-        if !branches.is_empty() || worktree.exists() {
+        let mut refs = vec![
+            "for-each-ref".to_owned(),
+            "--format=%(refname)".to_owned(),
+        ];
+        if let Some(number) = issue {
+            for prefix in ["refs/heads/", "refs/remotes/origin/"] {
+                refs.push(format!("{prefix}agents/{number}*"));
+                refs.push(format!("{prefix}issue-{number}*"));
+            }
+        } else {
+            refs.push(format!("refs/heads/{branch}"));
+        }
+        let args = refs.iter().map(String::as_str).collect::<Vec<_>>();
+        let branches = git.text(&repository.paths.worktree, &args, &token).await?;
+        let claimed = issue.map_or(!branches.is_empty(), |number| {
+            branches.lines().any(|name| {
+                name.strip_prefix("refs/heads/")
+                    .or_else(|| name.strip_prefix("refs/remotes/origin/"))
+                    .and_then(parse_issue_branch)
+                    .is_some_and(|claim| claim.number == number)
+            })
+        });
+        if claimed || worktree.exists() {
             return Err(Error::type_error("Local branch/path ownership collision; nothing was adopted or replaced"));
         }
         let record = Value::object(vec![
@@ -1584,6 +2549,8 @@ pub async fn prepare_local(
             ("worktree", Value::string(worktree.to_str().ok_or_else(|| Error::type_error("Worktree path must be Unicode"))?)),
             ("publication", Value::string("unknown")),
         ]);
+        token.check()?;
+        repository.require_indexes_current()?;
         secure::write_exclusive(&namespace.join(format!("{task}.json")), record.json().as_bytes())?;
         secure::private_directory(worktree.parent().ok_or_else(|| Error::type_error("Worktree needs a parent"))?, true)?;
         git.run(&repository.paths.worktree, &["worktree", "add", "--quiet", "-b", &branch, worktree.to_str().ok_or_else(|| Error::type_error("Worktree path must be Unicode"))?, &start.commit], &token).await?;
@@ -1749,5 +2716,290 @@ mod repository_path_tests {
                 PathBuf::from(std::ffi::OsString::from_wide(&[0xd800, u16::from(b'\n')]));
             assert!(repository_paths_need_legacy(&paths));
         }
+    }
+
+    #[test]
+    fn stranded_work_classification_and_wave_labels_preserve_legacy_contracts() -> Result<(), Error>
+    {
+        use crate::json::parse;
+
+        let now = 1_791_144_000_000.0;
+        let assigned = |number: u64, state: &str| {
+            Value::object(vec![
+                ("number", Value::Number(number as f64)),
+                ("state", Value::string(state)),
+                (
+                    "assignees",
+                    Value::Array(vec![Value::object(vec![(
+                        "login",
+                        Value::string("worker"),
+                    )])]),
+                ),
+                (
+                    "labels",
+                    Value::Array(vec![Value::object(vec![(
+                        "name",
+                        Value::string("in-progress"),
+                    )])]),
+                ),
+            ])
+        };
+        let mut unassigned = assigned(5, "OPEN");
+        crate::domain::put(&mut unassigned, "assignees", Value::Array(Vec::new()))?;
+        let issues = vec![
+            assigned(1, "OPEN"),
+            assigned(2, "OPEN"),
+            assigned(3, "OPEN"),
+            assigned(4, "CLOSED"),
+            unassigned,
+            assigned(6, "open"),
+        ];
+        let input = Value::object(vec![
+            ("issues", Value::Array(issues)),
+            (
+                "branches",
+                Value::Array(vec![Value::string("issue-2"), Value::string("issue-3")]),
+            ),
+            (
+                "worktrees",
+                Value::Array(vec![Value::object(vec![
+                    ("branch", Value::string("issue-6")),
+                    ("path", Value::string("unused")),
+                ])]),
+            ),
+            (
+                "heartbeats",
+                Value::Array(vec![
+                    Value::object(vec![
+                        ("issue", Value::Number(3.0)),
+                        ("timestamp", Value::Number(now)),
+                    ]),
+                    Value::object(vec![
+                        ("issue", Value::Number(6.0)),
+                        ("timestamp", Value::Number(now - 1000.0)),
+                    ]),
+                ]),
+            ),
+            ("now", Value::Number(now)),
+            ("thresholdMs", Value::Number(1000.0)),
+        ]);
+        let results = classify_stranded_work(&input)?;
+        let statuses = results
+            .iter()
+            .map(|entry| {
+                (
+                    entry
+                        .get("branch")
+                        .and_then(Value::as_string)
+                        .and_then(|s| s.to_utf8().ok()),
+                    entry
+                        .get("status")
+                        .and_then(Value::as_string)
+                        .and_then(|s| s.to_utf8().ok()),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            statuses,
+            vec![
+                (Some("agents/1".to_owned()), Some("stranded".to_owned())),
+                (Some("issue-2".to_owned()), Some("stale".to_owned())),
+                (Some("issue-3".to_owned()), Some("healthy".to_owned())),
+                (Some("issue-6".to_owned()), Some("healthy".to_owned())),
+            ]
+        );
+        assert!(
+            select_issue_branch(42, &["agents/42".to_owned(), "issue-42".to_owned()], None)
+                .is_err()
+        );
+        assert_eq!(
+            issue_wave(&parse(&Text::from(
+                r#"{"labels":[{"name":"wave:2"}],"body":"<!-- Roster-Wave: 2 -->"}"#
+            ))?)?,
+            Some(2)
+        );
+        assert!(
+            issue_wave(&parse(&Text::from(
+                r#"{"labels":["wave:1"],"body":"<!-- Roster-Wave: 2 -->"}"#
+            ))?)
+            .is_err()
+        );
+        assert!(issue_wave(&parse(&Text::from(r#"{"labels":null}"#))?).is_err());
+        assert!(
+            issue_wave(&parse(&Text::from(
+                r#"{"labels":["wave:1"],"body":"Syntax: <!-- Roster-Wave: N -->\n<!-- Roster-Wave: 2 -->"}"#
+            ))?)
+            .is_err()
+        );
+        assert_eq!(
+            issue_branches(0, None).err().map(|err| err.message),
+            Some("Issue number must be a positive safe integer".to_owned())
+        );
+        assert_eq!(
+            select_issue_branch(42, &[], Some(17))
+                .err()
+                .map(|err| err.message),
+            Some("Attempt index must be between 1 and 16".to_owned())
+        );
+        let offset_input = parse(&Text::from(
+            r#"{"issues":[{"number":1,"state":"OPEN","assignees":[{"login":"worker"}]}],"branches":["agents/1"],"heartbeats":[{"issue":1,"timestamp":"2026-10-04T16:00:00-04:00"}],"now":"2026-10-04T20:00:00+00:00"}"#,
+        ))?;
+        let offset_results = classify_stranded_work(&offset_input)?;
+        assert_eq!(
+            offset_results[0].get("status"),
+            Some(&Value::string("healthy"))
+        );
+        assert_eq!(
+            issue_dependencies(&parse(&Text::from(
+                r#"{"number":5,"body":"Slice\n\nDepends on: #1, #2\n"}"#
+            ))?)?,
+            Some(vec![1, 2])
+        );
+        assert_eq!(
+            issue_dependencies(&parse(&Text::from(
+                r#"{"number":5,"body":"Slice\n\nDepends on: none\n"}"#
+            ))?)?,
+            Some(Vec::new())
+        );
+        assert!(
+            issue_dependencies(&parse(&Text::from(
+                r#"{"number":5,"body":"Depends on: #5"}"#
+            ))?)
+            .is_err()
+        );
+        assert_eq!(parallel_limit(Some(&Value::string("4")))?, 4);
+        assert!(parallel_limit(Some(&Value::Number(0.0))).is_err());
+        let summary = format_issue_summary(
+            &parse(&Text::from(
+                r#"{"issue":{"number":42,"title":"Add status","state":"OPEN"},"openPr":null}"#,
+            ))?,
+            Some(&Value::object(Vec::new())),
+        )?;
+        assert_eq!(
+            summary,
+            "Issue: #42 Add status\nState: OPEN\nBranch: agents/42\nPR: (none)\n"
+        );
+        let unterminated = format_issue_summary(
+            &parse(&Text::from(
+                r#"{"issue":{"number":42,"title":"Fix \u001b]0;unterminated","state":"OPEN"},"openPr":null}"#,
+            ))?,
+            Some(&Value::object(Vec::new())),
+        )?;
+        assert!(unterminated.contains("Issue: #42 Fix ?]0;unterminated\n"));
+
+        assert_eq!(attempt_limit(None, None)?, 1);
+        assert_eq!(attempt_limit(Some(&Value::Number(3.0)), None)?, 3);
+        assert!(attempt_limit(Some(&Value::Number(4.0)), None).is_err());
+        assert!(attempt_limit(Some(&Value::Number(2.0)), Some(&Value::Number(17.0))).is_err());
+        let gates = attempt_gates(Some(&parse(&Text::from(
+            r#"{"tests":{"exit_code":0},"excellence":{"pass":true}}"#,
+        ))?));
+        assert_eq!(gates.get("tests"), Some(&Value::string("pass")));
+        assert_eq!(gates.get("excellence"), Some(&Value::string("pass")));
+        assert_eq!(gates.get("red_green"), Some(&Value::string("skipped")));
+        let candidate = |index: u64, lines: u64, duration: u64, review: &str| {
+            Value::object(vec![
+                (
+                    "completed",
+                    Value::object(vec![(
+                        "result",
+                        Value::object(vec![("mode", Value::string("llm"))]),
+                    )]),
+                ),
+                (
+                    "evidence",
+                    Value::object(vec![
+                        ("index", Value::Number(index as f64)),
+                        ("changed_lines", Value::Number(lines as f64)),
+                        ("duration_ms", Value::Number(duration as f64)),
+                        ("gates", gates.clone()),
+                        ("review", Value::string(review)),
+                    ]),
+                ),
+            ])
+        };
+        let winner = select_attempt(&[
+            candidate(4, 1, 1, "fail"),
+            candidate(2, 4, 50, "pass"),
+            candidate(3, 4, 20, "pass"),
+            candidate(1, 4, 20, "pass"),
+        ])
+        .ok_or_else(|| Error::new("TestError", "expected winner"))?;
+        assert_eq!(
+            winner.get("evidence").and_then(|e| e.get("index")),
+            Some(&Value::Number(1.0))
+        );
+
+        let wt1 = Worktree {
+            path: PathBuf::from("/tmp/w1"),
+            head: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            branch: Some("agents/42".to_owned()),
+            locked: false,
+            prunable: false,
+        };
+        let wt2 = Worktree {
+            path: PathBuf::from("/tmp/w2"),
+            head: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            branch: Some("issue-42".to_owned()),
+            locked: false,
+            prunable: false,
+        };
+        assert!(assert_isolated_issue_branches(std::slice::from_ref(&wt1)).is_ok());
+        assert!(assert_isolated_issue_branches(&[wt1, wt2]).is_err());
+
+        assert!(provenance_opt_out(Some(&Value::object(vec![(
+            "ROSTER_PROVENANCE_OPT_OUT",
+            Value::string("true"),
+        )]))));
+        assert!(provenance_opt_out(Some(&Value::object(vec![
+            ("ROSTER_PROVENANCE_OPT_OUT", Value::Null),
+            ("ROSTER_PROVENANCE_DISABLED", Value::string("1")),
+        ]))));
+        assert!(!provenance_opt_out(Some(&Value::object(vec![(
+            "ROSTER_PROVENANCE_OPT_OUT",
+            Value::string("0"),
+        )]))));
+
+        let recap_dir =
+            std::env::temp_dir().join(format!("roster-recap-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&recap_dir);
+        std::fs::create_dir_all(&recap_dir).map_err(|e| Error::new("TestError", e.to_string()))?;
+        let stub = crate::planning::artifacts::stub(
+            &Value::string("Update README.md."),
+            "issue:42",
+            None,
+            None,
+        )?;
+        std::fs::write(recap_dir.join("TASK.md"), stub.task.to_utf8()?)
+            .map_err(|e| Error::new("TestError", e.to_string()))?;
+        std::fs::write(recap_dir.join("REVIEW.md"), "# Review\r\nVerdict: pass\r\n")
+            .map_err(|e| Error::new("TestError", e.to_string()))?;
+        std::fs::write(
+            recap_dir.join("RESULT.md"),
+            "# Result\r\n- node --test exited 0\r\n",
+        )
+        .map_err(|e| Error::new("TestError", e.to_string()))?;
+        let recap = format_run_recap(
+            &recap_dir,
+            Some("Fallback title"),
+            Some("stop"),
+            Some(&Value::object(Vec::new())),
+        )?;
+        let _ = std::fs::remove_dir_all(&recap_dir);
+        assert!(recap.contains("Files: README.md"));
+        assert!(recap.contains("Last test: node --test (exit 0)"));
+        assert!(recap.contains("Review: pass"));
+        assert!(recap.contains("Finish reason: stop"));
+        let open_issues = parse_open_issues_json(r#"[{"number":42,"title":"Add status"}]"#)?;
+        assert_eq!(open_issues.len(), 1);
+        assert!(
+            parse_open_issues_json(r#"[{"number":42,"title":"A"},{"number":42,"title":"B"}]"#)
+                .is_err()
+        );
+        assert_eq!(
+            parse_diff_names("README.md\0src/app.rs\0"),
+            vec!["README.md".to_owned(), "src/app.rs".to_owned()]
+        );
+        Ok(())
     }
 }

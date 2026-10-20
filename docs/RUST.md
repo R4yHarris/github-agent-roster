@@ -35,13 +35,278 @@ The library contains:
   restoration and optional local-image Docker independent verification.
 - A native version-one encrypted file vault, OS-bound ownership/permissions
   and selected-only endpoint credentials in the actual local run path.
+- Ask drafting/submission, clarification checkpoints, scoped repository
+  questions, side questions (`/btw`), bounded state/provenance cleanup,
+  benchmark/debug-log/repo-map/run-log diagnostics, publication/trailer and
+  wave/attempt helpers, hardware/routing/discovery/remediation helpers, shell/
+  onboard helpers and paired Eve pilot evaluation.
 
 The public CLI supports help, recipe validation, catalog parsing, argument
-splitting, offline initialization/diagnostics and the first local TASK/Ask
-delivery coordinator, including the fixed-profile outer continuations below.
-GitHub issue delivery/publication and automatic fleet recovery/routing are
-not integrated. Unsupported commands return an
+splitting, offline initialization/diagnostics (`doctor`, `doctor --copilot`,
+`bench`), Ask and clarification checkpoints (`ask`, `ask --pending|--cancel|--resume`),
+read-only scoped repository questions (`question`), durable provenance history
+queries (`history list|show`), bounded state/provenance cleanup (`clean`),
+encrypted file-vault operations (`vault set|list|get`), analytics and recurring
+failure proposals (`stats [--delivery]`, `learn --recurring`, `recommend`, `eval`),
+and the local TASK/Ask delivery coordinator, including fresh App issue intake
+and the fixed-profile outer continuations below. GitHub publication/resume and
+automatic fleet recovery/routing are not integrated. Unsupported commands return an
 explicit error rather than invoke the old runtime or claim success.
+
+## Native read-only analytics checkpoint
+
+FEATURE_SPEC **5.6**, **5.2**, **5.7** and **5.8** now have native learning
+validation, Git/local joins, distinct-sample aggregation, known-only medians,
+advisory recommendations, actual seat/model difficulty ceilings and scoped
+routing-evidence summaries. The planner reuses the same recommendation core.
+No history is automatically promoted into model context or curated memory.
+
+The real CLI paths are:
+
+```text
+roster stats [--delivery] [--json] [--ref REVISION_OR_RANGE] [--evals PATH]
+roster learn --recurring
+roster history list [--format json|text|summary] [--store DIR] [--repo HASH] [--issue N] [--seat NAME] [--model MODEL] [--outcome VALUE] [--since TIME] [--until TIME]
+roster history show <session-or-run-or-record-id> [--format json|text|summary] [--store DIR]
+roster recommend --task-class feat|fix|docs|test [--difficulty 1-5] [--json]
+```
+
+They require an absolute `ROSTER_GIT` and use the existing hardened,
+cancellable owned Git transport, not Node or an SDK exporter. Ref endpoints
+become exact commit IDs before logging. Inputs are bounded and read-only;
+malformed/ambiguous evidence, provider errors, unsafe files and identity drift
+fail without partial output or storage mutation. Explicit refs exclude local
+unpublished samples. Explicit legacy eval files override matching SHAs only.
+The canonical repository's shared layout is used from subdirectories and
+linked worktrees; issue scratch and foreign repositories are not history.
+
+`learning` exposes parsing, joining, summary, recommendation, ceiling and
+evidence functions. `metrics::load` / `load_with_store` return `Analytics`,
+whose raw rows remain private. Existing provenance can be read only from an
+explicit identity-scoped machine root or injected same-identity store.
+No default user-root discovery, new durable writer, state migration, database,
+policy grant or automatic human evaluation is introduced.
+
+CLI recommendations are coder advice with three human samples, sufficient
+median difficulty and an earned ceiling, not a fleet/profile assignment.
+`roster stats --delivery [--json]` groups delivery evidence by served model,
+declared hardware and seat while preserving individual local attempt models
+and usage across published commit links. `roster learn --recurring` writes
+human-reviewable draft proposals in `.roster/proposals` without modifying
+active rules, and `roster stats` (text mode) lists open proposals.
+`roster history list` and `roster history show` read bounded durable
+provenance records in `text`, `json` and `summary` formats without mutating
+or repairing the store.
+Automatic fleet/prior routing and the legacy profile/context/hardware suffix
+are not implemented by this checkpoint. Automatic run recording,
+onboarding, shell, existing-issue recovery and publication remain explicitly
+unavailable.
+
+ASCII en-US collation and UTF-16/table/number contracts are covered natively.
+Non-ASCII locale ordering is refused as unproven rather than byte-sorted.
+Windows GNU checks do not prove MSVC, POSIX containment, filesystem ACL
+providers, complete legacy coverage or FEATURE_SPEC section 8 acceptance.
+See [METRICS](METRICS.md#native-stats-and-recommendations) and
+[the focused tests](TESTING.md#native-analytics-controls).
+
+On Windows GNU, the checkpoint's **56 new tests** pass on stable Rust
+**1.99.1** and Rust **1.85.0**: 40 library cases and 16 real CLI/acceptance
+cases. Twenty preserved affected controls also pass on each compiler.
+Format checking and strict all-target Clippy pass on both; discovery reports
+**698 tests**, not 698 executed passes. Stable optimized controls pass all
+16 analytics cases and all six preserved CLI cases.
+The unchanged recipe-file CLI fixture still owns and removes its nonce-named
+temporary root; its source/assertions were not weakened. New analytics
+fixtures use only their recorded repository-owned roots.
+
+Four independent review findings were reproduced and repaired: bounded
+join expansion, human-ledger chronology, SHA/session correction isolation
+and secret-free fallback configuration errors. Joined compact-JSONL bytes
+are checked incrementally at 16 MiB while retaining the existing 32 MiB
+combined input allowance. Human decisions retain real source ordinals;
+missing timestamps do not silently substitute Git/run order.
+
+The pre-existing 642-test baseline is not a current full-green claim:
+its last default local-delivery run passed 93/100 with seven existing
+600-second guard failures. Those guards, assertions and runtime/performance
+policies are unchanged by analytics; the default 100/full suite is not
+replayed as an analytics gate. Storage-ownership review and native CI/release
+remain separate open gates. Component checks and review do not establish
+full migration or cross-platform acceptance.
+
+## Native human evaluation
+
+FEATURE_SPEC **5.6**, **5.7** and **5.8** now have an explicit native human
+writer: `roster eval TARGET accept|reject|rework 1-5 y|n --local|--post`, with optional
+`--minutes` and `--comment`. This does not evaluate a seat automatically or
+authorize policy. Declared App/agent invocations and
+read-only seat acceptance refuse it before execution.
+
+The writer preserves the existing shared-state resolver, JSONL history,
+unknown measurements and actual source attribution. Full SHA1/SHA256 and
+commit abbreviations are supported; ambiguous session metadata requires a
+specific SHA or attempt. Local/Git evidence precedes explicit same-identity
+durable lookup, with exact source references and no requested-model or
+starting-commit substitution. Comments are redacted data. Existing locks,
+bounded checked reads, atomic replacement and explicit cleanup are reused;
+uncooperative vault storage ownership is not solved or weakened by this path.
+Optional posting uses an explicitly approved GitHub CLI and pinned explicit
+human credential, verifies its actual human principal and one exact-SHA PR
+association, and sends only compact `AI-Eval`/`Minutes` after local saving.
+No private comment is sent, no PR is guessed, and no uncertain write is
+retried. Origin drift, cancellation and unknown child cleanup fail explicitly;
+dropped submissions retain the lock. `record_local` remains strictly
+network-free even when passed a posting decision.
+See [human evaluation](LEARNING.md#native-human-evaluation).
+
+## Native offline issue observations
+
+FEATURE_SPEC **5.7** and **5.8** now have
+`roster status --issue N --offline [--json]`. This path uses an absolute approved
+`ROSTER_GIT` and the native registered-worktree inventory. It reads the selected
+base issue worktree's schema-one session log, falling back to the canonical
+repository only when that log is missing. Ambiguous issue ownership, foreign
+common directories, linked/nonregular/hardlinked/unreadable files and corrupt
+complete records fail explicitly without partial output.
+
+The reader preserves the native writer's exact 2 MiB bound, including a single
+large record and more than 10,000 small records. It validates schema, sequence
+and metadata labels in complete UTF-8 records; an active unfinished trailing
+record is explicitly ignored. Output projects only issue, safe seat/event/state
+labels and complete-record metadata, never raw detail bodies, model text or
+credentials. Missing observations stay unknown. Neither a recorded `pass` label
+nor the existence of a log proves worker liveness, current verification,
+publication or human acceptance.
+
+The real native CLI and read-only acceptance path are connected; acceptance
+adds `--offline` before implementation checking and preserves the argument cap.
+Offline status does not load endpoint configuration, credentials, default user
+history or a GitHub client and performs no filesystem mutation. Online issue
+observations are implemented separately below. Automatic issue inference,
+retry/winner selection and the broader cached issue, artifacts and measured-run
+display are still unavailable. This is not complete legacy
+status parity or an interactive status rail.
+See [the native controls](TESTING.md#native-offline-status-controls).
+
+## Native App-scoped issue observations
+
+FEATURE_SPEC **5.1**, **5.7** and **5.8** now have
+`roster status --issue N [--json]` and the native
+[`github::read_issue`](../rust/github.rs) API. The only Node adapter calls the
+required contracts SDK's public origin/authentication exports; it is not a
+Roster worker, delivery loop or fallback. GitHub HTTP, issue validation,
+cancellation, token revocation and status composition remain Rust, using the
+existing HTTP transport without redirects, proxies or retries.
+
+The adapter requires complete App credentials and absolute approved Git/Node20
+images, with the clean dependency sealed at the installation's reviewed
+gitlink. It does not import the SDK as its CLI entry point or forward ambient
+human tokens. The App key must be a bounded unlinked regular file outside both
+repositories. Its actual SDK-side handle read is capped at 64 KiB, not merely a
+preflight metadata check; the buffer is cleared. The existing SDK token baseline
+includes contents/PR write permissions; this path requests only additional
+issues read and performs no task, issue, PR or policy write.
+
+Only an exact repository/number issue is returned; PR-shaped, foreign,
+incomplete and oversized responses fail. Completed reads require acknowledged
+token revocation. Cancellation preserves its first reason while bounded
+revocation still runs; an unacknowledged cleanup never becomes a successful
+observation. Dropping an unfinished read provides no issue or task authority
+and is not proof of remote token revocation. No writer is acquired or released
+by this read-only intake path.
+
+An observed issue retains the original repository identities, approved Git
+provider and reviewed SDK seal. `require_current` rechecks them across later
+awaits; online status revalidates after its local-log read before returning.
+Output excludes the issue body and token, distinguishes local/remote facts,
+and explicitly leaves PR state unknown because no PR query ran.
+`status::observe` remains strictly local and refuses online options; read-only
+seat acceptance always adds `--offline`.
+
+Fresh native GitHub task delivery is described below; publication/resume and
+the rest of status parity remain unported. Tests use an owned synthetic SDK interface, a dummy non-PEM
+key and controlled native HTTP responses, not real credentials or GitHub calls.
+This does not prove live App installation permissions, platform release,
+worker cleanup or FEATURE_SPEC section 8 acceptance.
+See [the controls](TESTING.md#native-app-issue-observation-controls).
+
+## Native fresh issue delivery
+
+FEATURE_SPEC **5.3**, **5.4**, **5.5** and **5.7** now have
+`roster run --issue N --runtime builtin`, with the existing base/fetch/skip-review
+controls. Complete App configuration is required before private model settings
+are loaded. The App observation must identify an open issue; human credentials
+never replace it. The shared strict issue-number parser refuses aliases,
+fractional/unsafe values and leading zeroes consistently with status.
+
+`delivery::resolve_issue` captures the original calling repository before its
+metadata awaits, then returns an opaque immutable intake. Delivery reuses that
+original source/branch/index seal rather than accepting a fresh post-await
+snapshot, refuses a different calling worktree and revalidates before effects.
+The shared native seal checks actual primary and split/shared index bytes and
+file identity, not just status or a content diff. Same-commit branch switches
+and index-only changes cannot authorize a new task through a cloned intake.
+The whole CLI task deadline covers intake and all later seats. Authentication
+HTTP does not consume model request admission or become model metrics.
+
+Shared native preparation creates `agents/N`, task `issue-N`, session
+`roster-N-coder` and one fresh issue worktree. Existing paths and known
+canonical, legacy, attempt or remote-tracking claims are preserved and refused;
+this is not resume/adoption or proof that an explicitly unfetched remote is
+current. The existing prepare lock, exact approved submodule materialization
+and one-writer root lease remain in use. No Kanban store or second worker
+runtime was added.
+
+Planning, guarded coding and fresh read-only review use the same process,
+worktree and private completion receipts as local delivery. `intake::parse_issue_body`
+validates non-empty issue bodies and optional `## Task metadata` (`task_class`,
+`difficulty`, `estimate_min`) without pre-concatenating `title` into
+`assignment.ask`; classification and planning receive `Some(issue.title())`
+and parsed metadata explicitly, the recipe retains `issue:N`, and every
+post-intake origin/SDK re-check runs on the invocation's owned `start::Git`
+through completion before the typed outcome stamps the validated issue URL.
+`Repository::inspect` seals primary and shared indexes before observing `HEAD`,
+`status` and `source_digest`. A stub remains a no-model, no-code, no-test
+result. No issue status comment/label, close, PR, publication, automatic route
+or human evaluation is manufactured.
+
+Owned controls exercise a real issue branch/worktree and both stub and
+configured seven-response planning/critic/coder/self-review/fresh-review paths.
+The configured path makes an actual owned guide edit, passes the existing
+private gates and records distinct actual response models with reported zero
+usage. Three independent review findings (issue title/body classification and
+metadata parsing, owned Git tracking and completion origin re-verification, and
+pre-observation index sealing) were reproduced and repaired; **33 targeted
+cases** pass on both stable Rust **1.99.1** and Rust **1.85.0** GNU (15 library
+cases, one analytics CLI case, 10 start/checkpoint cases and seven CLI cases),
+plus optimized `--release` controls. App and model transports are synthetic;
+no live App/model or harness acceptance campaign is implied.
+See [the controls](TESTING.md#native-fresh-issue-delivery-controls).
+
+## Native offline fleet listing
+
+FEATURE_SPEC **5.2** and **5.7** now have `roster fleet list`. The synchronous
+native leaf reuses canonical shared configuration scope and the checked private
+settings reader, not an executor, Git process, endpoint client or new catalog
+store. Missing catalog and explicit empty catalog retain the existing empty
+message; configured profiles retain their original tabular field order and
+unknown onboard-default capacity. No profile, default, route, credential file
+or repository history is changed.
+
+Catalogs retain the exact 64 KiB bound and must be stable single-link regular
+files in unlinked checked directories. Malformed input, sharing denial and
+unsafe files fail without partial tables or private provider details.
+Single-line metadata refuses terminal control characters and Unicode line
+separators. Lossless internal UTF-16 remains intact; unencodable console output
+fails rather than silently replacing data. Known configured credential values
+are redacted; notes and credential declarations are not listed.
+
+CLI parsing and real read-only acceptance both recognize only `fleet list`;
+discovery, probing, warming, mutation, onboarding and automatic routing are
+still unavailable. Listing configured metadata is not endpoint discovery,
+measured capacity or response-backed run evidence.
+See [fleet scope](FLEET.md#native-scope) and
+[the native controls](TESTING.md#native-offline-fleet-listing-controls).
 
 ## Native verification
 

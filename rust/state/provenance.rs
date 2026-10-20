@@ -1,4 +1,5 @@
 pub mod api;
+pub mod history;
 pub mod integrity;
 pub mod schema;
 pub mod store;

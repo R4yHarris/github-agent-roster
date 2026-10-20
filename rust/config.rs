@@ -980,7 +980,7 @@ pub fn defaults() -> Result<Config, Error> {
     parse(&Text::from(include_str!("../roster.config.example.yml")))
 }
 
-fn shared_config_root(root: &Path) -> Result<PathBuf, Error> {
+pub(crate) fn shared_config_root(root: &Path) -> Result<PathBuf, Error> {
     let root = crate::paths::resolve_project_root(root)?;
     crate::state::secure::check_components(&root)?;
     match std::fs::symlink_metadata(root.join(".git")) {
@@ -994,7 +994,7 @@ fn shared_config_root(root: &Path) -> Result<PathBuf, Error> {
     }
 }
 
-fn private_settings(
+pub(crate) fn private_settings(
     root: &Path,
     name: settings::Name,
 ) -> Result<Option<(Text, crate::paths::FileIdentity)>, Error> {

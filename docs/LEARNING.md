@@ -1,11 +1,30 @@
 # Learning from runs and human evaluations
 
-Roster joins the required contracts pack's `AI-Run` export with local run
+Native Roster joins local Git `AI-Run` evidence with bounded run
 metadata and human decisions. The goal is the **next task at this difficulty
 with fewer defects**, not a hidden quality score. There is no model API, vault,
 analytics service, or separate task database. GitHub Issues and PRs remain the queue.
 
-## Automatic seat runs and optional preparation records
+## Native scope
+
+`stats` and `recommend` are implemented read-only native CLI commands.
+[`learning`](../rust/learning.rs) and [`metrics`](../rust/metrics.rs) retain
+correction/deduplication, defect, unknown-usage, median and ceiling contracts;
+the actual CLI uses approved native Git, not the retired Node exporter.
+See [native metrics](METRICS.md#native-stats-and-recommendations).
+
+Explicit human `eval ... --local` recording and opt-in `--post` feedback are
+implemented separately in [`evaluation`](../rust/evaluation.rs).
+Recurring proposal writes, automatic fleet routing and the historical delivery producer
+remain unavailable. An agent/App never generates a human decision. Existing
+human JSONL can be validated and summarized; no raw history is promoted into
+curated memory.
+
+## Historical automatic seat recording (native producer not integrated)
+
+The automatic producer described below is not wired to the native delivery
+path. Explicit human local evaluations do not manufacture a seat run, response
+usage, verification result or publication receipt.
 
 For issue runs, each completed planner, coder, or reviewer seat automatically creates
 and appends to `.roster/runs/runs.jsonl` in the issue repository. Stub seats record session,
@@ -89,13 +108,18 @@ Local learning reads all `*.jsonl` files directly inside `.roster/runs`, in
 filename order. Records need a full SHA or opaque session identifier; other
 fields may be omitted. Matching records are combined rather than counted
 twice. Known Git-exported values take precedence over local values.
+SHA-specific corrections do not replace another commit's applicable
+session-only decision. The normalized inputs retain the existing combined
+32 MiB allowance; live joined rows have a 16 MiB compact-JSONL byte budget,
+including local-metadata and evaluation expansion. The join checks replacements and
+appended evaluations incrementally instead of materializing unbounded fan-out.
 Defects are combined without duplicates across matching records, and failure
 evidence cannot be cleared by a later passing report or evaluation. In particular,
 a secret-path or policy touch remains a reject for recommendations even if a
 human later records `accept`. The human evaluation itself is not rewritten.
 Passing the gate still requires a human `roster eval` to establish acceptance.
 
-## Recurring failure proposals
+## Historical recurring failure proposals (native command unavailable)
 
 Run `roster learn --recurring` (or `/learn --recurring`) to inspect local run
 and human-evaluation history without contacting a model or GitHub. The pure
@@ -129,14 +153,24 @@ directory. The command never edits `skills/`, `principals/`, routing, policy,
 workflows, or the fleet, and cannot grant permissions. A gate failure or
 proposal is never fabricated into a human acceptance/rejection evaluation.
 
-## Human evaluation
+## Native human evaluation
 
 After reviewing the result, a **human** runs:
 
 ```sh
-roster eval roster-20260928T120000000Z accept 3 n --minutes 18 --comment "Ship quality."
-roster eval 0123456789abcdef0123456789abcdef01234567 rework 4 y --minutes 35
+roster eval roster-20260928T120000000Z accept 3 n --local --minutes 18 --comment "Ship quality."
+roster eval 0123456789abcdef0123456789abcdef01234567 rework 4 y --local --minutes 35
+roster eval 0123456789abcdef0123456789abcdef01234567 accept 3 y --post --minutes 18
 ```
+
+Exactly one of `--local` or `--post` is required. Local mode never invokes
+GitHub or reads its credentials; neither mode invokes the App publisher or
+changes policy. App credentials, `AI_*` declarations and `ROSTER_AGENT_SEAT`, including
+case aliases and blank values, refuse the write before repository access.
+Unmarked environment variables are not proof of human identity; only the
+explicit human command supplies a verdict. Evaluation rows remain data, not
+tool or publication authority. Roster's read-only acceptance catalog rejects
+this mutator before execution.
 
 The positional values are:
 
@@ -154,8 +188,11 @@ unmatched evaluations remain saved. Self-contained evaluations with a known
 model and task class can supply local learning evidence without a separate run
 record; incomplete metadata cannot establish model capacity.
 
-This appends `.roster/evals.jsonl` at the current Git repository's root, even
-when invoked from a subdirectory:
+This appends the canonical repository's shared evaluation ledger, even from a
+subdirectory or linked worktree. Native layout uses
+`.roster-state/shared/evals.jsonl`; the existing layout resolver retains
+`.roster/evals.jsonl` when that legacy layout is selected. Recording neither
+migrates nor copies another layout. The row format is:
 
 ```json
 {"sha":null,"session":"roster-20260928T120000000Z","model":null,"task_class":null,"verdict":"accept","difficulty":3,"again":false,"minutes":18,"comment":"Ship quality.","at":"2026-09-29T12:00:00.000Z"}
@@ -165,22 +202,36 @@ Corrections append another record, preserving the history. The last evaluation
 for an identical SHA or session wins; SHA matching is case-insensitive. A
 SHA-specific evaluation takes precedence over a session-wide evaluation.
 Malformed arguments or existing JSONL fail explicitly rather than silently
-skipping data.
+skipping data. Conflicting model, effort, task, task-class or seat metadata
+for a local/Git session requires an explicit SHA instead of silently choosing
+one worker. Private paths, endpoint URLs and secret-like model attribution
+are refused, including attribution copied from earlier human rows.
+
+The writer uses the existing cooperative ownership lock and checked atomic
+replacement, preserves earlier JSONL bytes, and rechecks scope and file
+identity before writing. A real single-link regular file, bounded UTF-8,
+1 MiB rows, a 16 MiB ledger and at most 10,000 rows are required. Corrections
+append rather than erase history; zero minutes remain zero and missing
+minutes remain unknown. Comments are redacted data, not executable skills.
+Cancellation after replacement is not rollback; inspect the ledger before
+retrying an uncertain operation.
 
 The human command enriches known SHA/session/model/class fields from run history.
 If an opaque session has no matching local/Git metric record, it matches exact
 durable session IDs or recorded operational attempt lineage through the
 repository-scoped typed durable API at the machine
-root. This restores observed served-model, seat and task-class attribution
+root selected explicitly by `ROSTER_STATE_HOME`. No default operator home is
+discovered. This restores observed served-model, seat and task-class attribution
 after a checkout loses its local ledger, including a reclone with the same
 origin identity. Lifecycle records are not seat attribution. Multiple matching
 session records, including retries of one operational session, fail before
-writing or commenting rather than selecting an arbitrary occurrence. A specific
+writing rather than selecting an arbitrary occurrence. A specific
 attempt-suffixed durable session ID can disambiguate that occurrence.
 Local/Git matches retain precedence without a durable read.
 
-Recovered decisions retain a bounded `provenance` reference with the source
-record ID, run ID and session ID. An absent served model remains unknown;
+Recovered decisions use the exact matched attempt session and retain a bounded
+`provenance` reference with the source record ID, run ID and session ID.
+An absent served model remains unknown;
 the requested model is never substituted. A starting `repository.commit`
 is never treated as a published evaluation SHA. Other repositories are
 excluded by the existing identity-scoped typed query. Durable-history opt-out
@@ -191,10 +242,34 @@ This lookup does not generate verdicts, migrate storage, write evaluations to
 machine history or replace routing's existing ledger. Only a genuine human
 decision is enriched. It implements [FEATURE_SPEC sections 5.6 and 5.8](FEATURE_SPEC.md).
 
-With `gh` and one matching PR, it posts `AI-Eval: 1|accept|3|n` and `Minutes: 18`
-using the human's GitHub identity, not the App. The free-text comment stays local.
-Missing minutes remain unknown (`null`); legacy four-argument calls still work.
-See the [retrospective guide](RETRO.md) for verdict meanings and failure handling.
+### Explicit human GitHub feedback
+
+`--post` requires `ROSTER_GH` naming an absolute approved GitHub CLI image and
+an explicit human `GH_TOKEN` or `GITHUB_TOKEN`. The selected token is pinned
+for the request sequence; no credential is taken from an operator auth store.
+GitHub's actual `/user` response must identify a human `User`, not an App or
+bot. An environment declaration or model name is not that principal proof.
+
+Only a known full evaluation SHA is used to query commit-associated PRs in
+the current credential-free GitHub origin. A missing SHA or an empty complete
+association is reported as **not posted**, never as a successful comment.
+Multiple PRs, foreign repository results, malformed data and failed identity
+checks refuse the operation before saving a decision or posting. A specific
+PR is not guessed from the current HEAD or a requested model.
+
+After preflight, the local decision is saved and the origin is checked again
+before posting only `AI-Eval: 1|accept|3|y` and optional `Minutes: 18`.
+Zero minutes are included; missing minutes are omitted. The free-text comment,
+model context and secrets never enter that request. The actual acknowledgement
+must match the sent body and contain a valid comment ID before reporting a
+verified PR URL.
+
+Local persistence and remote comments are not one transaction. A failure or
+cancellation after saving states that the local row exists and the remote
+outcome may be uncertain. Nothing automatically retries; inspect the PR
+before trying again. Unknown process cleanup or a dropped pending submission
+retains the writer lock instead of claiming release. See the
+[retrospective guide](RETRO.md) for verdict meanings.
 
 Roster does not fetch PR comments, generate decisions, or write evaluation
 trailers. The coder `run` and contracts publishing paths never write `AI-Eval`;
@@ -205,11 +280,12 @@ seat calls and coder-tool writes to the evaluation file are rejected.
 
 ```sh
 roster stats
+roster stats --json
 roster stats --ref main..HEAD --evals evals.jsonl
 roster recommend --task-class fix --difficulty 4
 ```
 
-Stats invokes contracts `export-agent-metrics.mjs` and joins the local records,
+Stats reads real Git objects/trailers natively and joins the local records,
 including self-contained human evaluations when no exported run matches.
 Rows are grouped by **model, task class, and effort**, so different effort
 configurations are not mixed. The table retains `MODEL`, `EFFORT`, `RUNS`,
@@ -264,23 +340,23 @@ duration. Legacy free-form verdicts remain visible in `EVALS` but do not enter
 the normalized `N` or recommendations. `again` and token context are evidence,
 not extra ranking weights; difficulty is an explicit eligibility gate.
 
-Fleet routing requires **three distinct human evaluations**, not three
-automatic failure/pass records. Two evaluations do not qualify for that
-tier, though a labeled [starting prior](CAPABILITIES.md) can still select a
-registered fleet model. A third distinct human sample for the same class,
-model, and effort meets the count threshold, but requested difficulty and
-declared context must also be supported. The default routing difficulty is 2.
+The native advisory command requires **three distinct human evaluations**,
+not three automatic failure/pass records, for the coder seat. The requested
+median difficulty and earned coder/model ceiling must both be supported.
+Its default requested difficulty is two. It does not bind a fleet profile,
+consult benchmark priors, validate a live endpoint or change routing.
 
 Example output:
 
 ```text
-feat: careful-model effort=h accept-rate=66.7% n=3 median-min=20 median-difficulty=4 profile=careful source=evals context_max=32768 concurrency=1 reason=3 distinct human evaluations; declared context is sufficient
+feat: careful-model effort=h accept-rate=66.7% n=3 median-min=20 median-difficulty=4
 ```
 
 If no configuration qualifies, output includes `insufficient data` and the
 configured fallback as information, not an automatic fleet choice.
-`roster recommend` is read-only and shares the registered-profile selector
-with `roster run --issue N --runtime builtin --auto-model`. The flag permits
+`roster recommend` is read-only. The historical registered-profile selector
+and `roster run --issue N --runtime builtin --auto-model` remain separate,
+unavailable native work. In the legacy contract that flag permits
 a run-scoped endpoint/model choice without clearing or editing the saved
 default. Qualified human data outranks priors; absent both, the run stays a
 deterministic stub. An explicit task model outside fleet routing can select the coder as
@@ -291,7 +367,7 @@ See [routing](ROUTING.md).
 
 ## Derived difficulty ceilings and skill notes (FEATURE_SPEC 5.6)
 
-`deriveDifficultyCeilings` reads joined human evaluations without writing a
+`learning::derive_difficulty_ceilings` reads joined human evaluations without writing a
 new store. Each **seat + model** starts at ceiling **2**. Three consecutive
 clean accepts at exactly the current ceiling raise it by one (maximum 5);
 each reject lowers it by one (minimum 1) and resets the streak. Off-level
@@ -303,7 +379,10 @@ establish ceiling evidence.
 Decisions are deduplicated by evaluation SHA (case-insensitive) or session,
 across task classes and efforts. Existing join rules retain the latest human
 correction and failure evidence. Complete evaluation timelines are ordered by
-human `at` timestamps; legacy timelines missing timestamps use ledger order.
+human `at` timestamps, with ledger order breaking ties; timelines missing any
+timestamps use ledger order. Joined rows carry a derived, bounded
+`evaluation_order` for this replay, not an invented human timestamp or policy
+grant. Raw prejoined API rows without that ordinal retain caller order.
 Explicit `seat` metadata wins, otherwise a session ending in `-planner`,
 `-coder`, or `-reviewer` identifies the seat. Older unlabelled runs use the
 coder bucket; unknown/stub models do not establish a ceiling.
@@ -312,7 +391,8 @@ Each derived reject adds a skill note containing the human comment, redacted
 with the existing feedback redactor and blockquoted as **data, not a policy
 grant**. Missing comments are stated, not invented. Notes are derived from
 the existing local ledger, not written into executable skills or a new DB.
-Fleet routing checks the requested seat (coder by default) ceiling in both
+Native recommendations check the coder/model ceiling without assigning a
+worker. Historical fleet routing checks the requested seat (coder by default) ceiling in both
 evidence and prior tiers; no evaluations for that seat/model preserve prior
 routing behavior. Existing median difficulty, context, and sample thresholds
 still apply. Ceiling evidence does not pool another seat's performance.
@@ -325,10 +405,12 @@ when a matching PR exists. These files are evidence, not a task queue.
 
 ## Tests
 
-Fixture tests cover automatic and failed seat recording, omitted unknowns,
-real zeros, joins and deduplication, human-only evaluations, existing stats
-flags, and the three-sample threshold:
+Native fixture tests cover omitted unknowns, real zeros, joins and
+deduplication, existing human evaluation input, actual stats/recommend flags,
+the three-sample threshold, per-seat ceilings and read-only authority:
 
-```sh
-node --test tests/learn.test.mjs tests/eval.test.mjs
+```powershell
+cargo test --lib --locked --offline learning::
+cargo test --lib --locked --offline metrics::
+cargo test --test analytics --locked --offline
 ```

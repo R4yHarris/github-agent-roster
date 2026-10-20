@@ -75,6 +75,16 @@ fn commands(checks: &[Text]) -> Result<Vec<Command>, Error> {
                     "Read-only acceptance command exceeds argument bounds",
                 ));
             }
+            if args.first().is_some_and(|arg| arg == "status")
+                && !args.iter().any(|arg| arg == "--offline")
+            {
+                if args.len() == 32 {
+                    return Err(denied(
+                        "Read-only status normalization exceeds argument bounds",
+                    ));
+                }
+                args.push("--offline".to_owned());
+            }
             let first = args.first().map_or("", String::as_str);
             let second = args.get(1).map_or("", String::as_str);
             let safe = match first {
@@ -110,11 +120,18 @@ fn commands(checks: &[Text]) -> Result<Vec<Command>, Error> {
                 "recipe" => second == "validate",
                 "arguments" => second == "split",
                 "catalog" => second == "parse",
+                "fleet" => matches!(
+                    crate::local_cli::parse(&args),
+                    Ok(crate::local_cli::Command::FleetList)
+                ),
+                "stats" | "recommend" | "status" => matches!(
+                    crate::local_cli::parse(&args),
+                    Ok(crate::local_cli::Command::Stats(_)
+                        | crate::local_cli::Command::Recommend(_)
+                        | crate::local_cli::Command::Status(_))
+                ),
                 _ => false,
             };
-            if first == "status" && !args.iter().any(|arg| arg == "--offline") {
-                args.push("--offline".to_owned());
-            }
             let command = format!("roster {}", args.join(" "));
             if commands.iter().any(|old: &Command| old.command == command) {
                 continue;
@@ -246,6 +263,44 @@ pub async fn run(
         });
     };
     for command in &commands {
+        if command.args.first().is_some_and(|arg| arg == "stats") {
+            if let crate::local_cli::Command::Stats(flags) = crate::local_cli::parse(&command.args)?
+            {
+                if let Some(path) = flags.metrics.evals_path {
+                    let path = path
+                        .to_str()
+                        .ok_or_else(|| denied("Read-only AI-Eval operand must be Unicode"))?;
+                    if path.starts_with('-')
+                        || !policy::exact_path(path)
+                        || crate::planning::forbidden_read(path)
+                        || !crate::planning::is_allowed(path, &boundary.scope()?)
+                    {
+                        return Err(denied(
+                            "Read-only AI-Eval input must remain inside exact non-private TASK scope",
+                        ));
+                    }
+                    let path = owner.root().join(path);
+                    crate::paths::ensure_local_path(&path, owner.root())?;
+                    match std::fs::symlink_metadata(&path) {
+                        Ok(metadata)
+                            if !metadata.is_file()
+                                || crate::state::secure::linked(&metadata)
+                                || metadata.len() > crate::learning::MAX_JSONL_BYTES as u64
+                                || crate::paths::file_information(&path)?.links != 1 =>
+                        {
+                            return Err(denied(
+                                "Read-only AI-Eval input must be a bounded real single-link file",
+                            ));
+                        }
+                        Ok(_) => {}
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(_) => {
+                            return Err(denied("Read-only AI-Eval input could not be inspected"));
+                        }
+                    }
+                }
+            }
+        }
         if command.args.first().is_some_and(|arg| arg == "recipe") {
             for path in command.args.iter().skip(2) {
                 if path.starts_with('-')
@@ -268,6 +323,37 @@ pub async fn run(
         crate::state::files::create_private_directories(&home.join("gh"))?;
         let mut env = counterfactual::environment(&home);
         env.remove("ROSTER_SEAT");
+        if commands.iter().any(|command| {
+            command
+                .args
+                .first()
+                .is_some_and(|arg| matches!(arg.as_str(), "stats" | "recommend" | "status"))
+        }) {
+            if !owner.host().git.is_absolute() {
+                return Err(unsupported(
+                    "Read-only analytics acceptance requires an absolute approved Git image",
+                ));
+            }
+            env.insert(
+                "ROSTER_GIT".to_owned(),
+                owner
+                    .host()
+                    .git
+                    .to_str()
+                    .ok_or_else(|| denied("Approved Git image path must be Unicode"))?
+                    .to_owned(),
+            );
+            env.insert(
+                "ROSTER_INSTALLATION_ROOT".to_owned(),
+                home.to_str()
+                    .ok_or_else(|| denied("Owned acceptance home must be Unicode"))?
+                    .to_owned(),
+            );
+            env.insert(
+                "ROSTER_ANALYTICS_CONFIG_DEFAULTS_ONLY".to_owned(),
+                "true".to_owned(),
+            );
+        }
         let mut runs = Vec::new();
         let mut failures = Vec::new();
         for command in &commands {

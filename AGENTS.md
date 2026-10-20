@@ -106,8 +106,9 @@ board. See [same-session seats](docs/MULTIAGENT.md) and [SDLC](docs/SDLC.md).
 GHCP subagent names `planner` and `coder` map to these sequential builtin seats
 in one run/worktree; reviewer is a later read-only builtin seat, not another
 chat, queue, or runtime. The parent Copilot calls
-the native run API for the issue once its CLI integration is implemented, then
-the App publisher for reviewed changes. The delivery CLI is currently incomplete.
+the native run API for a fresh App-authenticated issue, then the App publisher
+only for explicitly requested reviewed changes. Fresh issue delivery is
+implemented; native publication/resume and the rest of the delivery CLI remain incomplete.
 It must not
 `git commit` as R4yHarris when `GITHUB_APP_*` is set. Follow the
 [GHCP bridge](docs/GHCP.md) for publication and HTTP 422 handling.

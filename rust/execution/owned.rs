@@ -356,20 +356,26 @@ mod windows {
     }
 
     impl Child {
-        pub(super) fn spawn(command: Command) -> Result<Self, Failure> {
+        pub(super) fn spawn(
+            command: Command,
+            diagnostics: Option<&ProcessTrace>,
+        ) -> Result<Self, Failure> {
             let mut limits = ExtendedLimitInfo::new();
             limits.limit_kill_on_job_close();
-            let job = Arc::new(
-                Job::create_with_limit_info(&limits).map_err(|error| Failure {
-                    kind: FailureKind::Control(Box::new(Error::new(
-                        "OwnedProcessError",
-                        format!("Create owned job: {error}"),
-                    ))),
-                    captured: Captured::default(),
-                    cleanup_complete: true,
-                    source: None,
-                })?,
-            );
+            let creating = diagnostics.map(|trace| trace.scope(Label::NoInputJobCreate));
+            let created = Job::create_with_limit_info(&limits);
+            if let Some(creating) = creating {
+                creating.finish_status(created.is_ok());
+            }
+            let job = Arc::new(created.map_err(|error| Failure {
+                kind: FailureKind::Control(Box::new(Error::new(
+                    "OwnedProcessError",
+                    format!("Create owned job: {error}"),
+                ))),
+                captured: Captured::default(),
+                cleanup_complete: true,
+                source: None,
+            })?);
             let pid = Arc::new(AtomicU32::new(0));
             let mut wrapped = TokioCommandWrap::from(command);
             wrapped
@@ -380,7 +386,12 @@ mod windows {
                     pid: pid.clone(),
                 })
                 .wrap(JobObject);
-            let inner = wrapped.spawn().map_err(|error| {
+            let spawning = diagnostics.map(|trace| trace.scope(Label::NoInputWrappedSpawn));
+            let observed = wrapped.spawn();
+            if let Some(spawning) = spawning {
+                spawning.finish_status(observed.is_ok());
+            }
+            let inner = observed.map_err(|error| {
                 let pid = pid.load(Ordering::Acquire);
                 Failure {
                     kind: FailureKind::Spawn,
@@ -784,7 +795,7 @@ async fn execute_core(
         let spawn = diagnostics
             .as_ref()
             .map(|trace| trace.scope(Label::NoInputSpawn));
-        let observed = windows::Child::spawn(command);
+        let observed = windows::Child::spawn(command, diagnostics.as_deref());
         if let Some(spawn) = spawn {
             spawn.finish_status(observed.is_ok());
         }

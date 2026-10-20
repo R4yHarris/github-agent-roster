@@ -1,5 +1,20 @@
 # One-task loop
 
+## Native rewrite checkpoint
+
+On this Rust-only branch, use `roster run --issue N --runtime builtin` for a
+fresh App-authenticated issue, or the native local Ask/TASK paths described in
+[the native runtime guide](RUST.md#native-fresh-issue-delivery). Fresh issue
+delivery preserves the original calling repository and actual primary/shared
+index seals, then creates one isolated `agents/N` branch/worktree. Existing
+claims are refused, not adopted or resumed.
+
+The broader lifecycle below remains the behavioral reference. The native CLI
+still requires explicit runtime selection, has bounded schema-one session logs
+rather than the legacy live transcript, and does not yet record durable
+history, publish, resume existing issues, schedule waves or open the shell.
+No Node runtime is retained as a fallback for those missing surfaces.
+
 ## Whole-task budget
 
 Set optional `seat.task_timeout_ms` to a positive integer in milliseconds (at
@@ -77,6 +92,15 @@ API keys, or exception messages. Logging failures stop the run explicitly.
 line, even while a seat is active, without contacting GitHub. Missing logs
 are shown as unknown/none. Live logs are local managed files, not evidence
 that tests or human AI-Eval passed, and are never staged by the coder.
+
+On the native rewrite branch status requires the explicit issue number.
+`--offline` projects bounded schema-one local log metadata without credentials
+or GitHub access. Without it, complete App credentials and the reviewed SDK
+identity adapter are required for native issue observations and acknowledged
+token revocation; no human authentication is substituted. Optional `--json`
+preserves the distinction between local metadata and the observed issue.
+PR/cache/artifact status and automatic issue inference remain unported; see
+[native status](RUST.md#native-app-scoped-issue-observations).
 
 When no LLM endpoint
 is configured, the deterministic stub writes only the result summary and

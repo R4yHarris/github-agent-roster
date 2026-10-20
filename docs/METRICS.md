@@ -1,6 +1,13 @@
 # Local metrics
 
-[`createChat`](../src/llm/openai.mjs) retains an immutable `lastResponse`
+The native analytics checkpoint implements FEATURE_SPEC **5.6**, **5.2**,
+**5.7** and **5.8**, subject to sections 3, 7 and 8. Its implemented command
+contract is [native stats and recommendations](#native-stats-and-recommendations)
+below. Historical producer/delivery details in this page are behavioral
+reference, not a claim that every producer, GitHub feedback post, fleet route or
+delivery-dimension command has been migrated.
+
+The [native OpenAI transport](../rust/llm/openai.rs) retains an immutable `lastResponse`
 snapshot containing the response's `model` (or the actual request model when
 the response omits it) and reported `usage.prompt_tokens` /
 `usage.completion_tokens`. It retains neither prompts nor response text,
@@ -218,26 +225,49 @@ The printed manual publication instructions include every AI-Run environment
 field. Empty values clear inherited unknown slots; apply those as well as the
 known coder values before running the SDK command directly.
 
-`src/lib/metrics.mjs` reads compact AI-Run JSONL by invoking contracts
-`scripts/export-agent-metrics.mjs` with Node. Contracts resolution checks the
-required contracts submodule first, then `GITHUB_AGENT_CONTRACTS`, then the sibling
-clone; see [the dependency guide](DEPENDENCY.md). It runs against local Git
-history and joins `.roster/runs/*.jsonl` and `.roster/evals.jsonl` when present.
-It does not contact GitHub or any analytics service.
+## Native stats and recommendations
 
-```sh
-node src/cli.mjs stats --ref HEAD --evals evals.jsonl
+[`metrics`](../rust/metrics.rs) reads actual local Git commit objects through
+the existing approved Git/owned-process/cancellation boundary.
+[`run::parse_compact` and `run::parse_message`](../rust/run.rs) parse the pinned
+schema-one compact trailer contract natively; no contracts Node exporter,
+fallback application, GitHub request or model call runs.
+
+```powershell
+$env:ROSTER_GIT = 'C:\Program Files\Git\cmd\git.exe'
+roster stats
+roster stats --json --ref HEAD --evals evals.jsonl
+roster recommend --task-class fix --difficulty 4
+roster recommend --task-class fix --difficulty 4 --json
 ```
 
 `roster stats` accepts `--ref REVISION_OR_RANGE` and optional `--evals PATH`.
 Without `--ref`, it reads `HEAD` and includes local-only runs. With an explicit
 `--ref`, it includes only exported commits in the selected history, enriched by
-matching local records. It never fetches evaluations from GitHub. Code can import
-`loadMetrics({ contractsPath, cwd, ref, evalsPath })`,
-`summarizeMetrics(records)`, and `formatMetrics(groups)`; the module does not
-parse CLI flags. The CLI resolves the current repository root so local learning
-works from subdirectories; library callers supply that root as `cwd` (default:
-the current directory).
+matching local records. It never fetches evaluations from GitHub. Arguments, duplicates, dash operands,
+path selectors and unsafe revision/range syntax are rejected before Git or
+file access. Each revision endpoint is resolved with `--end-of-options` to a
+full commit ID before the bounded log query. Pager, signature display,
+textconv, external diff, hooks, credential helpers, replacement objects and
+lazy fetch are disabled through the existing hardened host. Missing objects,
+invalid refs, unreadable Git providers and a repository without a readable
+HEAD are errors, not empty success.
+
+The CLI resolves the canonical repository, including linked worktrees.
+Local legacy run/evaluation input uses the existing shared-layout resolver:
+`.roster-state/shared/` when present, otherwise repository `.roster/`.
+Issue-worktree scratch is not another repository's learning source.
+A present identity marker must match the current origin-derived identity
+before local history is read. Missing optional history is empty; malformed,
+linked, hard-linked, inaccessible or changing files fail without rewriting,
+quarantining or creating anything.
+
+Library entry points are `metrics::load`, `metrics::load_with_store`,
+`learning::parse_jsonl`, `join_learning`, `summarize_learning`, `recommend`,
+`derive_difficulty_ceilings`, `explain_route_evidence`, `format_metrics`
+and `format_recommendation`. `Analytics` keeps raw rows private and exposes
+only groups, recommendations, ceilings and scoped routing evidence.
+The planner's existing recommendation helper delegates to the same aggregation.
 
 The additional legacy `--evals PATH` file is UTF-8 JSONL, one record per full
 40- or 64-hex-digit commit SHA. Relative paths use the caller's directory:
@@ -252,7 +282,9 @@ remain supported. `loadMetrics` returns joined run records with an `evaluation`
 object or `null` added to each. SHA matching is case-insensitive; unmatched
 legacy evaluations without model/class do not create runs. Self-contained local
 human evaluations can supply learning evidence without an exported run. An explicit `--evals` file's entries override
-local SHA evaluations.
+matching local SHA evaluations. An unmatched external SHA does not create a
+run or assign another session, even if extra metadata is supplied. An extra
+`session` in that legacy file is not session-attribution authority.
 
 The default `.roster/evals.jsonl` uses the stricter human `roster eval` schema:
 at least one SHA or session (both when known), `accept|reject|rework`, integer
@@ -264,43 +296,115 @@ by full SHA or by session and compatible task; known exported fields win.
 Duplicate local run records do not add extra counts. See
 [learning](LEARNING.md) for recording and correction semantics.
 
-Malformed JSONL or fields, unreadable files, and exporter failures raise errors
-with source/line or command context. Missing default learning files are optional;
-a missing explicit `--evals` path is an error.
+Malformed JSONL or fields, unreadable files and Git failures return typed
+errors with safe source/line or provider context. Causes never retain raw
+stderr, credentials or machine paths. Missing default learning files are
+optional; a missing explicit `--evals` path is an error. Full 40- and
+64-character object IDs, case-insensitive SHA joins, latest append-only
+corrections, known-only medians, zero usage and decimal-string legacy counts
+beyond JavaScript's safe-integer range are preserved.
 
-`summarizeMetrics` groups by model, task class, and effort across versions and
-providers. `formatMetrics` keeps `MODEL`, `EFFORT`, `RUNS`, `EVALS` and adds
+`summarize_learning` groups by model, task class and effort across versions and
+providers. `format_metrics` keeps `MODEL`, `EFFORT`, `RUNS`, `EVALS` and adds
 `TASK_CLASS`, unique sample `N`, `ACCEPT` rate, `MEDIAN_MIN`, and
 `MEDIAN_DIFFICULTY`. Unknown values display as `-`; known zero minutes stay zero.
 Effort uses the exporter's `l`, `m`, `h`, `x`, or `-`. Empty history with no local
 evidence prints `No AI-Run records found.` Stats does not select models.
 
+`--json` emits the same aggregate objects as a JSON array, including literal
+`null` unknowns. Table padding uses UTF-16 code units, JavaScript-compatible
+number/percentage formatting and the existing verified en-US ASCII collation.
+Non-ASCII locale ordering is explicitly unproven and refused, not silently
+replaced with UTF-8 byte order.
+
 `roster recommend --task-class fix --difficulty 4` ranks accept-rate only among
-configurations with at least three distinct samples and median difficulty at
-least four. Recorded excellence failures are rejects, not accepts, even when
-tests passed. No qualifying candidate prints insufficient data and config's
-model/effort default. See [learning](LEARNING.md) for exact denominators and
-missing-data handling; there is no hidden score.
+coder configurations with at least three distinct **human** decisions, median
+difficulty at least four, and an earned coder/model ceiling of at least four.
+The default requested difficulty is two. Ceilings start at two, rise only
+after three consecutive clean accepts at the current level, and fall on a
+reject. Recorded defects remain derived rejects through duplicate records and
+later human accepts; no human decision is rewritten. Off-level accepts and
+rework reset the streak. Complete human timelines sort by time; missing times
+retain ledger order.
 
-Run the focused tests with
-`node --test tests/openai.test.mjs tests/run-metrics.test.mjs tests/builtin.*.test.mjs tests/issue-board.test.mjs tests/metrics.test.mjs tests/learn.test.mjs tests/eval.test.mjs`.
+Ranking is accept-rate, sample count, then stable model/effort order.
+The plain output is, for example:
 
-## Delivery evidence
+```text
+fix: capable effort=h accept-rate=100.0% n=3 median-min=20 median-difficulty=4
+```
 
-`roster stats --delivery` (or `/stats --delivery`) groups evidence by actual
-response model, declared fleet hardware, and seat. Add `--json` for stable,
-diffable JSON. CLI history/evaluation selectors still work:
+This is advisory evidence, not an endpoint/profile binding or an implemented
+automatic fleet/prior selector. No candidate prints the existing
+`insufficient data; config default: MODEL effort=TIER` line. `--json` returns
+the recommendation object, or `{"recommendation":null,"message":"..."}`.
+No run is started and no default is changed.
+
+Machine history is optional and **explicit**: only an absolute
+`ROSTER_STATE_HOME` enables an existing `history/<current-identity>/log/`
+provenance read, unless provenance opt-out is set. There is no default user
+home, shell-history, sibling-repository or `.roster`-to-machine fallback.
+Foreign identities are refused before raw store reads; foreign sibling roots
+are never enumerated. Existing typed provenance uses actual served models,
+reported usage and distinct session IDs, never a requested alias or the
+starting `repository.commit` as publication evidence. Curated memory is not
+auto-derived or loaded as raw history. This reader creates no state layout,
+writer, migration or evaluation ledger.
+
+Bounds are explicit: 16 MiB per Git/JSONL source, 1 MiB per JSONL line,
+10,000 learning rows/commit frames, 256 local directory entries and 4 MiB
+formatted output. Legacy/Git input accounting is capped at 32 MiB.
+Normalized join inputs share that 32 MiB budget, while live joined rows
+have a separate 16 MiB compact-JSONL byte budget. Both metadata and evaluation
+fan-out are checked incrementally, including the final attached evaluation.
+The reused provenance reader additionally retains its existing 1 MiB record,
+4,096-entry and 32 MiB store bounds; selected canonical rows also enter the
+learning budget. Over-limit reads fail rather than truncate into zero.
+Recommendation fallback configuration failures also fail without output;
+their typed error names/codes remain available, but raw configuration
+messages, nested causes and private paths are omitted.
+
+Read-only seat acceptance executes the actual compiled CLI plus an
+unknown-option negative control. `--evals` there additionally requires an
+exact, non-private, unlinked, single-link TASK-scoped file before execution.
+Its synthetic HOME/USERPROFILE/state root and
+`ROSTER_ANALYTICS_CONFIG_DEFAULTS_ONLY=true` prevent fallback configuration or
+operator-home reads. A human CLI invocation can explicitly select a checked
+external evaluation file; that does not grant a seat the same scope.
+
+See [learning](LEARNING.md) for denominators and correction semantics.
+
+Focused native checks:
+
+```powershell
+cargo test --lib --locked --offline learning::
+cargo test --lib --locked --offline metrics::
+cargo test --test analytics --locked --offline
+```
+
+## Native delivery-dimension evidence and recurring proposals
+
+`roster stats --delivery [--json]` and `roster learn --recurring` are
+implemented in the native CLI (`rust/learning.rs` and `rust/metrics.rs`).
+Human `eval ... --local` authoring is implemented separately, with explicit
+human `--post` feedback. Interactive shell, resume and automatic routing
+remain separate work.
+
+`roster stats --delivery` groups evidence by actual response model, declared
+fleet hardware, and seat. Add `--json` for stable, diffable JSON. CLI
+history/evaluation selectors still work:
 
 ```sh
 roster stats --delivery --json --ref HEAD --evals evals.jsonl
 ```
 
-The pure `deliveryMetrics(records)` and `formatDeliveryMetrics(groups)` helpers
-live in `src/lib/delivery-metrics.mjs`. `loadMetrics({ delivery: true })` preserves
+The pure `learning::delivery_metrics` and `learning::format_delivery_metrics`
+helpers live in `rust/learning.rs`. `metrics::load` with `delivery: true` preserves
 individual local seat attempts when enriching published commits; ordinary stats
-retains its existing commit/model/effort semantics. Explicit `--ref` still excludes
-unpublished local attempts. Neither stats nor the aggregation contacts an endpoint
-or GitHub, starts seats, or changes staffing decisions.
+retains its existing commit/model/effort semantics and appends open `.roster/proposals`
+drafts in text mode. Explicit `--ref` still excludes unpublished local attempts.
+Neither stats nor `roster learn --recurring` contacts an endpoint or GitHub,
+starts seats, or changes staffing decisions or active rules.
 Published SHA links enrich evaluations, but a final commit's model or usage never
 overwrites the response-backed metadata of an earlier attempt.
 

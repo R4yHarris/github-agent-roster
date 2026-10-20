@@ -646,10 +646,18 @@ impl Evidence {
                 .cloned(),
         );
         selected.extend(options.prior_wave_files.iter().cloned());
-        let required = planning::intake::requirements(
-            &Value::String(boundary.assignment().ask.clone()),
-            true,
-        )?;
+        let combined = match &boundary.assignment().title {
+            Some(title) => Text::from(
+                format!(
+                    "{}\n{}",
+                    title.to_utf8()?,
+                    boundary.assignment().ask.to_utf8()?
+                )
+                .as_str(),
+            ),
+            None => boundary.assignment().ask.clone(),
+        };
+        let required = planning::intake::requirements(&Value::String(combined), true)?;
         for file in &required.files {
             if policy::exact_path(file) {
                 selected.push(file.clone());

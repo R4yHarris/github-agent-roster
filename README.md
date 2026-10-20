@@ -10,8 +10,8 @@ There is no Kanban database, external worker framework or Node runtime fallback.
 
 Ray authorized the full rewrite and explicitly directed this branch to remove
 the Node implementation and oracle-preservation changes. The old application
-and tests remain available on main and in Git history, not as a parallel
-implementation or frozen checkout here.
+and tests remain available in Git history, not as a parallel implementation or
+frozen checkout here. Main now contains the merged Rust checkpoint.
 
 The [Rust library](rust) implements configuration, fleet/capability catalogs,
 lossless JSON/Text, recipes, request/provenance metadata, HTTP/SSE transport,
@@ -22,18 +22,80 @@ The [native CLI](rust/main.rs) currently exposes:
 
 - `roster --help`
 - `roster init` — exclusive examples and a human-owned-policy note, offline.
-- `roster doctor` — offline configuration, approved-image and contracts checks.
+- `roster ask "TEXT"` and `roster ask --pending|--cancel|--resume ["TEXT"]` —
+  issue/draft creation and private clarification checkpoint management.
+- `roster question [--files PATH,PATH --] TEXT` — read-only scoped repository
+  questions from public source excerpts without starting a task or writing files.
+- `roster doctor` and `roster doctor --copilot [--opt-in] [--runtime PATH] [--model ID]`
+  — offline configuration, approved-image, contracts and Copilot blocker checks.
+- `roster fleet list` — read-only configured profile metadata, without endpoint
+  discovery, credential-file access, warming, default changes or automatic routing.
+- `roster history list` and `roster history show` — read-only durable provenance
+  history queries and deterministic `text`, `json` and `summary` exports.
+- `roster clean` — dry-run-by-default state and provenance cleanup with active-lock
+  refusal and explicit `--execute --yes` confirmation.
+- `roster bench` — offline six-field startup, config, worktree, submodule and
+  mocked-round-trip benchmark report.
+- `roster status --issue N [--offline] [--json]` — bounded native issue-log
+  metadata, plus App-authenticated issue observations online. Unknown liveness,
+  verification and PR state stay unknown.
+- `roster stats [--delivery] [--json] [--ref REVISION_OR_RANGE] [--evals PATH]` —
+  bounded, read-only local Git/run/evaluation aggregates and delivery metrics.
+- `roster learn --recurring` — human-reviewable recurring-failure draft proposals
+  under `.roster/proposals`.
+- `roster vault set NAME`, `roster vault list` and `roster vault get NAME` —
+  encrypted local file-vault secret management over non-TTY streams.
+- `roster recommend --task-class feat|fix|docs|test [--difficulty 1-5] [--json]`
+  — advisory human-evidence ranking, constrained by the coder/model ceiling.
+- `roster eval TARGET accept|reject|rework 1-5 y|n --local|--post [--minutes N] [--comment TEXT]`
+  — an explicit human decision; optional posting verifies a human GitHub
+  principal and one commit-associated PR. Private comments remain local.
 - `roster run --seat coder --runtime builtin` — an existing local TASK.
 - `roster run --ask-file PATH --runtime builtin --no-fetch` — a new isolated
   local task, including configured planning, coding and read-only review.
+- `roster run --issue N --runtime builtin --no-fetch` — App-authenticated open
+  issue intake into a fresh `agents/N` worktree and the same sequential seats.
 - `roster recipe validate PATH`
 - `roster catalog parse ROOT FIELD...`
 - `roster arguments split`
 
-GitHub issue delivery/publication, resume, review repair, outer routing,
-vault storage, onboarding and shell remain incomplete. Unsupported commands fail rather than invoke
+GitHub publication/resume, outer routing,
+onboarding and interactive shell remain incomplete. Unsupported commands fail rather than invoke
 Node. Removing old code or passing component tests is not a completed rewrite,
 platform release or harness acceptance claim.
+
+Analytics requires an absolute approved `ROSTER_GIT`, never Node or a metrics
+exporter. Unknown measurements remain unknown. These commands do not record a
+human evaluation, promote history into memory, contact GitHub, or change a
+model/profile assignment. Explicit human evaluation is a separate path;
+it refuses App/agent-declared invocations and never grants policy. `--local`
+does not contact GitHub; `--post` additionally requires an approved absolute
+`ROSTER_GH` and explicit human `GH_TOKEN` or `GITHUB_TOKEN`. It does not borrow
+an operator authentication store or use the App publisher.
+Automatic fleet/prior routing and `stats --delivery` remain unavailable.
+See [local metrics](docs/METRICS.md)
+for selectors, privacy boundaries and native format/platform limits.
+
+Offline status requires an absolute approved `ROSTER_GIT`, but never contacts
+GitHub, loads endpoint configuration or records history. It selects a registered
+base issue worktree, ignores an unfinished trailing record and never emits raw
+log details. Only a missing log permits canonical-repository fallback; corrupt,
+linked or unreadable logs fail explicitly. This is local observation, not a
+review or acceptance receipt. Without `--offline`, status additionally requires
+complete App credentials, the clean reviewed contracts dependency and an
+absolute approved `ROSTER_NODE20` for its identity adapter. Native Rust performs
+the fixed GitHub HTTPS read and acknowledged token revocation; human tokens or
+authentication stores are never substituted. This observes the issue only, not
+its PR, acceptance or task execution. Automatic issue inference, retry selection
+and the broader cached-issue/artifact display remain incomplete.
+
+Fleet listing uses the same checked canonical private settings as native
+delivery, including from linked worktrees. It preserves the tabular profile,
+model, base URL, capacity, concurrency, hardware and task-hint display; the
+onboard-default capacity sentinel remains `unknown`, not invented capacity.
+Notes and key declarations are not displayed, and known credential values are
+redacted. Other fleet commands and onboarding remain unavailable.
+See [fleet scope](docs/FLEET.md#native-scope).
 
 ## Build and check
 
@@ -69,7 +131,8 @@ installation's private config. Linked worktrees share the canonical private
 settings. Without either file, validated built-in defaults select a truthful
 offline stub, not a model. Invalid/private-linked/unreadable settings fail.
 Configured runs need both an endpoint and model; credentials come only from
-explicit environment-key names, not an implemented vault.
+explicit environment-key names or the selected native file vault. Vault
+storage-ownership acceptance remains open; no missing key becomes anonymous auth.
 
 Existing-TASK mode requires clean product source, a strict bounded TASK with
 its unchanged Original Ask, and pre-existing ignore rules for managed
@@ -84,6 +147,16 @@ check/result/review receipts, not a model's `pass` text. Stub and planning-only
 outputs explicitly do **not** claim delivery acceptance. Existing foreign
 artifacts are preserved and refused; automatic resume/repair is not shipped.
 No local mode publishes, creates a fake GitHub issue or closes one.
+
+Issue mode requires complete App credentials, approved Git/Node20 and the
+reviewed contracts dependency. It seals the original calling repository before
+the App metadata await and refuses drift before preparation. Closed issues,
+existing canonical/legacy/attempt branches, known remote claims and occupied
+worktree paths stop rather than being adopted or replaced; native resume is
+still unavailable. A successful configured run uses the same private
+verification/review gates as local delivery. A stub does not edit code or claim
+tests. No issue or PR write, queue-status update, publication or human
+acceptance is implied.
 
 See [installation and host configuration](docs/INSTALL.md) and the exact
 [local-delivery contract](docs/RUST.md#native-local-delivery-checkpoint).
