@@ -88,10 +88,12 @@ pub fn worktree_state_key(root: &Path) -> Result<String, Error> {
     let root = root
         .to_str()
         .ok_or_else(|| Error::type_error("Worktree path must contain valid Unicode"))?;
-    Ok(format!(
-        "wt-{}",
-        &sha256_hex(root.to_lowercase().as_bytes())[..16]
-    ))
+    let normalized = if cfg!(windows) {
+        root.to_lowercase()
+    } else {
+        root.to_owned()
+    };
+    Ok(format!("wt-{}", &sha256_hex(normalized.as_bytes())[..16]))
 }
 
 pub fn resolve_directory(
