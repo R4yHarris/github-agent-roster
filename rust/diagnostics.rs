@@ -1648,13 +1648,33 @@ pub fn redact_root(root: &str, home: Option<&str>) -> String {
     let sep = if root.contains('\\') { '\\' } else { '/' };
     let mut display = root.to_owned();
     if let Some(home) = home.filter(|h| !h.is_empty()) {
-        let prefix = if home.ends_with(sep) {
-            home.to_owned()
+        let matches_home = if cfg!(windows) {
+            let norm_root = root.replace('/', "\\").to_ascii_lowercase();
+            let norm_home = home
+                .replace('/', "\\")
+                .trim_end_matches('\\')
+                .to_ascii_lowercase();
+            let norm_prefix = format!("{norm_home}\\");
+            if norm_root == norm_home {
+                Some("")
+            } else if norm_root.starts_with(&norm_prefix) {
+                root.get(norm_home.len()..)
+            } else {
+                None
+            }
         } else {
-            format!("{home}{sep}")
+            let trimmed_home = home.trim_end_matches(sep);
+            let prefix = format!("{trimmed_home}{sep}");
+            if root == trimmed_home || root == home {
+                Some("")
+            } else if root.starts_with(&prefix) {
+                root.get(trimmed_home.len()..)
+            } else {
+                None
+            }
         };
-        if root == home || root.starts_with(&prefix) {
-            display = format!("~{}", &root[home.len()..]);
+        if let Some(rest) = matches_home {
+            display = format!("~{rest}");
         }
     }
     let segments = display
@@ -1678,18 +1698,36 @@ pub fn redact_line(value: &str) -> String {
     ) else {
         return value.to_owned();
     };
-    value
-        .split_whitespace()
-        .map(|word| {
-            if let Some((prefix, _)) = word.split_once('=') {
-                if re.is_match(word) {
-                    return format!("{prefix}=<redacted>");
-                }
+    let words = value.split_whitespace().collect::<Vec<_>>();
+    let mut out = Vec::with_capacity(words.len());
+    let mut idx = 0;
+    while idx < words.len() {
+        let word = words[idx];
+        if let Some((prefix, _)) = word.split_once('=') {
+            if re.is_match(prefix) {
+                out.push(format!("{prefix}=<redacted>"));
+                idx += 1;
+                continue;
             }
-            word.to_owned()
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+        }
+        if let Some(prefix) = word.strip_suffix(':') {
+            if re.is_match(prefix) && idx + 1 < words.len() {
+                out.push(format!("{prefix}:"));
+                if words[idx + 1].eq_ignore_ascii_case("bearer") && idx + 2 < words.len() {
+                    out.push(words[idx + 1].to_owned());
+                    out.push("<redacted>".to_owned());
+                    idx += 3;
+                } else {
+                    out.push("<redacted>".to_owned());
+                    idx += 2;
+                }
+                continue;
+            }
+        }
+        out.push(word.to_owned());
+        idx += 1;
+    }
+    out.join(" ")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1773,20 +1811,41 @@ pub async fn warm_doctor<T: crate::llm::http::Transport>(
         headers,
         body: Vec::new(),
     };
-    let response = match tokio::time::timeout(
+    let (status, body_bytes) = match tokio::time::timeout(
         std::time::Duration::from_millis(u64::from(timeout_ms)),
-        transport.send(&req),
+        async {
+            let res = transport.send(&req).await.map_err(|_| {
+                Error::new(
+                    "ChatError",
+                    "Warming probe request failed. Check the endpoint and connection.",
+                )
+                .coded("network")
+            })?;
+            if !(200..=299).contains(&res.status) {
+                return Err(Error::new(
+                    "ChatError",
+                    format!("Warming probe failed (HTTP {}).", res.status),
+                )
+                .coded("http"));
+            }
+            let mut bytes = Vec::new();
+            if let Some(mut body) = res.body {
+                while let Some(chunk) = body.read().await.map_err(|_| {
+                    Error::new("ChatError", "Warming probe did not return model JSON.")
+                })? {
+                    token.check()?;
+                    bytes.extend_from_slice(&chunk);
+                }
+            }
+            Ok::<(u16, Vec<u8>), Error>((res.status, bytes))
+        },
     )
     .await
     {
-        Ok(Ok(res)) => res,
-        Ok(Err(_)) => {
+        Ok(Ok(pair)) => pair,
+        Ok(Err(err)) => {
             token.check()?;
-            return Err(Error::new(
-                "ChatError",
-                "Warming probe request failed. Check the endpoint and connection.",
-            )
-            .coded("network"));
+            return Err(err);
         }
         Err(_) => {
             token.check()?;
@@ -1800,23 +1859,6 @@ pub async fn warm_doctor<T: crate::llm::http::Transport>(
             return Err(Error::new("ChatError", msg).coded("ROSTER_LLM_TIMEOUT"));
         }
     };
-    if !(200..=299).contains(&response.status) {
-        return Err(Error::new(
-            "ChatError",
-            format!("Warming probe failed (HTTP {}).", response.status),
-        )
-        .coded("http"));
-    }
-    let mut body_bytes = Vec::new();
-    if let Some(mut body) = response.body {
-        while let Some(chunk) = body
-            .read()
-            .await
-            .map_err(|_| Error::new("ChatError", "Warming probe did not return model JSON."))?
-        {
-            body_bytes.extend_from_slice(&chunk);
-        }
-    }
     let text = String::from_utf8(body_bytes)
         .map_err(|_| Error::new("ChatError", "Warming probe did not return model JSON."))?;
     let payload = json::parse(&Text::from(text.as_str()))
@@ -1828,13 +1870,10 @@ pub async fn warm_doctor<T: crate::llm::http::Transport>(
     if !has_models {
         return Err(Error::new("ChatError", "Warming probe returned no models."));
     }
-    stderr_log.push_str(&format!(
-        "warming probe ok host={host} status={}\n",
-        response.status
-    ));
+    stderr_log.push_str(&format!("warming probe ok host={host} status={status}\n"));
     Ok(WarmDoctorReport {
         skipped: false,
-        status: Some(response.status),
+        status: Some(status),
         stderr_log,
     })
 }
@@ -2075,6 +2114,15 @@ mod tests {
         assert_eq!(
             redact_line("failed with api_key=secret123456 ok=1"),
             "failed with api_key=<redacted> ok=1"
+        );
+        assert_eq!(
+            redact_line("Authorization: Bearer topsecret123"),
+            "Authorization: Bearer <redacted>"
+        );
+        #[cfg(windows)]
+        assert_eq!(
+            redact_root("C:\\Users\\Alice\\projects\\roster", Some("c:/users/alice")),
+            "~\\\u{2026}\\roster"
         );
         Ok(())
     }

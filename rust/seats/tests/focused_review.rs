@@ -4,7 +4,7 @@ use crate::llm::openai::Completion;
 
 mod controls;
 
-fn cargo_failure_diagnostics(failures: &[Value]) -> Result<String, Error> {
+fn cargo_failure_diagnostics(container: &Path, failures: &[Value]) -> Result<String, Error> {
     let mut records = Vec::new();
     let mut summary = Vec::new();
     let mut previous = String::new();
@@ -75,7 +75,7 @@ fn cargo_failure_diagnostics(failures: &[Value]) -> Result<String, Error> {
         std::process::id(),
         SEQUENCE.fetch_add(1, Ordering::Relaxed)
     );
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(&name);
+    let path = container.join(&name);
     let json = Value::Array(records).json();
     if json.len() > 131_072 {
         return Err(Error::type_error(
@@ -326,7 +326,7 @@ async fn review_repro_actual_cargo_timing_changes_cannot_extend_repeated_failure
             coder.failure(),
             failures.len()
         );
-        let diagnostics = cargo_failure_diagnostics(failures)?;
+        let diagnostics = cargo_failure_diagnostics(&fixture.container, failures)?;
         eprintln!("Actual Cargo failure transitions: {diagnostics}");
         assert_eq!(failures.len(), 3, "{diagnostics}");
         assert_eq!(transport.requests.len(), 4);
@@ -414,7 +414,7 @@ async fn review_repro_native_cache_rebuild_cannot_count_as_test_repair_progress(
             .ok_or_else(|| {
                 Error::type_error("Actual native cache-rebuild failure history missing")
             })?;
-        let diagnostics = cargo_failure_diagnostics(failures)?;
+        let diagnostics = cargo_failure_diagnostics(&fixture.container, failures)?;
         eprintln!("Actual Cargo cache-rebuild transitions: {diagnostics}");
         assert!(
             failures

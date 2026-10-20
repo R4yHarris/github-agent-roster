@@ -1301,7 +1301,16 @@ pub fn without_llm_keys(env: &Value, config: &Value) -> Result<Value, Error> {
         let Value::Object(entries) = &mut clean else {
             return Err(Error::type_error("Native environment must be an object"));
         };
-        entries.retain(|(key, _)| key != name);
+        entries.retain(|(key, _)| {
+            if cfg!(windows) {
+                match (key.to_utf8(), name.to_utf8()) {
+                    (Ok(k), Ok(n)) => !k.eq_ignore_ascii_case(&n),
+                    _ => key != name,
+                }
+            } else {
+                key != name
+            }
+        });
     }
     Ok(clean)
 }

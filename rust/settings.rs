@@ -272,10 +272,11 @@ struct Prepared {
 }
 
 fn write_new(file: &Path, source: &Text) -> Result<(), Error> {
+    let utf8 = source.to_utf8()?;
     let mut handle = files::create_private_file(file)
         .map_err(|error| io_error("Create private settings", error))?;
     handle
-        .write_all(String::from_utf16_lossy(&source.0).as_bytes())
+        .write_all(utf8.as_bytes())
         .and_then(|()| handle.sync_all())
         .map_err(|error| io_error("Write private settings", error))
 }

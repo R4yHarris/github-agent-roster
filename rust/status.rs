@@ -382,7 +382,13 @@ pub async fn read<T: crate::llm::http::Transport>(
     )
     .await?;
     issue.require_current(token).await?;
-    domain::put(&mut observed.value, "github_issue", issue.metadata())?;
+    let redaction = redaction::Config {
+        environment: environment.clone(),
+        ..Default::default()
+    };
+    redaction.validate()?;
+    let redacted_issue = redaction::record(&issue.metadata(), &redaction)?;
+    domain::put(&mut observed.value, "github_issue", redacted_issue)?;
     token.check()?;
     Ok(observed)
 }

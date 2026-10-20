@@ -214,7 +214,7 @@ tie-break. Neither is a parallel-execution command.
 A fleet route carries its profile ID and `concurrency` into the seat's LLM
 config. Every chat request through that profile, from any seat in the same
 Roster process, first takes an in-process
-[admission](../src/runtime/admission.mjs) slot. At most `concurrency` requests
+[admission](../rust/llm/admission.rs) slot. At most `concurrency` requests
 are in flight per profile; later requests wait in FIFO order. The slot is held
 only for one HTTP attempt and is released on success, error, or abort, and an
 aborted waiter leaves the queue without consuming a slot.

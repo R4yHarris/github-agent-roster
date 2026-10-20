@@ -2,7 +2,7 @@
 
 A coder is one bounded principal executing one TASK.md, not a chat, worker
 swarm, second queue, or new runtime. The same
-[`runCoder`](../src/seats/coder.mjs) implementation serves the issue pipeline,
+[`run_coder`](../rust/seats/coder.rs) implementation serves the issue pipeline,
 the offline demo, and an already-planned standalone task.
 
 ## Ordered contract

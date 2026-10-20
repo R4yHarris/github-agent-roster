@@ -438,6 +438,20 @@ impl Progress {
             &stderr,
             tests.get("native") == Some(&Value::Boolean(true)),
         )?;
+        let take_utf16_prefix = |units: &[u16], limit: usize| -> Text {
+            if units.len() <= limit {
+                return Text(units.to_vec());
+            }
+            let mut end = limit;
+            if matches!(units.get(end.saturating_sub(1)), Some(0xd800..=0xdbff))
+                && matches!(units.get(end), Some(0xdc00..=0xdfff))
+            {
+                end = end.saturating_sub(1);
+            }
+            Text(units[..end].to_vec())
+        };
+        let fp_units = fingerprint.encode_utf16().collect::<Vec<_>>();
+        let out_text = Text::from(output.as_str());
         self.test_failures.push(Value::object(vec![
             ("exit", Value::Number(exit as f64)),
             (
@@ -446,21 +460,12 @@ impl Progress {
             ),
             (
                 "identity",
-                Value::String(Text(fingerprint.encode_utf16().take(8192).collect())),
+                Value::String(take_utf16_prefix(&fp_units, 8192)),
             ),
-            (
-                "identityComplete",
-                Value::Boolean(fingerprint.encode_utf16().count() <= 8192),
-            ),
+            ("identityComplete", Value::Boolean(fp_units.len() <= 8192)),
             (
                 "output",
-                Value::String(Text(
-                    Text::from(output.as_str())
-                        .0
-                        .into_iter()
-                        .take(8192)
-                        .collect(),
-                )),
+                Value::String(take_utf16_prefix(&out_text.0, 8192)),
             ),
         ]));
         let repeated = !self
@@ -511,9 +516,14 @@ impl Progress {
         self.repairs += 1;
         let mut feedback = Text::from(format!("Actual approved tests failed (exit {exit}). Repair {} of {}. No change is verified. Repair only task-authorized files, do not weaken checks or classify unmeasured failures as preexisting. Change strategy instead of repeating a failed repair.\n\n", self.repairs, self.repair_budget).as_str());
         let tail = Text::from(output.as_str());
-        feedback
-            .0
-            .extend(tail.0.iter().skip(tail.0.len().saturating_sub(4096)));
+        let mut start = tail.0.len().saturating_sub(4096);
+        if start > 0
+            && matches!(tail.0.get(start), Some(0xdc00..=0xdfff))
+            && matches!(tail.0.get(start - 1), Some(0xd800..=0xdbff))
+        {
+            start += 1;
+        }
+        feedback.0.extend(tail.0.iter().skip(start));
         Ok(feedback)
     }
 }

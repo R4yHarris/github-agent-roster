@@ -581,11 +581,12 @@ fn walk(
             };
             if history && !keep_home {
                 if let Some(home) = config.home.as_ref().filter(|home| !home.0.is_empty()) {
-                    if text.0.starts_with(&home.0)
-                        && text
-                            .0
-                            .get(home.0.len())
-                            .is_some_and(|unit| matches!(*unit, 47 | 92))
+                    if text.0 == home.0
+                        || (text.0.starts_with(&home.0)
+                            && text
+                                .0
+                                .get(home.0.len())
+                                .is_some_and(|unit| matches!(*unit, 47 | 92)))
                     {
                         let mut masked = Text::from("~");
                         masked

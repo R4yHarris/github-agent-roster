@@ -92,6 +92,12 @@ pub fn evaluate_retention(
             )
         })?;
     let expires = created + window;
+    if !expires.is_finite() {
+        return Err(invalid(
+            "E_RETENTION_WINDOW",
+            "evaluateRetention requires a positive finite windowMs.",
+        ));
+    }
     let expired = now_ms > expires;
     Ok(RetentionDecision {
         keep: !expired,

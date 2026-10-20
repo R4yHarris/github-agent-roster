@@ -287,6 +287,14 @@ fn copilot_doctor_cli_reports_blocked_offline_readiness_and_never_echoes_secret_
     Ok(())
 }
 
+struct TempDirGuard(std::path::PathBuf);
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 #[test]
 fn cli_ask_clarification_checkpoint_and_question_subcommands()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -297,6 +305,7 @@ fn cli_ask_clarification_checkpoint_and_question_subcommands()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_nanos()
     ));
+    let _guard = TempDirGuard(root.clone());
     std::fs::create_dir_all(root.join("src"))?;
     std::fs::write(
         root.join("src").join("api.mjs"),
@@ -395,6 +404,7 @@ fn cli_clean_dry_run_confirmation_and_execution() -> Result<(), Box<dyn std::err
             .duration_since(std::time::UNIX_EPOCH)?
             .as_nanos()
     ));
+    let _guard = TempDirGuard(state_root.clone());
     std::fs::create_dir_all(state_root.join("alpha"))?;
     std::fs::write(state_root.join("alpha").join("data.txt"), "alpha")?;
     std::fs::write(state_root.join("keep.json"), "{}")?;
@@ -454,6 +464,7 @@ fn cli_vault_set_list_and_get_roundtrip() -> Result<(), Box<dyn std::error::Erro
             .duration_since(std::time::UNIX_EPOCH)?
             .as_nanos()
     ));
+    let _guard = TempDirGuard(home.clone());
     std::fs::create_dir_all(&home)?;
 
     let run_vault = |args: &[&str],
@@ -546,6 +557,7 @@ fn cli_bench_writes_six_numeric_secret_free_timings() -> Result<(), Box<dyn std:
                 .duration_since(std::time::UNIX_EPOCH)?
                 .as_nanos()
         ));
+        let _guard = TempDirGuard(dir.clone());
         std::fs::create_dir_all(&dir)?;
 
         let out = Command::new(env!("CARGO_BIN_EXE_roster"))

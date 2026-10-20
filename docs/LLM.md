@@ -6,7 +6,7 @@ a hosted service implicitly.
 
 ## First profile: vllm-local (DGX Spark)
 
-[`createChat`](../src/llm/openai.mjs) accepts an in-memory configuration object
+[`Client::new`](../rust/llm/openai.rs) accepts an in-memory configuration object
 with an `llm` section. The first endpoint recipe uses the **vLLM OpenAI API
 on DGX Spark**. This loopback example assumes Roster runs on the same host:
 
@@ -89,8 +89,8 @@ stub in that case. `roster prepare` uses
 The existing builtin coder loop calls this
 factory; it does not add a separate runner, planner, or task queue.
 
-The builtin [planner](../src/planner/stub.mjs) and
-[coder](../src/runtime/loop.mjs) use this client through a shared adapter
+The builtin [planner](../rust/planning/lifecycle.rs) and
+[coder](../rust/seats/coder.rs) use this client through a shared adapter
 when `.roster/config.yml` sets the vLLM URL in `llm.base_url` or selects
 `llm.profile` for vLLM, Ollama, LM Studio, or OpenAI. The resolved
 `llm.api_key_env` is both the environment-variable and vault entry name:
@@ -238,7 +238,7 @@ const config = {
 };
 ```
 
-[`resolveSecret`](../src/lib/secrets.mjs) checks the named environment
+[`resolve_secret`](../rust/secrets.rs) checks the named environment
 variable first. A non-empty value wins without opening the vault. An unset
 or empty variable falls back to the same vault name; a missing entry returns
 `undefined`. Vault failures are errors, not missing-key fallbacks.
@@ -269,7 +269,7 @@ only when stdout is redirected or piped; it refuses an interactive terminal
 and errors on a missing name. The interactive shell's `/vault get NAME`
 reports presence without revealing the value.
 
-The [`createFileVault`](../src/vault/file.mjs) API exposes async `set(name,
+The [`FileVault`](../rust/vault.rs) API exposes `set(name,
 value)`, `get(name)` and `list()` methods. Names are case-sensitive, 1-64
 ASCII letters/digits/underscores and start with a letter or underscore.
 Missing entries return `undefined`; listing a missing vault returns `[]`.

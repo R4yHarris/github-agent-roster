@@ -367,9 +367,10 @@ async fn repository_identity(
         ));
     }
     let local = !origin.contains("://")
-        && origin
-            .split_once(':')
-            .is_none_or(|(host, _)| host.contains(['/', '\\']));
+        && origin.split_once(':').is_none_or(|(host, _)| {
+            host.contains(['/', '\\'])
+                || (host.len() == 1 && host.as_bytes()[0].is_ascii_alphabetic())
+        });
     identity::identity_hash(&if local {
         Text::from(
             paths::resolve(root, Path::new(&origin))?
