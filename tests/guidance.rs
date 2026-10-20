@@ -57,12 +57,7 @@ fn rust_and_cargo_instructions_have_scoped_discovery_and_no_node_preservation_ru
     assert!(!root.join("package.json").exists());
     assert!(!root.join("src").join("cli.mjs").exists());
     assert!(!root.join("scripts").join("legacy-oracle.mjs").exists());
-    assert!(
-        !root
-            .join("scripts")
-            .join("check-roster-scope.mjs")
-            .exists()
-    );
+    assert!(!root.join("scripts").join("check-roster-scope.mjs").exists());
     assert!(
         !root
             .join("scripts")
