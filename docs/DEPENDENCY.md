@@ -236,12 +236,11 @@ hardware claims.
 
 The [composite action](../.github/actions/check-agent-trailers/action.yml)
 passes the PR base and head SHAs to the pinned submodule's
-`scripts/check-pr-agent-trailers.mjs`, rather than the roster's local copy.
+`scripts/check-pr-agent-trailers.mjs`.
 The human-owned [workflow](../.github/workflows/check-agent-trailers.yml) must
 check out full history with `persist-credentials: false` and
 `submodules: recursive`, then use Node 20 before running that action. Do not
 check out the base revision before the local action: that replaces the PR
-checkout and can leave its checker without required files. The workflow also
-needs a separate `tests` job running `node --test tests/*.test.mjs` on Node 20.
+checkout and can leave its checker without required files.
 
-Run the Node 20+ ESM tests with `npm test`. No runtime packages are required.
+Run the native Rust tests with `cargo test --locked`. No Node application runtime or npm packages are used.
