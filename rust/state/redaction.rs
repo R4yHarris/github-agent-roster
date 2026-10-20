@@ -416,7 +416,7 @@ fn assignment(units: &[u16], position: usize, secret: bool) -> Option<(usize, Te
         key_end += 1;
     }
     let key = units.get(position..key_end)?;
-    let key_string = String::from_utf16_lossy(key);
+    let key_string = String::from_utf16_lossy(key).to_ascii_lowercase();
     if if secret {
         !key_string.contains("secret")
     } else {
@@ -443,14 +443,24 @@ fn assignment(units: &[u16], position: usize, secret: bool) -> Option<(usize, Te
     let first = *units.get(value_start)?;
     let quoted = matches!(first, 34 | 39);
     let end = if quoted {
-        let relative = units
-            .get(value_start + 1..)?
-            .iter()
-            .position(|unit| *unit == first)?;
-        if relative == 0 {
+        let mut cursor = value_start + 1;
+        let mut close = None;
+        while let Some(&unit) = units.get(cursor) {
+            if unit == 92 {
+                cursor += 2;
+                continue;
+            }
+            if unit == first {
+                close = Some(cursor);
+                break;
+            }
+            cursor += 1;
+        }
+        let close = close?;
+        if close == value_start + 1 {
             return None;
         }
-        value_start + relative + 2
+        close + 1
     } else {
         let mut end = value_start;
         while units

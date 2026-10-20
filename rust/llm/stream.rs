@@ -273,11 +273,11 @@ impl StreamDecoder {
             else {
                 continue;
             };
-            self.frames += 1;
             if ascii(field, "[DONE]") {
                 self.done = true;
                 continue;
             }
+            self.frames += 1;
             let chunk = json::parse(&Text(field.to_vec())).map_err(|_| Failure::json())?;
             self.assembler.push(&chunk);
             if let Some(text) = chunk
