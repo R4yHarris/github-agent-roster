@@ -188,8 +188,15 @@ impl<T: Transport> Transport for TransportBudget<'_, T> {
         );
         self.budget.last_started_ms.set(self.budget.elapsed_ms());
         self.budget.pending.set(true);
+        struct PendingGuard<'a>(&'a std::cell::Cell<bool>);
+        impl Drop for PendingGuard<'_> {
+            fn drop(&mut self) {
+                self.0.set(false);
+            }
+        }
+        let guard = PendingGuard(&self.budget.pending);
         let response = self.transport.send(request).await;
-        self.budget.pending.set(false);
+        drop(guard);
         self.budget.last_finished_ms.set(self.budget.elapsed_ms());
         if let Err(failure) = &response {
             let mut first = self.budget.first_transport_error.borrow_mut();

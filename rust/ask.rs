@@ -2005,6 +2005,21 @@ pub async fn submit_ask<T: Transport>(
         ));
     }
     let repository = github_repository(origin.trim())?;
+    let api_key_env = options
+        .config
+        .get("llm")
+        .and_then(|llm| llm.get("api_key_env"))
+        .and_then(Value::as_string)
+        .map(Text::to_utf8)
+        .transpose()?;
+    if redact_evidence_str(title, options.env, api_key_env.as_deref())? != title
+        || redact_evidence_str(&body, options.env, api_key_env.as_deref())? != body
+    {
+        return Err(Error::new(
+            "Error",
+            "Ask contains secret material; refusing to publish a GitHub issue",
+        ));
+    }
     let response = run_cmd(
         "gh",
         &[

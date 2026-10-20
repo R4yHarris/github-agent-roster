@@ -413,7 +413,7 @@ pub(super) fn readme_status(boundary: &tools::Boundary) -> Result<bool, Error> {
     let mut in_status = false;
     let mut lines = 0;
     let fence = execution::regex(r"^ {0,3}(?:`{3,}|~{3,})")?;
-    let heading = execution::regex(r"^#{1,2}\s+")?;
+    let heading = execution::regex(r"^#{1,6}\s+")?;
     for line in source.split('\n') {
         if fence.is_match(line) {
             fenced = !fenced;

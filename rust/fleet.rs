@@ -1596,32 +1596,36 @@ pub async fn probe_model_details<T: crate::llm::http::Transport>(
         headers,
         body: Vec::new(),
     };
-    let response = match tokio::time::timeout(
-        std::time::Duration::from_millis(effective_timeout),
-        transport.send(&req),
-    )
-    .await
-    {
-        Ok(Ok(res)) => res,
-        Ok(Err(_)) => return Err(Error::new("ModelProbeError", "network")),
-        Err(_) => return Err(Error::new("ModelProbeError", "timeout")),
-    };
-    if !(200..300).contains(&response.status) {
-        return Err(Error::new(
-            "ModelProbeError",
-            format!("HTTP {} auth={auth_source}", response.status),
-        ));
-    }
-    let mut body_bytes = Vec::new();
-    if let Some(mut body) = response.body {
-        while let Some(chunk) = body
-            .read()
-            .await
-            .map_err(|_| Error::new("ModelProbeError", "invalid response"))?
+    let body_bytes =
+        match tokio::time::timeout(std::time::Duration::from_millis(effective_timeout), async {
+            let res = transport
+                .send(&req)
+                .await
+                .map_err(|_| Error::new("ModelProbeError", "network"))?;
+            if !(200..300).contains(&res.status) {
+                return Err(Error::new(
+                    "ModelProbeError",
+                    format!("HTTP {} auth={auth_source}", res.status),
+                ));
+            }
+            let mut bytes = Vec::new();
+            if let Some(mut body) = res.body {
+                while let Some(chunk) = body
+                    .read()
+                    .await
+                    .map_err(|_| Error::new("ModelProbeError", "invalid response"))?
+                {
+                    bytes.extend_from_slice(&chunk);
+                }
+            }
+            Ok::<Vec<u8>, Error>(bytes)
+        })
+        .await
         {
-            body_bytes.extend_from_slice(&chunk);
-        }
-    }
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(err)) => return Err(err),
+            Err(_) => return Err(Error::new("ModelProbeError", "timeout")),
+        };
     let text = String::from_utf8(body_bytes)
         .map_err(|_| Error::new("ModelProbeError", "invalid response"))?;
     let payload = crate::json::parse(&Text::from(text.as_str()))

@@ -405,7 +405,14 @@ async fn native(
                 })
                 .await
                 .map_err(|error| {
-                    delivery::safe_invocation_error(&error, &loaded, &credentials).unwrap_or(error)
+                    delivery::safe_invocation_error(&error, &loaded, &credentials).unwrap_or_else(
+                        |_| {
+                            Error::new(
+                                "Error",
+                                "Delivery failed; diagnostic details were omitted to protect credentials.",
+                            )
+                        },
+                    )
                 })?;
                 let diagnostic = result
                     .failure
