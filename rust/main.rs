@@ -5,8 +5,8 @@ use std::process::ExitCode;
 
 use github_agent_roster::text::Text;
 use github_agent_roster::{
-    Error, arguments, cancel, catalog, config, delivery, evaluation, execution, host, json,
-    learning, llm, local_cli, metrics, recipe, start, status,
+    Error, arguments, ask, cancel, catalog, config, delivery, diagnostics, evaluation, execution,
+    host, json, learning, llm, local_cli, metrics, paths, recipe, start, status,
 };
 
 const MAX_INPUT_BYTES: u64 = 4 * 1024 * 1024;
@@ -74,15 +74,33 @@ async fn native(
 ) -> Result<Output, Error> {
     let source = cancel::CancellationSource::default();
     let token = source.token();
-    let operation = async {
+    let mut operation = Box::pin(async {
         match command {
             local_cli::Command::Stats(flags) => {
                 let evidence = metrics::load(cwd, environment, &flags.metrics, &token).await?;
-                let groups = evidence.groups()?;
-                let output = if flags.json {
-                    learning::bounded_output(format!("{}\n", json::Value::Array(groups).pretty()))?
+                let output = if flags.metrics.delivery {
+                    let groups = evidence.delivery_groups()?;
+                    if flags.json {
+                        learning::bounded_output(format!(
+                            "{}\n",
+                            json::Value::Array(groups).pretty()
+                        ))?
+                    } else {
+                        learning::format_delivery_metrics(&groups)?
+                    }
                 } else {
-                    learning::format_metrics(&groups)?
+                    let groups = evidence.groups()?;
+                    if flags.json {
+                        learning::bounded_output(format!(
+                            "{}\n",
+                            json::Value::Array(groups).pretty()
+                        ))?
+                    } else {
+                        let mut table = learning::format_metrics(&groups)?;
+                        let proposals = metrics::list_failure_proposals(cwd)?;
+                        table.push_str(&learning::format_failure_proposals(&proposals)?);
+                        learning::bounded_output(table)?
+                    }
                 };
                 tokio::task::yield_now().await;
                 token.check()?;
@@ -184,6 +202,113 @@ async fn native(
                 };
                 Ok(Output::success(observed.format(options.json)?))
             }
+            local_cli::Command::Question(words) => {
+                let text = ask::repository_question_text(&words)?;
+                let loaded = config::load(installation, cwd, environment)?;
+                let mut transport =
+                    llm::http::HttpTransport::new().map_err(|failure| *failure.error)?;
+                let mut options = ask::QuestionOptions {
+                    cwd,
+                    config: loaded.config.as_value(),
+                    env: Some(environment),
+                    vault: None,
+                    transport: &mut transport,
+                    signal: Some(&token),
+                };
+                let result = Box::pin(ask::answer_repository_question(&text, &mut options)).await?;
+                Ok(Output::success(format!("{}\n", result.answer)))
+            }
+            local_cli::Command::Ask(action) => {
+                let loaded = config::load(installation, cwd, environment)?;
+                let project_root = paths::resolve_project_root(cwd)?;
+                let api_key_env = loaded
+                    .config
+                    .as_value()
+                    .get("llm")
+                    .and_then(|llm| llm.get("api_key_env"))
+                    .and_then(json::Value::as_string)
+                    .map(Text::to_utf8)
+                    .transpose()?;
+                let checkpoint_options = ask::ClarificationOptions {
+                    repo_root: &project_root,
+                    env: Some(environment),
+                    api_key_env: api_key_env.as_deref(),
+                    id: None,
+                };
+                match action {
+                    local_cli::AskCommand::Pending => {
+                        let record = ask::read_clarification(&checkpoint_options)?;
+                        Ok(Output::success(ask::format_clarification_checkpoint(
+                            record.as_ref(),
+                            false,
+                        )?))
+                    }
+                    local_cli::AskCommand::Cancel => {
+                        let cancelled = ask::cancel_clarification(&checkpoint_options)?;
+                        Ok(Output::success(if cancelled {
+                            "Clarification cancelled. No new execution or publication started.\n"
+                                .to_owned()
+                        } else {
+                            "No pending clarification.\n".to_owned()
+                        }))
+                    }
+                    local_cli::AskCommand::Resume(answer) => {
+                        let resumed =
+                            ask::resume_clarification(answer.as_deref(), &checkpoint_options)?;
+                        let mut transport =
+                            llm::http::HttpTransport::new().map_err(|failure| *failure.error)?;
+                        let mut submit_options = ask::SubmitAskOptions {
+                            cwd,
+                            repo_root: &project_root,
+                            checkpoint_root: &project_root,
+                            config: loaded.config.as_value(),
+                            env: Some(environment),
+                            id: None,
+                            vault: None,
+                            transport: &mut transport,
+                            signal: Some(&token),
+                            run_command: None,
+                        };
+                        let result =
+                            Box::pin(ask::submit_ask(&resumed.ask, &mut submit_options)).await?;
+                        ask::cancel_clarification(&ask::ClarificationOptions {
+                            id: Some(&resumed.record.id),
+                            ..checkpoint_options
+                        })?;
+                        Ok(Output::success(ask::format_ask(&result)))
+                    }
+                    local_cli::AskCommand::Submit(text) => {
+                        let mut transport =
+                            llm::http::HttpTransport::new().map_err(|failure| *failure.error)?;
+                        let mut submit_options = ask::SubmitAskOptions {
+                            cwd,
+                            repo_root: installation,
+                            checkpoint_root: &project_root,
+                            config: loaded.config.as_value(),
+                            env: Some(environment),
+                            id: None,
+                            vault: None,
+                            transport: &mut transport,
+                            signal: Some(&token),
+                            run_command: None,
+                        };
+                        let result = Box::pin(ask::submit_ask(&text, &mut submit_options)).await?;
+                        Ok(Output::success(ask::format_ask(&result)))
+                    }
+                }
+            }
+            local_cli::Command::Clean(options) => {
+                use std::io::IsTerminal;
+                let output = Box::pin(github_agent_roster::state::clean::run_cli(
+                    &options,
+                    cwd,
+                    environment,
+                    io::stdout().is_terminal(),
+                    Some(&token),
+                ))
+                .await?;
+                Ok(Output::success(output))
+            }
             local_cli::Command::Doctor => {
                 let result = local_cli::doctor(installation, cwd, environment, &token).await?;
                 Ok(Output {
@@ -193,6 +318,9 @@ async fn native(
                 })
             }
             local_cli::Command::Run(flags) => {
+                if matches!(flags.input, delivery::Input::GitHubIssue(_)) {
+                    github_agent_roster::github::validate_app_configuration(environment)?;
+                }
                 let loaded = config::load(installation, cwd, environment)?;
                 if flags.skip_review && config::is_review_required(loaded.config.as_value())? {
                     return Err(Error::type_error(
@@ -238,21 +366,42 @@ async fn native(
                 };
                 let mut ownership = delivery::Ownership::default();
                 let result = execution::controls::with_task_deadline(&token, timeout, |token| {
-                    Box::pin(driver.run_local(
-                        delivery::Options {
-                            cwd,
-                            installation,
-                            loaded: &loaded,
-                            input: flags.input,
-                            host,
-                            approval,
-                            start,
-                            fetch,
-                            skip_review: flags.skip_review,
-                        },
-                        token,
-                        &mut ownership,
-                    ))
+                    let driver = &mut driver;
+                    let ownership = &mut ownership;
+                    let loaded = &loaded;
+                    Box::pin(async move {
+                        let input = match flags.input {
+                            delivery::Input::GitHubIssue(number) => {
+                                Box::pin(delivery::resolve_issue(
+                                    driver.transport,
+                                    installation,
+                                    cwd,
+                                    environment,
+                                    &host,
+                                    number,
+                                    &token,
+                                ))
+                                .await?
+                            }
+                            input => input,
+                        };
+                        Box::pin(driver.run_local(
+                            delivery::Options {
+                                cwd,
+                                installation,
+                                loaded,
+                                input,
+                                host,
+                                approval,
+                                start,
+                                fetch,
+                                skip_review: flags.skip_review,
+                            },
+                            token,
+                            ownership,
+                        ))
+                        .await
+                    })
                 })
                 .await
                 .map_err(|error| {
@@ -271,8 +420,7 @@ async fn native(
             }
             _ => Err(Error::type_error("Invalid asynchronous native command")),
         }
-    };
-    tokio::pin!(operation);
+    });
     tokio::select! {
         biased;
         signal = tokio::signal::ctrl_c() => {
@@ -303,6 +451,7 @@ async fn native(
 }
 
 fn run(args: &[String]) -> Result<Output, Error> {
+    let started = std::time::Instant::now();
     let command = local_cli::parse(args)?;
     let value = match command {
         local_cli::Command::Help => return Ok(Output::success(local_cli::HELP.to_owned())),
@@ -318,7 +467,107 @@ fn run(args: &[String]) -> Result<Output, Error> {
                 .map_err(|_| Error::new("Error", "Cannot resolve the invocation directory"))?;
             return local_cli::list_fleet(&cwd, &environment()?).map(Output::success);
         }
+        local_cli::Command::CopilotDoctor(options) => {
+            let report = github_agent_roster::capabilities::check_copilot_doctor(&options)?;
+            let stdout = github_agent_roster::capabilities::format_copilot_doctor(&report)?;
+            return Ok(Output {
+                stdout,
+                success: false,
+                diagnostic: None,
+            });
+        }
+        local_cli::Command::History(request) => {
+            let cwd = env::current_dir()
+                .map_err(|_| Error::new("Error", "Cannot resolve the invocation directory"))?;
+            return github_agent_roster::state::provenance::history::run(
+                &request,
+                &cwd,
+                &environment()?,
+            )
+            .map(Output::success);
+        }
+        local_cli::Command::LearnRecurring => {
+            let environment = environment()?;
+            let installation = host::selected_path(&environment, "ROSTER_INSTALLATION_ROOT")?
+                .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf());
+            let cwd = env::current_dir()
+                .map_err(|_| Error::new("Error", "Cannot resolve the invocation directory"))?;
+            return metrics::propose_recurring_failures(&installation, &cwd, &environment).map(
+                |result| {
+                    Output::success(format!(
+                        "Recurring failures: {} draft proposals created; {} existing drafts preserved. Human review required.\n",
+                        result.created.len(),
+                        result.existing.len()
+                    ))
+                },
+            );
+        }
+        local_cli::Command::Bench => {
+            let dispatch_ms = started.elapsed().as_secs_f64() * 1000.0;
+            let environment = environment()?;
+            let installation = host::selected_path(&environment, "ROSTER_INSTALLATION_ROOT")?
+                .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf());
+            let cwd = env::current_dir()
+                .map_err(|_| Error::new("Error", "Cannot resolve the invocation directory"))?;
+            let report = diagnostics::run_bench(&cwd, &installation, &environment, dispatch_ms)?;
+            return Ok(Output::success(format!("{}\n", report.as_value().pretty())));
+        }
+        local_cli::Command::Vault(action) => {
+            use std::io::IsTerminal;
+            let environment = environment()?;
+            match action {
+                local_cli::VaultCommand::Set(name) => {
+                    github_agent_roster::vault::validate_secret_name(&Text::from(name.as_str()))?;
+                    if io::stdin().is_terminal() {
+                        return Err(Error::type_error(
+                            "Pipe the secret to roster vault set NAME through stdin.",
+                        ));
+                    }
+                    let raw = read_input()
+                        .map_err(|_| Error::new("Error", "Unable to read the secret from stdin."))?
+                        .to_utf8()
+                        .map_err(|_| {
+                            Error::new("Error", "Unable to read the secret from stdin.")
+                        })?;
+                    let value = raw
+                        .strip_suffix("\r\n")
+                        .or_else(|| raw.strip_suffix('\n'))
+                        .unwrap_or(&raw);
+                    let vault =
+                        github_agent_roster::vault::FileVault::from_environment(&environment)?;
+                    vault.set(&name, value)?;
+                    return Ok(Output::success(format!("Stored secret {name}.\n")));
+                }
+                local_cli::VaultCommand::List => {
+                    let vault =
+                        github_agent_roster::vault::FileVault::from_environment(&environment)?;
+                    let names = vault.list()?;
+                    return Ok(Output::success(if names.is_empty() {
+                        String::new()
+                    } else {
+                        format!("{}\n", names.join("\n"))
+                    }));
+                }
+                local_cli::VaultCommand::Get(name) => {
+                    github_agent_roster::vault::validate_secret_name(&Text::from(name.as_str()))?;
+                    if io::stdout().is_terminal() {
+                        return Err(Error::type_error(
+                            "Pipe roster vault get NAME; refusing to print a secret in a terminal.",
+                        ));
+                    }
+                    let vault =
+                        github_agent_roster::vault::FileVault::from_environment(&environment)?;
+                    let Some(value) = vault.get(&name)? else {
+                        return Err(Error::new("Error", format!("No secret stored for {name}.")));
+                    };
+                    return Ok(Output::success(value));
+                }
+            }
+        }
         local_cli::Command::Doctor
+        | local_cli::Command::Ask(_)
+        | local_cli::Command::Question(_)
+        | local_cli::Command::Clean(_)
         | local_cli::Command::Status(_)
         | local_cli::Command::Run(_)
         | local_cli::Command::Stats(_)
@@ -375,7 +624,26 @@ fn main() -> ExitCode {
                 .map_err(|_| Error::type_error("Native arguments must be Unicode"))
         })
         .collect::<Result<Vec<_>, _>>()
-        .and_then(|args| run(&args));
+        .and_then(|args| {
+            match std::thread::Builder::new()
+                .stack_size(8 * 1024 * 1024)
+                .spawn(move || run(&args))
+            {
+                Ok(handle) => handle
+                    .join()
+                    .map_err(|_| Error::new("Error", "Native invocation worker panicked"))?,
+                Err(_) => {
+                    let fallback_args = env::args_os()
+                        .skip(1)
+                        .map(|arg| {
+                            arg.into_string()
+                                .map_err(|_| Error::type_error("Native arguments must be Unicode"))
+                        })
+                        .collect::<Result<Vec<_>, _>>()?;
+                    run(&fallback_args)
+                }
+            }
+        });
     match result {
         Ok(output) => {
             if let Err(error) = io::stdout().lock().write_all(output.stdout.as_bytes()) {

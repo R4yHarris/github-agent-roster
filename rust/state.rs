@@ -1,5 +1,6 @@
 use crate::Error;
 
+pub mod clean;
 pub mod files;
 pub mod layout;
 pub mod locks;

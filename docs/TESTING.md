@@ -166,10 +166,12 @@ failed cases retain the exact root and print it for hashing/archival before
 repair. Do not sweep `.roster`, old forensic roots or sibling synthetic homes.
 Windows GNU evidence is not MSVC, POSIX or independent-review acceptance.
 
-The analytics checkpoint passes **56 new tests** (31 learning, nine metrics
-and 16 native CLI/e2e) plus **20 unchanged affected controls** on both stable
+The analytics checkpoint passes **66 tests** (35 learning, nine metrics,
+one provenance-history unit test and 21 native CLI/e2e cases, including
+`stats --delivery`, `learn --recurring` and `history list`/`history show`)
+plus **20 unchanged affected controls** on both stable
 GNU Rust 1.99.1 and GNU Rust 1.85.0. Both compilers pass format checking and
-strict all-target Clippy. Discovery is **698**, not a full-suite pass.
+strict all-target Clippy.
 Stable release runs pass all 16 analytics and six unchanged CLI cases.
 The preserved controls include three run-metadata, three provenance, six
 lossless-planning, six CLI and two guidance cases. The unchanged recipe-file
@@ -380,6 +382,52 @@ Before these two review repairs the 42-case affected matrix also passed in
 optimized stable mode. Both newly added review controls also pass in optimized
 stable mode after the repairs. All App validation remains synthetic/offline; the
 default delivery and platform/live acceptance gates have not changed.
+
+## Native fresh issue delivery controls
+
+Product trace: FEATURE_SPEC **5.3**, **5.4**, **5.5** and **5.7**. Use the existing
+explicit Git/Node20 fixture inputs and the smallest new selectors:
+
+```powershell
+cargo test --lib --test analytics --locked --offline -- github::tests::issue_delivery_ issue_run_cli_ status::tests:: --test-threads=1
+```
+
+The post-repair dual-compiler GNU campaign passes **33 targeted cases** on
+both stable Rust **1.99.1** and Rust **1.85.0** (15 library cases, one actual
+CLI negative case, 10 existing start/checkpoint cases and seven CLI cases),
+plus optimized `--release` controls. Real owned issue branch/worktree creation drives a truthful stub and a
+configured seven-response planner/critic/coder/self-review/fresh-review path.
+The latter actually edits the guide and passes the existing private gates,
+with distinct response-backed models and reported zero counts. Closed issues,
+source drift during/after intake, origin drift during seat execution,
+legacy/attempt/remote-tracking claims and unsafe CLI modes stop without
+adoption or a fabricated local issue.
+
+An index-only `assume-unchanged` mutation first reproduced intake acceptance
+despite unchanged source, status and diff, and independent review reproduced
+title/body lead classification and `## Task metadata` parsing, origin drift
+during execution and pre-observation index sealing. Native intake now seals
+primary and shared indexes before observing `HEAD`, `status` and `source_digest`
+and re-verifies issue/origin scope on the invocation's owned Git handle through
+completion. Controls cover same-commit branch switches during intake and before
+preparation, cloned original index seals, linked worktree primary indexes,
+actual split/shared-file mutation, epic/one-liner body lead classification,
+structured issue metadata and origin drift during execution. These are owned
+native Git/filesystem controls, not live GitHub evidence. Parser checks
+preserve explicit issue mode, safe-integer boundaries and base/fetch/review
+flags while rejecting aliases, duplicate modes, resume and publication.
+
+Initial new installations lacked required `read-before-write` and `review`
+skill packets. Those explicit production refusals and fixtures are retained;
+the synthetic installation was completed without skipping or weakening the
+loader, review, test or completion gates. Recipe association is verified at its
+actual `ask: issue:42` field, not assumed to appear in TASK text. The original
+default 100-case delivery suite and its known failures are not replayed or
+reclassified as passing.
+
+Native issue delivery does not claim a live GitHub/model campaign, private
+authenticated Git fetch, remote freshness under `--no-fetch`, existing-claim
+resume, queue comments/labels, publication or human acceptance.
 
 ## Native offline fleet listing controls
 

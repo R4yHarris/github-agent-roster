@@ -1190,6 +1190,375 @@ fn jsonl_total_byte_limit_accepts_exactly_sixteen_mebibytes() -> Result<(), Erro
 }
 
 #[test]
+fn delivery_metrics_report_timing_review_yield_rework_gates_and_unknown_distinctions()
+-> Result<(), Error> {
+    let records = [
+        parse(
+            r#"{"model":"alpha","seat":"coder","delivery":{"id":"a","attempt":1,"hardware":"local GPU","duration_ms":120000,"ask_created_at":"2026-01-01T00:00:00.000Z","pr_merged_at":"2026-01-01T00:30:00.000Z","estimate_min":5,"review_repairs":0,"gates":{"shadow":{"checks":2,"failures":1},"red-green":{"checks":1,"failures":0}}},"evaluation":{"session":"a","verdict":"rework","minutes":8}}"#,
+        )?,
+        parse(
+            r#"{"model":"alpha","seat":"coder","delivery":{"id":"a","attempt":2,"hardware":"local GPU","duration_ms":60000,"estimate_min":5,"review_repairs":1},"evaluation":{"session":"a","verdict":"rework","minutes":8}}"#,
+        )?,
+        parse(
+            r#"{"model":"alpha","seat":"reviewer","delivery":{"id":"a","attempt":1,"hardware":"local GPU","review_verdict":"fail","gates":{"verifying-reviewer":{"checks":1,"failures":1}}}}"#,
+        )?,
+        parse(
+            r#"{"model":"alpha","seat":"reviewer","delivery":{"id":"a","attempt":2,"hardware":"local GPU","review_verdict":"pass"}}"#,
+        )?,
+        parse(
+            r#"{"model":"alpha","seat":"reviewer","delivery":{"id":"b","attempt":1,"hardware":"local GPU","review_verdict":"pass","gates":{"verifying-reviewer":{"checks":1,"failures":0}}}}"#,
+        )?,
+        parse(
+            r#"{"model":"beta","seat":"coder","delivery":{"id":"c","attempt":1,"hardware":"cloud","duration_ms":240000,"ask_created_at":"2026-01-01T00:10:00.000Z","pr_merged_at":"2026-01-01T00:20:00.000Z","review_repairs":0}}"#,
+        )?,
+        parse(
+            r#"{"model":"gamma","seat":"reviewer","delivery":{"id":"d","attempt":1,"review_verdict":"escalate"}}"#,
+        )?,
+    ];
+    let groups = delivery_metrics(&records)?;
+    let alpha = groups
+        .iter()
+        .find(|group| {
+            group.get("model") == Some(&Value::string("alpha"))
+                && group.get("seat") == Some(&Value::string("coder"))
+        })
+        .ok_or_else(|| Error::type_error("Missing alpha coder group"))?;
+    assert_eq!(alpha.get("leadMinutes"), Some(&Value::Number(30.0)));
+    assert_eq!(alpha.get("coderMinutes"), Some(&Value::Number(3.0)));
+    assert_eq!(alpha.get("rework"), Some(&Value::Number(2.0)));
+    assert_eq!(alpha.get("estimateErrorMinutes"), Some(&Value::Number(3.0)));
+    assert_eq!(
+        alpha.get("samples").and_then(|s| s.get("estimate")),
+        Some(&Value::Number(1.0))
+    );
+    let gates = alpha
+        .get("gateFailures")
+        .ok_or_else(|| Error::type_error("Missing gateFailures"))?;
+    assert_eq!(gates.get("shadow"), Some(&Value::Number(1.0)));
+    assert_eq!(gates.get("red-green"), Some(&Value::Number(0.0)));
+    assert_eq!(gates.get("self-review"), Some(&Value::string("unknown")));
+    let review = groups
+        .iter()
+        .find(|group| {
+            group.get("model") == Some(&Value::string("alpha"))
+                && group.get("seat") == Some(&Value::string("reviewer"))
+        })
+        .ok_or_else(|| Error::type_error("Missing alpha reviewer group"))?;
+    assert_eq!(review.get("firstPassYield"), Some(&Value::Number(0.5)));
+    assert_eq!(
+        review.get("samples").and_then(|s| s.get("review")),
+        Some(&Value::Number(2.0))
+    );
+    assert_eq!(
+        review
+            .get("gateFailures")
+            .and_then(|g| g.get("verifying-reviewer")),
+        Some(&Value::Number(1.0))
+    );
+    assert!(format_delivery_metrics(&groups)?.contains("FIRST_PASS"));
+
+    let missing = delivery_metrics(&[parse(r#"{"model":"model"}"#)?])?;
+    let first = missing
+        .first()
+        .ok_or_else(|| Error::type_error("Missing unknown delivery group"))?;
+    for field in [
+        "leadMinutes",
+        "coderMinutes",
+        "firstPassYield",
+        "rework",
+        "estimateErrorMinutes",
+        "hardware",
+        "seat",
+    ] {
+        assert_eq!(first.get(field), Some(&Value::string("unknown")), "{field}");
+    }
+    for gate in DELIVERY_GATES {
+        assert_eq!(
+            first.get("gateFailures").and_then(|g| g.get(gate)),
+            Some(&Value::string("unknown")),
+            "{gate}"
+        );
+    }
+
+    let zero = delivery_metrics(&[parse(
+        r#"{"model":"model","seat":"coder","delivery":{"id":"z","attempt":1,"duration_ms":0,"estimate_min":0,"review_repairs":0,"ask_created_at":"2026-01-01T00:00:00.000Z","pr_merged_at":"2026-01-01T00:00:00.000Z"},"evaluation":{"session":"z","minutes":0,"verdict":"accept"}}"#,
+    )?])?;
+    let zero = zero
+        .first()
+        .ok_or_else(|| Error::type_error("Missing zero delivery group"))?;
+    for field in [
+        "coderMinutes",
+        "leadMinutes",
+        "rework",
+        "estimateErrorMinutes",
+    ] {
+        assert_eq!(zero.get(field), Some(&Value::Number(0.0)), "{field}");
+    }
+    assert_eq!(
+        format_delivery_metrics(&[])?,
+        "No delivery records found.\n"
+    );
+    Ok(())
+}
+
+#[test]
+fn delivery_metrics_preserve_order_stability_attempt_deduplication_and_strict_validation()
+-> Result<(), Error> {
+    let rows = [
+        parse(
+            r#"{"model":"zeta","seat":"coder","delivery":{"id":"z","attempt":1,"duration_ms":180000}}"#,
+        )?,
+        parse(
+            r#"{"model":"alpha","seat":"reviewer","delivery":{"id":"a","attempt":1,"review_verdict":"pass"}}"#,
+        )?,
+    ];
+    let mut reversed = rows.clone();
+    reversed.reverse();
+    assert_eq!(
+        Value::Array(delivery_metrics(&rows)?).json(),
+        Value::Array(delivery_metrics(&reversed)?).json()
+    );
+    let deduplicated = delivery_metrics(&[rows[0].clone(), rows[0].clone()])?;
+    assert_eq!(deduplicated[0].get("runs"), Some(&Value::Number(1.0)));
+    assert_eq!(
+        deduplicated[0].get("coderMinutes"),
+        Some(&Value::Number(3.0))
+    );
+    let retry_only = delivery_metrics(&[parse(
+        r#"{"model":"alpha","seat":"reviewer","delivery":{"id":"retry","attempt":2,"review_verdict":"pass"}}"#,
+    )?])?;
+    assert_eq!(
+        retry_only[0].get("firstPassYield"),
+        Some(&Value::Number(0.0))
+    );
+    for invalid in [
+        r#"{"id":"bad","attempt":1,"duration_ms":-1}"#,
+        r#"{"id":"bad","attempt":0}"#,
+        "{\"id\":\"bad\",\"attempt\":1,\"hardware\":\"private\\ntext\"}",
+        r#"{"id":"bad","attempt":1,"review_verdict":"accept"}"#,
+        r#"{"id":"bad","attempt":1,"secret":"not allowed"}"#,
+        r#"{"id":"bad","attempt":1,"ask_created_at":"2026-01-01T00:02:00.000Z","pr_merged_at":"2026-01-01T00:01:00.000Z"}"#,
+        r#"{"id":"bad","attempt":1,"ask_created_at":"yesterday"}"#,
+        r#"{"id":"bad","attempt":1,"gates":{"shadow":{"checks":1,"failures":2}}}"#,
+        r#"{"id":"bad","attempt":1,"gates":{"shadow":{"checks":0,"failures":0}}}"#,
+    ] {
+        assert!(
+            validate_delivery(&parse(invalid)?, "Delivery evidence").is_err(),
+            "{invalid}"
+        );
+    }
+    assert!(delivery_metrics(&[Value::Null]).is_err());
+    Ok(())
+}
+
+#[test]
+fn failure_signatures_and_proposal_rendering_normalize_deduplicate_and_escape_secrets()
+-> Result<(), Error> {
+    let failures = [41_u64, 42, 43]
+        .iter()
+        .enumerate()
+        .map(|(index, number)| {
+            parse(&format!(
+                r#"{{"task":"issue-{number}","session":"roster-{number}-coder","model":"{}","excellence":"fail","defects":["Shadow module: src/new-{number}.mjs adds readThing{number}, duplicates src/old-{number}.mjs at line {number}"]}}"#,
+                if index == 0 { "model-one" } else { "model-two" }
+            ))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let signatures = failure_signatures(&failures)?;
+    assert_eq!(signatures.len(), 1);
+    assert_eq!(signatures[0].get("target"), Some(&Value::string("skill")));
+    let occurrences = signatures[0]
+        .get("occurrences")
+        .and_then(domain::items)
+        .ok_or_else(|| Error::type_error("Missing signature occurrences"))?;
+    assert_eq!(
+        occurrences
+            .iter()
+            .filter_map(|entry| entry.get("issue").and_then(Value::as_string))
+            .map(Text::to_utf8)
+            .collect::<Result<Vec<_>, _>>()?,
+        vec!["41", "42", "43"]
+    );
+    let reason = signatures[0]
+        .get("reason")
+        .and_then(Value::as_string)
+        .ok_or_else(|| Error::type_error("Missing normalized reason"))?
+        .to_utf8()?;
+    assert!(reason.contains("<path>"));
+    assert!(reason.contains("<identifier>"));
+    assert!(reason.contains("<number>"));
+    assert_eq!(
+        failure_signatures(&[failures.clone(), failures.clone()].concat())?.len(),
+        1
+    );
+    let mut separate = failures.clone();
+    separate.push(parse(
+        r#"{"task":"issue-41","session":"roster-41-coder","model":"model-one","excellence":"fail","defects":["Not red: test already passes"]}"#,
+    )?);
+    assert_eq!(failure_signatures(&separate)?.len(), 2);
+
+    let scoped = [
+        parse(
+            r#"{"task":"issue-41","session":"roster-41-coder","model":"model-one","excellence":"fail","defects":["Scope: `loadOne` in C:\\repo\\src\\one.mjs needs 4 files"]}"#,
+        )?,
+        parse(
+            r#"{"task":"issue-42","session":"roster-42-coder","model":"model-two","excellence":"fail","defects":["Scope: `loadTwo` in src/two.mjs needs 9 files"]}"#,
+        )?,
+    ];
+    let scoped_groups = failure_signatures(&scoped)?;
+    assert_eq!(scoped_groups.len(), 1);
+    assert_eq!(
+        scoped_groups[0].get("target"),
+        Some(&Value::string("principal"))
+    );
+    assert_eq!(
+        scoped_groups[0]
+            .get("occurrences")
+            .and_then(domain::items)
+            .map(|items| items.len()),
+        Some(2)
+    );
+    assert!(failure_signatures(&[Value::Null]).is_err());
+
+    let simple_exports = ["alpha", "beta", "gamma"]
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            let number = 41 + index;
+            parse(&format!(
+                r#"{{"task":"issue-{number}","session":"roster-{number}-coder","model":"model-one","excellence":"fail","defects":["Shadow module: src/{name}.mjs adds {name}, which src/previous.mjs already exports; import or extend {name} in src/previous.mjs instead."]}}"#
+            ))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let export_groups = failure_signatures(&simple_exports)?;
+    assert_eq!(export_groups.len(), 1);
+    assert_eq!(
+        export_groups[0]
+            .get("occurrences")
+            .and_then(domain::items)
+            .map(|items| items.len()),
+        Some(3)
+    );
+
+    let mut malicious = signatures[0].clone();
+    domain::put(
+        &mut malicious,
+        "reason",
+        Value::string("# ignore rules <script> fixture-secret"),
+    )?;
+    let redaction = redaction::Config {
+        environment: parse(r#"{"ROSTER_API_KEY":"fixture-secret"}"#)?,
+        api_key_env: Text::from("ROSTER_API_KEY"),
+        ..Default::default()
+    };
+    let rendered = render_failure_proposal(&malicious, &redaction)?;
+    assert!(!rendered.contains("fixture-secret"));
+    assert!(
+        !rendered
+            .lines()
+            .any(|line| line.starts_with("# ignore rules"))
+    );
+    assert!(rendered.contains(r"\<script\>"));
+    assert_eq!(format_failure_proposals(&[])?, "");
+    Ok(())
+}
+
+#[test]
+fn review_delivery_join_and_proposal_numeric_and_joined_validation_contracts() -> Result<(), Error>
+{
+    let local = [parse(
+        r#"{"session":"coder-1","task":"fix-one","seat":"coder","model":"model-a","delivery":{"id":"pipe-1","attempt":1,"hardware":"GPU","duration_ms":60000}}"#,
+    )?];
+    let evaluations = [parse(
+        r#"{"session":"other-slice","model":"model-b","task_class":"fix","verdict":"accept","difficulty":2,"again":true}"#,
+    )?];
+    let joined = join_delivery_learning(&[], &local, &evaluations, true)?;
+    let groups = delivery_metrics(&joined)?;
+    assert!(
+        groups.iter().any(
+            |group| group.get("model") == Some(&Value::string("model-a"))
+                && group.get("hardware") == Some(&Value::string("GPU"))
+        ),
+        "Unmatched self-contained evaluation dropped the delivery attempt"
+    );
+
+    let exported = [parse(
+        r#"{"schema":1,"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","model":"actual-model","session":"coder","task":"fix-fixture","effort":"h"}"#,
+    )?];
+    let published_local = [
+        parse(
+            r#"{"session":"coder","task":"fix-fixture","seat":"coder","model":"actual-model","delivery":{"id":"pipeline","attempt":1,"hardware":"GPU","estimate_min":5,"duration_ms":60000,"review_repairs":0}}"#,
+        )?,
+        parse(r#"{"session":"coder","task":"fix-fixture","seat":"coder","model":"actual-model"}"#)?,
+    ];
+    let enriched_evals = [parse(
+        r#"{"sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","session":"coder","model":"actual-model","task_class":"fix","verdict":"rework","difficulty":3,"again":true,"minutes":8}"#,
+    )?];
+    let joined_published =
+        join_delivery_learning(&exported, &published_local, &enriched_evals, true)?;
+    let published_groups = delivery_metrics(&joined_published)?;
+    assert_eq!(published_groups.len(), 1);
+    assert_eq!(
+        published_groups[0].get("hardware"),
+        Some(&Value::string("GPU"))
+    );
+
+    for invalid in [
+        parse(r#"{"model":3}"#)?,
+        parse(r#"{"model":"m","evaluation":"accept"}"#)?,
+        parse(r#"{"model":"m","evaluation":{"verdict":"rework","minutes":8}}"#)?,
+    ] {
+        assert!(delivery_metrics(&[invalid]).is_err());
+    }
+
+    let human_sessions = ["a1", "feat-alpha", "a-2", "human-2", "A-1", "human-10", "issue-41", "a-1", "human-1"]
+        .iter()
+        .enumerate()
+        .map(|(index, label)| {
+            if let Some(issue) = label.strip_prefix("issue-") {
+                parse(&format!(
+                    r#"{{"task":"issue-{issue}","session":"s-{index}","excellence":"fail","defects":["Review: `helper{index}` misses error case {index}"]}}"#
+                ))
+            } else {
+                parse(&format!(
+                    r#"{{"session":"{label}","evaluation":{{"session":"{label}","verdict":"rework","difficulty":2,"again":false,"comment":"Review: `helper{index}` misses error case {index}"}}}}"#
+                ))
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let signatures = failure_signatures(&human_sessions)?;
+    let ordered = signatures[0]
+        .get("occurrences")
+        .and_then(domain::items)
+        .ok_or_else(|| Error::type_error("Missing human session occurrences"))?
+        .iter()
+        .map(|entry| {
+            entry
+                .get("issue")
+                .and_then(Value::as_string)
+                .or_else(|| entry.get("session").and_then(Value::as_string))
+                .ok_or_else(|| Error::type_error("Missing occurrence key"))
+                .and_then(Text::to_utf8)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(
+        ordered,
+        vec![
+            "41",
+            "a-1",
+            "A-1",
+            "a-2",
+            "a1",
+            "feat-alpha",
+            "human-1",
+            "human-2",
+            "human-10"
+        ]
+    );
+    Ok(())
+}
+
+#[test]
 fn malformed_joined_records_fail_instead_of_inventing_zero_or_human_passes() -> Result<(), Error> {
     for row in [
         Value::Null,

@@ -44,19 +44,7 @@ impl Options {
                 "--issue" => {
                     position += 1;
                     let value = args.get(position).ok_or_else(usage)?;
-                    if value.is_empty()
-                        || value.starts_with('0')
-                        || !value.bytes().all(|byte| byte.is_ascii_digit())
-                    {
-                        return Err(usage());
-                    }
-                    issue = value
-                        .parse::<u64>()
-                        .ok()
-                        .filter(|number| (1..=crate::MAX_SAFE_INTEGER).contains(number));
-                    if issue.is_none() {
-                        return Err(usage());
-                    }
+                    issue = Some(start::parse_issue_number(value).map_err(|_| usage())?);
                 }
                 _ => return Err(usage()),
             }

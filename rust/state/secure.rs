@@ -99,7 +99,7 @@ pub fn private_directory(path: &Path, create: bool) -> Result<(), Error> {
     Ok(())
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Snapshot {
     pub bytes: Vec<u8>,
     pub identity: FileIdentity,

@@ -190,6 +190,12 @@ impl Credentials {
     }
 }
 
+pub fn validate_app_configuration(environment: &Value) -> Result<(), Error> {
+    Credentials::select(environment)
+        .map(|_| ())
+        .map_err(safe_error)
+}
+
 struct Access {
     token: Zeroizing<String>,
     scope: Result<Scope, Error>,
@@ -426,13 +432,44 @@ impl Issue {
         self.facts.body()
     }
 
+    pub fn title(&self) -> &Text {
+        &self.facts.title
+    }
+
+    pub fn url(&self) -> &str {
+        &self.facts.url
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.facts.state == "OPEN"
+    }
+
     pub fn metadata(&self) -> Value {
         self.facts.metadata()
     }
 
+    pub fn cleanup_certain(&self) -> bool {
+        self.context.git.cleanup_certain()
+    }
+
     pub async fn require_current(&self, token: &CancellationToken) -> Result<(), Error> {
+        self.require_current_with_git(&self.context.git, token)
+            .await
+    }
+
+    pub(crate) async fn require_current_with_git(
+        &self,
+        git: &start::Git,
+        token: &CancellationToken,
+    ) -> Result<(), Error> {
         let result = async {
             token.check()?;
+            if !self.cleanup_certain() || !git.cleanup_certain() {
+                return Err(error(
+                    "ROSTER_PROCESS_CLEANUP",
+                    "Issue observation Git cleanup is unverified; no task or status may proceed",
+                ));
+            }
             let current = paths::repository_paths(&self.context.paths.worktree)?;
             if paths::file_information(&current.worktree)?.identity != self.context.worktree
                 || paths::file_information(&current.common_dir)?.identity != self.context.common
@@ -442,13 +479,8 @@ impl Issue {
                     "The issue observation repository identity changed",
                 ));
             }
-            self.context
-                .sdk
-                .require_current(&self.context.git, token)
-                .await?;
-            let origin = self
-                .context
-                .git
+            self.context.sdk.require_current(git, token).await?;
+            let origin = git
                 .text(
                     &current.worktree,
                     &["config", "--get", "remote.origin.url"],
@@ -459,6 +491,12 @@ impl Issue {
                 return Err(error(
                     "ROSTER_GITHUB_SCOPE",
                     "Repository origin changed after the issue observation",
+                ));
+            }
+            if !self.cleanup_certain() || !git.cleanup_certain() {
+                return Err(error(
+                    "ROSTER_PROCESS_CLEANUP",
+                    "Issue observation Git cleanup is unverified; no task or status may proceed",
                 ));
             }
             token.check()

@@ -124,6 +124,117 @@ pub fn clean_ask(input: &Value) -> Result<String, Error> {
     })
 }
 
+const METADATA_MARKER: &str = "\n\n## Task metadata\n\n";
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct IssueBody {
+    pub ask: Text,
+    pub metadata: Option<Value>,
+}
+
+pub fn render_issue_body(ask: &Value, metadata: Option<&Value>) -> Result<Text, Error> {
+    let text = clean_ask(ask)?;
+    if matches(r"(?im)^## Task metadata\s*$", &text)? {
+        return Err(Error::type_error(
+            "Ask must not contain the reserved Task metadata heading",
+        ));
+    }
+    let mut input = Value::object(vec![(
+        "task_class",
+        Value::string(
+            estimate::infer_class(text.split('\n').next().unwrap_or(""))?
+                .as_deref()
+                .unwrap_or("feat"),
+        ),
+    )]);
+    if let Some(metadata) = metadata {
+        let entries = domain::members(metadata)
+            .ok_or_else(|| Error::type_error("Issue metadata must be a mapping"))?;
+        for (key, value) in entries {
+            domain::put(&mut input, &encode(key), value.clone())?;
+        }
+    }
+    let estimated = estimate::estimate(&input, &[], "")?;
+    Ok(decode(&format!(
+        "# Ask\n\n{text}{METADATA_MARKER}task_class: {}\ndifficulty: {}\nestimate_min: {}\n",
+        estimated.task_class, estimated.difficulty, estimated.minutes
+    )))
+}
+
+pub fn parse_issue_body(body: &Value) -> Result<IssueBody, Error> {
+    let source = text(body, "Issue body must contain an Ask")?;
+    if trim(&source).is_empty() {
+        return Err(Error::type_error("Issue body must contain an Ask"));
+    }
+    let normalized = source.replace("\r\n", "\n");
+    let parts = normalized.split(METADATA_MARKER).collect::<Vec<_>>();
+    if parts.len() == 1 {
+        if matches(r"(?im)^## Task metadata\s*$", &normalized)? {
+            return Err(Error::type_error(
+                "Issue Task metadata must contain task_class, difficulty, and estimate_min",
+            ));
+        }
+        let raw = normalized.strip_prefix("# Ask\n\n").unwrap_or(&normalized);
+        return Ok(IssueBody {
+            ask: decode(&clean_ask(&value(raw))?),
+            metadata: None,
+        });
+    }
+    let [prefix, suffix] = parts.as_slice() else {
+        return Err(Error::type_error(
+            "Issue Task metadata must contain task_class, difficulty, and estimate_min",
+        ));
+    };
+    let captures = regex(
+        r"^task_class: (feat|fix|docs|test)\ndifficulty: ([1-5])\nestimate_min: (0|[1-9]\d*)\n?$",
+    )?
+    .captures(suffix)
+    .ok_or_else(|| {
+        Error::type_error(
+            "Issue Task metadata must contain task_class, difficulty, and estimate_min",
+        )
+    })?;
+    if matches(r"(?im)^## Task metadata\s*$", prefix)? {
+        return Err(Error::type_error(
+            "Issue Task metadata must contain task_class, difficulty, and estimate_min",
+        ));
+    }
+    let raw = prefix.strip_prefix("# Ask\n\n").unwrap_or(prefix);
+    let difficulty = captures
+        .get(2)
+        .and_then(|entry| entry.as_str().parse::<u8>().ok())
+        .ok_or_else(|| {
+            Error::type_error(
+                "Issue Task metadata must contain task_class, difficulty, and estimate_min",
+            )
+        })?;
+    let minutes = captures
+        .get(3)
+        .and_then(|entry| entry.as_str().parse::<u64>().ok())
+        .filter(|minutes| *minutes <= crate::MAX_SAFE_INTEGER)
+        .ok_or_else(|| Error::type_error("estimate_min must be a safe non-negative integer"))?;
+    let validated = estimate::estimate(
+        &Value::object(vec![
+            (
+                "task_class",
+                Value::string(captures.get(1).map_or("", |entry| entry.as_str())),
+            ),
+            ("difficulty", Value::Number(f64::from(difficulty))),
+            ("estimate_min", Value::Number(minutes as f64)),
+        ]),
+        &[],
+        "",
+    )?;
+    Ok(IssueBody {
+        ask: decode(&clean_ask(&value(raw))?),
+        metadata: Some(Value::object(vec![
+            ("task_class", Value::string(&validated.task_class)),
+            ("difficulty", Value::Number(f64::from(validated.difficulty))),
+            ("estimate_min", Value::Number(validated.minutes as f64)),
+        ])),
+    })
+}
+
 pub fn list_in_ask(ask: &str, heading: &str) -> Result<Option<Vec<String>>, Error> {
     let heading_pattern = regex(&format!(r"(?i)^#{{1,3}} {heading}\s*$"))?;
     let next_heading = regex(r"^#{1,3} ")?;

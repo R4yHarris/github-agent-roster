@@ -487,6 +487,733 @@ pub fn load(repo_root: &Path) -> Result<Fleet, Error> {
     }
 }
 
+struct HardwareSpec {
+    id: &'static str,
+    class: &'static str,
+    memory_gb: u32,
+    nodes: u32,
+    notes: &'static str,
+}
+
+const HARDWARE_INDEX: [HardwareSpec; 5] = [
+    HardwareSpec {
+        id: "rtx-3090-24gb",
+        class: "last-resort",
+        memory_gb: 24,
+        nodes: 1,
+        notes: "Local workstation GPU",
+    },
+    HardwareSpec {
+        id: "rtx-6000-ada-48gb",
+        class: "dedicated",
+        memory_gb: 48,
+        nodes: 1,
+        notes: "Dedicated data-center GPU",
+    },
+    HardwareSpec {
+        id: "dgx-spark-gb10-128gb",
+        class: "cluster",
+        memory_gb: 128,
+        nodes: 1,
+        notes: "One GB10 Spark, 128GB unified memory",
+    },
+    HardwareSpec {
+        id: "dgx-spark-2n",
+        class: "cluster",
+        memory_gb: 256,
+        nodes: 2,
+        notes: "Two GB10 Sparks",
+    },
+    HardwareSpec {
+        id: "dgx-spark-4n",
+        class: "cluster",
+        memory_gb: 512,
+        nodes: 4,
+        notes: "Four GB10 Sparks",
+    },
+];
+
+pub fn describe_hardware(id: &str) -> Result<Value, Error> {
+    let spec = HARDWARE_INDEX
+        .iter()
+        .find(|entry| entry.id == id)
+        .ok_or_else(|| Error::type_error(format!("Unknown hardware id: {id}")))?;
+    Ok(Value::object(vec![
+        ("id", Value::string(spec.id)),
+        ("class", Value::string(spec.class)),
+        ("memory_gb", Value::Number(f64::from(spec.memory_gb))),
+        ("nodes", Value::Number(f64::from(spec.nodes))),
+        ("notes", Value::string(spec.notes)),
+    ]))
+}
+
+pub fn hardware_cost(profile: &Value, difficulty: u8) -> Result<f64, Error> {
+    if members(profile).is_none() {
+        return Err(Error::type_error("Fleet profile must be a JSON object"));
+    }
+    let hardware = profile
+        .get("hardware")
+        .and_then(Value::as_string)
+        .map(|text| String::from_utf16_lossy(&text.0))
+        .unwrap_or_default();
+    let indexed = HARDWARE_INDEX.iter().find(|entry| entry.id == hardware);
+    let kind = if let Some(entry) = indexed {
+        entry.class
+    } else if hardware.contains("3090") {
+        "last-resort"
+    } else if hardware.contains("6000") || hardware.contains("aperture") {
+        "dedicated"
+    } else if hardware.contains("spark") || hardware.contains("dgx") {
+        "cluster"
+    } else {
+        "unspecified"
+    };
+    let context_max = profile
+        .get("context_max")
+        .and_then(Value::as_number)
+        .filter(|value| value.is_finite() && *value > 0.0);
+    let context = context_max.map_or(2.0, |value| value / 1_000_000.0);
+    Ok(match kind {
+        "last-resort" => 100.0 + context,
+        "cluster" => {
+            (if difficulty >= 4 { 8.0 } else { 30.0 })
+                + context
+                + f64::from(indexed.map_or(1, |entry| entry.nodes))
+        }
+        "dedicated" => 10.0 + context,
+        _ => 20.0 + context,
+    })
+}
+
+pub struct RouteOptions<'a> {
+    pub fleet: &'a Value,
+    pub capabilities: &'a Value,
+    pub records: &'a [Value],
+    pub task_class: &'a str,
+    pub difficulty: u8,
+    pub context_required: u64,
+    pub profile_id: Option<&'a str>,
+    pub seat: &'a str,
+    pub excluded_profile_ids: &'a [String],
+    pub queue_depth: Option<&'a dyn Fn(&str) -> usize>,
+    pub now: i64,
+}
+
+fn valid_route_identifier(value: &str) -> bool {
+    (1..=64).contains(&value.len())
+        && value != "-"
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+fn effort_rank(effort: Option<&Value>) -> usize {
+    match effort.and_then(Value::as_string) {
+        Some(text) if ascii(&text.0, "l") => 0,
+        Some(text) if ascii(&text.0, "m") => 1,
+        Some(text) if ascii(&text.0, "h") => 2,
+        Some(text) if ascii(&text.0, "x") => 3,
+        _ => 4,
+    }
+}
+
+pub fn choose_route(options: &RouteOptions<'_>) -> Result<Option<Value>, Error> {
+    if !crate::learning::TASK_CLASSES.contains(&options.task_class) {
+        return Err(Error::type_error(
+            "Routing task class must be feat, fix, docs, or test",
+        ));
+    }
+    if !(1..=5).contains(&options.difficulty) {
+        return Err(Error::type_error(
+            "Routing difficulty must be an integer from 1 to 5",
+        ));
+    }
+    if options.context_required > crate::MAX_SAFE_INTEGER {
+        return Err(Error::type_error(
+            "Routing context requirement must be a nonnegative safe integer",
+        ));
+    }
+    for record in options.records {
+        if members(record).is_none()
+            || record
+                .get("evaluation")
+                .is_some_and(|eval| eval != &Value::Null && members(eval).is_none())
+        {
+            return Err(Error::type_error(
+                "Routing requires joined run/evaluation records",
+            ));
+        }
+    }
+    if !valid_route_identifier(options.seat) {
+        return Err(Error::type_error(
+            "Routing seat must be an opaque 1-64 character identifier",
+        ));
+    }
+    let mut excluded = HashSet::new();
+    for id in options.excluded_profile_ids {
+        if !valid_route_identifier(id) || !excluded.insert(id.as_str()) {
+            return Err(Error::type_error(
+                "Excluded fleet profiles must be distinct opaque identifiers",
+            ));
+        }
+    }
+    let ceilings = crate::learning::derive_difficulty_ceilings(
+        options.records,
+        &crate::state::redaction::Config::default(),
+    )?;
+    let catalog = validate(options.fleet)?;
+    let priors = crate::capabilities::validate(
+        options.capabilities,
+        crate::capabilities::Completeness::Full,
+    )?;
+    let base_profiles = match options.profile_id {
+        Some(id) => vec![get_profile(&catalog, &Value::string(id))?.clone()],
+        None => catalog.profiles().to_vec(),
+    };
+    let mut profiles = Vec::new();
+    for profile in base_profiles {
+        let val = profile.as_value();
+        let id = val
+            .get("id")
+            .and_then(Value::as_string)
+            .ok_or_else(|| Error::type_error("Fleet profile requires id"))?
+            .to_utf8()?;
+        if excluded.contains(id.as_str()) {
+            continue;
+        }
+        let model = val
+            .get("model")
+            .and_then(Value::as_string)
+            .ok_or_else(|| Error::type_error("Fleet profile requires model"))?;
+        let allowed_by_ceiling = ceilings
+            .iter()
+            .find(|entry| {
+                domain::is_text(entry.get("seat"), options.seat)
+                    && entry.get("model") == Some(&Value::String(model.clone()))
+            })
+            .and_then(|entry| domain::safe_integer(entry.get("ceiling")))
+            .is_none_or(|ceiling| ceiling >= u64::from(options.difficulty));
+        if allowed_by_ceiling {
+            profiles.push(profile);
+        }
+    }
+    let depth_of = |id: &str| -> usize { options.queue_depth.map_or(0, |f| f(id)) };
+    let seat_text = Text::from(options.seat);
+    let mut human = Vec::new();
+    for record in options.records {
+        if record
+            .get("evaluation")
+            .is_some_and(|eval| *eval != Value::Null)
+            && crate::learning::learning_seat(record)? == seat_text
+        {
+            human.push(record.clone());
+        }
+    }
+    let groups = crate::learning::summarize_learning(&human)?
+        .into_iter()
+        .filter(|group| {
+            domain::is_text(group.get("task_class"), options.task_class)
+                && domain::safe_integer(group.get("n")).is_some_and(|n| n >= 3)
+                && group
+                    .get("medianDifficulty")
+                    .and_then(Value::as_number)
+                    .is_some_and(|med| med >= f64::from(options.difficulty))
+        })
+        .collect::<Vec<_>>();
+    let mut evaluated = Vec::new();
+    for profile in &profiles {
+        let val = profile.as_value();
+        let ctx_max = domain::safe_integer(val.get("context_max")).unwrap_or(0);
+        if ctx_max == 0 || ctx_max < options.context_required {
+            continue;
+        }
+        let id_text = val
+            .get("id")
+            .and_then(Value::as_string)
+            .ok_or_else(|| Error::type_error("Fleet profile requires id"))?;
+        let id_str = id_text.to_utf8()?;
+        let id_key = crate::learning::collation_key(id_text)?;
+        for group in &groups {
+            if group.get("model") == val.get("model") {
+                let n = domain::safe_integer(group.get("n")).unwrap_or(0);
+                let rate = group
+                    .get("acceptRate")
+                    .and_then(Value::as_number)
+                    .unwrap_or(0.0);
+                let recommendation = Value::object(
+                    [
+                        "model",
+                        "effort",
+                        "n",
+                        "accepted",
+                        "acceptRate",
+                        "medianMinutes",
+                        "medianDifficulty",
+                        "estimate_min",
+                    ]
+                    .iter()
+                    .map(|name| (*name, group.get(name).cloned().unwrap_or(Value::Null)))
+                    .collect(),
+                );
+                let choice = Value::object(vec![
+                    ("profile", val.clone()),
+                    ("source", Value::string("evals")),
+                    (
+                        "reason",
+                        Value::string(&format!(
+                            "{n} distinct human evaluations; declared context is sufficient"
+                        )),
+                    ),
+                    ("recommendation", recommendation),
+                ]);
+                evaluated.push((
+                    rate,
+                    n,
+                    depth_of(&id_str),
+                    id_key.clone(),
+                    effort_rank(group.get("effort")),
+                    choice,
+                ));
+            }
+        }
+    }
+    evaluated.sort_by(|left, right| {
+        right
+            .0
+            .total_cmp(&left.0)
+            .then_with(|| right.1.cmp(&left.1))
+            .then_with(|| left.2.cmp(&right.2))
+            .then_with(|| left.3.cmp(&right.3))
+            .then_with(|| left.4.cmp(&right.4))
+    });
+    let attach_evidence = |mut choice: Value| -> Result<Value, Error> {
+        let model = choice
+            .get("profile")
+            .and_then(|profile| profile.get("model"))
+            .and_then(Value::as_string)
+            .cloned()
+            .ok_or_else(|| Error::type_error("Route profile requires model"))?;
+        let effort = choice
+            .get("recommendation")
+            .and_then(|rec| rec.get("effort"))
+            .cloned();
+        let evidence = crate::learning::explain_route_evidence(
+            options.records,
+            crate::learning::EvidenceScope {
+                model: &model,
+                task_class: options.task_class,
+                seat: &seat_text,
+                difficulty: options.difficulty,
+                effort: effort.as_ref(),
+                now_ms: options.now as f64,
+            },
+        )?;
+        put(&mut choice, "evidence", Value::Array(evidence))?;
+        Ok(choice)
+    };
+    if let Some((_, _, _, _, _, choice)) = evaluated.into_iter().next() {
+        return attach_evidence(choice).map(Some);
+    }
+
+    let mut candidates = Vec::new();
+    for profile in &profiles {
+        let val = profile.as_value();
+        let ctx_max = domain::safe_integer(val.get("context_max")).unwrap_or(0);
+        if options.context_required > 0 && ctx_max < options.context_required {
+            continue;
+        }
+        let id_text = val
+            .get("id")
+            .and_then(Value::as_string)
+            .ok_or_else(|| Error::type_error("Fleet profile requires id"))?;
+        let id_str = id_text.to_utf8()?;
+        let id_key = crate::learning::collation_key(id_text)?;
+        let prior = priors
+            .records()
+            .iter()
+            .find(|record| {
+                record.get("profile_id") == Some(&Value::String(id_text.clone()))
+                    && domain::is_text(record.get("task_class"), options.task_class)
+            })
+            .or_else(|| {
+                priors.records().iter().find(|record| {
+                    record.get("model_id") == val.get("model")
+                        && domain::is_text(record.get("task_class"), options.task_class)
+                })
+            });
+        let hinted = val
+            .get("task_class")
+            .and_then(items)
+            .is_some_and(|classes| {
+                classes
+                    .iter()
+                    .any(|item| domain::is_text(Some(item), options.task_class))
+            });
+        if let Some(prior_record) = prior {
+            if domain::safe_integer(prior_record.get("suggested_difficulty"))
+                .is_none_or(|suggested| suggested < u64::from(options.difficulty))
+            {
+                continue;
+            }
+        } else if !hinted {
+            continue;
+        }
+        let reason = format!(
+            "{}; smallest sufficient hardware; starting guess, not a benchmark{}",
+            if prior.is_some() {
+                "capability prior"
+            } else {
+                "fleet task-class hint"
+            },
+            if ctx_max == 0 {
+                "; context capacity remains unknown"
+            } else {
+                ""
+            }
+        );
+        let choice = Value::object(vec![
+            ("profile", val.clone()),
+            ("source", Value::string("prior")),
+            ("recommendation", Value::Null),
+            ("reason", Value::string(&reason)),
+        ]);
+        let cost = hardware_cost(val, options.difficulty)?;
+        let context_fit = if ctx_max > 0 {
+            ctx_max
+        } else {
+            crate::MAX_SAFE_INTEGER
+        };
+        let concurrency = domain::safe_integer(val.get("concurrency")).unwrap_or(1);
+        candidates.push((
+            hinted,
+            cost,
+            context_fit,
+            depth_of(&id_str),
+            concurrency,
+            id_key,
+            choice,
+        ));
+    }
+    candidates.sort_by(|left, right| {
+        right
+            .0
+            .cmp(&left.0)
+            .then_with(|| left.1.total_cmp(&right.1))
+            .then_with(|| left.2.cmp(&right.2))
+            .then_with(|| left.3.cmp(&right.3))
+            .then_with(|| right.4.cmp(&left.4))
+            .then_with(|| left.5.cmp(&right.5))
+    });
+    if let Some((_, _, _, _, _, _, choice)) = candidates.into_iter().next() {
+        attach_evidence(choice).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn format_route(
+    choice: Option<&Value>,
+    task_class: &str,
+    config: &Value,
+    environment: &Value,
+) -> Result<String, Error> {
+    let Some(choice) = choice else {
+        return crate::learning::format_recommendation(None, task_class, config, environment);
+    };
+    let profile = choice
+        .get("profile")
+        .ok_or_else(|| Error::type_error("Route choice requires a profile"))?;
+    let id = domain::string(
+        profile
+            .get("id")
+            .ok_or_else(|| Error::type_error("Route profile requires id"))?,
+    )?
+    .to_utf8()?;
+    let model = domain::string(
+        profile
+            .get("model")
+            .ok_or_else(|| Error::type_error("Route profile requires model"))?,
+    )?
+    .to_utf8()?;
+    let source = domain::string(
+        choice
+            .get("source")
+            .ok_or_else(|| Error::type_error("Route choice requires source"))?,
+    )?
+    .to_utf8()?;
+    let reason = domain::string(
+        choice
+            .get("reason")
+            .ok_or_else(|| Error::type_error("Route choice requires reason"))?,
+    )?
+    .to_utf8()?;
+    let ctx_max = domain::safe_integer(profile.get("context_max")).unwrap_or(0);
+    let ctx_str = if ctx_max == 0 {
+        "unknown".to_owned()
+    } else {
+        ctx_max.to_string()
+    };
+    let concurrency = domain::safe_integer(profile.get("concurrency")).unwrap_or(1);
+    let prefix = match choice
+        .get("recommendation")
+        .filter(|rec| **rec != Value::Null)
+    {
+        Some(recommendation) => crate::learning::format_recommendation(
+            Some(recommendation),
+            task_class,
+            config,
+            environment,
+        )?
+        .trim_end()
+        .to_owned(),
+        None => format!("{task_class}: {model}"),
+    };
+    let mut output = format!(
+        "{prefix} profile={id} source={source} context_max={ctx_str} concurrency={concurrency} reason={reason}\n"
+    );
+    if let Some(evidence) = choice.get("evidence").and_then(items) {
+        for entry in evidence {
+            let entry_model = domain::string(
+                entry
+                    .get("model")
+                    .ok_or_else(|| Error::type_error("Route evidence requires model"))?,
+            )?
+            .to_utf8()?;
+            let seat = domain::string(
+                entry
+                    .get("seat")
+                    .ok_or_else(|| Error::type_error("Route evidence requires seat"))?,
+            )?
+            .to_utf8()?;
+            let entry_class = domain::string(
+                entry
+                    .get("task_class")
+                    .ok_or_else(|| Error::type_error("Route evidence requires task_class"))?,
+            )?
+            .to_utf8()?;
+            let effort = entry
+                .get("effort")
+                .filter(|v| **v != Value::Null)
+                .map_or_else(|| Ok(Text::from("-")), domain::string)?
+                .to_utf8()?;
+            let samples = domain::safe_integer(entry.get("samples")).unwrap_or(0);
+            let accepted = domain::safe_integer(entry.get("accepted")).unwrap_or(0);
+            let rejected = domain::safe_integer(entry.get("rejected")).unwrap_or(0);
+            let origin = if samples > 0 {
+                "local-human-evaluations"
+            } else {
+                "none"
+            };
+            let accept_rate = match entry.get("acceptRate").and_then(Value::as_number) {
+                Some(rate) => {
+                    format!("{}%", crate::planning::feedback::percentage(rate * 100.0)?)
+                }
+                None => "unknown".to_owned(),
+            };
+            let latest = entry
+                .get("latestEvaluation")
+                .filter(|v| **v != Value::Null)
+                .map_or_else(|| Ok(Text::from("unknown")), domain::string)?
+                .to_utf8()?;
+            let age_days = entry
+                .get("ageDays")
+                .filter(|v| **v != Value::Null)
+                .map_or_else(|| Ok(Text::from("unknown")), domain::string)?
+                .to_utf8()?;
+            let sufficient = entry.get("sufficient") == Some(&Value::Boolean(true));
+            let warning = if sufficient {
+                "none"
+            } else if samples > 0 {
+                "insufficient-qualifying-evidence"
+            } else {
+                "no-human-evidence"
+            };
+            output.push_str(&format!(
+                "evidence model={entry_model} seat={seat} task-class={entry_class} effort={effort} origin={origin} n={samples} accepted={accepted} rejected={rejected} accept-rate={accept_rate} latest={latest} age-days={age_days} warning={warning}\n"
+            ));
+        }
+    }
+    crate::learning::bounded_output(output)
+}
+
+pub const DISCOVERY_PORTS: &[u16] = &[8000, 8001, 8080, 8888, 11434, 11435, 1234];
+
+pub fn local_candidates() -> Vec<String> {
+    DISCOVERY_PORTS
+        .iter()
+        .map(|port| format!("http://127.0.0.1:{port}/v1"))
+        .collect()
+}
+
+pub fn discovery_candidates(env: Option<&Value>, extra_urls: &[String]) -> Vec<String> {
+    let mut list = local_candidates();
+    if let Some(extra_raw) = env
+        .and_then(|e| e.get("ROSTER_DISCOVER_HOSTS"))
+        .and_then(Value::as_string)
+        .and_then(|t| t.to_utf8().ok())
+    {
+        for entry in extra_raw.split(',') {
+            let trimmed = entry.trim();
+            if !trimmed.is_empty() && !list.iter().any(|existing| existing == trimmed) {
+                list.push(trimmed.to_owned());
+            }
+        }
+    }
+    for url in extra_urls {
+        if !url.is_empty() && !list.iter().any(|existing| existing == url) {
+            list.push(url.clone());
+        }
+    }
+    list
+}
+
+pub fn merge_discovered_profiles(fleet: &Value, endpoints: &[Value]) -> Result<Fleet, Error> {
+    let validated = validate(fleet)?;
+    let mut profiles = validated
+        .profiles()
+        .iter()
+        .map(|profile| profile.as_value().clone())
+        .collect::<Vec<_>>();
+    for endpoint in endpoints {
+        let base_url_val = endpoint
+            .get("baseUrl")
+            .ok_or_else(|| Error::type_error("Discovered endpoint requires baseUrl"))?;
+        let base_url = normalize_base_url(base_url_val)?.to_utf8()?;
+        let hardware = endpoint
+            .get("hardware")
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "unspecified".to_owned());
+        let models = endpoint
+            .get("models")
+            .and_then(items)
+            .ok_or_else(|| Error::type_error("Discovered endpoint requires models array"))?;
+        for model in models {
+            let Some(model_id) = model
+                .get("id")
+                .and_then(Value::as_string)
+                .and_then(|t| t.to_utf8().ok())
+                .filter(|s| !s.is_empty())
+            else {
+                continue;
+            };
+            if profiles.iter().any(|existing| {
+                domain::is_text(existing.get("base_url"), &base_url)
+                    && domain::is_text(existing.get("model"), &model_id)
+            }) {
+                continue;
+            }
+            let Some(context_max) =
+                domain::safe_integer(model.get("context_max")).filter(|ctx| *ctx >= 1)
+            else {
+                continue;
+            };
+            let digest = crate::identity::sha256_hex(format!("{base_url}\n{model_id}").as_bytes());
+            let prefix = format!("discovered-{}", &digest[..16]);
+            let mut id = prefix.clone();
+            let mut suffix = 2_u64;
+            while profiles
+                .iter()
+                .any(|existing| domain::is_text(existing.get("id"), &id))
+            {
+                id = format!("{prefix}-{suffix}");
+                suffix += 1;
+            }
+            profiles.push(Value::object(vec![
+                ("id", Value::string(&id)),
+                ("base_url", Value::string(&base_url)),
+                ("model", Value::string(&model_id)),
+                ("provider", Value::string("vllm")),
+                ("context_max", Value::Number(context_max as f64)),
+                ("concurrency", Value::Number(1.0)),
+                ("hardware", Value::string(&hardware)),
+                (
+                    "notes",
+                    Value::string(
+                        "Observed through GET /models; hardware and capacity not inferred.",
+                    ),
+                ),
+            ]));
+        }
+    }
+    validate(&Value::object(vec![("profiles", Value::Array(profiles))]))
+}
+
+pub fn select_remediation_profile(profiles: &[Value], current_id: Option<&str>) -> Option<Value> {
+    let mut eligible = profiles
+        .iter()
+        .filter(|profile| {
+            profile
+                .get("id")
+                .and_then(Value::as_string)
+                .is_some_and(|s| !s.0.is_empty())
+                && profile
+                    .get("base_url")
+                    .and_then(Value::as_string)
+                    .is_some_and(|s| !s.0.is_empty())
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if eligible.is_empty() {
+        return None;
+    }
+    eligible.sort_by(|left, right| {
+        let left_ctx = domain::safe_integer(left.get("context_max")).unwrap_or(0);
+        let right_ctx = domain::safe_integer(right.get("context_max")).unwrap_or(0);
+        right_ctx.cmp(&left_ctx).then_with(|| {
+            let left_id = left
+                .get("id")
+                .and_then(Value::as_string)
+                .and_then(|t| t.to_utf8().ok())
+                .unwrap_or_default();
+            let right_id = right
+                .get("id")
+                .and_then(Value::as_string)
+                .and_then(|t| t.to_utf8().ok())
+                .unwrap_or_default();
+            left_id.cmp(&right_id)
+        })
+    });
+    eligible.into_iter().next().or_else(|| {
+        let target = current_id?;
+        profiles
+            .iter()
+            .find(|p| domain::is_text(p.get("id"), target))
+            .cloned()
+    })
+}
+
+pub fn remediation_task(files: &[String], workspace: &str) -> Result<Value, Error> {
+    let test_re = regex_lite::Regex::new(r"^(?:tests/)?[^/]+[._-]test\.[cm]?js$")
+        .map_err(|error| Error::new("Error", error.to_string()))?;
+    let mut tests = Vec::new();
+    for file in files {
+        let normalized = file.replace('\\', "/");
+        if (test_re.is_match(&normalized) || normalized.starts_with("tests/"))
+            && !tests.contains(&normalized)
+        {
+            tests.push(normalized);
+        }
+    }
+    if tests.is_empty() {
+        return Err(Error::type_error(
+            "Remediation requires at least one workspace test file",
+        ));
+    }
+    let ask = format!(
+        "Remediate the failing tests in {workspace}. Edit only {}. Do not change product code unless a test proves the current behavior is wrong. Run only those test files. Stop when they pass.",
+        tests.join(", ")
+    );
+    Ok(Value::object(vec![
+        (
+            "files",
+            Value::Array(tests.iter().map(|f| Value::string(f)).collect()),
+        ),
+        ("ask", Value::string(&ask)),
+    ]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -603,6 +1330,207 @@ mod tests {
                 .and_then(|llm| llm.get("fleet_profile"))
                 .is_none()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn hardware_index_and_cost_reflect_dedicated_cluster_and_last_resort_classes()
+    -> Result<(), Error> {
+        let spark = describe_hardware("dgx-spark-4n")?;
+        assert_eq!(spark.get("class"), Some(&Value::string("cluster")));
+        assert_eq!(spark.get("memory_gb"), Some(&Value::Number(512.0)));
+        assert_eq!(spark.get("nodes"), Some(&Value::Number(4.0)));
+        assert!(describe_hardware("unknown-sku").is_err());
+
+        let rtx3090 = Value::object(vec![
+            ("hardware", Value::string("rtx-3090-24gb")),
+            ("context_max", Value::Number(32_768.0)),
+        ]);
+        let dedicated = Value::object(vec![
+            ("hardware", Value::string("rtx-6000-ada-48gb")),
+            ("context_max", Value::Number(65_536.0)),
+        ]);
+        let spark_1n = Value::object(vec![
+            ("hardware", Value::string("dgx-spark-gb10-128gb")),
+            ("context_max", Value::Number(65_536.0)),
+        ]);
+        let cluster = Value::object(vec![
+            ("hardware", Value::string("dgx-spark-2n")),
+            ("context_max", Value::Number(1_000_000.0)),
+        ]);
+        assert!(hardware_cost(&dedicated, 2)? < hardware_cost(&cluster, 2)?);
+        assert!(hardware_cost(&spark_1n, 4)? < hardware_cost(&dedicated, 4)?);
+        assert!(hardware_cost(&cluster, 4)? < hardware_cost(&cluster, 2)?);
+        assert!(hardware_cost(&cluster, 2)? < hardware_cost(&rtx3090, 2)?);
+        let surrogate_hw = Value::object(vec![
+            ("hardware", Value::String(Text(vec![0xd800]))),
+            ("context_max", Value::Number(32_768.0)),
+        ]);
+        assert!((hardware_cost(&surrogate_hw, 2)? - 20.032_768).abs() < 1e-9);
+        assert!(hardware_cost(&Value::Null, 2).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn choose_route_and_format_route_honor_evals_priors_ceilings_exclusions_and_hardware()
+    -> Result<(), Error> {
+        let fleet_val = crate::json::parse(&Text::from(
+            r#"{"profiles":[{"id":"fast","base_url":"https://fast.example.invalid/v1","model":"owner/fast","provider":"vllm","context_max":32768,"concurrency":4,"hardware":"test-gpu","task_class":["fix"],"notes":""},{"id":"steady","base_url":"https://steady.example.invalid/v1","model":"owner/steady","provider":"vllm","context_max":65536,"concurrency":1,"hardware":"test-gpu","task_class":["feat"],"notes":""}]}"#,
+        ))?;
+        let caps_val = crate::json::parse(&Text::from(
+            r#"{"capabilities":[{"profile_id":"fast","task_class":"fix","suggested_difficulty":5,"context_max":32768,"concurrency":4,"notes":"Starting guess."},{"model_id":"owner/steady","task_class":"fix","suggested_difficulty":1,"context_max":65536,"concurrency":1,"notes":"Starting guess."}]}"#,
+        ))?;
+        let samples = |model: &str, count: usize, verdict: &str| -> Result<Vec<Value>, Error> {
+            (0..count)
+                .map(|index| {
+                    let session = format!("{}-{index}", model.replace('/', "-"));
+                    crate::json::parse(&Text::from(
+                        format!(
+                            r#"{{"model":"{model}","task_class":"fix","effort":"h","session":"{session}","evaluation":{{"session":"{session}","verdict":"{verdict}","difficulty":2,"again":true,"minutes":10}}}}"#
+                        )
+                        .as_str(),
+                    ))
+                })
+                .collect()
+        };
+        let steady_evals = samples("owner/steady", 3, "accept")?;
+        let eval_choice = choose_route(&RouteOptions {
+            fleet: &fleet_val,
+            capabilities: &caps_val,
+            records: &steady_evals,
+            task_class: "fix",
+            difficulty: 2,
+            context_required: 0,
+            profile_id: None,
+            seat: "coder",
+            excluded_profile_ids: &[],
+            queue_depth: None,
+            now: 1_700_000_000_000,
+        })?
+        .ok_or_else(|| Error::type_error("Expected evaluated route"))?;
+        assert_eq!(
+            eval_choice.get("profile").and_then(|p| p.get("id")),
+            Some(&Value::string("steady"))
+        );
+        assert_eq!(eval_choice.get("source"), Some(&Value::string("evals")));
+        let formatted = format_route(Some(&eval_choice), "fix", &Value::Null, &Value::Null)?;
+        assert!(formatted.contains("profile=steady source=evals"));
+        assert!(formatted.contains("origin=local-human-evaluations n=3 accepted=3 rejected=0"));
+
+        for count in [0, 2] {
+            let partial = samples("owner/steady", count, "accept")?;
+            let prior_choice = choose_route(&RouteOptions {
+                fleet: &fleet_val,
+                capabilities: &caps_val,
+                records: &partial,
+                task_class: "fix",
+                difficulty: 2,
+                context_required: 0,
+                profile_id: None,
+                seat: "coder",
+                excluded_profile_ids: &[],
+                queue_depth: None,
+                now: 1_700_000_000_000,
+            })?
+            .ok_or_else(|| Error::type_error("Expected prior route"))?;
+            assert_eq!(
+                prior_choice.get("profile").and_then(|p| p.get("id")),
+                Some(&Value::string("fast"))
+            );
+            assert_eq!(prior_choice.get("source"), Some(&Value::string("prior")));
+        }
+
+        let excluded_choice = choose_route(&RouteOptions {
+            fleet: &fleet_val,
+            capabilities: &caps_val,
+            records: &[],
+            task_class: "fix",
+            difficulty: 2,
+            context_required: 0,
+            profile_id: None,
+            seat: "coder",
+            excluded_profile_ids: &["fast".to_owned()],
+            queue_depth: None,
+            now: 1_700_000_000_000,
+        })?;
+        assert!(excluded_choice.is_none());
+
+        let rejected = samples("owner/fast", 1, "reject")?;
+        assert!(
+            choose_route(&RouteOptions {
+                fleet: &fleet_val,
+                capabilities: &caps_val,
+                records: &rejected,
+                task_class: "fix",
+                difficulty: 2,
+                context_required: 0,
+                profile_id: None,
+                seat: "coder",
+                excluded_profile_ids: &[],
+                queue_depth: None,
+                now: 1_700_000_000_000,
+            })?
+            .is_none()
+        );
+        assert!(
+            choose_route(&RouteOptions {
+                fleet: &fleet_val,
+                capabilities: &caps_val,
+                records: &[],
+                task_class: "fix",
+                difficulty: 2,
+                context_required: 0,
+                profile_id: None,
+                seat: "_coder",
+                excluded_profile_ids: &["_excluded".to_owned()],
+                queue_depth: None,
+                now: 1_700_000_000_000,
+            })?
+            .is_some()
+        );
+
+        let candidates = discovery_candidates(
+            Some(&Value::object(vec![(
+                "ROSTER_DISCOVER_HOSTS",
+                Value::string("http://10.0.0.1:8000/v1"),
+            )])),
+            &[],
+        );
+        assert!(candidates.contains(&"http://127.0.0.1:8000/v1".to_owned()));
+        assert!(candidates.contains(&"http://10.0.0.1:8000/v1".to_owned()));
+
+        let merged = merge_discovered_profiles(
+            &fleet_val,
+            &[Value::object(vec![
+                ("baseUrl", Value::string("http://127.0.0.1:8000/v1")),
+                (
+                    "models",
+                    Value::Array(vec![Value::object(vec![
+                        ("id", Value::string("owner/discovered")),
+                        ("context_max", Value::Number(16_384.0)),
+                    ])]),
+                ),
+            ])],
+        )?;
+        assert_eq!(merged.profiles().len(), 3);
+
+        let merged_profiles = merged
+            .profiles()
+            .iter()
+            .map(|p| p.as_value().clone())
+            .collect::<Vec<_>>();
+        let rem_profile = select_remediation_profile(&merged_profiles, None)
+            .ok_or_else(|| Error::new("TestError", "remediation profile"))?;
+        assert_eq!(rem_profile.get("id"), Some(&Value::string("steady")));
+        let rem_task = remediation_task(
+            &["src/app.js".to_owned(), "tests/app.test.mjs".to_owned()],
+            "repo",
+        )?;
+        assert_eq!(
+            rem_task.get("files"),
+            Some(&Value::Array(vec![Value::string("tests/app.test.mjs")]))
+        );
+        assert!(remediation_task(&["src/app.js".to_owned()], "repo").is_err());
         Ok(())
     }
 }

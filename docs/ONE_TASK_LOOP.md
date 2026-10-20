@@ -1,5 +1,20 @@
 # One-task loop
 
+## Native rewrite checkpoint
+
+On this Rust-only branch, use `roster run --issue N --runtime builtin` for a
+fresh App-authenticated issue, or the native local Ask/TASK paths described in
+[the native runtime guide](RUST.md#native-fresh-issue-delivery). Fresh issue
+delivery preserves the original calling repository and actual primary/shared
+index seals, then creates one isolated `agents/N` branch/worktree. Existing
+claims are refused, not adopted or resumed.
+
+The broader lifecycle below remains the behavioral reference. The native CLI
+still requires explicit runtime selection, has bounded schema-one session logs
+rather than the legacy live transcript, and does not yet record durable
+history, publish, resume existing issues, schedule waves or open the shell.
+No Node runtime is retained as a fallback for those missing surfaces.
+
 ## Whole-task budget
 
 Set optional `seat.task_timeout_ms` to a positive integer in milliseconds (at

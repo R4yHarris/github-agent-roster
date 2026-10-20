@@ -18,16 +18,22 @@ not behind, run `git submodule update --init --recursive`, and confirm the
 issue is open. Roster then branches new issue work from fresh
 `origin/<default>`:
 
-```sh
-node src/cli.mjs run --issue N --runtime builtin --seats planner,coder,reviewer
+```powershell
+roster run --issue N --runtime builtin
 ```
 
-In a human TTY, the equivalent is `/run N` in the [Roster shell](REPL.md).
+The native command requires complete App credentials and explicit approved
+Git/Node20 images for its required SDK identity adapter, then uses a fresh
+`agents/N` worktree and the sequential seats automatically. Existing claims
+are refused; native resume, queue writes and publication remain unavailable.
+`--no-fetch` is an explicit stale-ref choice, not proof of a fresh remote.
+The shell `/run N` remains unported; see [native scope](RUST.md#native-fresh-issue-delivery).
+
 The parent reviews the resulting worktree and tests, then invokes the
 contracts publisher below for an explicitly requested publication. Copilot
 subagent names label Roster seats; they are not GitHub identities or policy
 grants.
-Roster-managed `--publish` and REPL `/publish` require a passing
+The eventual Roster-managed `--publish` and REPL `/publish` require a passing
 [REVIEW.md](REVIEW.md) unless `--skip-review` is explicit. A direct call to
 the contracts publisher cannot enforce that in-process gate: review the
 code and result yourself before using the manual handoff.

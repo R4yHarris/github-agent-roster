@@ -13,20 +13,34 @@ use crate::json::Value;
 use crate::metrics;
 use crate::paths;
 use crate::start::{self, Sync};
+use crate::state::provenance::history;
 use crate::state::{redaction, secure};
 use crate::status;
 
 pub const HELP: &str = "Usage:
   roster --help
   roster init
+  roster ask \"TEXT\"
+  roster ask --pending|--cancel|--resume [\"TEXT\"]
+  roster question [--files PATH,PATH --] TEXT
   roster doctor
+  roster doctor --copilot [--opt-in] [--runtime PATH] [--model ID]
   roster fleet list
+  roster history list [--format json|text|summary] [--store DIR] [--repo HASH] [--issue N] [--seat NAME] [--model MODEL] [--outcome VALUE] [--since TIME] [--until TIME]
+  roster history show <session-or-run-or-record-id> [--format json|text|summary] [--store DIR]
+  roster clean [--target issue|repo|machine-history|curated-memory] [--issue N] [--store DIR] [--scope SCOPE] [--state-root PATH] [--exclude NAME]... [--execute --yes]
+  roster bench
   roster status --issue N [--offline] [--json]
-  roster stats [--json] [--ref REVISION_OR_RANGE] [--evals PATH]
+  roster stats [--delivery] [--json] [--ref REVISION_OR_RANGE] [--evals PATH]
+  roster learn --recurring
+  roster vault set NAME
+  roster vault list
+  roster vault get NAME
   roster recommend --task-class feat|fix|docs|test [--difficulty 1-5] [--json]
   roster eval TARGET accept|reject|rework 1-5 y|n --local|--post [--minutes N] [--comment TEXT]
   roster run --seat coder --runtime builtin [--skip-review]
   roster run --ask-file PATH --runtime builtin [--base trunk|current|REF] [--no-fetch|--fetch] [--skip-review]
+  roster run --issue N --runtime builtin [--base trunk|current|REF] [--no-fetch|--fetch] [--skip-review]
   roster catalog parse ROOT FIELD... < catalog.yml
   roster arguments split < arguments.txt
   roster recipe validate PATH
@@ -34,14 +48,17 @@ pub const HELP: &str = "Usage:
 Native Rust application under active rewrite.
 Local delivery uses approved native tools and sequential builtin seats.
 Local fixed-profile delivery supports at most two rescopings, two fresh perspectives and two semantic review repairs.
-GitHub issue delivery, publication, resume, routing and review repair are unavailable.
-Those exclusions concern GitHub-backed runs; local fixed-profile continuations above are implemented.
+GitHub issue intake uses App authentication and a fresh isolated issue worktree.
+GitHub publication, resume and automatic routing are unavailable.
+Existing issue claims are never adopted or replaced; local fixed-profile continuations above are implemented.
 Unimplemented commands fail explicitly; there is no Node runtime fallback.
 Stats and recommendations read bounded local evidence without recording, publishing or changing a route.
+History list and show read bounded durable provenance records without modifying or repairing the store.
 Status requires an explicit issue; --offline stays local, otherwise complete App authentication and the reviewed SDK are required. Observations are not liveness or passing authority.
 Fleet list reads checked canonical private settings without probing, warming, writing or selecting a route; other fleet commands remain unavailable.
 Human eval requires explicit --local or --post and a separate human invocation; posting requires approved human GitHub credentials.
-Delivery stats, onboarding and the interactive shell remain unavailable.
+Learn --recurring writes human-reviewable draft proposals in .roster/proposals without changing active rules.
+Onboarding and the interactive shell remain unavailable.
 ";
 
 #[derive(Debug, Clone)]
@@ -66,11 +83,34 @@ pub struct Recommend {
 }
 
 #[derive(Debug, Clone)]
+pub enum AskCommand {
+    Submit(String),
+    Pending,
+    Cancel,
+    Resume(Option<String>),
+}
+
+#[derive(Debug, Clone)]
+pub enum VaultCommand {
+    Set(String),
+    List,
+    Get(String),
+}
+
+#[derive(Debug, Clone)]
 pub enum Command {
     Help,
     Init,
+    Ask(AskCommand),
+    Question(Vec<String>),
     Doctor,
+    CopilotDoctor(crate::capabilities::CopilotDoctorOptions),
     FleetList,
+    History(history::Request),
+    Clean(crate::state::clean::CliOptions),
+    Bench,
+    LearnRecurring,
+    Vault(VaultCommand),
     Status(status::Options),
     Stats(Stats),
     Recommend(Recommend),
@@ -82,8 +122,11 @@ pub enum Command {
 }
 
 fn parse_stats(args: &[String]) -> Result<Stats, Error> {
-    let usage =
-        || Error::type_error("Use roster stats [--json] [--ref REVISION_OR_RANGE] [--evals PATH].");
+    let usage = || {
+        Error::type_error(
+            "Use roster stats [--delivery] [--json] [--ref REVISION_OR_RANGE] [--evals PATH].",
+        )
+    };
     let mut seen = BTreeSet::new();
     let mut result = Stats {
         metrics: metrics::Options::default(),
@@ -96,6 +139,7 @@ fn parse_stats(args: &[String]) -> Result<Stats, Error> {
         }
         match flag.as_str() {
             "--json" => result.json = true,
+            "--delivery" => result.metrics.delivery = true,
             "--ref" | "--evals" => {
                 position += 1;
                 let value = args
@@ -108,11 +152,6 @@ fn parse_stats(args: &[String]) -> Result<Stats, Error> {
                     result.metrics.evals_path = Some(PathBuf::from(value));
                 }
             }
-            "--delivery" => return Err(Error::new(
-                "NativeIntegrationError",
-                "Delivery-dimension stats are not implemented; no learning summary was substituted",
-            )
-            .coded("ROSTER_NATIVE_UNSUPPORTED")),
             _ => return Err(usage()),
         }
         position += 1;
@@ -166,14 +205,13 @@ fn parse_recommend(args: &[String]) -> Result<Recommend, Error> {
 
 fn invalid_run() -> Error {
     Error::type_error(
-        "Use roster run --seat coder --runtime builtin or roster run --ask-file PATH --runtime builtin [--base trunk|current|REF] [--no-fetch|--fetch] [--skip-review]",
+        "Use roster run --seat coder --runtime builtin or roster run --ask-file PATH|--issue N --runtime builtin [--base trunk|current|REF] [--no-fetch|--fetch] [--skip-review]",
     )
 }
 
 fn parse_run(args: &[String]) -> Result<Run, Error> {
     if args.iter().any(|arg| {
         [
-            "--issue",
             "--publish",
             "--auto-model",
             "--seats",
@@ -189,7 +227,7 @@ fn parse_run(args: &[String]) -> Result<Run, Error> {
     }) {
         return Err(Error::new(
             "NativeIntegrationError",
-            "GitHub issue/publication and outer routing/resume/review-repair flags are not implemented; no local issue or publisher was substituted",
+            "GitHub publication and outer routing/resume flags are not implemented; no publisher or route was substituted",
         ).coded("ROSTER_NATIVE_UNSUPPORTED"));
     }
     let mut seen = BTreeSet::new();
@@ -215,7 +253,7 @@ fn parse_run(args: &[String]) -> Result<Run, Error> {
                     Sync::Offline
                 });
             }
-            "--seat" | "--runtime" | "--ask-file" | "--base" => {
+            "--seat" | "--runtime" | "--ask-file" | "--base" | "--issue" => {
                 position += 1;
                 let value = args
                     .get(position)
@@ -227,6 +265,11 @@ fn parse_run(args: &[String]) -> Result<Run, Error> {
                     }
                     "--ask-file" if input.is_none() => {
                         input = Some(Input::AskFile(PathBuf::from(value)))
+                    }
+                    "--issue" if input.is_none() => {
+                        input = Some(Input::GitHubIssue(
+                            start::parse_issue_number(value).map_err(|_| invalid_run())?,
+                        ))
                     }
                     "--runtime" if value == "builtin" => runtime = Some(()),
                     "--base" => {
@@ -249,7 +292,7 @@ fn parse_run(args: &[String]) -> Result<Run, Error> {
     let input = input.ok_or_else(invalid_run)?;
     if matches!(input, Input::ExistingTask) && (base.is_some() || sync.is_some()) {
         return Err(Error::type_error(
-            "Existing-TASK mode never moves its current worktree; --base/--fetch/--no-fetch apply only to --ask-file",
+            "Existing-TASK mode never moves its current worktree; --base/--fetch/--no-fetch apply only to --ask-file or --issue",
         ));
     }
     Ok(Run {
@@ -266,8 +309,58 @@ pub fn parse(args: &[String]) -> Result<Command, Error> {
     }
     match args {
         [command] if command == "init" => Ok(Command::Init),
+        [command, rest @ ..] if command == "question" => {
+            if rest.is_empty() {
+                Err(Error::type_error(
+                    "Use roster question TEXT with an explicit Files allowed section.",
+                ))
+            } else {
+                Ok(Command::Question(rest.to_vec()))
+            }
+        }
+        [command, rest @ ..] if command == "ask" => match rest {
+            [flag] if flag == "--pending" => Ok(Command::Ask(AskCommand::Pending)),
+            [flag] if flag == "--cancel" => Ok(Command::Ask(AskCommand::Cancel)),
+            [flag] if flag == "--resume" => Ok(Command::Ask(AskCommand::Resume(None))),
+            [flag, answer] if flag == "--resume" => {
+                Ok(Command::Ask(AskCommand::Resume(Some(answer.clone()))))
+            }
+            [flag, ..] if matches!(flag.as_str(), "--pending" | "--cancel" | "--resume") => Err(
+                Error::type_error("Use roster ask --pending, --cancel, or --resume \"TEXT\"."),
+            ),
+            [text] => Ok(Command::Ask(AskCommand::Submit(text.clone()))),
+            _ => Err(Error::type_error(
+                "Use roster ask \"TEXT\" or roster ask --pending, --cancel, or --resume \"TEXT\".",
+            )),
+        },
         [command] if command == "doctor" => Ok(Command::Doctor),
+        [command, flag, rest @ ..] if command == "doctor" && flag == "--copilot" => Ok(
+            Command::CopilotDoctor(crate::capabilities::parse_copilot_doctor_args(rest)?),
+        ),
         [command, operation] if command == "fleet" && operation == "list" => Ok(Command::FleetList),
+        [command, flags @ ..] if command == "history" => {
+            Ok(Command::History(history::Request::parse(flags)?))
+        }
+        [command, flags @ ..] if command == "clean" => Ok(Command::Clean(
+            crate::state::clean::CliOptions::parse(flags)?,
+        )),
+        [command] if command == "bench" => Ok(Command::Bench),
+        [command, flags @ ..] if command == "learn" => {
+            if flags == ["--recurring"] {
+                Ok(Command::LearnRecurring)
+            } else {
+                Err(Error::type_error("Use roster learn --recurring."))
+            }
+        }
+        [command, operation, name] if command == "vault" && operation == "set" => {
+            Ok(Command::Vault(VaultCommand::Set(name.clone())))
+        }
+        [command, operation] if command == "vault" && operation == "list" => {
+            Ok(Command::Vault(VaultCommand::List))
+        }
+        [command, operation, name] if command == "vault" && operation == "get" => {
+            Ok(Command::Vault(VaultCommand::Get(name.clone())))
+        }
         [command, flags @ ..] if command == "status" => {
             Ok(Command::Status(status::Options::parse(flags)?))
         }

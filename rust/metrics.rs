@@ -22,6 +22,7 @@ pub const MAX_DIRECTORY_ENTRIES: usize = 256;
 pub struct Options {
     pub reference: Option<String>,
     pub evals_path: Option<PathBuf>,
+    pub delivery: bool,
 }
 
 enum ReadScope<'a> {
@@ -614,6 +615,13 @@ impl Analytics {
             .collect()
     }
 
+    pub fn delivery_groups(&self) -> Result<Vec<Value>, Error> {
+        learning::delivery_metrics(&self.records)?
+            .iter()
+            .map(|value| redaction::history_record(value, &self.redaction))
+            .collect()
+    }
+
     pub fn recommendation(
         &self,
         task_class: &str,
@@ -712,6 +720,26 @@ fn safe_models(records: &[Value], redaction: &redaction::Config) -> Result<(), E
                     "ROSTER_ANALYTICS_INPUT",
                     "Model metadata must be a redacted model identifier, not a path or endpoint",
                 ));
+            }
+        }
+        if let Some(hardware) = optional(record, "delivery")
+            .and_then(|delivery| optional(delivery, "hardware"))
+            .and_then(Value::as_string)
+        {
+            let source = hardware.to_utf8().map_err(|_| {
+                learning::error(
+                    "ROSTER_ANALYTICS_COLLATION_UNPROVEN",
+                    "Unpaired UTF-16 hardware ordering is unproven",
+                )
+            })?;
+            if redaction::diagnostic(hardware, redaction) != *hardware {
+                return Err(learning::error(
+                    "ROSTER_ANALYTICS_INPUT",
+                    "Delivery hardware metadata contains private or secret-shaped material; no aggregate was emitted",
+                ));
+            }
+            if !source.is_ascii() {
+                learning::collation_key(hardware)?;
             }
         }
     }
@@ -860,8 +888,16 @@ async fn load_selected(
             }
         }
     }
-    let records =
-        learning::join_learning(&exported, &local, &evaluations, options.reference.is_none())?;
+    let records = if options.delivery {
+        learning::join_delivery_learning(
+            &exported,
+            &local,
+            &evaluations,
+            options.reference.is_none(),
+        )?
+    } else {
+        learning::join_learning(&exported, &local, &evaluations, options.reference.is_none())?
+    };
     let redaction = redaction_config(environment, &paths);
     safe_models(&records, &redaction)?;
     tokio::task::yield_now().await;
@@ -1114,6 +1150,298 @@ pub(crate) async fn evaluation_metadata(
     )?;
     token.check()?;
     Ok(Some(metadata))
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProposalOutcome {
+    pub created: Vec<String>,
+    pub existing: Vec<String>,
+    pub signatures: Vec<Value>,
+}
+
+fn valid_proposal_draft_name(name: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".md") else {
+        return false;
+    };
+    let Some((prefix, hash)) = stem.rsplit_once('-') else {
+        return false;
+    };
+    !prefix.is_empty()
+        && prefix
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        && hash.len() == 16
+        && hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn proposal_directory(cwd: &Path, create: bool) -> Result<(PathBuf, PathBuf), Error> {
+    let root = config::shared_config_root(cwd)?;
+    secure::check_components(&root)?;
+    let directory = layout::resolve_directory(layout::Scope::Shared, &root, None, None)?;
+    secure::check_components(&directory.dir)?;
+    secure::check_components(&directory.legacy_root)?;
+    let proposals = layout::state_path(directory, &["proposals"])?.path;
+    paths::ensure_local_path(&proposals, &root)?;
+    secure::check_components(&proposals)?;
+    if create {
+        secure::private_directory(&proposals, true)?;
+        paths::ensure_local_path(&proposals, &root)?;
+    }
+    Ok((root, proposals))
+}
+
+pub fn list_failure_proposals(cwd: &Path) -> Result<Vec<String>, Error> {
+    list_failure_proposals_inner(cwd).map_err(safe_error)
+}
+
+fn list_failure_proposals_inner(cwd: &Path) -> Result<Vec<String>, Error> {
+    let (root, directory) = proposal_directory(cwd, false)?;
+    if !secure::private_directory_if_present(&directory)? {
+        return Ok(Vec::new());
+    }
+    let mut names = Vec::new();
+    for name in secure::entries_bounded(&directory, MAX_DIRECTORY_ENTRIES).map_err(|_| {
+        learning::error(
+            "ROSTER_ANALYTICS_SIZE",
+            "Proposal directory is unreadable or exceeds 256 directory entries",
+        )
+    })? {
+        if !name.ends_with(".md") {
+            continue;
+        }
+        let target = directory.join(&name);
+        paths::ensure_local_path(&target, &root)?;
+        secure::check_components(&target)?;
+        let metadata = std::fs::symlink_metadata(&target)
+            .map_err(|cause| secure::io_error("Inspect proposal draft", &target, cause))?;
+        if !metadata.is_file() || secure::linked(&metadata) {
+            return Err(learning::error(
+                "ROSTER_ANALYTICS_INPUT",
+                "Proposal drafts must be regular files",
+            ));
+        }
+        if !valid_proposal_draft_name(&name) {
+            return Err(learning::error(
+                "ROSTER_ANALYTICS_INPUT",
+                "Proposal draft names must use the generated signature slug",
+            ));
+        }
+        if paths::file_information(&target)?.links != 1 {
+            return Err(learning::error(
+                "ROSTER_ANALYTICS_INPUT",
+                "Proposal drafts must be single-link files",
+            ));
+        }
+        names.push(name);
+    }
+    names.sort();
+    Ok(names)
+}
+
+pub fn propose_recurring_failures(
+    installation: &Path,
+    cwd: &Path,
+    environment: &Value,
+) -> Result<ProposalOutcome, Error> {
+    propose_recurring_failures_inner(installation, cwd, environment).map_err(safe_error)
+}
+
+fn add_declared_credential(
+    redaction: &mut redaction::Config,
+    environment: &Value,
+    name: Option<&Value>,
+) -> Result<(), Error> {
+    let Some(name) = name
+        .and_then(Value::as_string)
+        .filter(|name| !name.0.is_empty())
+    else {
+        return Ok(());
+    };
+    if let Some(value) = config::environment_entry(environment, &name.to_utf8()?)? {
+        let value = value.as_string().ok_or_else(|| {
+            learning::error(
+                "ROSTER_ANALYTICS_INPUT",
+                "Selected credential declaration must be text",
+            )
+        })?;
+        if !value.0.is_empty() {
+            redaction.credential_values.push(value.clone());
+        }
+    }
+    Ok(())
+}
+
+fn propose_recurring_failures_inner(
+    installation: &Path,
+    cwd: &Path,
+    environment: &Value,
+) -> Result<ProposalOutcome, Error> {
+    if !matches!(environment, Value::Object(_)) {
+        return Err(Error::type_error(
+            "Recurring failure proposal environment must be a typed mapping",
+        ));
+    }
+    let root = config::shared_config_root(cwd)?;
+    secure::check_components(&root)?;
+    paths::ensure_local_path(&root.join(".roster").join("runs"), &root)?;
+    paths::ensure_local_path(&root.join(".roster").join("evals.jsonl"), &root)?;
+    let mut redaction = if let Ok(repo_paths) = paths::repository_paths(cwd) {
+        redaction_config(environment, &repo_paths)
+    } else {
+        let mut config = redaction::Config {
+            environment: environment.clone(),
+            ..Default::default()
+        };
+        if let Some(path) = root.to_str() {
+            config.paths.push(Text::from(path));
+        }
+        for name in ["HOME", "USERPROFILE", "LOCALAPPDATA", "APPDATA"] {
+            if let Some(value) = environment
+                .get(name)
+                .and_then(Value::as_string)
+                .filter(|value| !value.0.is_empty())
+            {
+                config.paths.push(value.clone());
+            }
+        }
+        config
+    };
+    let loaded = config::load(installation, &root, environment).map_err(|cause| {
+        let mut safe = Error::new(
+            cause.name,
+            "Configuration diagnostics were omitted; existing bytes were preserved.",
+        );
+        safe.code = cause.code;
+        learning::error(
+            "ROSTER_ANALYTICS_CONFIG",
+            "Could not load recurring-proposal configuration; verify checked configuration files and permissions",
+        )
+        .caused_by(safe)
+    })?;
+    if let Some(name) = loaded
+        .config
+        .as_value()
+        .get("llm")
+        .and_then(|llm| llm.get("api_key_env"))
+        .and_then(Value::as_string)
+    {
+        redaction.api_key_env = name.clone();
+    }
+    add_declared_credential(
+        &mut redaction,
+        environment,
+        loaded
+            .config
+            .as_value()
+            .get("llm")
+            .and_then(|llm| llm.get("api_key_env")),
+    )?;
+    let catalog = crate::fleet::load(&root).map_err(|cause| {
+        let mut safe = Error::new(cause.name, "Private fleet provider details were omitted");
+        safe.code = cause.code;
+        learning::error(
+            "ROSTER_ANALYTICS_CONFIG",
+            "Could not read recurring-proposal fleet settings; private settings were preserved",
+        )
+        .caused_by(safe)
+    })?;
+    for profile in catalog.profiles() {
+        add_declared_credential(
+            &mut redaction,
+            environment,
+            profile.as_value().get("api_key_env"),
+        )?;
+    }
+    let mut budget = Budget::default();
+    let (runs, evaluations) = learning_files(&root, &mut budget, true).map_err(|cause| {
+        if cause.name == "LearningError" {
+            cause
+        } else {
+            learning::error(
+                "ROSTER_ANALYTICS_INPUT",
+                "Local learning read refused; verify bounded real files and private directories. Existing bytes were preserved.",
+            )
+        }
+    })?;
+    let mut records = learning::join_learning(&[], &runs, &evaluations, true)?;
+    for (order, evaluation) in evaluations.iter().enumerate() {
+        if !records
+            .iter()
+            .any(|record| learning::matches_evaluation(record, evaluation))
+        {
+            let latest = evaluations
+                .iter()
+                .enumerate()
+                .rfind(|(_, entry)| learning::matches_evaluation(entry, evaluation))
+                .map(|(index, _)| index);
+            if latest == Some(order) {
+                let mut row = evaluation.clone();
+                domain::put(&mut row, "evaluation", evaluation.clone())?;
+                domain::put(&mut row, "evaluation_order", Value::Number(order as f64))?;
+                records.push(row);
+            }
+        }
+    }
+    safe_models(&records, &redaction)?;
+    let recurring = learning::failure_signatures(&records)?
+        .into_iter()
+        .filter(|signature| {
+            signature
+                .get("occurrences")
+                .and_then(domain::items)
+                .is_some_and(|occurrences| occurrences.len() >= 3)
+        })
+        .collect::<Vec<_>>();
+    if recurring.is_empty() {
+        return Ok(ProposalOutcome::default());
+    }
+    let (root, directory) = proposal_directory(&root, true)?;
+    let mut created = Vec::new();
+    let mut existing = Vec::new();
+    for proposal in &recurring {
+        let slug = proposal
+            .get("slug")
+            .and_then(Value::as_string)
+            .ok_or_else(|| Error::type_error("Proposal requires a slug"))?
+            .to_utf8()?;
+        let name = format!("{slug}.md");
+        if !valid_proposal_draft_name(&name) {
+            return Err(learning::error(
+                "ROSTER_ANALYTICS_INPUT",
+                "Proposal draft names must use the generated signature slug",
+            ));
+        }
+        let file = directory.join(&name);
+        paths::ensure_local_path(&file, &root)?;
+        secure::check_components(&file)?;
+        let content = learning::render_failure_proposal(proposal, &redaction)?;
+        match secure::write_exclusive(&file, content.as_bytes()) {
+            Ok(_) => created.push(name),
+            Err(error) if error.code == Some("EEXIST") => {
+                let metadata = std::fs::symlink_metadata(&file).map_err(|cause| {
+                    secure::io_error("Inspect existing proposal draft", &file, cause)
+                })?;
+                if !metadata.is_file()
+                    || secure::linked(&metadata)
+                    || paths::file_information(&file)?.links != 1
+                {
+                    return Err(learning::error(
+                        "ROSTER_ANALYTICS_INPUT",
+                        "Existing proposal must be a regular single-link draft",
+                    ));
+                }
+                existing.push(name);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(ProposalOutcome {
+        created,
+        existing,
+        signatures: recurring,
+    })
 }
 
 #[cfg(test)]

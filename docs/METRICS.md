@@ -382,29 +382,29 @@ cargo test --lib --locked --offline metrics::
 cargo test --test analytics --locked --offline
 ```
 
-## Historical delivery evidence (native command unavailable)
+## Native delivery-dimension evidence and recurring proposals
 
-`roster stats --delivery` is explicitly unavailable in the native CLI.
-The following legacy contract is retained for later migration, not implemented
-by substituting the learning table. Human `eval ... --local` authoring is
-implemented separately, with explicit human `--post` feedback.
-Recurring proposal creation, interactive shell, resume and automatic routing
+`roster stats --delivery [--json]` and `roster learn --recurring` are
+implemented in the native CLI (`rust/learning.rs` and `rust/metrics.rs`).
+Human `eval ... --local` authoring is implemented separately, with explicit
+human `--post` feedback. Interactive shell, resume and automatic routing
 remain separate work.
 
-`roster stats --delivery` (or `/stats --delivery`) groups evidence by actual
-response model, declared fleet hardware, and seat. Add `--json` for stable,
-diffable JSON. CLI history/evaluation selectors still work:
+`roster stats --delivery` groups evidence by actual response model, declared
+fleet hardware, and seat. Add `--json` for stable, diffable JSON. CLI
+history/evaluation selectors still work:
 
 ```sh
 roster stats --delivery --json --ref HEAD --evals evals.jsonl
 ```
 
-The pure `deliveryMetrics(records)` and `formatDeliveryMetrics(groups)` helpers
-live in `src/lib/delivery-metrics.mjs`. `loadMetrics({ delivery: true })` preserves
+The pure `learning::delivery_metrics` and `learning::format_delivery_metrics`
+helpers live in `rust/learning.rs`. `metrics::load` with `delivery: true` preserves
 individual local seat attempts when enriching published commits; ordinary stats
-retains its existing commit/model/effort semantics. Explicit `--ref` still excludes
-unpublished local attempts. Neither stats nor the aggregation contacts an endpoint
-or GitHub, starts seats, or changes staffing decisions.
+retains its existing commit/model/effort semantics and appends open `.roster/proposals`
+drafts in text mode. Explicit `--ref` still excludes unpublished local attempts.
+Neither stats nor `roster learn --recurring` contacts an endpoint or GitHub,
+starts seats, or changes staffing decisions or active rules.
 Published SHA links enrich evaluations, but a final commit's model or usage never
 overwrites the response-backed metadata of an earlier attempt.
 

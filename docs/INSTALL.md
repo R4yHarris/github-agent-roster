@@ -5,9 +5,10 @@ There is no npm package entry point, parallel Node implementation or legacy
 oracle checkout. Main and Git history retain the former application.
 
 The native CLI implements help, recipe validation, catalog parsing, argument
-splitting, offline `init`/`doctor`, and the first Windows-native local TASK/Ask
-delivery path, including fixed-profile rescoping, fresh-context perspectives
-and independent review repairs. GitHub issue delivery/publication, onboarding,
+splitting, offline `init`/`doctor`, Windows-native local TASK/Ask and fresh
+App-authenticated issue delivery, including fixed-profile rescoping,
+fresh-context perspectives and independent review repairs. GitHub publication,
+onboarding,
 interactive shell, resume and automatic fleet recovery/routing remain unavailable.
 
 ## Prerequisites
@@ -15,8 +16,8 @@ interactive shell, resume and automatic fleet recovery/routing remain unavailabl
 - Rust 1.85 or later with Cargo, rustfmt and Clippy.
 - Git and the reviewed contracts submodule.
 - The selected Rust target's normal compiler/linker prerequisites.
-- Node 20 only for JavaScript consumer test fixtures and the independent
-  contracts publishing SDK, not for the Roster binary.
+- Node 20 only for JavaScript consumer checks and the independent contracts
+  identity/publishing SDK adapter, not as a Roster runtime or fallback.
 
 ## Windows PowerShell
 
@@ -54,7 +55,8 @@ See [TESTING](TESTING.md) for formatting, strict Clippy, native unit/integration
 tests, minimum-compiler checks and external consumer fixture requirements.
 Use a persistent source checkout while resource installation and the remaining
 CLI are being implemented. This branch does not claim a completed packaged
-installation, model onboarding, cross-platform delivery or GitHub delivery loop.
+installation, model onboarding, cross-platform delivery or the complete
+issue-to-publication delivery loop.
 
 ## Explicit local host configuration
 
@@ -71,11 +73,15 @@ $env:ROSTER_NODE20 = 'C:\approved-node20\node.exe'
 .\target\release\roster.exe doctor
 .\target\release\roster.exe run --seat coder --runtime builtin
 .\target\release\roster.exe run --ask-file ASK.md --runtime builtin --no-fetch
+.\target\release\roster.exe run --issue 42 --runtime builtin --no-fetch
 ```
 
 These paths are examples, not executable discovery or installation commands.
 Only select images actually installed and approved on the host. Node is an
-optional consumer-language engine, never a Roster fallback.
+optional consumer-language engine and the explicit contracts identity adapter,
+never a Roster fallback. Issue mode additionally needs complete App credentials
+with the private key outside source repositories; it refuses existing issue
+claims rather than resuming them. See [fresh issue delivery](RUST.md#native-fresh-issue-delivery).
 
 For a Rust consumer set an absolute `ROSTER_CARGO`, the installed toolchain's
 `CARGO_HOME`/`RUSTUP_HOME` and, where needed, `RUSTUP_TOOLCHAIN` and `RUSTFLAGS`.

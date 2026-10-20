@@ -59,62 +59,43 @@ impl GitSubject {
     }
 }
 
-pub(crate) struct GitSeal {
-    validation: Value,
-    indexes: Vec<(std::path::PathBuf, Option<secure::Snapshot>)>,
+#[derive(Debug, Clone)]
+pub(crate) struct IndexSeal {
+    files: Vec<(std::path::PathBuf, Option<secure::Snapshot>)>,
 }
 
-impl GitSeal {
-    pub(crate) fn capture<'a>(
-        boundary: &'a Boundary,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Self, Error>> + 'a>> {
-        Box::pin(async move {
-            let original = validation(boundary).await?;
-            let mut indexes = Vec::new();
-            for args in [
-                vec!["rev-parse", "--git-path", "index"],
-                vec!["rev-parse", "--shared-index-path"],
-            ] {
-                let output = bytes_text(
-                    &boundary
-                        .git(
-                            &args.into_iter().map(str::to_owned).collect::<Vec<_>>(),
-                            &BTreeMap::new(),
-                        )
-                        .await?,
-                )?;
-                let path = output.trim();
-                if path.is_empty() {
-                    if indexes.is_empty() {
-                        return Err(denied("Original Git index path is unavailable"));
-                    }
-                    continue;
-                }
-                let path = crate::paths::resolve(boundary.root(), std::path::Path::new(path))?;
-                secure::check_components(&path)?;
-                let snapshot = secure::read(&path, MAX_FILE_BYTES)?;
-                if snapshot.is_some() && crate::paths::file_information(&path)?.links != 1 {
-                    return Err(denied(
-                        "Original Git index must be a single-link regular file",
-                    ));
-                }
-                indexes.push((path, snapshot));
-            }
-            let seal = Self {
-                validation: original,
-                indexes,
-            };
-            seal.require_current(boundary).await?;
-            Ok(seal)
-        })
+impl IndexSeal {
+    pub(crate) fn capture(root: &std::path::Path, primary: &str) -> Result<Self, Error> {
+        if primary.is_empty() {
+            return Err(denied("Original Git index path is unavailable"));
+        }
+        let mut seal = Self { files: Vec::new() };
+        seal.include_shared(root, primary)?;
+        Ok(seal)
     }
 
-    pub(crate) fn validation(&self) -> &Value {
-        &self.validation
+    pub(crate) fn include_shared(
+        &mut self,
+        root: &std::path::Path,
+        path: &str,
+    ) -> Result<(), Error> {
+        if path.is_empty() {
+            return Ok(());
+        }
+        let path = crate::paths::resolve(root, std::path::Path::new(path))?;
+        secure::check_components(&path)?;
+        let snapshot = secure::read(&path, MAX_FILE_BYTES)?;
+        if snapshot.is_some() && crate::paths::file_information(&path)?.links != 1 {
+            return Err(denied(
+                "Original Git index must be a single-link regular file",
+            ));
+        }
+        self.files.push((path, snapshot));
+        Ok(())
     }
 
-    fn require_indexes(&self) -> Result<(), Error> {
-        for (path, expected) in &self.indexes {
+    pub(crate) fn require_current(&self) -> Result<(), Error> {
+        for (path, expected) in &self.files {
             let current = secure::read(path, MAX_FILE_BYTES)?;
             match (expected, current) {
                 (None, None) => {}
@@ -131,6 +112,49 @@ impl GitSeal {
         }
         Ok(())
     }
+}
+
+pub(crate) struct GitSeal {
+    validation: Value,
+    indexes: IndexSeal,
+}
+
+impl GitSeal {
+    pub(crate) fn capture<'a>(
+        boundary: &'a Boundary,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<Self, Error>> + 'a>> {
+        Box::pin(async move {
+            let original = validation(boundary).await?;
+            let primary = bytes_text(
+                &boundary
+                    .git(
+                        &["rev-parse", "--git-path", "index"].map(str::to_owned),
+                        &BTreeMap::new(),
+                    )
+                    .await?,
+            )?;
+            let mut indexes = IndexSeal::capture(boundary.root(), primary.trim())?;
+            let shared = bytes_text(
+                &boundary
+                    .git(
+                        &["rev-parse", "--shared-index-path"].map(str::to_owned),
+                        &BTreeMap::new(),
+                    )
+                    .await?,
+            )?;
+            indexes.include_shared(boundary.root(), shared.trim())?;
+            let seal = Self {
+                validation: original,
+                indexes,
+            };
+            seal.require_current(boundary).await?;
+            Ok(seal)
+        })
+    }
+
+    pub(crate) fn validation(&self) -> &Value {
+        &self.validation
+    }
 
     pub(crate) fn require_current<'a>(
         &'a self,
@@ -141,7 +165,7 @@ impl GitSeal {
             boundary.check()?;
             {
                 let scope = boundary.span(super::timing::Label::GitIndex);
-                let result = self.require_indexes();
+                let result = self.indexes.require_current();
                 super::timing::finish(scope, result.as_ref().err());
                 result?;
             }
@@ -152,7 +176,7 @@ impl GitSeal {
             }
             {
                 let scope = boundary.span(super::timing::Label::GitIndex);
-                let result = self.require_indexes();
+                let result = self.indexes.require_current();
                 super::timing::finish(scope, result.as_ref().err());
                 result?;
             }

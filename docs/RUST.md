@@ -35,12 +35,22 @@ The library contains:
   restoration and optional local-image Docker independent verification.
 - A native version-one encrypted file vault, OS-bound ownership/permissions
   and selected-only endpoint credentials in the actual local run path.
+- Ask drafting/submission, clarification checkpoints, scoped repository
+  questions, side questions (`/btw`), bounded state/provenance cleanup,
+  benchmark/debug-log/repo-map/run-log diagnostics, publication/trailer and
+  wave/attempt helpers, hardware/routing/discovery/remediation helpers, shell/
+  onboard helpers and paired Eve pilot evaluation.
 
 The public CLI supports help, recipe validation, catalog parsing, argument
-splitting, offline initialization/diagnostics and the first local TASK/Ask
-delivery coordinator, including the fixed-profile outer continuations below.
-GitHub issue delivery/publication and automatic fleet recovery/routing are
-not integrated. Unsupported commands return an
+splitting, offline initialization/diagnostics (`doctor`, `doctor --copilot`,
+`bench`), Ask and clarification checkpoints (`ask`, `ask --pending|--cancel|--resume`),
+read-only scoped repository questions (`question`), durable provenance history
+queries (`history list|show`), bounded state/provenance cleanup (`clean`),
+encrypted file-vault operations (`vault set|list|get`), analytics and recurring
+failure proposals (`stats [--delivery]`, `learn --recurring`, `recommend`, `eval`),
+and the local TASK/Ask delivery coordinator, including fresh App issue intake
+and the fixed-profile outer continuations below. GitHub publication/resume and
+automatic fleet recovery/routing are not integrated. Unsupported commands return an
 explicit error rather than invoke the old runtime or claim success.
 
 ## Native read-only analytics checkpoint
@@ -54,7 +64,10 @@ No history is automatically promoted into model context or curated memory.
 The real CLI paths are:
 
 ```text
-roster stats [--json] [--ref REVISION_OR_RANGE] [--evals PATH]
+roster stats [--delivery] [--json] [--ref REVISION_OR_RANGE] [--evals PATH]
+roster learn --recurring
+roster history list [--format json|text|summary] [--store DIR] [--repo HASH] [--issue N] [--seat NAME] [--model MODEL] [--outcome VALUE] [--since TIME] [--until TIME]
+roster history show <session-or-run-or-record-id> [--format json|text|summary] [--store DIR]
 roster recommend --task-class feat|fix|docs|test [--difficulty 1-5] [--json]
 ```
 
@@ -76,10 +89,18 @@ policy grant or automatic human evaluation is introduced.
 
 CLI recommendations are coder advice with three human samples, sufficient
 median difficulty and an earned ceiling, not a fleet/profile assignment.
+`roster stats --delivery [--json]` groups delivery evidence by served model,
+declared hardware and seat while preserving individual local attempt models
+and usage across published commit links. `roster learn --recurring` writes
+human-reviewable draft proposals in `.roster/proposals` without modifying
+active rules, and `roster stats` (text mode) lists open proposals.
+`roster history list` and `roster history show` read bounded durable
+provenance records in `text`, `json` and `summary` formats without mutating
+or repairing the store.
 Automatic fleet/prior routing and the legacy profile/context/hardware suffix
 are not implemented by this checkpoint. Automatic run recording,
-`stats --delivery`, recurring proposals, onboarding, shell, GitHub delivery
-and publication remain explicitly unavailable.
+onboarding, shell, existing-issue recovery and publication remain explicitly
+unavailable.
 
 ASCII en-US collation and UTF-16/table/number contracts are covered natively.
 Non-ASCII locale ordering is refused as unproven rather than byte-sorted.
@@ -202,12 +223,65 @@ and explicitly leaves PR state unknown because no PR query ran.
 `status::observe` remains strictly local and refuses online options; read-only
 seat acceptance always adds `--offline`.
 
-Native GitHub task delivery, publication/resume and the rest of status parity
-remain unported. Tests use an owned synthetic SDK interface, a dummy non-PEM
+Fresh native GitHub task delivery is described below; publication/resume and
+the rest of status parity remain unported. Tests use an owned synthetic SDK interface, a dummy non-PEM
 key and controlled native HTTP responses, not real credentials or GitHub calls.
 This does not prove live App installation permissions, platform release,
 worker cleanup or FEATURE_SPEC section 8 acceptance.
 See [the controls](TESTING.md#native-app-issue-observation-controls).
+
+## Native fresh issue delivery
+
+FEATURE_SPEC **5.3**, **5.4**, **5.5** and **5.7** now have
+`roster run --issue N --runtime builtin`, with the existing base/fetch/skip-review
+controls. Complete App configuration is required before private model settings
+are loaded. The App observation must identify an open issue; human credentials
+never replace it. The shared strict issue-number parser refuses aliases,
+fractional/unsafe values and leading zeroes consistently with status.
+
+`delivery::resolve_issue` captures the original calling repository before its
+metadata awaits, then returns an opaque immutable intake. Delivery reuses that
+original source/branch/index seal rather than accepting a fresh post-await
+snapshot, refuses a different calling worktree and revalidates before effects.
+The shared native seal checks actual primary and split/shared index bytes and
+file identity, not just status or a content diff. Same-commit branch switches
+and index-only changes cannot authorize a new task through a cloned intake.
+The whole CLI task deadline covers intake and all later seats. Authentication
+HTTP does not consume model request admission or become model metrics.
+
+Shared native preparation creates `agents/N`, task `issue-N`, session
+`roster-N-coder` and one fresh issue worktree. Existing paths and known
+canonical, legacy, attempt or remote-tracking claims are preserved and refused;
+this is not resume/adoption or proof that an explicitly unfetched remote is
+current. The existing prepare lock, exact approved submodule materialization
+and one-writer root lease remain in use. No Kanban store or second worker
+runtime was added.
+
+Planning, guarded coding and fresh read-only review use the same process,
+worktree and private completion receipts as local delivery. `intake::parse_issue_body`
+validates non-empty issue bodies and optional `## Task metadata` (`task_class`,
+`difficulty`, `estimate_min`) without pre-concatenating `title` into
+`assignment.ask`; classification and planning receive `Some(issue.title())`
+and parsed metadata explicitly, the recipe retains `issue:N`, and every
+post-intake origin/SDK re-check runs on the invocation's owned `start::Git`
+through completion before the typed outcome stamps the validated issue URL.
+`Repository::inspect` seals primary and shared indexes before observing `HEAD`,
+`status` and `source_digest`. A stub remains a no-model, no-code, no-test
+result. No issue status comment/label, close, PR, publication, automatic route
+or human evaluation is manufactured.
+
+Owned controls exercise a real issue branch/worktree and both stub and
+configured seven-response planning/critic/coder/self-review/fresh-review paths.
+The configured path makes an actual owned guide edit, passes the existing
+private gates and records distinct actual response models with reported zero
+usage. Three independent review findings (issue title/body classification and
+metadata parsing, owned Git tracking and completion origin re-verification, and
+pre-observation index sealing) were reproduced and repaired; **33 targeted
+cases** pass on both stable Rust **1.99.1** and Rust **1.85.0** GNU (15 library
+cases, one analytics CLI case, 10 start/checkpoint cases and seven CLI cases),
+plus optimized `--release` controls. App and model transports are synthetic;
+no live App/model or harness acceptance campaign is implied.
+See [the controls](TESTING.md#native-fresh-issue-delivery-controls).
 
 ## Native offline fleet listing
 

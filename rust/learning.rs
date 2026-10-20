@@ -13,6 +13,7 @@ pub const MAX_SOURCE_BYTES: usize = 2 * MAX_JSONL_BYTES;
 pub const MAX_LINE_BYTES: usize = 1024 * 1024;
 pub const MAX_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 pub const TASK_CLASSES: [&str; 4] = ["feat", "fix", "docs", "test"];
+pub const DELIVERY_GATES: [&str; 4] = ["red-green", "shadow", "self-review", "verifying-reviewer"];
 const RUN_FIELDS: [&str; 17] = [
     "sha",
     "session",
@@ -51,6 +52,10 @@ pub fn valid_sha(value: &str) -> bool {
 
 pub fn validate_run(value: &Value) -> Result<(), Error> {
     estimate::validate_run(value)
+}
+
+pub fn validate_delivery(value: &Value, source: &str) -> Result<(), Error> {
+    estimate::validate_delivery_with_source(value, source)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -510,6 +515,139 @@ pub fn join_learning(
             Ok(record)
         })
         .collect()
+}
+
+pub fn join_delivery_learning(
+    exported: &[Value],
+    local: &[Value],
+    evaluations: &[Value],
+    include_unpublished: bool,
+) -> Result<Vec<Value>, Error> {
+    if exported
+        .len()
+        .saturating_add(local.len())
+        .saturating_add(evaluations.len())
+        > MAX_ROWS
+    {
+        return Err(error(
+            "ROSTER_ANALYTICS_SIZE",
+            "Learning inputs exceed 10000 rows",
+        ));
+    }
+    let mut input_bytes = 0;
+    for record in exported.iter().chain(local).chain(evaluations) {
+        if domain::members(record).is_none() {
+            return Err(error(
+                "ROSTER_ANALYTICS_INPUT",
+                "Expected learning JSON objects",
+            ));
+        }
+        crate::state::provenance::schema::validate_data(record, "learning record").map_err(
+            |_| {
+                error(
+                    "ROSTER_ANALYTICS_INPUT",
+                    "Raw snapshots, nonfinite data or excessive nesting are not learning evidence",
+                )
+            },
+        )?;
+        replace_learning_bytes(&mut input_bytes, 0, record, MAX_SOURCE_BYTES)?;
+    }
+    let mut represented = HashSet::new();
+    let mut attempts = Vec::new();
+    let mut non_delivery = Vec::new();
+    for record in local {
+        let Some(delivery) = optional(record, "delivery") else {
+            non_delivery.push(record.clone());
+            continue;
+        };
+        validate_delivery(delivery, "Delivery evidence")?;
+        let matching = exported
+            .iter()
+            .filter(|git| matches_run(git, record))
+            .collect::<Vec<_>>();
+        if text(record, "sha").is_none() {
+            unambiguous(&matching)?;
+        }
+        if !include_unpublished && matching.is_empty() {
+            continue;
+        }
+        let mut attempt = record.clone();
+        if let Some(git) = matching.first() {
+            if let Some(sha) = text(git, "sha") {
+                represented.insert(sha.to_utf8()?.to_ascii_lowercase());
+                domain::put(&mut attempt, "sha", Value::String(sha.clone()))?;
+            }
+        }
+        let matching_evaluations = evaluations
+            .iter()
+            .enumerate()
+            .filter(|(_, evaluation)| matches_evaluation(&attempt, evaluation))
+            .collect::<Vec<_>>();
+        let eval_slice = matching_evaluations
+            .iter()
+            .map(|(_, evaluation)| (*evaluation).clone())
+            .collect::<Vec<_>>();
+        let joined = join_learning(&[], std::slice::from_ref(&attempt), &eval_slice, true)?;
+        if let Some(mut first) = joined.into_iter().next() {
+            if let Some(local_order) = first
+                .get("evaluation_order")
+                .and_then(|value| domain::safe_integer(Some(value)))
+            {
+                if let Some((original_order, _)) = matching_evaluations.get(local_order as usize) {
+                    domain::put(
+                        &mut first,
+                        "evaluation_order",
+                        Value::Number(*original_order as f64),
+                    )?;
+                }
+            }
+            attempts.push(first);
+        }
+    }
+    let unrepresented = exported
+        .iter()
+        .filter(|record| {
+            text(record, "sha")
+                .and_then(|sha| sha.to_utf8().ok())
+                .is_none_or(|sha| !represented.contains(&sha.to_ascii_lowercase()))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let remaining_non_delivery = non_delivery
+        .into_iter()
+        .filter(|record| !attempts.iter().any(|attempt| matches_run(attempt, record)))
+        .collect::<Vec<_>>();
+    let remaining_evaluations = evaluations
+        .iter()
+        .filter(|evaluation| {
+            unrepresented
+                .iter()
+                .chain(&remaining_non_delivery)
+                .any(|record| matches_evaluation(record, evaluation))
+                || !attempts
+                    .iter()
+                    .any(|attempt| matches_evaluation(attempt, evaluation))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut combined = join_learning(
+        &unrepresented,
+        &remaining_non_delivery,
+        &remaining_evaluations,
+        include_unpublished,
+    )?;
+    combined.extend(attempts);
+    if combined.len() > MAX_ROWS {
+        return Err(error(
+            "ROSTER_ANALYTICS_SIZE",
+            "Learning snapshot exceeds 10000 records",
+        ));
+    }
+    let mut joined_bytes = 0;
+    for record in &combined {
+        replace_learning_bytes(&mut joined_bytes, 0, record, MAX_JSONL_BYTES)?;
+    }
+    Ok(combined)
 }
 
 pub fn median(values: &[f64]) -> Result<Option<f64>, Error> {
@@ -1298,6 +1436,710 @@ pub fn format_metrics(groups: &[Value]) -> Result<String, Error> {
     bounded_output(output.to_utf8()?)
 }
 
+fn delivery_label(value: Option<&Value>) -> Result<Text, Error> {
+    match value.filter(|value| **value != Value::Null) {
+        None => Ok(Text::from("unknown")),
+        Some(Value::String(text)) => {
+            if !text.0.is_empty() && !ascii(&text.0, "-") {
+                Ok(text.clone())
+            } else {
+                Ok(Text::from("unknown"))
+            }
+        }
+        Some(_) => Err(Error::type_error(
+            "Expected text or null delivery dimension",
+        )),
+    }
+}
+
+fn map_set<K: PartialEq, V>(entries: &mut Vec<(K, V)>, key: K, value: V) {
+    if let Some((_, existing)) = entries.iter_mut().find(|(existing, _)| *existing == key) {
+        *existing = value;
+    } else {
+        entries.push((key, value));
+    }
+}
+
+pub fn delivery_metrics(records: &[Value]) -> Result<Vec<Value>, Error> {
+    if records.len() > MAX_ROWS {
+        return Err(error(
+            "ROSTER_ANALYTICS_SIZE",
+            "Delivery snapshot exceeds 10000 records",
+        ));
+    }
+    struct DeliveryGroup {
+        key_units: Vec<u16>,
+        dimensions: [Text; 3],
+        records: Vec<(String, Value)>,
+    }
+    let mut groups: Vec<DeliveryGroup> = Vec::new();
+    for record in records {
+        validate_joined(record)?;
+        if let Some(evaluation) = optional(record, "evaluation") {
+            target(evaluation)?;
+        }
+        let delivery = optional(record, "delivery");
+        if let Some(delivery) = delivery {
+            validate_delivery(delivery, "Delivery evidence")?;
+        }
+        let dimensions = [
+            delivery_label(record.get("model"))?,
+            delivery_label(delivery.and_then(|value| value.get("hardware")))?,
+            delivery_label(record.get("seat"))?,
+        ];
+        let key_json = Value::Array(dimensions.iter().cloned().map(Value::String).collect()).json();
+        let key_units = Text::from(key_json.as_str()).0;
+        let group =
+            if let Some(group) = groups.iter_mut().find(|group| group.key_units == key_units) {
+                group
+            } else {
+                groups.push(DeliveryGroup {
+                    key_units,
+                    dimensions,
+                    records: Vec::new(),
+                });
+                groups
+                    .last_mut()
+                    .ok_or_else(|| Error::type_error("Missing delivery group"))?
+            };
+        let identity = if let Some(delivery) = delivery {
+            Value::Array(vec![
+                delivery.get("id").cloned().unwrap_or(Value::Null),
+                delivery.get("attempt").cloned().unwrap_or(Value::Null),
+            ])
+            .json()
+        } else if let Some(sha) = text(record, "sha").filter(|sha| !sha.0.is_empty()) {
+            format!("sha:{}", sha.to_utf8()?.to_ascii_lowercase())
+        } else {
+            format!("row:{}", group.records.len())
+        };
+        map_set(&mut group.records, identity, record.clone());
+    }
+    groups.sort_by(|left, right| left.key_units.cmp(&right.key_units));
+    let mut output = Vec::with_capacity(groups.len());
+    for group in groups {
+        let [model, hardware, seat] = group.dimensions;
+        let is_coder = ascii(&seat.0, "coder");
+        let mut lead: Vec<(Text, f64)> = Vec::new();
+        let mut cycles: Vec<(Text, f64)> = Vec::new();
+        let mut reviews: Vec<(Text, (u64, Text))> = Vec::new();
+        let mut evaluations: Vec<(Text, Value)> = Vec::new();
+        let mut estimates: Vec<(Text, f64)> = Vec::new();
+        let mut repairs = 0_u64;
+        let mut repair_samples = 0_usize;
+        let mut gate_checks = [0_u64; 4];
+        let mut gate_failures = [0_u64; 4];
+        for (_, record) in &group.records {
+            let evidence = optional(record, "delivery");
+            if let Some(evidence) = evidence {
+                let id = text(evidence, "id")
+                    .cloned()
+                    .ok_or_else(|| Error::type_error("Delivery evidence requires an id"))?;
+                if let (Some(created), Some(merged)) = (
+                    optional(evidence, "ask_created_at").and_then(estimate::timestamp),
+                    optional(evidence, "pr_merged_at").and_then(estimate::timestamp),
+                ) {
+                    map_set(
+                        &mut lead,
+                        id.clone(),
+                        (merged.saturating_sub(created)) as f64 / 60_000.0,
+                    );
+                }
+                if is_coder {
+                    if let Some(duration) =
+                        optional(evidence, "duration_ms").and_then(Value::as_number)
+                    {
+                        let next = cycles
+                            .iter()
+                            .find(|(existing, _)| *existing == id)
+                            .map_or(0.0, |(_, current)| *current)
+                            + duration / 60_000.0;
+                        map_set(&mut cycles, id.clone(), next);
+                    }
+                }
+                if let Some(verdict) = text(evidence, "review_verdict") {
+                    let attempt = domain::safe_integer(evidence.get("attempt")).unwrap_or(1);
+                    let replace = reviews
+                        .iter()
+                        .find(|(existing, _)| *existing == id)
+                        .is_none_or(|(_, (previous, _))| attempt < *previous);
+                    if replace {
+                        map_set(&mut reviews, id.clone(), (attempt, verdict.clone()));
+                    }
+                }
+                if let Some(count) =
+                    optional(evidence, "review_repairs").and_then(|v| domain::safe_integer(Some(v)))
+                {
+                    repairs = repairs.saturating_add(count);
+                    repair_samples += 1;
+                }
+                if let Some(gates) = optional(evidence, "gates") {
+                    for (index, gate) in DELIVERY_GATES.iter().enumerate() {
+                        if let Some(counts) = optional(gates, gate) {
+                            gate_checks[index] = gate_checks[index].saturating_add(
+                                domain::safe_integer(counts.get("checks")).unwrap_or(0),
+                            );
+                            gate_failures[index] = gate_failures[index].saturating_add(
+                                domain::safe_integer(counts.get("failures")).unwrap_or(0),
+                            );
+                        }
+                    }
+                }
+            }
+            if let Some(evaluation) = optional(record, "evaluation") {
+                let eval_key =
+                    if let Some(sha) = text(evaluation, "sha").filter(|sha| !sha.0.is_empty()) {
+                        Some(Text::from(sha.to_utf8()?.to_ascii_lowercase().as_str()))
+                    } else {
+                        text(evaluation, "session")
+                            .filter(|session| !session.0.is_empty())
+                            .cloned()
+                    };
+                if let Some(key) = eval_key {
+                    map_set(&mut evaluations, key.clone(), evaluation.clone());
+                    if let (Some(estimated), Some(actual)) = (
+                        evidence
+                            .and_then(|e| optional(e, "estimate_min"))
+                            .and_then(Value::as_number),
+                        optional(evaluation, "minutes")
+                            .and_then(Value::as_number)
+                            .filter(|minutes| minutes.is_finite() && *minutes >= 0.0),
+                    ) {
+                        if !estimates.iter().any(|(existing, _)| *existing == key) {
+                            estimates.push((key, actual - estimated));
+                        }
+                    }
+                }
+            }
+        }
+        let rework_evals = evaluations
+            .iter()
+            .filter(|(_, evaluation)| domain::is_text(evaluation.get("verdict"), "rework"))
+            .count() as u64;
+        let lead_values = lead.iter().map(|(_, value)| *value).collect::<Vec<_>>();
+        let cycle_values = cycles.iter().map(|(_, value)| *value).collect::<Vec<_>>();
+        let estimate_values = estimates
+            .iter()
+            .map(|(_, value)| *value)
+            .collect::<Vec<_>>();
+        let first_pass = if reviews.is_empty() {
+            Value::string("unknown")
+        } else {
+            let passed = reviews
+                .iter()
+                .filter(|(_, (attempt, verdict))| *attempt == 1 && ascii(&verdict.0, "pass"))
+                .count();
+            Value::Number(passed as f64 / reviews.len() as f64)
+        };
+        let rework = if repair_samples > 0 || !evaluations.is_empty() {
+            Value::Number((repairs.saturating_add(rework_evals)) as f64)
+        } else {
+            Value::string("unknown")
+        };
+        let gate_failures_obj = Value::object(
+            DELIVERY_GATES
+                .iter()
+                .enumerate()
+                .map(|(index, gate)| {
+                    (
+                        *gate,
+                        if gate_checks[index] > 0 {
+                            Value::Number(gate_failures[index] as f64)
+                        } else {
+                            Value::string("unknown")
+                        },
+                    )
+                })
+                .collect(),
+        );
+        let gate_checks_obj = Value::object(
+            DELIVERY_GATES
+                .iter()
+                .enumerate()
+                .map(|(index, gate)| (*gate, Value::Number(gate_checks[index] as f64)))
+                .collect(),
+        );
+        output.push(Value::object(vec![
+            ("model", Value::String(model)),
+            ("hardware", Value::String(hardware)),
+            ("seat", Value::String(seat)),
+            ("runs", Value::Number(group.records.len() as f64)),
+            (
+                "leadMinutes",
+                median(&lead_values)?.map_or_else(|| Value::string("unknown"), Value::Number),
+            ),
+            (
+                "coderMinutes",
+                median(&cycle_values)?.map_or_else(|| Value::string("unknown"), Value::Number),
+            ),
+            ("firstPassYield", first_pass),
+            ("rework", rework),
+            ("gateFailures", gate_failures_obj),
+            (
+                "estimateErrorMinutes",
+                median(&estimate_values)?.map_or_else(|| Value::string("unknown"), Value::Number),
+            ),
+            (
+                "samples",
+                Value::object(vec![
+                    ("lead", Value::Number(lead.len() as f64)),
+                    ("cycle", Value::Number(cycles.len() as f64)),
+                    ("review", Value::Number(reviews.len() as f64)),
+                    ("repairs", Value::Number(repair_samples as f64)),
+                    ("evaluations", Value::Number(evaluations.len() as f64)),
+                    ("estimate", Value::Number(estimates.len() as f64)),
+                ]),
+            ),
+            ("gateChecks", gate_checks_obj),
+        ]));
+    }
+    Ok(output)
+}
+
+fn delivery_number(value: Option<&Value>) -> Result<Text, Error> {
+    match value {
+        Some(Value::Number(number)) if number.is_finite() => {
+            let mut rounded = (number * 1000.0).round() / 1000.0;
+            if rounded == 0.0 {
+                rounded = 0.0;
+            }
+            Ok(Text::from(Value::Number(rounded).json().as_str()))
+        }
+        Some(value) if *value != Value::Null => domain::string(value),
+        _ => Ok(Text::from("unknown")),
+    }
+}
+
+pub fn format_delivery_metrics(groups: &[Value]) -> Result<String, Error> {
+    if groups.is_empty() {
+        return Ok("No delivery records found.\n".to_owned());
+    }
+    let headers = [
+        "MODEL",
+        "HARDWARE",
+        "SEAT",
+        "RUNS",
+        "LEAD_MIN",
+        "CODER_MIN",
+        "FIRST_PASS",
+        "REWORK",
+        "ESTIMATE_ERROR_MIN",
+        "red-green",
+        "shadow",
+        "self-review",
+        "verifying-reviewer",
+    ];
+    let mut rows = vec![
+        headers
+            .iter()
+            .map(|header| Text::from(*header))
+            .collect::<Vec<_>>(),
+    ];
+    for group in groups {
+        if domain::members(group).is_none() {
+            return Err(Error::type_error("Expected delivery metrics group objects"));
+        }
+        let mut row = vec![
+            delivery_label(group.get("model"))?,
+            delivery_label(group.get("hardware"))?,
+            delivery_label(group.get("seat"))?,
+            domain::string(
+                group
+                    .get("runs")
+                    .ok_or_else(|| Error::type_error("Delivery group requires runs"))?,
+            )?,
+            delivery_number(group.get("leadMinutes"))?,
+            delivery_number(group.get("coderMinutes"))?,
+            match group.get("firstPassYield").and_then(Value::as_number) {
+                Some(rate) => {
+                    Text::from(format!("{}%", feedback::percentage(rate * 100.0)?).as_str())
+                }
+                None => Text::from("unknown"),
+            },
+            delivery_number(group.get("rework"))?,
+            delivery_number(group.get("estimateErrorMinutes"))?,
+        ];
+        let failures = group
+            .get("gateFailures")
+            .ok_or_else(|| Error::type_error("Delivery group requires gateFailures"))?;
+        for gate in DELIVERY_GATES {
+            row.push(delivery_number(failures.get(gate))?);
+        }
+        rows.push(row);
+    }
+    let columns = headers.len();
+    let widths = (0..columns)
+        .map(|column| {
+            rows.iter()
+                .filter_map(|row| row.get(column))
+                .map(|cell| cell.0.len())
+                .max()
+                .unwrap_or(0)
+        })
+        .collect::<Vec<_>>();
+    let mut output = Text::default();
+    for row in rows {
+        for (column, cell) in row.iter().enumerate() {
+            output.0.extend_from_slice(&cell.0);
+            if column + 1 < columns {
+                let width = widths
+                    .get(column)
+                    .copied()
+                    .ok_or_else(|| Error::type_error("Missing delivery column width"))?;
+                output.push_str(&" ".repeat(width.saturating_sub(cell.0.len()) + 2));
+            }
+        }
+        output.push_str("\n");
+    }
+    bounded_output(output.to_utf8()?)
+}
+
+fn proposal_regex(pattern: &str) -> Result<regex_lite::Regex, Error> {
+    regex_lite::Regex::new(pattern).map_err(|_| Error::new("Error", "Invalid proposal pattern"))
+}
+
+fn failure_signature(reason: &str) -> Result<(String, String), Error> {
+    let prefix = proposal_regex(r"^([A-Za-z][A-Za-z /-]{1,40}):\s*")?;
+    let whitespace = proposal_regex(r"\s+")?;
+    let (gate, rest) = if let Some(captures) = prefix.captures(reason) {
+        let full = captures.get(0).map_or(0, |entry| entry.end());
+        let raw_gate = captures
+            .get(1)
+            .map_or("review", |entry| entry.as_str())
+            .to_ascii_lowercase();
+        (
+            whitespace.replace_all(&raw_gate, "-").into_owned(),
+            reason.get(full..).unwrap_or(""),
+        )
+    } else {
+        ("review".to_owned(), reason)
+    };
+    let quoted = proposal_regex(r#"`[^`]+`|'[^']+'|"[^"]+""#)?;
+    let path = proposal_regex(
+        r"(?:[A-Za-z]:[\\/]|\.{0,2}[\\/])?[A-Za-z0-9_@.-]+(?:[\\/][A-Za-z0-9_@.-]+)+",
+    )?;
+    let filename = proposal_regex(r"(?i)\b[A-Za-z0-9_.-]+\.(?:[cm]?[jt]sx?|md|ya?ml|json)\b")?;
+    let verb_ident = proposal_regex(r"\b(adds|exports|extend|role of)\s+[$A-Za-z_][$A-Za-z0-9_]*")?;
+    let ident = proposal_regex(r"\b[a-z]+(?:[A-Z][A-Za-z0-9]*)+\b|\b[a-z]+(?:_[a-z0-9]+)+\b")?;
+    let numbers = proposal_regex(r"\b\d+(?:\.\d+)?\b")?;
+    let normalized = quoted.replace_all(rest, "<identifier>");
+    let normalized = path.replace_all(&normalized, "<path>");
+    let normalized = filename.replace_all(&normalized, "<path>");
+    let normalized = verb_ident.replace_all(&normalized, "$1 <identifier>");
+    let normalized = ident.replace_all(&normalized, "<identifier>");
+    let normalized = numbers.replace_all(&normalized, "<number>");
+    let normalized = normalized.to_lowercase();
+    let normalized = whitespace.replace_all(&normalized, " ");
+    Ok((gate, normalized.trim().to_owned()))
+}
+
+type NumericKey = (Vec<(u8, usize, Vec<u8>)>, Vec<u8>);
+
+fn numeric_collation_key(source: &str) -> Result<NumericKey, Error> {
+    let mut primary = Vec::new();
+    let mut tertiary = Vec::new();
+    let mut index = 0;
+    let bytes = source.as_bytes();
+    while index < bytes.len() {
+        let is_digit = bytes[index].is_ascii_digit();
+        let start = index;
+        index += 1;
+        while index < bytes.len() && bytes[index].is_ascii_digit() == is_digit {
+            index += 1;
+        }
+        let slice = source
+            .get(start..index)
+            .ok_or_else(|| Error::type_error("Invalid numeric collation slice"))?;
+        if is_digit {
+            let trimmed = slice.trim_start_matches('0');
+            let significant = if trimmed.is_empty() { "0" } else { trimmed };
+            primary.push((40_u8, significant.len(), significant.as_bytes().to_vec()));
+            tertiary.push(0_u8);
+        } else {
+            let (slice_primary, slice_tertiary) = collation_key(&Text::from(slice))?;
+            for weight in slice_primary {
+                primary.push((weight, 0_usize, Vec::new()));
+            }
+            tertiary.extend(slice_tertiary);
+        }
+    }
+    Ok((primary, tertiary))
+}
+
+pub fn failure_signatures(records: &[Value]) -> Result<Vec<Value>, Error> {
+    if records.len() > MAX_ROWS {
+        return Err(error(
+            "ROSTER_ANALYTICS_SIZE",
+            "Failure signature history exceeds 10000 records",
+        ));
+    }
+    struct Group {
+        key: String,
+        gate: String,
+        reason: String,
+        occurrences: Vec<(String, Value)>,
+    }
+    let mut groups: Vec<Group> = Vec::new();
+    for record in records {
+        if domain::members(record).is_none() {
+            return Err(Error::type_error("Failure history requires object records"));
+        }
+        let evaluation = optional(record, "evaluation");
+        let eval_failed = evaluation.is_some_and(|eval| {
+            domain::is_text(eval.get("verdict"), "reject")
+                || domain::is_text(eval.get("verdict"), "rework")
+        });
+        if !estimate::excellence_failed(record) && !eval_failed {
+            continue;
+        }
+        let mut reasons = Vec::new();
+        for source in [
+            optional(record, "defects"),
+            evaluation.and_then(|eval| optional(eval, "defects")),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Some(items) = domain::items(source) {
+                for item in items {
+                    if let Some(reason) = item.as_string() {
+                        reasons.push(reason.to_utf8()?);
+                    }
+                }
+            }
+        }
+        if eval_failed {
+            if let Some(comment) = evaluation
+                .and_then(|eval| text(eval, "comment"))
+                .filter(|comment| !trim(&comment.0).is_empty())
+            {
+                reasons.push(comment.to_utf8()?);
+            }
+        }
+        let seat = learning_seat(record)?.to_utf8()?;
+        let identity = if let Some(task) = text(record, "task").filter(|task| !task.0.is_empty()) {
+            Some(format!("task:{}", task.to_utf8()?))
+        } else if let Some(session) =
+            text(record, "session").filter(|session| !session.0.is_empty())
+        {
+            Some(format!("session:{}", session.to_utf8()?))
+        } else if let Some(sha) = text(record, "sha").filter(|sha| !sha.0.is_empty()) {
+            Some(format!("sha:{}", sha.to_utf8()?.to_ascii_lowercase()))
+        } else {
+            None
+        };
+        let Some(identity) = identity else {
+            continue;
+        };
+        let task_text = text(record, "task").map(Text::to_utf8).transpose()?;
+        let issue = task_text
+            .as_deref()
+            .and_then(|task| task.strip_prefix("issue-"))
+            .filter(|digits| {
+                !digits.is_empty()
+                    && !digits.starts_with('0')
+                    && digits.bytes().all(|byte| byte.is_ascii_digit())
+            })
+            .map(str::to_owned);
+        let occurrence_key = format!("{identity}:{seat}");
+        for reason in reasons {
+            if reason.trim().is_empty() {
+                continue;
+            }
+            let (gate, normalized) = failure_signature(&reason)?;
+            if normalized.is_empty() {
+                continue;
+            }
+            let key = format!("{gate}:{normalized}");
+            let group = if let Some(existing) = groups.iter_mut().find(|group| group.key == key) {
+                existing
+            } else {
+                groups.push(Group {
+                    key,
+                    gate,
+                    reason: normalized,
+                    occurrences: Vec::new(),
+                });
+                groups
+                    .last_mut()
+                    .ok_or_else(|| Error::type_error("Missing failure signature group"))?
+            };
+            if !group
+                .occurrences
+                .iter()
+                .any(|(existing, _)| *existing == occurrence_key)
+            {
+                let occurrence = Value::object(vec![
+                    ("issue", issue.as_deref().map_or(Value::Null, Value::string)),
+                    (
+                        "task",
+                        task_text.as_deref().map_or(Value::Null, Value::string),
+                    ),
+                    (
+                        "session",
+                        text(record, "session")
+                            .cloned()
+                            .map_or(Value::Null, Value::String),
+                    ),
+                    (
+                        "model",
+                        text(record, "model")
+                            .cloned()
+                            .map_or_else(|| Value::string("unknown"), Value::String),
+                    ),
+                    ("seat", Value::string(&seat)),
+                ]);
+                group.occurrences.push((occurrence_key.clone(), occurrence));
+            }
+        }
+    }
+    let principal_pattern = proposal_regex(r"policy|scope|secret|permission")?;
+    let mut output = Vec::with_capacity(groups.len());
+    for group in groups {
+        let slug_prefix: String = group
+            .gate
+            .chars()
+            .map(|c| {
+                if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' {
+                    c
+                } else {
+                    '-'
+                }
+            })
+            .take(40)
+            .collect();
+        let digest = crate::identity::sha256_hex(group.key.as_bytes());
+        let slug = format!(
+            "{slug_prefix}-{}",
+            digest.get(..16).unwrap_or(digest.as_str())
+        );
+        let target = if principal_pattern.is_match(&format!("{} {}", group.gate, group.reason)) {
+            "principal"
+        } else {
+            "skill"
+        };
+        let mut occurrences = Vec::with_capacity(group.occurrences.len());
+        for (_, occurrence) in group.occurrences {
+            let primary = text(&occurrence, "issue")
+                .or_else(|| text(&occurrence, "task"))
+                .or_else(|| text(&occurrence, "session"))
+                .map(Text::to_utf8)
+                .transpose()?
+                .unwrap_or_default();
+            let seat = text(&occurrence, "seat")
+                .map(Text::to_utf8)
+                .transpose()?
+                .unwrap_or_default();
+            let key = numeric_collation_key(&format!("{primary}:{seat}"))?;
+            occurrences.push((key, occurrence));
+        }
+        occurrences.sort_by(|left, right| left.0.cmp(&right.0));
+        output.push((
+            slug.clone(),
+            Value::object(vec![
+                ("gate", Value::string(&group.gate)),
+                ("reason", Value::string(&group.reason)),
+                ("slug", Value::string(&slug)),
+                ("target", Value::string(target)),
+                (
+                    "occurrences",
+                    Value::Array(occurrences.into_iter().map(|(_, value)| value).collect()),
+                ),
+            ]),
+        ));
+    }
+    output.sort_by(|left, right| left.0.cmp(&right.0));
+    Ok(output.into_iter().map(|(_, value)| value).collect())
+}
+
+fn safe_proposal_text(
+    value: Option<&Value>,
+    redaction: &redaction::Config,
+) -> Result<String, Error> {
+    let raw = match value.filter(|value| **value != Value::Null) {
+        Some(value) => domain::string(value)?,
+        None => Text::from("unknown"),
+    };
+    let redacted = redaction::diagnostic(&memory::redact(&raw, redaction), redaction).to_utf8()?;
+    let mut escaped = String::with_capacity(redacted.len());
+    for character in redacted.chars() {
+        let character = if matches!(character, '\x00'..='\x1f' | '\x7f') {
+            ' '
+        } else {
+            character
+        };
+        if matches!(
+            character,
+            '\\' | '`' | '*' | '_' | '{' | '}' | '[' | ']' | '<' | '>' | '#' | '|'
+        ) {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    Ok(escaped)
+}
+
+pub fn render_failure_proposal(
+    proposal: &Value,
+    redaction: &redaction::Config,
+) -> Result<String, Error> {
+    if domain::members(proposal).is_none() {
+        return Err(Error::type_error("Proposal must be a JSON object"));
+    }
+    let target = match proposal.get("target").and_then(Value::as_string) {
+        Some(target) if ascii(&target.0, "principal") => "principal",
+        Some(target) if ascii(&target.0, "skill") => "skill",
+        _ => {
+            return Err(Error::type_error(
+                "Proposal target must be skill or principal",
+            ));
+        }
+    };
+    let gate = safe_proposal_text(proposal.get("gate"), redaction)?;
+    let reason = safe_proposal_text(proposal.get("reason"), redaction)?;
+    let occurrences = proposal
+        .get("occurrences")
+        .and_then(domain::items)
+        .ok_or_else(|| Error::type_error("Proposal occurrences must be an array"))?;
+    let mut lines = Vec::with_capacity(occurrences.len());
+    for entry in occurrences {
+        if domain::members(entry).is_none() {
+            return Err(Error::type_error("Proposal occurrence must be an object"));
+        }
+        let issue = match optional(entry, "issue") {
+            Some(issue) => format!("#{}", safe_proposal_text(Some(issue), redaction)?),
+            None => "unknown".to_owned(),
+        };
+        lines.push(format!(
+            "- Issue: {issue}; task: {}; session: {}; model: {}; seat: {}",
+            safe_proposal_text(entry.get("task"), redaction)?,
+            safe_proposal_text(entry.get("session"), redaction)?,
+            safe_proposal_text(entry.get("model"), redaction)?,
+            safe_proposal_text(entry.get("seat"), redaction)?
+        ));
+    }
+    bounded_output(format!(
+        "# Proposed {target}: {gate}\n\nStatus: draft; human review required.\nTarget: {target}\nOccurrences: {} distinct slice/seat identities.\n\n## Failure signature\n\n{gate}: {reason}\n\n## Evidence\n\n{}\n\n## Proposed rule\n\nBefore completing this seat, verify that the {gate} gate has evidence resolving the recurring condition \"{reason}\". If it remains unmet, report the concrete blocker and retain the existing scope and policy boundaries rather than claiming success.\n\n## Human promotion\n\nReview the cited outcomes, revise this draft into an actionable rule, and choose the appropriate repository skill packet or principal note. Promotion is a human-owned move/edit; this command never installs a rule, grants capabilities, modifies routing, or changes active skills/principals. After promotion or rejection, move this draft out of the proposals directory.\n",
+        occurrences.len(),
+        lines.join("\n")
+    ))
+}
+
+pub fn format_failure_proposals(names: &[String]) -> Result<String, Error> {
+    if names.is_empty() {
+        return Ok(String::new());
+    }
+    bounded_output(format!(
+        "Open improvement proposals ({}):\n{}\n",
+        names.len(),
+        names
+            .iter()
+            .map(|name| format!("- {name}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    ))
+}
+
 pub fn format_recommendation(
     recommendation: Option<&Value>,
     task_class: &str,
@@ -1347,6 +2189,8 @@ pub fn format_recommendation(
         field("medianDifficulty")?
     ))
 }
+
+pub mod pilot;
 
 #[cfg(test)]
 mod tests;

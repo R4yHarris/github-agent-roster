@@ -182,7 +182,8 @@ fn ref_operands_validate_before_git_or_file_access_and_ranges_never_become_optio
     assert!(
         Options {
             reference: Some("--all".to_owned()),
-            evals_path: Some(PathBuf::from("missing"))
+            evals_path: Some(PathBuf::from("missing")),
+            ..Options::default()
         }
         .validate()
         .is_err()

@@ -544,8 +544,8 @@ fn analytics_cli_rejects_invalid_flags_before_any_default_history_config_or_git_
         vec!["stats", "--ref", "HEAD:path"],
         vec!["stats", "--ref", "HEAD", "--ref", "HEAD"],
         vec!["stats", "--json", "--json"],
+        vec!["stats", "--delivery", "--delivery"],
         vec!["stats", "--unknown"],
-        vec!["stats", "--delivery"],
         vec!["recommend"],
         vec!["recommend", "--task-class", "chore"],
         vec!["recommend", "--task-class", "fix", "--difficulty", "0"],
@@ -2368,6 +2368,65 @@ fn online_status_cli_requires_complete_app_credentials_before_any_local_provider
 }
 
 #[test]
+fn issue_run_cli_missing_app_configuration_and_invalid_modes_have_no_effects() -> Result<(), Error>
+{
+    let fixture = Fixture::new(false)?;
+    fixture.commit(None, "base")?;
+    fixture.write(".roster/config.yml", "not-valid [test-only-private-config")?;
+    let before = snapshot(&fixture.container)?;
+    let rejected = fixture
+        .command(
+            &["run", "--issue", "42", "--runtime", "builtin", "--no-fetch"],
+            &fixture.root,
+        )
+        .env_remove("GITHUB_APP_ID")
+        .env_remove("GITHUB_APP_PRIVATE_KEY_PATH")
+        .env("GH_TOKEN", "test-only-human-token-not-an-app")
+        .output()
+        .map_err(io)?;
+    assert!(!rejected.status.success());
+    assert!(rejected.stdout.is_empty());
+    assert!(
+        utf8(&rejected.stderr)?
+            .contains("requires complete GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY_PATH")
+    );
+    assert!(!utf8(&rejected.stderr)?.contains("test-only-private"));
+    assert!(!utf8(&rejected.stderr)?.contains("test-only-human-token"));
+    for args in [
+        vec!["run", "--issue", "0", "--runtime", "builtin"],
+        vec!["run", "--issue", "042", "--runtime", "builtin"],
+        vec!["run", "--issue", "9007199254740992", "--runtime", "builtin"],
+        vec![
+            "run",
+            "--issue",
+            "42",
+            "--seat",
+            "coder",
+            "--runtime",
+            "builtin",
+        ],
+        vec![
+            "run",
+            "--issue",
+            "42",
+            "--ask-file",
+            "ask.md",
+            "--runtime",
+            "builtin",
+        ],
+        vec!["run", "--issue", "42", "--runtime", "builtin", "--publish"],
+        vec!["run", "--issue", "42", "--runtime", "builtin", "--resume"],
+    ] {
+        let result = fixture.invoke(&args)?;
+        assert!(!result.status.success(), "{args:?}");
+        assert!(result.stdout.is_empty());
+        assert!(!utf8(&result.stderr)?.contains("test-only-private"));
+    }
+    assert_eq!(snapshot(&fixture.container)?, before);
+    fixture.finish()
+}
+
+#[test]
 fn offline_status_cli_reads_only_complete_native_metadata_and_ignores_the_active_tail()
 -> Result<(), Error> {
     let fixture = Fixture::new(false)?;
@@ -2942,5 +3001,448 @@ async fn fleet_list_read_only_acceptance_executes_the_actual_cli_and_its_unknown
     }
     .await;
     github_agent_roster::state::locks::finish(result, boundary.close().await)?;
+    fixture.finish()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn delivery_stats_cli_preserves_attempt_attribution_and_passes_read_only_acceptance()
+-> Result<(), Error> {
+    let fixture = Fixture::new(false)?;
+    let sha = fixture.commit(Some("actual-model"), "coder")?;
+    fixture.write(
+        ".roster/runs/runs.jsonl",
+        concat!(
+            "{\"session\":\"coder\",\"task\":\"fix-fixture\",\"seat\":\"coder\",\"model\":\"actual-model\",\"delivery\":{\"id\":\"pipeline\",\"attempt\":1,\"hardware\":\"GPU\",\"estimate_min\":5,\"duration_ms\":60000,\"review_repairs\":0}}\n",
+            "{\"session\":\"coder\",\"task\":\"fix-fixture\",\"seat\":\"coder\",\"model\":\"actual-model\",\"delivery\":{\"id\":\"pipeline\",\"attempt\":2,\"hardware\":\"GPU\",\"estimate_min\":5,\"duration_ms\":120000,\"review_repairs\":1}}\n",
+            "{\"session\":\"coder\",\"task\":\"fix-fixture\",\"seat\":\"coder\",\"model\":\"actual-model\",\"delivery\":{\"id\":\"pipeline\",\"attempt\":2,\"hardware\":\"GPU\",\"estimate_min\":5,\"duration_ms\":120000,\"review_repairs\":1,\"ask_created_at\":\"2026-01-01T00:00:00.000Z\",\"pr_merged_at\":\"2026-01-01T00:30:00.000Z\"}}\n",
+            "{\"session\":\"coder\",\"task\":\"fix-fixture\",\"seat\":\"coder\",\"model\":\"earlier-model\",\"delivery\":{\"id\":\"earlier\",\"attempt\":1,\"hardware\":\"GPU\",\"duration_ms\":60000}}\n"
+        ),
+    )?;
+    fixture.write(
+        ".roster/evals.jsonl",
+        &format!(
+            "{{\"sha\":\"{sha}\",\"verdict\":\"rework\",\"difficulty\":3,\"again\":true,\"minutes\":8}}\n"
+        ),
+    )?;
+    let before = snapshot(&fixture.container)?;
+    let json_out = fixture.invoke(&["stats", "--delivery", "--json"])?;
+    assert!(json_out.status.success(), "{}", utf8(&json_out.stderr)?);
+    assert!(json_out.stderr.is_empty());
+    let groups = parsed(&json_out.stdout)?;
+    let rows = items(&groups)?;
+    assert_eq!(rows.len(), 2);
+    let actual = rows
+        .iter()
+        .find(|row| row.get("model") == Some(&Value::string("actual-model")))
+        .ok_or_else(|| Error::type_error("Missing actual-model delivery group"))?;
+    assert_eq!(number(actual, "runs"), Some(2.0));
+    assert_eq!(number(actual, "coderMinutes"), Some(3.0));
+    assert_eq!(number(actual, "leadMinutes"), Some(30.0));
+    assert_eq!(number(actual, "rework"), Some(2.0));
+    assert_eq!(number(actual, "estimateErrorMinutes"), Some(3.0));
+    let earlier = rows
+        .iter()
+        .find(|row| row.get("model") == Some(&Value::string("earlier-model")))
+        .ok_or_else(|| Error::type_error("Final commit overwrote earlier attempt model"))?;
+    assert_eq!(number(earlier, "runs"), Some(1.0));
+    assert_eq!(number(earlier, "coderMinutes"), Some(1.0));
+
+    let table = fixture.invoke(&["stats", "--delivery", "--ref", "HEAD"])?;
+    assert!(table.status.success(), "{}", utf8(&table.stderr)?);
+    let table_text = utf8(&table.stdout)?;
+    assert!(table_text.contains("FIRST_PASS"));
+    assert!(table_text.contains("actual-model"));
+    assert!(table_text.contains("earlier-model"));
+    assert_eq!(snapshot(&fixture.container)?, before);
+
+    let assignment = fixture.task(
+        &["docs/guide.md"],
+        &[
+            "`roster stats --delivery` prints the delivery metrics table.",
+            "`roster stats --delivery --json` prints valid JSON.",
+        ],
+    )?;
+    let cancellation = CancellationSource::default();
+    let mut boundary = tools::Boundary::open(
+        &fixture.root,
+        assignment,
+        tools::Options::default(),
+        fixture.host(),
+        redaction::Config::default(),
+        cancellation.token(),
+    )
+    .await?;
+    let result = async {
+        let report = e2e::run(
+            &boundary,
+            &backend::Approval {
+                native_cli: Some(PathBuf::from(env!("CARGO_BIN_EXE_roster"))),
+                ..Default::default()
+            },
+        )
+        .await?;
+        assert!(report.passed(), "{}", report.as_value().json());
+        let runs = items(
+            report
+                .as_value()
+                .get("runs")
+                .ok_or_else(|| Error::type_error("Missing delivery stats acceptance runs"))?,
+        )?;
+        assert_eq!(runs.len(), 2);
+        report.require_current(&boundary).await?;
+        Ok(())
+    }
+    .await;
+    github_agent_roster::state::locks::finish(result, boundary.close().await)?;
+    fixture.finish()
+}
+
+#[test]
+fn recurring_failure_proposals_cli_writes_drafts_lists_in_stats_and_preserves_rules_and_edits()
+-> Result<(), Error> {
+    let fixture = Fixture::new(false)?;
+    fixture.commit(None, "base")?;
+    fixture.write("skills/existing.md", "# Existing skill\n")?;
+    fixture.write("principals/existing.md", "# Existing principal\n")?;
+    fixture.write(
+        ".roster/runs/runs.jsonl",
+        concat!(
+            "{\"task\":\"issue-41\",\"session\":\"roster-41-coder\",\"model\":\"model-one\",\"excellence\":\"fail\",\"defects\":[\"Shadow module: src/new-41.mjs adds readThing41, duplicates src/old-41.mjs at line 41\"]}\n",
+            "{\"task\":\"issue-42\",\"session\":\"roster-42-coder\",\"model\":\"model-two\",\"excellence\":\"fail\",\"defects\":[\"Shadow module: src/new-42.mjs adds readThing42, duplicates src/old-42.mjs at line 42\"]}\n",
+            "{\"task\":\"issue-43\",\"session\":\"roster-43-coder\",\"model\":\"model-two\",\"excellence\":\"fail\",\"defects\":[\"Shadow module: src/new-43.mjs adds readThing43, duplicates src/old-43.mjs at line 43\"]}\n"
+        ),
+    )?;
+    for args in [vec!["learn"], vec!["learn", "--force"]] {
+        let invalid = fixture.invoke(&args)?;
+        assert!(!invalid.status.success());
+        assert!(invalid.stdout.is_empty());
+        assert!(utf8(&invalid.stderr)?.contains("Use roster learn --recurring."));
+    }
+    let learned = fixture.invoke(&["learn", "--recurring"])?;
+    assert!(learned.status.success(), "{}", utf8(&learned.stderr)?);
+    assert_eq!(
+        utf8(&learned.stdout)?,
+        "Recurring failures: 1 draft proposals created; 0 existing drafts preserved. Human review required.\n"
+    );
+    let listed = github_agent_roster::metrics::list_failure_proposals(&fixture.root)?;
+    assert_eq!(listed.len(), 1);
+    let draft_path = fixture
+        .root
+        .join(".roster")
+        .join("proposals")
+        .join(&listed[0]);
+    let content = fs::read_to_string(&draft_path).map_err(io)?;
+    for expected in [
+        "Issue: #41",
+        "Issue: #42",
+        "Issue: #43",
+        "model-one",
+        "model-two",
+        "human review required",
+        "## Proposed rule",
+    ] {
+        assert!(content.contains(expected), "{expected}");
+    }
+    let stats = fixture.invoke(&["stats"])?;
+    assert!(stats.status.success(), "{}", utf8(&stats.stderr)?);
+    assert!(utf8(&stats.stdout)?.contains("Open improvement proposals (1):"));
+    assert!(utf8(&stats.stdout)?.contains(&listed[0]));
+
+    fs::write(&draft_path, "# Human edited draft\n").map_err(io)?;
+    let again = fixture.invoke(&["learn", "--recurring"])?;
+    assert!(again.status.success(), "{}", utf8(&again.stderr)?);
+    assert_eq!(
+        utf8(&again.stdout)?,
+        "Recurring failures: 0 draft proposals created; 1 existing drafts preserved. Human review required.\n"
+    );
+    assert_eq!(
+        fs::read_to_string(&draft_path).map_err(io)?,
+        "# Human edited draft\n"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.root.join("skills").join("existing.md")).map_err(io)?,
+        "# Existing skill\n"
+    );
+    assert_eq!(
+        fs::read_to_string(fixture.root.join("principals").join("existing.md")).map_err(io)?,
+        "# Existing principal\n"
+    );
+
+    let linked = fixture.root.join("linked-draft.md");
+    fs::hard_link(&draft_path, &linked).map_err(io)?;
+    assert!(!fixture.invoke(&["learn", "--recurring"])?.status.success());
+    assert!(github_agent_roster::metrics::list_failure_proposals(&fixture.root).is_err());
+    fs::remove_file(&linked).map_err(io)?;
+    fixture.finish()
+}
+
+#[test]
+fn recurring_failure_proposals_deduplicate_same_slice_candidates_and_respect_corrected_human_rework()
+-> Result<(), Error> {
+    {
+        let fixture = Fixture::new(false)?;
+        fixture.commit(None, "base")?;
+        fixture.write(
+            ".roster/runs/runs.jsonl",
+            concat!(
+                "{\"task\":\"issue-41\",\"session\":\"roster-41-a1-coder\",\"model\":\"model-0\",\"excellence\":\"fail\",\"defects\":[\"Shadow module: src/new-41.mjs adds readThing41\"]}\n",
+                "{\"task\":\"issue-41\",\"session\":\"roster-41-a2-coder\",\"model\":\"model-1\",\"excellence\":\"fail\",\"defects\":[\"Shadow module: src/new-41.mjs adds readThing41\"]}\n",
+                "{\"task\":\"issue-41\",\"session\":\"roster-41-a3-coder\",\"model\":\"model-2\",\"excellence\":\"fail\",\"defects\":[\"Shadow module: src/new-41.mjs adds readThing41\"]}\n",
+                "{\"task\":\"issue-41\",\"session\":\"roster-41-a4-coder\",\"model\":\"model-3\",\"excellence\":\"fail\",\"defects\":[\"Shadow module: src/new-41.mjs adds readThing41\"]}\n"
+            ),
+        )?;
+        let outcome = github_agent_roster::metrics::propose_recurring_failures(
+            &fixture.installation,
+            &fixture.root,
+            &fixture.environment(),
+        )?;
+        assert!(outcome.created.is_empty());
+        assert!(!fixture.root.join(".roster").join("proposals").exists());
+        fixture.finish()?;
+    }
+    {
+        let fixture = Fixture::new(false)?;
+        fixture.commit(None, "base")?;
+        let base_evals = concat!(
+            "{\"session\":\"human-1\",\"verdict\":\"rework\",\"difficulty\":2,\"again\":false,\"comment\":\"Review: `helper1` misses error case 1\"}\n",
+            "{\"session\":\"human-2\",\"verdict\":\"rework\",\"difficulty\":2,\"again\":false,\"comment\":\"Review: `helper2` misses error case 2\"}\n",
+            "{\"session\":\"human-3\",\"verdict\":\"rework\",\"difficulty\":2,\"again\":false,\"comment\":\"Review: `helper3` misses error case 3\"}\n"
+        );
+        fixture.write(
+            ".roster/evals.jsonl",
+            &format!(
+                "{base_evals}{{\"session\":\"human-1\",\"verdict\":\"accept\",\"difficulty\":2,\"again\":true}}\n"
+            ),
+        )?;
+        let corrected = github_agent_roster::metrics::propose_recurring_failures(
+            &fixture.installation,
+            &fixture.root,
+            &fixture.environment(),
+        )?;
+        assert!(corrected.created.is_empty());
+        fixture.write(".roster/evals.jsonl", base_evals)?;
+        let unmatched = github_agent_roster::metrics::propose_recurring_failures(
+            &fixture.installation,
+            &fixture.root,
+            &fixture.environment(),
+        )?;
+        assert_eq!(unmatched.created.len(), 1);
+        fixture.finish()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn review_recurring_failure_proposals_redact_custom_aliases_and_paths_and_refuse_unsafe_inputs()
+-> Result<(), Error> {
+    let fixture = Fixture::new(false)?;
+    fixture.commit(None, "base")?;
+    fixture.write(".roster/fleet.yml", OWNED_FLEET)?;
+    let root_str = fixture.root.to_string_lossy().replace('\\', "/");
+    fixture.write(
+        ".roster/evals.jsonl",
+        &format!(
+            concat!(
+                "{{\"session\":\"human-1\",\"verdict\":\"rework\",\"difficulty\":2,\"again\":false,\"comment\":\"Review: `helper1` leaked opaque-value-123 at {0}/secret on case 1\"}}\n",
+                "{{\"session\":\"human-2\",\"verdict\":\"rework\",\"difficulty\":2,\"again\":false,\"comment\":\"Review: `helper2` leaked opaque-value-123 at {0}/secret on case 2\"}}\n",
+                "{{\"session\":\"human-3\",\"verdict\":\"rework\",\"difficulty\":2,\"again\":false,\"comment\":\"Review: `helper3` leaked opaque-value-123 at {0}/secret on case 3\"}}\n"
+            ),
+            root_str
+        ),
+    )?;
+    let learned = fixture
+        .command(&["learn", "--recurring"], &fixture.root)
+        .env("bound_credential", "opaque-value-123")
+        .output()
+        .map_err(io)?;
+    assert!(learned.status.success(), "{}", utf8(&learned.stderr)?);
+    let listed = github_agent_roster::metrics::list_failure_proposals(&fixture.root)?;
+    assert_eq!(listed.len(), 1);
+    let draft = fs::read_to_string(
+        fixture
+            .root
+            .join(".roster")
+            .join("proposals")
+            .join(&listed[0]),
+    )
+    .map_err(io)?;
+    assert!(!draft.contains("opaque-value-123"));
+    assert!(!draft.contains(&fixture.container.to_string_lossy().into_owned()));
+    assert!(!draft.contains(&root_str));
+
+    fixture.write(
+        ".roster/evals.jsonl",
+        concat!(
+            "{\"session\":\"url-1\",\"model\":\"https://private.example.invalid/v1\",\"verdict\":\"rework\",\"difficulty\":2,\"again\":false,\"comment\":\"Review: `helper1` misses error case 1\"}\n",
+            "{\"session\":\"url-2\",\"model\":\"https://private.example.invalid/v1\",\"verdict\":\"rework\",\"difficulty\":2,\"again\":false,\"comment\":\"Review: `helper2` misses error case 2\"}\n",
+            "{\"session\":\"url-3\",\"model\":\"https://private.example.invalid/v1\",\"verdict\":\"rework\",\"difficulty\":2,\"again\":false,\"comment\":\"Review: `helper3` misses error case 3\"}\n"
+        ),
+    )?;
+    let unsafe_model = fixture.invoke(&["learn", "--recurring"])?;
+    assert!(!unsafe_model.status.success());
+    assert!(!utf8(&unsafe_model.stderr)?.contains("https://private.example.invalid"));
+
+    fs::remove_dir_all(fixture.root.join(".roster").join("proposals")).map_err(io)?;
+    fixture.write(".roster/proposals", "not-a-directory")?;
+    for args in [vec!["learn", "--recurring"], vec!["stats"]] {
+        let failed = fixture.invoke(&args)?;
+        assert!(!failed.status.success(), "{args:?}");
+        assert!(failed.stdout.is_empty());
+        assert!(
+            !utf8(&failed.stderr)?.contains(&fixture.container.to_string_lossy().into_owned()),
+            "{args:?}: {}",
+            utf8(&failed.stderr)?
+        );
+    }
+    fixture.finish()
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn history_cli_list_and_show_preserve_store_bytes_skip_corrupt_entries_and_support_formats()
+-> Result<(), Error> {
+    use github_agent_roster::state::provenance::{schema, store};
+
+    let fixture = Fixture::new(false)?;
+    fixture.commit(None, "base")?;
+    let missing_store = fixture.container.join("missing-store");
+    let before_missing = snapshot(&fixture.container)?;
+    let missing_out = fixture.invoke(&[
+        "history",
+        "list",
+        "--store",
+        missing_store
+            .to_str()
+            .ok_or_else(|| Error::type_error("Missing store path must be Unicode"))?,
+    ])?;
+    assert!(
+        missing_out.status.success(),
+        "{}",
+        utf8(&missing_out.stderr)?
+    );
+    assert!(utf8(&missing_out.stdout)?.contains("No history store found at"));
+    assert!(!missing_store.exists());
+    assert_eq!(snapshot(&fixture.container)?, before_missing);
+
+    let default_store = fixture.root.join(".git").join("roster").join("provenance");
+    let opened = store::Store::open(&default_store)?;
+    let repo_a = "sha256-1111111111111111111111111111111111111111111111111111111111111111";
+    let repo_b = "sha256-2222222222222222222222222222222222222222222222222222222222222222";
+    let mut rec_1 = schema::create_record(
+        &Value::object(vec![
+            ("run", Value::string("r1")),
+            ("session", Value::string("s1")),
+            ("issue", Value::object(vec![("issue", Value::string("10"))])),
+            (
+                "seat",
+                Value::object(vec![("name", Value::string("coder"))]),
+            ),
+            ("servedModel", Value::string("served-a")),
+        ]),
+        Value::string("2025-01-01T00:00:00.000Z"),
+    )?;
+    github_agent_roster::state::provenance::api::store_record_id(
+        repo_a,
+        "r1",
+        "s1",
+        "completed",
+        "raw-history",
+    );
+    for (key, value) in [
+        ("id", Value::string("record-1")),
+        ("version", Value::Number(1.0)),
+        ("repoIdentity", Value::string(repo_a)),
+        ("event", Value::string("completed")),
+        (
+            "payload",
+            Value::object(vec![("outcome", Value::string("success"))]),
+        ),
+    ] {
+        if let Value::Object(ref mut entries) = rec_1 {
+            entries.push((Text::from(key), value));
+        }
+    }
+    opened.append_record(&rec_1, None).await?;
+
+    let mut rec_2 = schema::create_record(
+        &Value::object(vec![
+            ("run", Value::string("r2")),
+            ("session", Value::string("s2")),
+        ]),
+        Value::string("2025-02-01T00:00:00.000Z"),
+    )?;
+    for (key, value) in [
+        ("id", Value::string("record-2")),
+        ("version", Value::Number(1.0)),
+        ("repoIdentity", Value::string(repo_b)),
+        ("event", Value::string("failure")),
+        (
+            "payload",
+            Value::object(vec![
+                ("issue", Value::Number(20.0)),
+                ("seat", Value::string("reviewer")),
+                ("model", Value::string("payload-model")),
+                ("outcome", Value::string("rework")),
+            ]),
+        ),
+    ] {
+        if let Value::Object(ref mut entries) = rec_2 {
+            entries.push((Text::from(key), value));
+        }
+    }
+    opened.append_record(&rec_2, None).await?;
+
+    fs::write(
+        default_store.join(store::LOG_DIRNAME).join("bad.json"),
+        b"{broken",
+    )
+    .map_err(io)?;
+    fs::write(
+        default_store.join(store::LOG_DIRNAME).join("future.json"),
+        b"{\"id\":\"future\",\"version\":999}\n",
+    )
+    .map_err(io)?;
+    let before = snapshot(&fixture.container)?;
+
+    let list_text = fixture.invoke(&["history", "list", "--repo", repo_b])?;
+    assert!(list_text.status.success(), "{}", utf8(&list_text.stderr)?);
+    assert!(utf8(&list_text.stdout)?.contains("Skipped 2 unreadable or incompatible"));
+    assert!(utf8(&list_text.stdout)?.contains("session=s2  run=r2"));
+    assert!(!utf8(&list_text.stdout)?.contains("run=r1"));
+
+    let show_text = fixture.invoke(&["history", "show", "s1"])?;
+    assert!(show_text.status.success(), "{}", utf8(&show_text.stderr)?);
+    assert!(utf8(&show_text.stdout)?.contains("session=s1  run=r1"));
+
+    let list_json_1 = fixture.invoke(&["history", "list", "--format", "json"])?;
+    let list_json_2 = fixture.invoke(&["history", "list", "--format", "json"])?;
+    assert!(
+        list_json_1.status.success(),
+        "{}",
+        utf8(&list_json_1.stderr)?
+    );
+    assert_eq!(list_json_1.stdout, list_json_2.stdout);
+    let parsed_json = parsed(&list_json_1.stdout)?;
+    assert_eq!(
+        parsed_json
+            .get("meta")
+            .and_then(|meta| number(meta, "skippedCount")),
+        Some(2.0)
+    );
+    assert_eq!(
+        parsed_json
+            .get("meta")
+            .and_then(|meta| number(meta, "recordCount")),
+        Some(2.0)
+    );
+
+    let summary_out = fixture.invoke(&["history", "list", "--format", "summary"])?;
+    assert!(
+        summary_out.status.success(),
+        "{}",
+        utf8(&summary_out.stderr)?
+    );
+    assert!(utf8(&summary_out.stdout)?.contains("Machine history store:"));
+    assert!(utf8(&summary_out.stdout)?.contains("Repository state (not part of machine history):"));
+    assert_eq!(snapshot(&fixture.container)?, before);
     fixture.finish()
 }

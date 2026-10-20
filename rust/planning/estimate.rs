@@ -484,7 +484,11 @@ pub(crate) fn timestamp(input: &Value) -> Option<i64> {
 }
 
 fn validate_delivery(input: &Value) -> Result<(), Error> {
-    let fail = |message: &str| Error::type_error(format!("Estimation history: {message}"));
+    validate_delivery_with_source(input, "Estimation history")
+}
+
+pub(crate) fn validate_delivery_with_source(input: &Value, source: &str) -> Result<(), Error> {
+    let fail = |message: &str| Error::type_error(format!("{source}: {message}"));
     let entries = domain::members(input).ok_or_else(|| fail("delivery must be an object"))?;
     for (name, _) in entries {
         let name = encode(name);
@@ -504,7 +508,7 @@ fn validate_delivery(input: &Value) -> Result<(), Error> {
         {
             return Err(text_error(
                 "TypeError",
-                &format!("Estimation history: unsupported delivery field {name}"),
+                &format!("{source}: unsupported delivery field {name}"),
             ));
         }
     }
