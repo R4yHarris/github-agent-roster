@@ -1881,6 +1881,40 @@ pub struct SubmitAskOptions<'a, T: Transport> {
     pub run_command: Option<&'a mut CommandRunner<'a>>,
 }
 
+fn derive_issue_title(first_line: &str) -> String {
+    let trimmed = first_line.trim();
+    if trimmed.encode_utf16().count() <= 240 {
+        return trimmed.to_owned();
+    }
+    for (idx, ch) in trimmed.char_indices() {
+        if matches!(ch, '.' | '?' | '!') {
+            let candidate = trimmed[..=idx].trim();
+            let count = candidate.encode_utf16().count();
+            if (12..=240).contains(&count) {
+                return candidate.to_owned();
+            }
+        }
+    }
+    let mut out = String::new();
+    let mut units = 0_usize;
+    let mut last_space = None;
+    for ch in trimmed.chars() {
+        let len = ch.len_utf16();
+        if units + len > 240 {
+            break;
+        }
+        if ch.is_whitespace() {
+            last_space = Some(out.len());
+        }
+        out.push(ch);
+        units += len;
+    }
+    if let Some(space_idx) = last_space.filter(|&i| i >= 40) {
+        out.truncate(space_idx);
+    }
+    out.trim_end().to_owned()
+}
+
 pub async fn submit_ask<T: Transport>(
     ask: &str,
     options: &mut SubmitAskOptions<'_, T>,
@@ -1899,8 +1933,9 @@ pub async fn submit_ask<T: Transport>(
             .await
             .map(AskOutcome::Question);
     }
-    let title = text.split('\n').next().unwrap_or("");
-    if title.encode_utf16().count() > 240 {
+    let derived_title = derive_issue_title(text.split('\n').next().unwrap_or(""));
+    let title = derived_title.as_str();
+    if title.is_empty() {
         return Err(Error::type_error(
             "Issue title must be at most 240 characters",
         ));

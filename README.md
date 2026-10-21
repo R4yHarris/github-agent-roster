@@ -1,101 +1,175 @@
 # github-agent-roster
 
-Roster is being rewritten as a native Rust software-delivery orchestrator.
-GitHub Issues and PRs remain the board and forge. Planning, task files, seats,
-tools, skills, memory and worktrees belong to Roster; identity and publication
-belong to the independent [contracts SDK](vendor/github-agent-contracts).
-There is no Kanban database, external worker framework or Node runtime fallback.
+**github-agent-roster** is a native Rust software-delivery orchestrator.
+GitHub Issues and Pull Requests are the board and the forge. Planning, task
+artifacts (`RECIPE.yml`, `TASK.md`, `PLAN.md`, `ESTIMATE.md`), sequential
+builtin seats (`planner` $\rightarrow$ `coder` $\rightarrow$ `reviewer`),
+guarded tools, skills, curated memory, and isolated Git worktrees belong to
+Roster; cryptographic bot identity, policy verification, commit trailers, and
+PR publication belong to the independent
+[github-agent-contracts](vendor/github-agent-contracts) SDK. There is no Kanban
+database, external worker swarm, or Node application runtime fallback.
 
-## Migration status
+---
 
-Ray authorized the full rewrite and explicitly directed this branch to remove
-the Node implementation and oracle-preservation changes. The old application
-and tests remain available in Git history, not as a parallel implementation or
-frozen checkout here. Main now contains the merged Rust checkpoint.
+## Quickstart & Interactive Shell
 
-The [Rust library](rust) implements configuration, fleet/capability catalogs,
-lossless JSON/Text, recipes, request/provenance metadata, HTTP/SSE transport,
-cancellation, state/locks/migration, planning, guarded execution, and actual
-bounded builtin coder/read-only reviewer loops. The first local delivery
-coordinator now connects those APIs to the CLI on the verified Windows backend.
-The [native CLI](rust/main.rs) currently exposes:
+Build the native Rust binary (Rust 1.85+ and initialized submodules):
 
-- `roster --help`
-- `roster init` — exclusive examples and a human-owned-policy note, offline.
-- `roster ask "TEXT"` and `roster ask --pending|--cancel|--resume ["TEXT"]` —
-  issue/draft creation and private clarification checkpoint management.
-- `roster question [--files PATH,PATH --] TEXT` — read-only scoped repository
-  questions from public source excerpts without starting a task or writing files.
-- `roster doctor` and `roster doctor --copilot [--opt-in] [--runtime PATH] [--model ID]`
-  — offline configuration, approved-image, contracts and Copilot blocker checks.
-- `roster fleet list` — read-only configured profile metadata, without endpoint
-  discovery, credential-file access, warming, default changes or automatic routing.
-- `roster history list` and `roster history show` — read-only durable provenance
-  history queries and deterministic `text`, `json` and `summary` exports.
-- `roster clean` — dry-run-by-default state and provenance cleanup with active-lock
-  refusal and explicit `--execute --yes` confirmation.
-- `roster bench` — offline six-field startup, config, worktree, submodule and
-  mocked-round-trip benchmark report.
-- `roster status --issue N [--offline] [--json]` — bounded native issue-log
-  metadata, plus App-authenticated issue observations online. Unknown liveness,
-  verification and PR state stay unknown.
-- `roster stats [--delivery] [--json] [--ref REVISION_OR_RANGE] [--evals PATH]` —
-  bounded, read-only local Git/run/evaluation aggregates and delivery metrics.
-- `roster learn --recurring` — human-reviewable recurring-failure draft proposals
-  under `.roster/proposals`.
-- `roster vault set NAME`, `roster vault list` and `roster vault get NAME` —
-  encrypted local file-vault secret management over non-TTY streams.
-- `roster recommend --task-class feat|fix|docs|test [--difficulty 1-5] [--json]`
-  — advisory human-evidence ranking, constrained by the coder/model ceiling.
-- `roster eval TARGET accept|reject|rework 1-5 y|n --local|--post [--minutes N] [--comment TEXT]`
-  — an explicit human decision; optional posting verifies a human GitHub
-  principal and one commit-associated PR. Private comments remain local.
-- `roster run --seat coder --runtime builtin` — an existing local TASK.
-- `roster run --ask-file PATH --runtime builtin --no-fetch` — a new isolated
-  local task, including configured planning, coding and read-only review.
-- `roster run --issue N --runtime builtin --no-fetch` — App-authenticated open
-  issue intake into a fresh `agents/N` worktree and the same sequential seats.
-- `roster recipe validate PATH`
-- `roster catalog parse ROOT FIELD...`
-- `roster arguments split`
+```powershell
+git submodule update --init --recursive
+cargo build --release --locked --offline
+```
 
-GitHub publication/resume, outer routing,
-onboarding and interactive shell remain incomplete. Unsupported commands fail rather than invoke
-Node. Removing old code or passing component tests is not a completed rewrite,
-platform release or harness acceptance claim.
+Run `roster` with no arguments in an interactive terminal to open the
+**Interactive Roster Shell**:
 
-Analytics requires an absolute approved `ROSTER_GIT`, never Node or a metrics
-exporter. Unknown measurements remain unknown. These commands do not record a
-human evaluation, promote history into memory, contact GitHub, or change a
-model/profile assignment. Explicit human evaluation is a separate path;
-it refuses App/agent-declared invocations and never grants policy. `--local`
-does not contact GitHub; `--post` additionally requires an approved absolute
-`ROSTER_GH` and explicit human `GH_TOKEN` or `GITHUB_TOKEN`. It does not borrow
-an operator authentication store or use the App publisher.
-Automatic fleet/prior routing and `stats --delivery` remain unavailable.
-See [local metrics](docs/METRICS.md)
-for selectors, privacy boundaries and native format/platform limits.
+```text
+github-agent-roster  v0.2.1
+node 20 · powershell · D:\oss\github-agent-roster · main
+endpoint configured · qwen3.8-27b · 127.0.0.1:8000
+contracts v0.2.1-6-g0050ada · update skipped · warnings none
+───────────────────────────────────────────────────────────────────────────────
+idle │ qwen3.8-27b m │ - / 262.1k │ -
+───────────────────────────────────────────────────────────────────────────────
+roster>
+```
 
-Offline status requires an absolute approved `ROSTER_GIT`, but never contacts
-GitHub, loads endpoint configuration or records history. It selects a registered
-base issue worktree, ignores an unfinished trailing record and never emits raw
-log details. Only a missing log permits canonical-repository fallback; corrupt,
-linked or unreadable logs fail explicitly. This is local observation, not a
-review or acceptance receipt. Without `--offline`, status additionally requires
-complete App credentials, the clean reviewed contracts dependency and an
-absolute approved `ROSTER_NODE20` for its identity adapter. Native Rust performs
-the fixed GitHub HTTPS read and acknowledged token revocation; human tokens or
-authentication stores are never substituted. This observes the issue only, not
-its PR, acceptance or task execution. Automatic issue inference, retry selection
-and the broader cached-issue/artifact display remain incomplete.
+- **Startup banner**: displays product version, runtime/shell, working directory,
+  Git branch, LLM endpoint state/model/host, contracts submodule version, and
+  any health warnings.
+- **Pinned status rail**: sits between two cyan rules directly above `roster> `,
+  showing the active issue/phase (`idle`, `plan`, `draft`, `test`, `review`,
+  `pass`, `fail`), configured model + effort letter (`l`, `m`, `h`, `x`),
+  server-reported token context bar (`12.4k/262.1k [####------] 5%`), and
+  elapsed time.
+- **Natural-language Asks**: type an Ask directly at `roster> ` (or prefix with
+  `/ask `) to classify (`clarify` | `slice` | `feature` | `initiative`), draft
+  `RECIPE.yml` + `TASK.md` (or `PLAN.md`), or answer scoped read-only repository
+  questions.
 
-Fleet listing uses the same checked canonical private settings as native
-delivery, including from linked worktrees. It preserves the tabular profile,
-model, base URL, capacity, concurrency, hardware and task-hint display; the
-onboard-default capacity sentinel remains `unknown`, not invented capacity.
-Notes and key declarations are not displayed, and known credential values are
-redacted. Other fleet commands and onboarding remain unavailable.
-See [fleet scope](docs/FLEET.md#native-scope).
+---
+
+## CLI Command Inventory & Status
+
+All CLI subcommands below are implemented in the native Rust `roster` binary
+([`rust/main.rs`](rust/main.rs), [`rust/local_cli.rs`](rust/local_cli.rs)):
+
+| Command | Status | Description & How to Use |
+| --- | --- | --- |
+| `roster` / `roster shell` | **Working (Native Rust)** | Open the interactive Roster shell in a TTY with banner, pinned status rail, history, and `/`-command dispatcher. |
+| `roster --debug [COMMAND]` | **Working (Native Rust)** | Enable process-only redacted debug JSONL logging (`.roster/logs/debug-<session>.jsonl`) for the shell or command. |
+| `roster --help` / `-h` | **Working (Native Rust)** | Print CLI usage and command summary (also printed when `roster` is invoked with non-TTY stdin and no arguments). |
+| `roster init` | **Working (Native Rust)** | Exclusively create `roster.config.example.yml` and `ROSTER-POLICY-NOTE.md` without overwriting existing files or `agent-policy.yml`. |
+| `roster onboard [--discover]` | **Working (Native Rust)** | Interactive 5-step terminal wizard (`Platform`, `LLM endpoint`, `Permissions`, `Review`, `Doctor`) that probes `/v1/models` and writes `.roster/config.yml` and `.roster/fleet.yml`. |
+| `roster ask "TEXT"` | **Working (Native Rust)** | Classify an Ask (`clarify`, `slice`, `feature`, `initiative`). Creates a GitHub issue when `gh` is available (deriving a concise $\le 240$-char title for long single-line prompts while keeping the full Ask in the body), saves an offline draft when `gh` is unavailable, or saves a private clarification checkpoint when scope is missing. |
+| `roster ask --pending` | **Working (Native Rust)** | Inspect the pending private clarification checkpoint (`.roster/asks/clarification.json`), including assumptions and clarifying questions. |
+| `roster ask --resume ["TEXT"]` | **Working (Native Rust)** | Merge follow-up scope/Allowed Files into the pending clarification checkpoint and resubmit. |
+| `roster ask --cancel` | **Working (Native Rust)** | Atomically remove the pending clarification checkpoint without starting execution. |
+| `roster question [--files PATH,PATH --] TEXT` | **Working (Native Rust)** | Answer a read-only repository question using only public source excerpts matching the explicit file allowlist; never starts a task or writes files. |
+| `roster doctor` | **Working (Native Rust)** | Offline check of repository configuration, approved `ROSTER_GIT`/`ROSTER_NODE20`/`ROSTER_CARGO` images, and initialized `vendor/github-agent-contracts` submodule. |
+| `roster doctor --copilot [--opt-in] [--runtime PATH] [--model ID]` | **Working (Native Rust)** | Offline Copilot worker capability and blocker assessment; never launches a worker or network login. |
+| `roster fleet list` | **Working (Native Rust)** | Read and format validated `.roster/fleet.yml` profiles (`ID`, `MODEL`, `BASE_URL`, `CONTEXT_MAX`, `CONCURRENCY`, `HARDWARE`, `TASK_CLASS`) with secret redaction. |
+| `roster history list [FLAGS]` | **Working (Native Rust)** | Query durable provenance records (`--format json\|text\|summary`, `--store DIR`, `--repo HASH`, `--issue N`, `--seat NAME`, `--model MODEL`, `--outcome VALUE`, `--since TIME`, `--until TIME`). |
+| `roster history show <ID> [FLAGS]` | **Working (Native Rust)** | Inspect a single provenance record, run, or session in `text`, `json`, or `summary` format. |
+| `roster clean [FLAGS]` | **Working (Native Rust)** | Dry-run-by-default cleanup of `.roster` / `.roster-state` and provenance stores (`--target issue\|repo\|machine-history\|curated-memory`, `--issue N`, `--scope SCOPE`, `--state-root PATH`, `--exclude NAME`, `--execute --yes`). Refuses active run locks and forbidden paths. |
+| `roster bench` | **Working (Native Rust)** | Measure and write `.roster/bench.json` with six secret-free timings (`process_start_ms`, `config_load_ms`, `command_dispatch_ms`, `git_worktree_add_ms`, `submodule_init_ms`, `mocked_round_trip_ms`). |
+| `roster status --issue N [--offline] [--json]` | **Working (Native Rust)** | Read bounded per-worktree session log state offline, or combine with App-authenticated GitHub issue metadata online. |
+| `roster stats [--delivery] [--json] [--ref REV] [--evals PATH]` | **Working (Native Rust)** | Join Git `AI-Run` history, local run JSONL records, and human `AI-Eval` decisions into model/seat summaries or `--delivery` attempt/hardware tables, plus open failure proposals. |
+| `roster learn --recurring` | **Working (Native Rust)** | Synthesize human-reviewable draft failure proposals under `.roster/proposals/` from recurring failed/rejected slices without mutating active rules. |
+| `roster recommend --task-class CLASS [--difficulty 1-5] [--json]` | **Working (Native Rust)** | Rank coder models from qualifying human evaluations and earned difficulty ceilings (`feat`, `fix`, `docs`, `test`). |
+| `roster eval TARGET VERDICT 1-5 y\|n --local\|--post [FLAGS]` | **Working (Native Rust)** | Record a human `AI-Eval` decision (`accept`, `reject`, `rework`) locally in `.roster/evals.jsonl` or post a verified human PR comment (`--post`). |
+| `roster vault set\|list\|get NAME` | **Working (Native Rust)** | Manage AES-256-GCM encrypted secrets in `~/.roster/vault` with OS-enforced owner-only ACLs (`0700`/`0600`). `set` reads from piped stdin; `get` writes to piped stdout. |
+| `roster run --seat coder --runtime builtin [--skip-review]` | **Working (Native Rust)** | Execute an existing `TASK.md` in the current worktree through the bounded builtin coder and fresh read-only reviewer. |
+| `roster run --ask-file PATH --runtime builtin [FLAGS]` | **Working (Native Rust)** | Prepare an isolated `agents/local-<id>` worktree and run sequential builtin `planner` $\rightarrow$ `coder` $\rightarrow$ `reviewer` seats (`--base`, `--no-fetch`\|`--fetch`, `--skip-review`). |
+| `roster run --issue N --runtime builtin [FLAGS]` | **Working (Native Rust)** | Authenticate as the GitHub App, read open issue `#N`, seal the caller index, prepare an isolated `agents/N` worktree, and run sequential builtin seats. |
+| `roster recipe validate PATH` | **Working (Native Rust)** | Validate strict v0 `RECIPE.yml` seat definitions, read/write roots, and tool allowlists. |
+| `roster catalog parse ROOT FIELD...` | **Working (Native Rust)** | Parse and format restricted YAML catalogs from stdin. |
+| `roster arguments split` | **Working (Native Rust)** | Split shell-quoted argument strings into a JSON array. |
+| `roster run --publish` / `--resume` / `--parallel` / `--attempts` | **Planned / Library-Ready** | Helper logic is implemented in [`rust/run.rs`](rust/run.rs) and [`rust/start.rs`](rust/start.rs); top-level CLI flags fail closed until full end-to-end App publication/resume cutover. Use `/publish` in the shell or `agent-pr.mjs` directly. |
+
+---
+
+## Interactive Shell (`/`) Command Inventory & Status
+
+Inside `roster` (or `roster shell`), all 38 slash commands across 6 groups are
+available ([`rust/shell.rs`](rust/shell.rs)):
+
+### 1. Session Commands
+
+| Command | Aliases | Status | Description & Example |
+| --- | --- | --- | --- |
+| `/help [GROUP\|COMMAND]` | `/` | **Working** | Show all command groups (`Session`, `Ask`, `Model`, `Board`, `Human`, `Settings`) or a detailed command page (`/help fleet`). |
+| `/status [N] [--offline]` | — | **Working** | Show current session state (`Issue`, `Branch`, `Seat`, `State`, `Model`, `Host`, `Effort`, `Review`, `Worktree`) or query issue `#N`. |
+| `/history` | — | **Working** | Display the last 20 secret-scrubbed commands from `.roster/history`. |
+| `/context` | — | **Working** | Show last seat context readout (`Seat`, `Provider`, `Model`, `Effort`, `Input`, `Output`, `Context max`, `Finish reason`, `Pack budget`). |
+| `/usage` | — | **Working** | Show token usage, cached tokens, tool calls, elapsed time, and thinking state. |
+| `/clear` | — | **Working** | Clear the terminal screen and redraw the pinned status rail. |
+| `/redraw` | — | **Working** | Repaint the status rail and prompt at the current terminal width. |
+| `/quit` | `/q`, `exit` | **Working** | Exit the interactive shell cleanly. |
+
+### 2. Ask & Task Commands
+
+| Command | Aliases | Status | Description & Example |
+| --- | --- | --- | --- |
+| `/ask TEXT` (or bare `TEXT`) | — | **Working** | Classify and plan an Ask in `.roster/asks/`, printing the `Task summary` (`Outcome`, `Allowed files`, `Checks`), artifact paths, and `roster run --ask-file` command, or saving a clarification checkpoint. |
+| `/question [--files P --] TEXT` | — | **Working** | Answer a read-only scoped repository question without creating a worktree or writing files. |
+| `/btw QUESTION` | — | **Working** | Ask a single-turn, tool-free side question about the active task (`TASK.md`, `PLAN.md`, `REVIEW.md`). |
+| `/clarify [show\|cancel\|continue\|TEXT]` | — | **Working** | Inspect, cancel, or resume a pending private clarification checkpoint with explicit Allowed Files. |
+| `/plan TEXT` | — | **Working** | Draft task artifacts or a multi-slice `PLAN.md` without coding. |
+| `/queue [TEXT\|list\|drop N\|clear]` | `/qs` | **Working** | Manage the 8-slot session Ask queue (displayed above the top status rule). Pressing Enter on an empty line pops and runs the next queued Ask. |
+| `/remediate [TEST ...]` | — | **Working** | Build a test-only remediation task and select the largest-context fleet profile. |
+| `/publish [SUBJECT] [--model ID] [--skip-review]` | — | **Working** | Format the exact `AI_*` metadata environment and `agent-pr.mjs --merge-when-green` publication command for the reviewed worktree. |
+| `/map` | — | **Working** | Generate a bounded ($\le 80$ lines) filename-only `.roster/map.md` in the active worktree and register it in `.git/info/exclude`. |
+| `/checkpoints` | — | **Working** | List recorded product checkpoints (`number \| seat \| status \| time`) in the active worktree. |
+| `/rewind N` | `/undo` | **Working / Scoped** | Rewind product files to checkpoint `N` (or latest with `/undo`) when an active task scope is loaded. |
+| `/resume [N] [--green]` | — | **Working** | Inspect and attach to a local issue worktree (`.worktrees/issue-N`) and load its assignment/review state. |
+| `/recap` | — | **Working** | Print a one-line recap (`Outcome \| Files \| Last test \| Review \| Finish reason`) from the active worktree's artifacts. |
+| `/worktrees` | — | **Working** | List registered issue worktrees (`path \| branch \| seat \| status`) from `git worktree list`. |
+| `/stop` | — | **Working** | Cancel an active run or pending confirmation. |
+| `/steer TEXT` | — | **Scoped** | Interrupt an in-flight drafting coder model call with additional instructions within current `TASK.md` scope. |
+| `/run N` / `/review` / `/retry` | — | **CLI-Bridged** | Directs to `roster run --issue N --runtime builtin` / `roster run --seat coder --runtime builtin` for full process-isolated seat execution. |
+| `/batch` | — | **Refused by Design** | Always refuses (`One seat at a time. Worktrees are isolated.`). |
+
+### 3. Model & Fleet Commands
+
+| Command | Aliases | Status | Description & Example |
+| --- | --- | --- | --- |
+| `/model [ID\|clear] [--save]` | — | **Working** | Show or change the active session model (pass `--save` to persist to `.roster/config.yml`). |
+| `/effort [l\|m\|h\|x\|none\|status]` | — | **Working** | Show or change the session reasoning effort level (`l`, `m`, `h`, `x`, `none`) and update the rail. |
+| `/provider` | — | **Working** | Show the active session profile ID and endpoint host without exposing credentials. |
+| `/fleet [list\|use ID\|probe\|add\|discover\|hardware\|default\|remove]` | — | **Working** | List fleet profiles, switch the session profile (`/fleet use ID`), probe `/v1/models`, discover local endpoints, or add/update/remove profiles in `.roster/fleet.yml`. |
+| `/stats [REF] \| /stats --delivery [--json]` | — | **Working** | Display model/seat aggregates, failure proposals, or `--delivery` metrics. |
+
+### 4. Board Commands
+
+| Command | Aliases | Status | Description & Example |
+| --- | --- | --- | --- |
+| `/issues` | — | **Working** | List up to 100 open GitHub issues (`#N title`) for the `origin` repository. |
+| `/issue N` | — | **Working** | Show cached or live `Issue`, `State`, `Branch`, and `PR` summary for issue `#N`. |
+| `/diff` | — | **Working** | Print tracked filenames changed relative to `HEAD` in the active worktree. |
+| `/waves [open]` | — | **Working** | Read and display child wave drafts (`wave:N \| title \| state`) from `PLAN.md`. |
+| `/log N\|debug` | — | **Working** | Tail redacted per-worktree seat logs for issue `#N` or the process debug JSONL log (`/log debug`). |
+
+### 5. Human Feedback & Learning Commands
+
+| Command | Aliases | Status | Description & Example |
+| --- | --- | --- | --- |
+| `/eval SESSION VERDICT 1-5 y\|n --minutes N --note "TEXT"` | — | **Working** | Record a human `AI-Eval` decision (`accept`, `reject`, `rework`) with required note on `reject`/`rework` or `again=n`. |
+| `/recommend [feat\|fix\|docs\|test] [--difficulty 1-5]` | — | **Working** | Show advisory coder model recommendation from human evaluation history. |
+| `/learn --recurring` | — | **Working** | Generate draft failure proposals in `.roster/proposals/` from recurring slice failures. |
+
+### 6. Settings & Vault Commands
+
+| Command | Aliases | Status | Description & Example |
+| --- | --- | --- | --- |
+| `/statusbar on\|off` | — | **Working** | Toggle the pinned status rail and rules for the current shell process. |
+| `/debug on\|off\|status` | — | **Working** | Toggle or inspect process-only debug JSONL logging (adds `*` and `thinking · max_tokens` detail to the rail). |
+| `/doctor [warm\|copilot [FLAGS]]` | — | **Working** | Run offline prerequisite checks (`/doctor`), probe `/v1/models` with the configured request timeout (`/doctor warm`), or run offline Copilot diagnostics (`/doctor copilot`). |
+| `/config [path\|set KEY VALUE]` | — | **Working** | Display redacted `.roster/config.yml`, print its path (`/config path`), or update `effort`, `context.budget`, `statusbar`, or `debug`. |
+| `/vault [list\|get NAME\|set NAME]` | — | **Working** | List stored secret names, verify presence without printing the secret (`/vault get NAME`), or prompt with hidden input (`/vault set NAME`). |
+
+---
 
 ## Build and check
 

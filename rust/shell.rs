@@ -3973,30 +3973,143 @@ impl ShellSession {
     }
 
     async fn run_ask_text(&mut self, text: &str) -> Result<String, Error> {
+        let cleaned = crate::planning::intake::clean_ask(&Value::string(text))?;
+        if crate::ask::is_repository_question_ask(&cleaned)? {
+            return self.run_question_text(&cleaned).await;
+        }
+        let classified = crate::planning::intake::classify(&Value::string(&cleaned), None, &[])?;
+        let ask_kind = classified
+            .get("kind")
+            .and_then(Value::as_string)
+            .map(Text::to_utf8)
+            .transpose()?
+            .unwrap_or_else(|| "slice".to_owned());
+        let root = self.current_root();
+        let api_key_env = self.api_key_env();
+        if ask_kind == "clarify" {
+            let cp = crate::ask::save_clarification(
+                &cleaned,
+                &crate::ask::ClarificationOptions {
+                    repo_root: &root,
+                    env: Some(&self.environment),
+                    api_key_env: api_key_env.as_deref(),
+                    id: None,
+                },
+            )?;
+            let cp_id = cp.id.clone();
+            let detail = crate::planning::intake::clarification(&Value::string(&cleaned))?;
+            let str_field = |k: &str| {
+                detail
+                    .get(k)
+                    .and_then(Value::as_string)
+                    .and_then(|t| t.to_utf8().ok())
+                    .unwrap_or_default()
+            };
+            let list_field = |k: &str| {
+                detail
+                    .get(k)
+                    .and_then(domain::items)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|i| i.as_string()?.to_utf8().ok())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            };
+            let clarify_out = crate::ask::AskOutcome::Clarify {
+                ask_kind: "clarify".to_owned(),
+                clarification: str_field("clarification"),
+                guidance: str_field("guidance"),
+                interpretation: str_field("interpretation"),
+                assumptions: list_field("assumptions"),
+                questions: list_field("questions"),
+                template: str_field("template"),
+                checkpoint: Some(cp),
+            };
+            return Ok(format!(
+                "{}Checkpoint saved privately: {cp_id}. Use /clarify to inspect, /clarify TEXT with explicit Allowed Files to resume, or /clarify cancel.\n",
+                crate::ask::format_ask(&clarify_out)
+            ));
+        }
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+        let _ = domain::put(&mut self.display, "state", Value::string("planning"));
+        let _ = domain::put(&mut self.display, "startedAt", Value::Number(now_ms));
+
         let mut transport =
             crate::llm::http::HttpTransport::new().map_err(|failure| *failure.error)?;
         let source = crate::cancel::CancellationSource::default();
         let token = source.token();
-        let root = self.current_root();
-        let mut sub_opts = crate::ask::SubmitAskOptions {
-            cwd: &self.cwd,
-            repo_root: &self.installation,
-            checkpoint_root: &root,
+        let mut write_opts = crate::ask::WriteAskOptions {
+            repo_root: &root,
             config: &self.config,
-            env: Some(&self.environment),
             id: None,
+            env: Some(&self.environment),
             vault: None,
             transport: &mut transport,
             signal: Some(&token),
-            run_command: None,
         };
-        let outcome = crate::ask::submit_ask(text, &mut sub_opts).await?;
-        if let crate::ask::AskOutcome::Draft { ref draft, .. } = outcome {
+        let mut outcome = match crate::ask::write_ask(&cleaned, &mut write_opts).await {
+            Ok(out) => out,
+            Err(err) => {
+                let _ = domain::put(&mut self.display, "state", Value::string("failed"));
+                return Err(err);
+            }
+        };
+        let mut extra_summary = String::new();
+        if let crate::ask::AskOutcome::Draft {
+            ref draft,
+            ref mut command,
+        } = outcome
+        {
+            if command.is_empty() {
+                *command = format!(
+                    "roster run --ask-file {} --runtime builtin --no-fetch",
+                    crate::ask::quote_for_shell(&draft.ask_path.display().to_string())
+                );
+            }
+            if let Some(usage) = &draft.usage {
+                if let Some(pt) = domain::safe_integer(usage.get("prompt_tokens")) {
+                    let _ = domain::put(&mut self.display, "contextUsed", Value::Number(pt as f64));
+                }
+                if let Some(ct) = domain::safe_integer(usage.get("completion_tokens")) {
+                    let _ =
+                        domain::put(&mut self.display, "outputTokens", Value::Number(ct as f64));
+                }
+            }
+            if let Some(ref task_path) = draft.task_path {
+                if let Ok(task_src) = fs::read_to_string(task_path) {
+                    if let Ok(doc) = crate::planning::task::parse(
+                        &Value::string(&task_src),
+                        &crate::planning::task::Authority::default(),
+                    ) {
+                        let title_str = doc.title.to_utf8().unwrap_or_default();
+                        let files_str = doc.files_allowed.join(", ");
+                        let checks_str = doc
+                            .acceptance_checks
+                            .iter()
+                            .filter_map(|c| c.to_utf8().ok())
+                            .map(|c| format!("- {c}"))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        extra_summary = format!(
+                            "Task summary:\nOutcome: {title_str}\nAllowed files: {files_str}\nChecks:\n{checks_str}\n"
+                        );
+                    }
+                }
+            }
             if let Some(parent) = draft.ask_path.parent() {
                 self.last_worktree = Some(parent.to_path_buf());
             }
         }
-        Ok(crate::ask::format_ask(&outcome))
+        let _ = domain::put(&mut self.display, "state", Value::string("passed"));
+        Ok(format!(
+            "{extra_summary}{}",
+            crate::ask::format_ask(&outcome)
+        ))
     }
 }
 
@@ -4694,10 +4807,17 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn shell_session_dispatcher_banner_and_tray_block_work_end_to_end() -> Result<(), Error> {
-        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let install = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = std::env::temp_dir().join(format!(
+            "roster-shell-test-{}-{}",
+            std::process::id(),
+            files::nonce()?
+        ));
+        files::create_private_directories(&root)?;
         let env = Value::object(Vec::new());
-        let mut session = ShellSession::new(root, root, &env, false)?;
-        let facts = collect_banner_facts(root, root, &env, &session.config);
+        let mut session = ShellSession::new(&root, install, &env, false)?;
+        session.config = config::defaults()?.as_value().clone();
+        let facts = collect_banner_facts(&root, install, &env, &session.config);
         let banner = format_banner(&facts, false);
         assert!(banner.contains("github-agent-roster"));
         assert!(banner.contains("contracts"));
@@ -4745,13 +4865,19 @@ mod tests {
             ShellAction::Continue("Ask queue cleared.\n".to_owned())
         );
 
+        let long_ask = "Can we take inventory of all the command features within the roster CLI, / or otherwise to determine a feature list and then update the documentaiton and Readme.md file in the base repo so that when a user lands on the GitHub page they see all the features nad functionalities and understand how to use them. Take inventory, what is currently working or a future feature or command and then update the command and status into the readme.md file.";
+        let ask_act = session.dispatch_line(long_ask).await?;
+        assert!(
+            matches!(ask_act, ShellAction::Continue(ref s) if s.contains("Ask kind: slice") && s.contains("Allowed files: README.md"))
+        );
+
         assert_eq!(
             session.dispatch_line("/clear").await?,
             ShellAction::ClearScreen
         );
         assert_eq!(session.dispatch_line("/redraw").await?, ShellAction::Redraw);
         assert_eq!(session.dispatch_line("/quit").await?, ShellAction::Exit);
-        let _ = fs::remove_file(root.join(".roster").join("history"));
+        let _ = fs::remove_dir_all(&root);
         Ok(())
     }
 }
