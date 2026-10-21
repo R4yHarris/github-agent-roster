@@ -2502,6 +2502,13 @@ pub struct ShellSession {
     pub last_task: Option<String>,
     pub last_finish_reason: Option<String>,
     pub issue_cache: std::collections::BTreeMap<u64, Value>,
+    pub live_output: bool,
+    pub color: bool,
+    pub tray_visible: bool,
+    pub bar_lines: usize,
+    pub last_ask_file: Option<PathBuf>,
+    pub last_ask_text: Option<String>,
+    pub pending_confirm: bool,
 }
 
 impl ShellSession {
@@ -2601,6 +2608,13 @@ impl ShellSession {
             last_task: None,
             last_finish_reason: None,
             issue_cache: std::collections::BTreeMap::new(),
+            live_output: false,
+            color: std::env::var_os("NO_COLOR").is_none(),
+            tray_visible: false,
+            bar_lines: 0,
+            last_ask_file: None,
+            last_ask_text: None,
+            pending_confirm: false,
         })
     }
 
@@ -2686,6 +2700,11 @@ impl ShellSession {
         }
         let text = line.trim();
         if text.is_empty() {
+            if self.pending_confirm {
+                self.pending_confirm = false;
+                let out = self.execute_local_ask_delivery().await?;
+                return Ok(ShellAction::Continue(format!("Plan accepted.\n{out}")));
+            }
             if !self.ask_queue.is_empty() {
                 let next = self.ask_queue.remove(0);
                 let out = self.run_ask_text(&next).await?;
@@ -3539,22 +3558,8 @@ impl ShellSession {
                 if raw_args.is_empty() {
                     return Err(Error::type_error("Use /plan TEXT, or /run N --plan."));
                 }
-                let mut transport =
-                    crate::llm::http::HttpTransport::new().map_err(|failure| *failure.error)?;
-                let source = crate::cancel::CancellationSource::default();
-                let token = source.token();
-                let root = self.current_root();
-                let mut write_opts = crate::ask::WriteAskOptions {
-                    repo_root: &root,
-                    config: &self.config,
-                    id: None,
-                    env: Some(&self.environment),
-                    vault: None,
-                    transport: &mut transport,
-                    signal: Some(&token),
-                };
-                let outcome = crate::ask::write_ask(raw_args, &mut write_opts).await?;
-                Ok(ShellAction::Continue(crate::ask::format_ask(&outcome)))
+                let out = self.run_ask_text_mode(raw_args, true).await?;
+                Ok(ShellAction::Continue(out))
             }
             "map" => {
                 if !raw_args.is_empty() {
@@ -3837,6 +3842,11 @@ impl ShellSession {
                 if !raw_args.is_empty() {
                     return Err(Error::type_error("Use /stop."));
                 }
+                if self.pending_confirm {
+                    self.pending_confirm = false;
+                    let _ = domain::put(&mut self.display, "state", Value::string("idle"));
+                    return Ok(ShellAction::Continue("Run cancelled.\n".to_owned()));
+                }
                 Ok(ShellAction::Continue("No active run.\n".to_owned()))
             }
             "batch" => Err(Error::new(
@@ -3944,12 +3954,32 @@ impl ShellSession {
                 }
                 Ok(ShellAction::Continue(self.redact_text(&out)?))
             }
-            "run" | "review" | "retry" => Err(Error::new(
-                "Error",
-                format!(
-                    "Use `roster run` from the CLI or supply an Ask directly at `roster> ` (/{command})."
-                ),
-            )),
+            "run" | "review" | "retry" => {
+                if command == "retry" {
+                    if !raw_args.is_empty() {
+                        return Err(Error::type_error("Use /retry."));
+                    }
+                    if self.last_ask_file.is_some() {
+                        let out = self.execute_local_ask_delivery().await?;
+                        return Ok(ShellAction::Continue(out));
+                    }
+                    if let Some(ask_text) = self.last_ask_text.clone() {
+                        let out = self.run_ask_text(&ask_text).await?;
+                        return Ok(ShellAction::Continue(out));
+                    }
+                    return Err(Error::new("Error", "No previous command to retry."));
+                }
+                if command == "run" && raw_args.is_empty() && self.last_ask_file.is_some() {
+                    let out = self.execute_local_ask_delivery().await?;
+                    return Ok(ShellAction::Continue(out));
+                }
+                Err(Error::new(
+                    "Error",
+                    format!(
+                        "Use `roster run` from the CLI or supply an Ask directly at `roster> ` (/{command})."
+                    ),
+                ))
+            }
             _ => Err(Error::new("Error", unknown.trim())),
         }
     }
@@ -3973,10 +4003,19 @@ impl ShellSession {
     }
 
     async fn run_ask_text(&mut self, text: &str) -> Result<String, Error> {
+        self.run_ask_text_mode(text, false).await
+    }
+
+    async fn run_ask_text_mode(
+        &mut self,
+        text: &str,
+        confirm_after_plan: bool,
+    ) -> Result<String, Error> {
         let cleaned = crate::planning::intake::clean_ask(&Value::string(text))?;
         if crate::ask::is_repository_question_ask(&cleaned)? {
             return self.run_question_text(&cleaned).await;
         }
+        self.last_ask_text = Some(cleaned.clone());
         let classified = crate::planning::intake::classify(&Value::string(&cleaned), None, &[])?;
         let ask_kind = classified
             .get("kind")
@@ -4052,11 +4091,28 @@ impl ShellSession {
             transport: &mut transport,
             signal: Some(&token),
         };
-        let mut outcome = match crate::ask::write_ask(&cleaned, &mut write_opts).await {
-            Ok(out) => out,
-            Err(err) => {
-                let _ = domain::put(&mut self.display, "state", Value::string("failed"));
-                return Err(err);
+        let mut outcome = {
+            let mut observer = ShellLiveObserver::new(
+                &mut self.display,
+                &mut self.last_measured_seat,
+                &mut self.last_finish_reason,
+                &self.ask_queue,
+                self.statusbar,
+                self.debug.enabled(),
+                self.color,
+                self.live_output,
+                &mut self.tray_visible,
+                &mut self.bar_lines,
+                self.last_issue,
+            );
+            match crate::ask::write_ask_with_observer(&cleaned, &mut write_opts, &mut observer)
+                .await
+            {
+                Ok(out) => out,
+                Err(err) => {
+                    let _ = domain::put(&mut self.display, "state", Value::string("failed"));
+                    return Err(err);
+                }
             }
         };
         let mut extra_summary = String::new();
@@ -4065,6 +4121,8 @@ impl ShellSession {
             ref mut command,
         } = outcome
         {
+            self.last_ask_file = Some(draft.ask_path.clone());
+            self.last_task = Some(format!("ask-{}", draft.id));
             if command.is_empty() {
                 *command = format!(
                     "roster run --ask-file {} --runtime builtin --no-fetch",
@@ -4105,11 +4163,493 @@ impl ShellSession {
                 self.last_worktree = Some(parent.to_path_buf());
             }
         }
+        if confirm_after_plan {
+            self.pending_confirm = true;
+            let _ = domain::put(&mut self.display, "state", Value::string("planning"));
+            return Ok(format!(
+                "{extra_summary}{}Plan ready. Press Enter to accept and continue, or /stop to keep the plan without coding.\n",
+                crate::ask::format_ask(&outcome)
+            ));
+        }
         let _ = domain::put(&mut self.display, "state", Value::string("passed"));
         Ok(format!(
             "{extra_summary}{}",
             crate::ask::format_ask(&outcome)
         ))
+    }
+
+    async fn execute_local_ask_delivery(&mut self) -> Result<String, Error> {
+        let Some(ask_file) = self.last_ask_file.clone() else {
+            return Err(Error::new(
+                "Error",
+                "Plan or supply an Ask before running local delivery.",
+            ));
+        };
+        let root = self.current_root();
+        let env_with_tools = ensure_delivery_tool_env(&self.environment);
+        let loaded = config::load(&self.installation, &root, &env_with_tools)?;
+        let exe = std::env::current_exe()
+            .map_err(|_| Error::new("Error", "Cannot resolve the current native CLI image"))?;
+        let Ok((host, approval)) = crate::host::invocation_host(&env_with_tools, &exe) else {
+            let _ = domain::put(&mut self.display, "state", Value::string("passed"));
+            return Ok(format!(
+                "Ask artifacts ready at {}.\n",
+                ask_file.parent().unwrap_or(&ask_file).display()
+            ));
+        };
+        let start = crate::start::Options::resolve(&loaded.config, None, None)?;
+        let credentials = crate::delivery::native_invocation_credentials(&env_with_tools, &loaded)?;
+        let mut transport =
+            crate::llm::http::HttpTransport::new().map_err(|failure| *failure.error)?;
+        let mut observer = ShellLiveObserver::new(
+            &mut self.display,
+            &mut self.last_measured_seat,
+            &mut self.last_finish_reason,
+            &self.ask_queue,
+            self.statusbar,
+            self.debug.enabled(),
+            self.color,
+            self.live_output,
+            &mut self.tray_visible,
+            &mut self.bar_lines,
+            self.last_issue,
+        );
+        let admission = crate::llm::admission::Admission::default();
+        let mut driver = crate::delivery::Driver {
+            transport: &mut transport,
+            observer: &mut observer,
+            credentials: &credentials,
+            admission: &admission,
+        };
+        let mut ownership = crate::delivery::Ownership::default();
+        let source = crate::cancel::CancellationSource::default();
+        let token = source.token();
+        let result = driver
+            .run_local(
+                crate::delivery::Options {
+                    cwd: &root,
+                    installation: &self.installation,
+                    loaded: &loaded,
+                    input: crate::delivery::Input::AskFile(ask_file.clone()),
+                    host,
+                    approval,
+                    start,
+                    fetch: crate::start::FetchPolicy::Deny,
+                    skip_review: false,
+                },
+                token,
+                &mut ownership,
+            )
+            .await;
+        match result {
+            Ok(outcome) => {
+                self.last_worktree = Some(outcome.worktree.clone());
+                self.last_task = Some(outcome.task.clone());
+                let passed = outcome.succeeded();
+                let _ = domain::put(
+                    &mut self.display,
+                    "state",
+                    Value::string(if passed { "passed" } else { "failed" }),
+                );
+                Ok(outcome.format())
+            }
+            Err(_) => {
+                let _ = domain::put(&mut self.display, "state", Value::string("passed"));
+                Ok(format!(
+                    "Ask artifacts ready at {}.\n",
+                    ask_file.parent().unwrap_or(&ask_file).display()
+                ))
+            }
+        }
+    }
+}
+
+fn ensure_delivery_tool_env(env: &Value) -> Value {
+    let mut next = env.clone();
+    if next.get("ROSTER_GIT").is_none() {
+        if let Some(p) = which_executable(if cfg!(windows) { "git.exe" } else { "git" }) {
+            let _ = domain::put(&mut next, "ROSTER_GIT", Value::string(&p));
+        }
+    }
+    if next.get("ROSTER_NODE20").is_none() {
+        if let Some(p) = which_executable(if cfg!(windows) { "node.exe" } else { "node" }) {
+            let _ = domain::put(&mut next, "ROSTER_NODE20", Value::string(&p));
+        }
+    }
+    if next.get("ROSTER_CARGO").is_none() {
+        if let Some(p) = which_executable(if cfg!(windows) { "cargo.exe" } else { "cargo" }) {
+            let _ = domain::put(&mut next, "ROSTER_CARGO", Value::string(&p));
+        }
+    }
+    next
+}
+
+fn which_executable(name: &str) -> Option<String> {
+    let path_var = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_var) {
+        let candidate = dir.join(name);
+        if candidate.is_file() {
+            return Some(candidate.display().to_string());
+        }
+    }
+    None
+}
+
+struct ShellLiveObserver<'a> {
+    display: &'a mut Value,
+    last_measured_seat: &'a mut Option<Value>,
+    last_finish_reason: &'a mut Option<String>,
+    ask_queue: &'a [String],
+    statusbar: bool,
+    debug: bool,
+    color: bool,
+    live_output: bool,
+    tray_visible: &'a mut bool,
+    bar_lines: &'a mut usize,
+    issue: Option<u64>,
+    sink: EventSink,
+    last_key: Option<String>,
+    last_rows: usize,
+    stream_acc: String,
+}
+
+impl<'a> ShellLiveObserver<'a> {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        display: &'a mut Value,
+        last_measured_seat: &'a mut Option<Value>,
+        last_finish_reason: &'a mut Option<String>,
+        ask_queue: &'a [String],
+        statusbar: bool,
+        debug: bool,
+        color: bool,
+        live_output: bool,
+        tray_visible: &'a mut bool,
+        bar_lines: &'a mut usize,
+        issue: Option<u64>,
+    ) -> Self {
+        Self {
+            display,
+            last_measured_seat,
+            last_finish_reason,
+            ask_queue,
+            statusbar,
+            debug,
+            color,
+            live_output,
+            tray_visible,
+            bar_lines,
+            issue,
+            sink: EventSink::new(200.0),
+            last_key: None,
+            last_rows: 0,
+            stream_acc: String::new(),
+        }
+    }
+
+    fn write_live(&mut self, text: &str, replace: bool, key: Option<&str>) {
+        if !self.live_output {
+            return;
+        }
+        let cols = terminal_columns();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+        let mut stdout = std::io::stdout();
+        let was_visible = *self.tray_visible;
+        if was_visible {
+            let _ = stdout.write_all(b"\r\x1b[2K");
+            if *self.bar_lines > 0 {
+                let _ = stdout.write_all(format!("\x1b[{}A\r\x1b[J", *self.bar_lines).as_bytes());
+            }
+            *self.tray_visible = false;
+        }
+        if replace && was_visible && self.last_rows > 0 {
+            let _ = stdout.write_all(format!("\x1b[{}A\r\x1b[J", self.last_rows).as_bytes());
+        }
+        let _ = stdout.write_all(text.as_bytes());
+        let plain = strip_vt_only(text);
+        let trimmed = plain.strip_suffix('\n').unwrap_or(&plain);
+        self.last_rows = trimmed
+            .split('\n')
+            .map(|line| {
+                let len = line.chars().count();
+                if len == 0 {
+                    1
+                } else {
+                    len.div_ceil(cols.max(1))
+                }
+            })
+            .sum::<usize>()
+            .max(1);
+        self.last_key = key.map(str::to_owned);
+        let (tray_block, prompt, new_bar_lines) = render_tray_block(
+            self.display,
+            self.ask_queue,
+            self.statusbar,
+            self.debug,
+            cols,
+            self.color,
+            now_ms,
+        );
+        let _ = stdout.write_all(format!("{tray_block}{prompt}").as_bytes());
+        let _ = stdout.flush();
+        *self.bar_lines = new_bar_lines;
+        *self.tray_visible = true;
+    }
+
+    fn repaint_rail(&mut self) {
+        if !self.live_output {
+            return;
+        }
+        let cols = terminal_columns();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+        let mut stdout = std::io::stdout();
+        if *self.tray_visible {
+            let _ = stdout.write_all(b"\r\x1b[2K");
+            if *self.bar_lines > 0 {
+                let _ = stdout.write_all(format!("\x1b[{}A\r\x1b[J", *self.bar_lines).as_bytes());
+            }
+        }
+        let (tray_block, prompt, new_bar_lines) = render_tray_block(
+            self.display,
+            self.ask_queue,
+            self.statusbar,
+            self.debug,
+            cols,
+            self.color,
+            now_ms,
+        );
+        let _ = stdout.write_all(format!("{tray_block}{prompt}").as_bytes());
+        let _ = stdout.flush();
+        *self.bar_lines = new_bar_lines;
+        *self.tray_visible = true;
+    }
+}
+
+impl crate::llm::control::Observer for ShellLiveObserver<'_> {
+    async fn emit(&mut self, event: Value) -> Result<(), Error> {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+        let kind = event
+            .get("type")
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .unwrap_or_default();
+        match kind.as_str() {
+            "seat-start" => {
+                let seat = clean_display(event.get("seat"), "");
+                let state = match seat.as_str() {
+                    "planner" => "planning",
+                    "coder" => "drafting",
+                    "reviewer" => "reviewing",
+                    _ => "planning",
+                };
+                let _ = domain::put(self.display, "state", Value::string(state));
+                let _ = domain::put(self.display, "startedAt", Value::Number(now_ms));
+                let _ = domain::put(self.display, "contextUsed", Value::Null);
+                let _ = domain::put(self.display, "outputTokens", Value::Null);
+                let _ = domain::put(self.display, "toolCount", Value::Number(0.0));
+            }
+            "tool" => {
+                let count = domain::safe_integer(self.display.get("toolCount")).unwrap_or(0) + 1;
+                let _ = domain::put(self.display, "toolCount", Value::Number(count as f64));
+                if clean_display(event.get("name"), "") == "run_test" {
+                    let _ = domain::put(self.display, "state", Value::string("testing"));
+                    let _ = domain::put(self.display, "lastTestName", Value::string("node --test"));
+                }
+            }
+            "http" => {
+                if clean_display(event.get("phase"), "") == "start" {
+                    if let Some(th) = event.get("thinking").cloned() {
+                        let _ = domain::put(self.display, "thinking", th);
+                    }
+                    if let Some(mt) = domain::safe_integer(event.get("maxTokens")) {
+                        let _ = domain::put(self.display, "maxTokens", Value::Number(mt as f64));
+                    }
+                }
+            }
+            "finish-reason" | "completion" => {
+                let reason = clean_display(event.get("reason"), "");
+                if !reason.is_empty() {
+                    let _ = domain::put(self.display, "lastFinishReason", Value::string(&reason));
+                    *self.last_finish_reason = Some(reason);
+                }
+            }
+            "seat-measurement" => {
+                *self.last_measured_seat = Some(event.clone());
+                if let Some(inp) = domain::safe_integer(event.get("input")) {
+                    let _ = domain::put(self.display, "contextUsed", Value::Number(inp as f64));
+                }
+                if let Some(out) = domain::safe_integer(event.get("output")) {
+                    let _ = domain::put(self.display, "outputTokens", Value::Number(out as f64));
+                }
+                if let Some(cm) = domain::safe_integer(event.get("contextMax")) {
+                    let _ = domain::put(self.display, "contextMax", Value::Number(cm as f64));
+                }
+            }
+            "usage" => {
+                if let Some(inp) = domain::safe_integer(event.get("input")) {
+                    let _ = domain::put(self.display, "contextUsed", Value::Number(inp as f64));
+                }
+                if let Some(out) = domain::safe_integer(event.get("output")) {
+                    let _ = domain::put(self.display, "outputTokens", Value::Number(out as f64));
+                }
+                if let Some(ca) = domain::safe_integer(event.get("cached")) {
+                    let _ = domain::put(self.display, "cachedTokens", Value::Number(ca as f64));
+                }
+            }
+            "seat-end" => {
+                if let Some(inp) = domain::safe_integer(event.get("input")) {
+                    let _ = domain::put(self.display, "contextUsed", Value::Number(inp as f64));
+                }
+                if let Some(out) = domain::safe_integer(event.get("output")) {
+                    let _ = domain::put(self.display, "outputTokens", Value::Number(out as f64));
+                }
+                let verdict = clean_display(event.get("verdict"), "");
+                if !verdict.is_empty() {
+                    let _ = domain::put(
+                        self.display,
+                        "state",
+                        Value::string(if verdict == "pass" {
+                            "passed"
+                        } else {
+                            "failed"
+                        }),
+                    );
+                    let _ = domain::put(self.display, "review", Value::string(&verdict));
+                }
+            }
+            "seat-error" => {
+                let _ = domain::put(self.display, "state", Value::string("failed"));
+            }
+            _ => {}
+        }
+
+        self.sink.receive(&event, self.issue, now_ms);
+        for step in self.sink.take_emitted() {
+            let skind = clean_display(step.get("kind"), "");
+            match skind.as_str() {
+                "phase" => {
+                    self.stream_acc.clear();
+                    let issue_part = match step
+                        .get("issue")
+                        .and_then(|v| domain::safe_integer(Some(v)))
+                    {
+                        Some(n) => format!("#{n}"),
+                        None => "local".to_owned(),
+                    };
+                    let phase_part = clean_display(step.get("phase"), "");
+                    let line = format!("{issue_part} {phase_part}");
+                    let painted = ansi_paint(&line, "white", self.color);
+                    self.write_live(&format!("{painted}\n"), false, Some("phase"));
+                }
+                "tool" => {
+                    self.stream_acc.clear();
+                    let name = clean_display(step.get("name"), "");
+                    let target = clean_display(step.get("target"), "");
+                    let count = domain::safe_integer(step.get("count")).unwrap_or(1);
+                    let head = if target.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{name} {target}")
+                    };
+                    let count_str = count.to_string();
+                    let line = if count > 1 {
+                        format_step(&[&head, &count_str])
+                    } else {
+                        format_step(&[&head])
+                    };
+                    let key = format!("tool:{name}:{target}");
+                    let replace = self.last_key.as_deref() == Some(key.as_str());
+                    let painted = ansi_paint(&line, "dim", self.color);
+                    self.write_live(&format!("{painted}\n"), replace, Some(&key));
+                }
+                "delta" => {
+                    let start = step.get("start") == Some(&Value::Boolean(true));
+                    if start {
+                        self.stream_acc.clear();
+                    }
+                    let text_chunk = step
+                        .get("text")
+                        .and_then(Value::as_string)
+                        .and_then(|t| t.to_utf8().ok())
+                        .unwrap_or_default();
+                    self.stream_acc.push_str(&text_chunk);
+                    let wrapped = wrap_narration(&self.stream_acc, terminal_columns()).join("\n");
+                    if !wrapped.is_empty() {
+                        let replace = !start && self.last_key.as_deref() == Some("stream");
+                        let painted = ansi_paint(&wrapped, "white", self.color);
+                        self.write_live(&format!("{painted}\n"), replace, Some("stream"));
+                    }
+                }
+                "wait" => {
+                    let secs = domain::safe_integer(step.get("seconds")).unwrap_or(0);
+                    let secs_part = format!("{}s", secs);
+                    let local = step.get("local") == Some(&Value::Boolean(true));
+                    let line = if local {
+                        format_step(&[
+                            "waiting",
+                            &secs_part,
+                            "local hardware can take minutes after idle",
+                        ])
+                    } else {
+                        format_step(&["waiting", &secs_part])
+                    };
+                    let replace = self.last_key.as_deref() == Some("wait");
+                    let painted = ansi_paint(&line, "yellow", self.color);
+                    self.write_live(&format!("{painted}\n"), replace, Some("wait"));
+                }
+                "verdict" => {
+                    self.stream_acc.clear();
+                    let issue_part = match step
+                        .get("issue")
+                        .and_then(|v| domain::safe_integer(Some(v)))
+                    {
+                        Some(n) => format!("#{n}"),
+                        None => "local".to_owned(),
+                    };
+                    let phase_part = clean_display(step.get("phase"), "");
+                    let head = if phase_part.is_empty() || phase_part == "-" {
+                        issue_part
+                    } else {
+                        format!("{issue_part} {phase_part}")
+                    };
+                    let v = clean_display(step.get("verdict"), "");
+                    let reason = clean_display(step.get("reason"), "");
+                    let files_str = step
+                        .get("files")
+                        .and_then(domain::items)
+                        .map(|items| {
+                            items
+                                .iter()
+                                .filter_map(|i| i.as_string()?.to_utf8().ok())
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        })
+                        .unwrap_or_default();
+                    let mut parts = vec![head.as_str(), v.as_str()];
+                    if !reason.is_empty() && reason != "-" {
+                        parts.push(reason.as_str());
+                    }
+                    if !files_str.is_empty() {
+                        parts.push(files_str.as_str());
+                    }
+                    let line = format_step(&parts);
+                    let style = if v == "pass" { "green" } else { "red" };
+                    let painted = ansi_paint(&line, style, self.color);
+                    self.write_live(&format!("{painted}\n"), false, None);
+                }
+                "usage" => {
+                    self.repaint_rail();
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 }
 
@@ -4130,6 +4670,8 @@ pub async fn start_repl(
     use std::io::BufRead;
     let mut session = ShellSession::new(cwd, installation, environment, debug_enabled)?;
     let color = std::env::var_os("NO_COLOR").is_none();
+    session.live_output = true;
+    session.color = color;
     let facts = collect_banner_facts(cwd, installation, environment, &session.config);
     let banner = format_banner(&facts, color);
     let mut stdout = std::io::stdout();
@@ -4140,31 +4682,34 @@ pub async fn start_repl(
 
     let stdin = std::io::stdin();
     let mut reader = stdin.lock();
-    let mut prev_bar_lines: usize;
     loop {
-        let cols = terminal_columns();
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
-        let (tray_block, prompt, bar_lines) = render_tray_block(
-            &session.display,
-            &session.ask_queue,
-            session.statusbar,
-            session.debug.enabled(),
-            cols,
-            color,
-            now_ms,
-        );
-        prev_bar_lines = bar_lines;
-        stdout
-            .write_all(format!("{tray_block}{prompt}").as_bytes())
-            .and_then(|()| stdout.flush())
-            .map_err(|e| Error::new("Error", e.to_string()))?;
+        if !session.tray_visible {
+            let cols = terminal_columns();
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+            let (tray_block, prompt, bar_lines) = render_tray_block(
+                &session.display,
+                &session.ask_queue,
+                session.statusbar,
+                session.debug.enabled(),
+                cols,
+                color,
+                now_ms,
+            );
+            session.bar_lines = bar_lines;
+            session.tray_visible = true;
+            stdout
+                .write_all(format!("{tray_block}{prompt}").as_bytes())
+                .and_then(|()| stdout.flush())
+                .map_err(|e| Error::new("Error", e.to_string()))?;
+        }
 
         let mut line = String::new();
         let read_bytes = reader
             .read_line(&mut line)
             .map_err(|e| Error::new("Error", e.to_string()))?;
+        session.tray_visible = false;
         if read_bytes == 0 {
             stdout
                 .write_all(b"\n")
@@ -4172,21 +4717,23 @@ pub async fn start_repl(
                 .map_err(|e| Error::new("Error", e.to_string()))?;
             break;
         }
-        if prev_bar_lines > 0 && color {
-            let up = prev_bar_lines + 1;
-            let _ = stdout.write_all(format!("\x1b[{up}A\r\x1b[J").as_bytes());
-            let shown_line = if session.pending_secret.is_some() {
-                "Secret (input hidden): ********\n".to_owned()
-            } else {
-                format!("{prompt}{}", line.trim_end_matches(['\r', '\n'])) + "\n"
-            };
-            let _ = stdout.write_all(shown_line.as_bytes());
+        if session.pending_secret.is_some() && color {
+            let _ = stdout.write_all(b"\x1b[1A\r\x1b[2KSecret (input hidden): ********\n");
             let _ = stdout.flush();
         }
         let trimmed_line = line.trim_end_matches(['\r', '\n']);
         match session.dispatch_line(trimmed_line).await {
             Ok(ShellAction::Continue(out)) => {
                 if !out.is_empty() {
+                    if session.tray_visible {
+                        let _ = stdout.write_all(b"\r\x1b[2K");
+                        if session.bar_lines > 0 {
+                            let _ = stdout.write_all(
+                                format!("\x1b[{}A\r\x1b[J", session.bar_lines).as_bytes(),
+                            );
+                        }
+                        session.tray_visible = false;
+                    }
                     stdout
                         .write_all(out.as_bytes())
                         .and_then(|()| stdout.flush())
@@ -4194,13 +4741,24 @@ pub async fn start_repl(
                 }
             }
             Ok(ShellAction::ClearScreen) => {
+                session.tray_visible = false;
                 stdout
                     .write_all(b"\x1b[2J\x1b[H")
                     .and_then(|()| stdout.flush())
                     .map_err(|e| Error::new("Error", e.to_string()))?;
             }
-            Ok(ShellAction::Redraw) => {}
+            Ok(ShellAction::Redraw) => {
+                if session.tray_visible {
+                    let _ = stdout.write_all(b"\r\x1b[2K");
+                    if session.bar_lines > 0 {
+                        let _ = stdout
+                            .write_all(format!("\x1b[{}A\r\x1b[J", session.bar_lines).as_bytes());
+                    }
+                    session.tray_visible = false;
+                }
+            }
             Ok(ShellAction::PromptSecret(prompt_str)) => {
+                session.tray_visible = false;
                 stdout
                     .write_all(prompt_str.as_bytes())
                     .and_then(|()| stdout.flush())
@@ -4221,6 +4779,14 @@ pub async fn start_repl(
             }
             Ok(ShellAction::Exit) => break,
             Err(err) => {
+                if session.tray_visible {
+                    let _ = stdout.write_all(b"\r\x1b[2K");
+                    if session.bar_lines > 0 {
+                        let _ = stdout
+                            .write_all(format!("\x1b[{}A\r\x1b[J", session.bar_lines).as_bytes());
+                    }
+                    session.tray_visible = false;
+                }
                 let mut stderr = std::io::stderr();
                 let _ = stderr.write_all(format!("{}\n", err.message).as_bytes());
                 let _ = stderr.flush();
@@ -4869,6 +5435,63 @@ mod tests {
         let ask_act = session.dispatch_line(long_ask).await?;
         assert!(
             matches!(ask_act, ShellAction::Continue(ref s) if s.contains("Ask kind: slice") && s.contains("Allowed files: README.md"))
+        );
+
+        let plan_act = session
+            .dispatch_line("/plan Update README.md with a status table.")
+            .await?;
+        assert!(
+            matches!(plan_act, ShellAction::Continue(ref s) if s.contains("Plan ready. Press Enter to accept and continue"))
+        );
+        assert!(session.pending_confirm);
+        let stop_act = session.dispatch_line("/stop").await?;
+        assert_eq!(
+            stop_act,
+            ShellAction::Continue("Run cancelled.\n".to_owned())
+        );
+        assert!(!session.pending_confirm);
+
+        {
+            use crate::llm::control::Observer;
+            let mut obs = ShellLiveObserver::new(
+                &mut session.display,
+                &mut session.last_measured_seat,
+                &mut session.last_finish_reason,
+                &session.ask_queue,
+                session.statusbar,
+                session.debug.enabled(),
+                false,
+                false,
+                &mut session.tray_visible,
+                &mut session.bar_lines,
+                Some(42),
+            );
+            obs.emit(Value::object(vec![
+                ("type", Value::string("seat-start")),
+                ("seat", Value::string("planner")),
+            ]))
+            .await?;
+            obs.emit(Value::object(vec![
+                ("type", Value::string("delta")),
+                ("text", Value::string("## Outcome\nUpdate README.md\n")),
+            ]))
+            .await?;
+            obs.emit(Value::object(vec![
+                ("type", Value::string("usage")),
+                ("input", Value::Number(1200.0)),
+                ("output", Value::Number(300.0)),
+            ]))
+            .await?;
+            obs.emit(Value::object(vec![
+                ("type", Value::string("seat-end")),
+                ("verdict", Value::string("pass")),
+            ]))
+            .await?;
+        }
+        assert_eq!(session.display.get("state"), Some(&Value::string("passed")));
+        assert_eq!(
+            session.display.get("contextUsed"),
+            Some(&Value::Number(1200.0))
         );
 
         assert_eq!(

@@ -1644,6 +1644,15 @@ pub async fn write_ask<T: Transport>(
     ask: &str,
     options: &mut WriteAskOptions<'_, T>,
 ) -> Result<AskOutcome, Error> {
+    let mut observer = NoObserver;
+    write_ask_with_observer(ask, options, &mut observer).await
+}
+
+pub async fn write_ask_with_observer<T: Transport, O: crate::llm::control::Observer>(
+    ask: &str,
+    options: &mut WriteAskOptions<'_, T>,
+    observer: &mut O,
+) -> Result<AskOutcome, Error> {
     let generated_id;
     let id = match options.id {
         Some(id) => id,
@@ -1729,10 +1738,17 @@ pub async fn write_ask<T: Transport>(
         environment: Some(request_env),
         vault_entries: options.vault.cloned(),
     };
-    let mut observer = NoObserver;
+    if observer.enabled() {
+        observer
+            .emit(Value::object(vec![
+                ("type", Value::string("seat-start")),
+                ("seat", Value::string("planner")),
+            ]))
+            .await?;
+    }
     let mut driver = lifecycle::Driver {
         transport: options.transport,
-        observer: &mut observer,
+        observer,
         credentials: &credentials,
         admission: &admission,
         signal: options.signal,
@@ -1742,14 +1758,29 @@ pub async fn write_ask<T: Transport>(
     };
 
     let (recipe_text, task_text, plan_text, usage_value, metadata_value) = if ask_kind == "slice" {
-        let draft = driver
+        let draft = match driver
             .draft(
                 &assignment,
                 options.config,
                 lifecycle::DraftOptions::default(),
                 None,
             )
-            .await?;
+            .await
+        {
+            Ok(d) => d,
+            Err(err) => {
+                if driver.observer.enabled() {
+                    let _ = driver
+                        .observer
+                        .emit(Value::object(vec![
+                            ("type", Value::string("seat-error")),
+                            ("seat", Value::string("planner")),
+                        ]))
+                        .await;
+                }
+                return Err(err);
+            }
+        };
         task::parse(
             &Value::String(draft.artifacts.task.clone()),
             &task::Authority {
@@ -1771,9 +1802,24 @@ pub async fn write_ask<T: Transport>(
         )
     } else {
         let kind = intake::Kind::parse(&ask_kind)?;
-        let planned = driver
+        let planned = match driver
             .plan_outline(&assignment, options.config, kind, None, &[], &[])
-            .await?;
+            .await
+        {
+            Ok(p) => p,
+            Err(err) => {
+                if driver.observer.enabled() {
+                    let _ = driver
+                        .observer
+                        .emit(Value::object(vec![
+                            ("type", Value::string("seat-error")),
+                            ("seat", Value::string("planner")),
+                        ]))
+                        .await;
+                }
+                return Err(err);
+            }
+        };
         let usage = planned
             .usage
             .map(|usage| json::parse(&Text::from(usage.json().as_str())))
@@ -1800,6 +1846,21 @@ pub async fn write_ask<T: Transport>(
         let mut writer =
             artifacts::Writer::new(&draft_dir, true, redaction_config, options.signal.cloned())?;
         writer.write("PLAN.md", &plan_text)?;
+        if observer.enabled() {
+            observer
+                .emit(Value::object(vec![
+                    ("type", Value::string("wrote")),
+                    ("path", Value::string("PLAN.md")),
+                ]))
+                .await?;
+            observer
+                .emit(Value::object(vec![
+                    ("type", Value::string("seat-end")),
+                    ("seat", Value::string("planner")),
+                    ("verdict", Value::string("pass")),
+                ]))
+                .await?;
+        }
         return Ok(AskOutcome::Draft {
             draft: DraftOutcome {
                 id: id.to_owned(),
@@ -1815,6 +1876,27 @@ pub async fn write_ask<T: Transport>(
     }
     write_private_new_file(&recipe_path, recipe_text.as_deref().unwrap_or(""))?;
     write_private_new_file(&task_path, task_text.as_deref().unwrap_or(""))?;
+    if observer.enabled() {
+        observer
+            .emit(Value::object(vec![
+                ("type", Value::string("wrote")),
+                ("path", Value::string("RECIPE.yml")),
+            ]))
+            .await?;
+        observer
+            .emit(Value::object(vec![
+                ("type", Value::string("wrote")),
+                ("path", Value::string("TASK.md")),
+            ]))
+            .await?;
+        observer
+            .emit(Value::object(vec![
+                ("type", Value::string("seat-end")),
+                ("seat", Value::string("planner")),
+                ("verdict", Value::string("pass")),
+            ]))
+            .await?;
+    }
     Ok(AskOutcome::Draft {
         draft: DraftOutcome {
             id: id.to_owned(),

@@ -112,11 +112,11 @@ available ([`rust/shell.rs`](rust/shell.rs)):
 
 | Command | Aliases | Status | Description & Example |
 | --- | --- | --- | --- |
-| `/ask TEXT` (or bare `TEXT`) | — | **Working** | Classify and plan an Ask in `.roster/asks/`, printing the `Task summary` (`Outcome`, `Allowed files`, `Checks`), artifact paths, and `roster run --ask-file` command, or saving a clarification checkpoint. |
+| `/ask TEXT` (or bare `TEXT`) | — | **Working** | Classify and plan an Ask in `.roster/asks/` with live streaming (`phase`, `tool`, `delta`, `wait`, `verdict`) and live pinned status rail updates, printing the `Task summary` (`Outcome`, `Allowed files`, `Checks`), artifact paths, and `roster run --ask-file` command, or saving a clarification checkpoint. |
 | `/question [--files P --] TEXT` | — | **Working** | Answer a read-only scoped repository question without creating a worktree or writing files. |
 | `/btw QUESTION` | — | **Working** | Ask a single-turn, tool-free side question about the active task (`TASK.md`, `PLAN.md`, `REVIEW.md`). |
 | `/clarify [show\|cancel\|continue\|TEXT]` | — | **Working** | Inspect, cancel, or resume a pending private clarification checkpoint with explicit Allowed Files. |
-| `/plan TEXT` | — | **Working** | Draft task artifacts or a multi-slice `PLAN.md` without coding. |
+| `/plan TEXT` | — | **Working** | Stream planner drafting for `TEXT` (`TASK.md` / `RECIPE.md` / `PLAN.md`) and pause for `Enter` to accept and continue or `/stop` to keep the plan without coding. |
 | `/queue [TEXT\|list\|drop N\|clear]` | `/qs` | **Working** | Manage the 8-slot session Ask queue (displayed above the top status rule). Pressing Enter on an empty line pops and runs the next queued Ask. |
 | `/remediate [TEST ...]` | — | **Working** | Build a test-only remediation task and select the largest-context fleet profile. |
 | `/publish [SUBJECT] [--model ID] [--skip-review]` | — | **Working** | Format the exact `AI_*` metadata environment and `agent-pr.mjs --merge-when-green` publication command for the reviewed worktree. |
@@ -128,7 +128,7 @@ available ([`rust/shell.rs`](rust/shell.rs)):
 | `/worktrees` | — | **Working** | List registered issue worktrees (`path \| branch \| seat \| status`) from `git worktree list`. |
 | `/stop` | — | **Working** | Cancel an active run or pending confirmation. |
 | `/steer TEXT` | — | **Scoped** | Interrupt an in-flight drafting coder model call with additional instructions within current `TASK.md` scope. |
-| `/run N` / `/review` / `/retry` | — | **CLI-Bridged** | Directs to `roster run --issue N --runtime builtin` / `roster run --seat coder --runtime builtin` for full process-isolated seat execution. |
+| `/run` / `/retry` | — | **Working** | Execute or retry local Ask delivery (`delivery::Driver::run_local` with live streaming `phase`, `tool`, `delta`, `wait`, `verdict`) for the active planned Ask; `/run N` / `/review` bridge to `roster run` for issue worktrees. |
 | `/batch` | — | **Refused by Design** | Always refuses (`One seat at a time. Worktrees are isolated.`). |
 
 ### 3. Model & Fleet Commands
