@@ -458,8 +458,68 @@ async fn native(
 }
 
 fn run(args: &[String]) -> Result<Output, Error> {
+    use std::io::IsTerminal;
     let started = std::time::Instant::now();
-    let command = local_cli::parse(args)?;
+    let (debug_flag, effective_args) = match args.first().map(String::as_str) {
+        Some("--debug") => (true, &args[1..]),
+        _ => (false, args),
+    };
+    let is_tty = io::stdin().is_terminal() && io::stdout().is_terminal();
+    if is_tty && (effective_args.is_empty() || effective_args == ["shell"]) {
+        let environment = environment()?;
+        let installation = host::selected_path(&environment, "ROSTER_INSTALLATION_ROOT")?
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf());
+        let cwd = env::current_dir()
+            .map_err(|_| Error::new("Error", "Cannot resolve the invocation directory"))?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| {
+                Error::new(
+                    "RuntimeUnavailable",
+                    "Cannot initialize the native invocation runtime",
+                )
+            })?;
+        let code = runtime.block_on(github_agent_roster::shell::start_repl(
+            &cwd,
+            &installation,
+            &environment,
+            debug_flag,
+        ))?;
+        return Ok(Output {
+            stdout: String::new(),
+            success: code == 0,
+            diagnostic: None,
+        });
+    }
+    if is_tty && (effective_args == ["onboard"] || effective_args == ["onboard", "--discover"]) {
+        let environment = environment()?;
+        let installation = host::selected_path(&environment, "ROSTER_INSTALLATION_ROOT")?
+            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf());
+        let cwd = env::current_dir()
+            .map_err(|_| Error::new("Error", "Cannot resolve the invocation directory"))?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| {
+                Error::new(
+                    "RuntimeUnavailable",
+                    "Cannot initialize the native invocation runtime",
+                )
+            })?;
+        let code = runtime.block_on(github_agent_roster::shell::run_onboard(
+            &cwd,
+            &installation,
+            &environment,
+            effective_args.len() == 2,
+        ))?;
+        return Ok(Output {
+            stdout: String::new(),
+            success: code == 0,
+            diagnostic: None,
+        });
+    }
+    let command = local_cli::parse(effective_args)?;
     let value = match command {
         local_cli::Command::Help => return Ok(Output::success(local_cli::HELP.to_owned())),
         local_cli::Command::Init => {

@@ -18,8 +18,11 @@ use crate::state::{redaction, secure};
 use crate::status;
 
 pub const HELP: &str = "Usage:
+  roster                     Open the interactive shell in a TTY
+  roster --debug [COMMAND]   Enable process-only debug JSONL logging
   roster --help
   roster init
+  roster onboard [--discover]
   roster ask \"TEXT\"
   roster ask --pending|--cancel|--resume [\"TEXT\"]
   roster question [--files PATH,PATH --] TEXT
@@ -45,7 +48,11 @@ pub const HELP: &str = "Usage:
   roster arguments split < arguments.txt
   roster recipe validate PATH
 
-Native Rust application under active rewrite.
+Ask creates a GitHub issue when gh is available; otherwise it saves a local draft.
+Doctor checks local prerequisites without contacting GitHub or printing App env values.
+Doctor --copilot reports offline blockers only; --opt-in never enables or launches a worker.
+Init copies review-only examples; it never overwrites agent-policy.yml.
+Onboard configures a real vLLM model and local permissions in an interactive terminal.
 Local delivery uses approved native tools and sequential builtin seats.
 Local fixed-profile delivery supports at most two rescopings, two fresh perspectives and two semantic review repairs.
 GitHub issue intake uses App authentication and a fresh isolated issue worktree.
@@ -55,10 +62,10 @@ Unimplemented commands fail explicitly; there is no Node runtime fallback.
 Stats and recommendations read bounded local evidence without recording, publishing or changing a route.
 History list and show read bounded durable provenance records without modifying or repairing the store.
 Status requires an explicit issue; --offline stays local, otherwise complete App authentication and the reviewed SDK are required. Observations are not liveness or passing authority.
-Fleet list reads checked canonical private settings without probing, warming, writing or selecting a route; other fleet commands remain unavailable.
+Fleet list reads checked canonical private settings without probing, warming, writing or selecting a route.
 Human eval requires explicit --local or --post and a separate human invocation; posting requires approved human GitHub credentials.
 Learn --recurring writes human-reviewable draft proposals in .roster/proposals without changing active rules.
-Onboarding and the interactive shell remain unavailable.
+Vault set reads a secret from stdin; vault list prints names, never values.
 ";
 
 #[derive(Debug, Clone)]

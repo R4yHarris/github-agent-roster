@@ -2163,6 +2163,2405 @@ impl EventSink {
     }
 }
 
+fn run_banner_git(cwd: &Path, args: &[&str]) -> Result<String, Error> {
+    let git_exe = std::env::var_os("ROSTER_GIT")
+        .or_else(|| std::env::var_os("ROSTER_TEST_GIT"))
+        .map_or_else(|| PathBuf::from("git"), PathBuf::from);
+    let mut cmd = StdCommand::new(git_exe);
+    cmd.current_dir(cwd).env_clear().args(args);
+    for key in [
+        "PATH",
+        "PATHEXT",
+        "SystemRoot",
+        "SYSTEMROOT",
+        "WINDIR",
+        "TEMP",
+        "TMP",
+        "HOME",
+        "USERPROFILE",
+    ] {
+        if let Some(val) = std::env::var_os(key) {
+            cmd.env(key, val);
+        }
+    }
+    cmd.env("GIT_TERMINAL_PROMPT", "0");
+    let out = cmd
+        .output()
+        .map_err(|error| Error::new("Error", error.to_string()))?;
+    if !out.status.success() {
+        return Err(Error::new(
+            "Error",
+            String::from_utf8_lossy(&out.stderr).trim().to_owned(),
+        ));
+    }
+    let text =
+        String::from_utf8(out.stdout).map_err(|error| Error::new("Error", error.to_string()))?;
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err(Error::new("Error", "git returned empty output"));
+    }
+    Ok(trimmed.to_owned())
+}
+
+pub fn collect_banner_facts(
+    cwd: &Path,
+    installation: &Path,
+    environment: &Value,
+    config_val: &Value,
+) -> Value {
+    let mut warnings = Vec::new();
+    let version = match run_banner_git(installation, &["describe", "--tags", "--always"]) {
+        Ok(v) => v,
+        Err(_) => env!("CARGO_PKG_VERSION").to_owned(),
+    };
+    let node_ver = {
+        let node_exe = std::env::var_os("ROSTER_NODE20")
+            .or_else(|| std::env::var_os("ROSTER_TEST_NODE"))
+            .map_or_else(|| PathBuf::from("node"), PathBuf::from);
+        StdCommand::new(node_exe)
+            .arg("-v")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| {
+                s.trim()
+                    .trim_start_matches('v')
+                    .split('.')
+                    .next()
+                    .unwrap_or("-")
+                    .to_owned()
+            })
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "rust".to_owned())
+    };
+    let sh = shell_name(Some(environment));
+    let cwd_str = cwd.display().to_string();
+    let branch = paths::resolve_project_root(cwd)
+        .ok()
+        .and_then(|root| run_banner_git(&root, &["rev-parse", "--abbrev-ref", "HEAD"]).ok())
+        .unwrap_or_else(|| "-".to_owned());
+    let llm = config_val.get("llm");
+    let base_url = llm
+        .and_then(|l| l.get("base_url"))
+        .and_then(Value::as_string)
+        .and_then(|t| t.to_utf8().ok())
+        .filter(|s| !s.trim().is_empty());
+    let model = llm
+        .and_then(|l| l.get("model"))
+        .and_then(Value::as_string)
+        .and_then(|t| t.to_utf8().ok())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "-".to_owned());
+    let host = base_url
+        .as_deref()
+        .and_then(|u| url::Url::parse(u).ok())
+        .and_then(|u| {
+            let h = u.host_str()?.to_owned();
+            Some(match u.port() {
+                Some(p) => format!("{h}:{p}"),
+                None => h,
+            })
+        })
+        .unwrap_or_else(|| "-".to_owned());
+    let endpoint = if base_url.is_some() {
+        "configured"
+    } else {
+        "-"
+    };
+    let configured_contracts = environment
+        .get("GITHUB_AGENT_CONTRACTS")
+        .and_then(Value::as_string)
+        .and_then(|t| t.to_utf8().ok())
+        .map(PathBuf::from);
+    let contracts =
+        match paths::resolve_contracts_path(installation, cwd, configured_contracts.as_deref()) {
+            Ok(contracts_dir) => {
+                match run_banner_git(&contracts_dir, &["describe", "--tags", "--always"]) {
+                    Ok(desc) => desc,
+                    Err(err) => {
+                        warnings.push(Value::string(&format!(
+                            "contracts check failed: {}",
+                            err.message
+                        )));
+                        "-".to_owned()
+                    }
+                }
+            }
+            Err(err) => {
+                warnings.push(Value::string(&format!(
+                    "contracts check failed: {}",
+                    err.message
+                )));
+                "-".to_owned()
+            }
+        };
+    Value::object(vec![
+        ("version", Value::string(&version)),
+        ("node", Value::string(&node_ver)),
+        ("shell", Value::string(&sh)),
+        ("cwd", Value::string(&cwd_str)),
+        ("branch", Value::string(&branch)),
+        ("endpoint", Value::string(endpoint)),
+        ("model", Value::string(&model)),
+        ("host", Value::string(&host)),
+        ("contracts", Value::string(&contracts)),
+        ("update", Value::string("skipped")),
+        ("warnings", Value::Array(warnings)),
+    ])
+}
+
+pub fn queue_lines(asks: &[String], width: usize, color: bool) -> Vec<String> {
+    if asks.is_empty() {
+        return Vec::new();
+    }
+    let header = ansi_paint(
+        "/queue list  \u{00b7}  /queue drop N  \u{00b7}  /queue clear",
+        "label",
+        color,
+    );
+    let mut rows = vec![header];
+    for (idx, ask) in asks.iter().take(8).enumerate() {
+        let collapsed = ask.split_whitespace().collect::<Vec<_>>().join(" ");
+        let line = format!("{}. {collapsed}", idx + 1);
+        let truncated = if line.chars().count() > width {
+            let take = width.saturating_sub(1).max(1);
+            format!("{}\u{2026}", line.chars().take(take).collect::<String>())
+        } else {
+            line
+        };
+        rows.push(ansi_paint(&truncated, "white", color));
+    }
+    rows
+}
+
+pub fn render_tray_block(
+    display: &Value,
+    ask_queue: &[String],
+    statusbar: bool,
+    debug: bool,
+    columns: usize,
+    color: bool,
+    now_ms: f64,
+) -> (String, String, usize) {
+    let frame = format_tray(display, columns, color, now_ms, debug);
+    let queued = queue_lines(ask_queue, columns, color);
+    let children = if statusbar {
+        display
+            .get("waves")
+            .and_then(domain::items)
+            .map(|items| {
+                items
+                    .iter()
+                    .map(|row| {
+                        let issue = domain::safe_integer(row.get("issue")).unwrap_or(0);
+                        let wave = domain::safe_integer(row.get("wave")).unwrap_or(1);
+                        let seat = clean_display(row.get("seat"), "-");
+                        let state = clean_display(row.get("state"), "-");
+                        let model = clean_display(row.get("model"), "-");
+                        let line = format!("#{issue} wave:{wave} {seat} {state} {model}");
+                        line.chars()
+                            .take(columns.saturating_sub(1).max(8))
+                            .collect::<String>()
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let mut block = String::new();
+    if !queued.is_empty() {
+        block.push_str(&queued.join("\n"));
+        block.push('\n');
+    }
+    let bar_lines = if statusbar {
+        let detail_count = usize::from(frame.detail.is_some());
+        3 + detail_count + queued.len() + children.len()
+    } else {
+        queued.len()
+    };
+    if statusbar {
+        block.push_str(&frame.rule);
+        block.push('\n');
+        block.push_str(&frame.rail);
+        block.push('\n');
+        for child in &children {
+            block.push_str(child);
+            block.push('\n');
+        }
+        block.push_str(&frame.rule);
+        block.push('\n');
+        if let Some(detail) = &frame.detail {
+            block.push_str(detail);
+            block.push('\n');
+        }
+    }
+    (block, frame.prompt, bar_lines)
+}
+
+pub async fn set_config_value(
+    installation: &Path,
+    cwd: &Path,
+    field: &str,
+    value: &str,
+    token: Option<&crate::cancel::CancellationToken>,
+) -> Result<Value, Error> {
+    let root = config::resolve_config_root(installation, cwd)?;
+    let previous = settings::read_private_file(&root, settings::Name::Config)?;
+    let mut cfg = match &previous {
+        Some(src) => config::parse(src)?.as_value().clone(),
+        None => config::load(installation, cwd, &Value::object(Vec::new()))?
+            .config
+            .as_value()
+            .clone(),
+    };
+    match field {
+        "model" => {
+            let mut llm = cfg
+                .get("llm")
+                .cloned()
+                .unwrap_or_else(|| Value::object(Vec::new()));
+            domain::put(&mut llm, "model", Value::string(value))?;
+            domain::put(&mut cfg, "llm", llm)?;
+        }
+        "effort" => {
+            let mut llm = cfg
+                .get("llm")
+                .cloned()
+                .unwrap_or_else(|| Value::object(Vec::new()));
+            domain::put(&mut llm, "effort", Value::string(value))?;
+            domain::put(&mut llm, "effort_override", Value::string(value))?;
+            domain::put(&mut cfg, "llm", llm)?;
+        }
+        "context_budget" => {
+            let budget = value
+                .parse::<u64>()
+                .ok()
+                .filter(|n| (1..=MAX_SAFE_INTEGER).contains(n))
+                .ok_or_else(|| {
+                    Error::type_error("Config context budget must be a positive safe integer.")
+                })?;
+            let mut seat = cfg
+                .get("seat")
+                .cloned()
+                .unwrap_or_else(|| Value::object(Vec::new()));
+            domain::put(&mut seat, "context_chars", Value::Number(budget as f64))?;
+            domain::put(&mut cfg, "seat", seat)?;
+            if let Some(mut ctx) = cfg.get("context").cloned() {
+                domain::put(&mut ctx, "budget", Value::Number(budget as f64))?;
+                domain::put(&mut cfg, "context", ctx)?;
+            }
+        }
+        _ => {
+            return Err(Error::type_error(
+                "Unsupported private configuration setting",
+            ));
+        }
+    }
+    let formatted = config::format(&cfg)?;
+    let validated = config::parse(&formatted)?.as_value().clone();
+    settings::ensure_private_files_ignored(&root, &[settings::Name::Config], token).await?;
+    settings::write_private_documents(
+        &root,
+        &[settings::Document {
+            name: settings::Name::Config,
+            source: formatted,
+            expected_source: Some(previous),
+        }],
+    )?;
+    Ok(validated)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShellAction {
+    Continue(String),
+    ClearScreen,
+    Redraw,
+    PromptSecret(String),
+    Exit,
+}
+
+pub struct ShellSession {
+    pub cwd: PathBuf,
+    pub installation: PathBuf,
+    pub environment: Value,
+    pub config: Value,
+    pub display: Value,
+    pub statusbar: bool,
+    pub debug: crate::diagnostics::DebugLog,
+    pub history: ShellHistory,
+    pub ask_queue: Vec<String>,
+    pub queued_input: Vec<String>,
+    pub fleet_profile_id: Option<String>,
+    pub route_next: bool,
+    pub pending_secret: Option<String>,
+    pub last_measured_seat: Option<Value>,
+    pub last_worktree: Option<PathBuf>,
+    pub last_issue: Option<u64>,
+    pub last_task: Option<String>,
+    pub last_finish_reason: Option<String>,
+    pub issue_cache: std::collections::BTreeMap<u64, Value>,
+}
+
+impl ShellSession {
+    pub fn new(
+        cwd: &Path,
+        installation: &Path,
+        environment: &Value,
+        debug_enabled: bool,
+    ) -> Result<Self, Error> {
+        let cfg = match config::load(installation, cwd, environment) {
+            Ok(loaded) => loaded.config.as_value().clone(),
+            Err(_) => config::defaults()?.as_value().clone(),
+        };
+        let project_root = paths::resolve_project_root(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+        let branch = run_banner_git(&project_root, &["rev-parse", "--abbrev-ref", "HEAD"])
+            .unwrap_or_else(|_| "-".to_owned());
+        let llm = cfg.get("llm");
+        let model = llm
+            .and_then(|l| l.get("model"))
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .unwrap_or_default();
+        let base_url = llm
+            .and_then(|l| l.get("base_url"))
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .unwrap_or_default();
+        let host = if base_url.is_empty() {
+            String::new()
+        } else {
+            url::Url::parse(&base_url)
+                .ok()
+                .and_then(|u| {
+                    let h = u.host_str()?.to_owned();
+                    Some(match u.port() {
+                        Some(p) => format!("{h}:{p}"),
+                        None => h,
+                    })
+                })
+                .unwrap_or_default()
+        };
+        let effort = llm
+            .and_then(|l| l.get("effort"))
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .unwrap_or_else(|| "h".to_owned());
+        let context_max = llm
+            .and_then(|l| l.get("context_max"))
+            .and_then(|v| domain::safe_integer(Some(v)))
+            .map_or(Value::Null, |n| Value::Number(n as f64));
+        let seat_id = cfg
+            .get("seat")
+            .and_then(|s| s.get("id"))
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .unwrap_or_else(|| "coder".to_owned());
+        let display = Value::object(vec![
+            ("issue", Value::Null),
+            ("branch", Value::string(&branch)),
+            ("seat", Value::string(&seat_id)),
+            ("state", Value::string("idle")),
+            ("busy", Value::Boolean(false)),
+            ("model", Value::string(&model)),
+            ("host", Value::string(&host)),
+            ("effort", Value::string(&effort)),
+            ("contextUsed", Value::Null),
+            ("contextMax", context_max),
+            ("startedAt", Value::Null),
+            ("lastFinishReason", Value::Null),
+            ("lastTestName", Value::Null),
+            ("review", Value::Null),
+        ]);
+        let mut history = ShellHistory::new(&project_root, Some(environment));
+        let _ = history.load();
+        let debug = crate::diagnostics::DebugLog::new(
+            Some(environment),
+            if debug_enabled { Some(true) } else { None },
+            None,
+        )?;
+        Ok(Self {
+            cwd: cwd.to_path_buf(),
+            installation: installation.to_path_buf(),
+            environment: environment.clone(),
+            config: cfg,
+            display,
+            statusbar: true,
+            debug,
+            history,
+            ask_queue: Vec::new(),
+            queued_input: Vec::new(),
+            fleet_profile_id: None,
+            route_next: false,
+            pending_secret: None,
+            last_measured_seat: None,
+            last_worktree: None,
+            last_issue: None,
+            last_task: None,
+            last_finish_reason: None,
+            issue_cache: std::collections::BTreeMap::new(),
+        })
+    }
+
+    fn current_root(&self) -> PathBuf {
+        paths::resolve_project_root(&self.cwd).unwrap_or_else(|_| self.cwd.clone())
+    }
+
+    fn api_key_env(&self) -> Option<String> {
+        self.config
+            .get("llm")
+            .and_then(|l| l.get("api_key_env"))
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+    }
+
+    fn host_str(&self) -> String {
+        let base_url = self
+            .config
+            .get("llm")
+            .and_then(|l| l.get("base_url"))
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .unwrap_or_default();
+        if base_url.is_empty() {
+            return "-".to_owned();
+        }
+        url::Url::parse(&base_url)
+            .ok()
+            .and_then(|u| {
+                let h = u.host_str()?.to_owned();
+                Some(match u.port() {
+                    Some(p) => format!("{h}:{p}"),
+                    None => h,
+                })
+            })
+            .unwrap_or_else(|| "-".to_owned())
+    }
+
+    fn sync_model_display(&mut self) {
+        let llm = self.config.get("llm");
+        let model = llm
+            .and_then(|l| l.get("model"))
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .unwrap_or_default();
+        let effort = llm
+            .and_then(|l| l.get("effort"))
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .unwrap_or_else(|| "h".to_owned());
+        let ctx_max = llm
+            .and_then(|l| l.get("context_max"))
+            .and_then(|v| domain::safe_integer(Some(v)))
+            .map_or(Value::Null, |n| Value::Number(n as f64));
+        let host = self.host_str();
+        let _ = domain::put(&mut self.display, "model", Value::string(&model));
+        let _ = domain::put(&mut self.display, "host", Value::string(&host));
+        let _ = domain::put(&mut self.display, "effort", Value::string(&effort));
+        let _ = domain::put(&mut self.display, "contextMax", ctx_max);
+        let _ = domain::put(&mut self.display, "contextUsed", Value::Null);
+    }
+
+    fn redact_text(&self, text: &str) -> Result<String, Error> {
+        let mut cfg = redaction::Config {
+            environment: self.environment.clone(),
+            ..redaction::Config::default()
+        };
+        if let Some(key) = self.api_key_env() {
+            cfg.api_key_env = Text::from(key.as_str());
+        }
+        cfg.validate()?;
+        redaction::evidence(&Text::from(text), &cfg).to_utf8()
+    }
+
+    pub async fn dispatch_line(&mut self, line: &str) -> Result<ShellAction, Error> {
+        if let Some(secret_name) = self.pending_secret.take() {
+            let value = line.strip_suffix('\r').unwrap_or(line);
+            let vault = crate::vault::FileVault::from_environment(&self.environment)?;
+            vault.set(&secret_name, value)?;
+            return Ok(ShellAction::Continue(format!(
+                "Stored secret {secret_name}.\n"
+            )));
+        }
+        let text = line.trim();
+        if text.is_empty() {
+            if !self.ask_queue.is_empty() {
+                let next = self.ask_queue.remove(0);
+                let out = self.run_ask_text(&next).await?;
+                return Ok(ShellAction::Continue(format!(
+                    "Starting queued Ask: {next}\n{out}"
+                )));
+            }
+            return Ok(ShellAction::Continue(String::new()));
+        }
+        let _ = self.history.record(text, false);
+        if text == "exit" {
+            return Ok(ShellAction::Exit);
+        }
+        if text == "/" {
+            let help = format_help("").unwrap_or_default();
+            return Ok(ShellAction::Continue(help));
+        }
+        if !text.starts_with('/') {
+            if crate::ask::is_repository_question_ask(text)? {
+                let ans = self.run_question_text(text).await?;
+                return Ok(ShellAction::Continue(ans));
+            }
+            let out = self.run_ask_text(text).await?;
+            return Ok(ShellAction::Continue(out));
+        }
+        let unknown = "Unknown command. /help lists commands.\n";
+        let re = regex_lite::Regex::new(r"(?s)^/([a-z]+)(?:\s+(.*))?$")
+            .map_err(|error| Error::new("Error", error.to_string()))?;
+        let Some(caps) = re.captures(text) else {
+            return Err(Error::new("Error", unknown.trim()));
+        };
+        let input_cmd = caps.get(1).map_or("", |m| m.as_str());
+        let raw_args = caps.get(2).map_or("", |m| m.as_str()).trim();
+        let command = canonical_command(input_cmd);
+        match command {
+            "quit" => {
+                if !raw_args.is_empty() {
+                    return Err(Error::type_error("Use /quit."));
+                }
+                Ok(ShellAction::Exit)
+            }
+            "help" => {
+                if raw_args.chars().any(char::is_whitespace) {
+                    return Err(Error::type_error("Use /help [GROUP|COMMAND]."));
+                }
+                match format_help(raw_args) {
+                    Some(h) => Ok(ShellAction::Continue(h)),
+                    None => Err(Error::new("Error", unknown.trim())),
+                }
+            }
+            "clear" => {
+                if !raw_args.is_empty() {
+                    return Err(Error::type_error("Use /clear."));
+                }
+                Ok(ShellAction::ClearScreen)
+            }
+            "redraw" => {
+                if !raw_args.is_empty() {
+                    return Err(Error::type_error("Use /redraw."));
+                }
+                Ok(ShellAction::Redraw)
+            }
+            "statusbar" => {
+                if !matches!(raw_args, "on" | "off") {
+                    return Err(Error::type_error("Use /statusbar on or /statusbar off."));
+                }
+                self.statusbar = raw_args == "on";
+                Ok(ShellAction::Continue(format!("Status bars {raw_args}.\n")))
+            }
+            "debug" => {
+                if !matches!(raw_args, "on" | "off" | "status") {
+                    return Err(Error::type_error(
+                        "Use /debug on, /debug off, or /debug status.",
+                    ));
+                }
+                if raw_args != "status" {
+                    self.debug.set_enabled(raw_args == "on")?;
+                }
+                let state = if self.debug.enabled() { "on" } else { "off" };
+                Ok(ShellAction::Continue(format!("Debug logging {state}.\n")))
+            }
+            "history" => {
+                if !raw_args.is_empty() {
+                    return Err(Error::type_error("Use /history."));
+                }
+                let safe = self
+                    .history
+                    .lines()
+                    .iter()
+                    .filter(|l| safe_history_line(l, Some(&self.environment), false))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let start = safe.len().saturating_sub(20);
+                let tail = &safe[start..];
+                if tail.is_empty() {
+                    Ok(ShellAction::Continue("No stored commands.\n".to_owned()))
+                } else {
+                    Ok(ShellAction::Continue(format!("{}\n", tail.join("\n"))))
+                }
+            }
+            "context" => {
+                if !raw_args.is_empty() {
+                    return Err(Error::type_error("Use /context."));
+                }
+                let budget = self
+                    .config
+                    .get("seat")
+                    .and_then(|s| s.get("context_chars"))
+                    .and_then(|v| domain::safe_integer(Some(v)));
+                let out = format_context_readout(
+                    self.last_measured_seat.as_ref(),
+                    budget,
+                    Some(&self.environment),
+                )?;
+                Ok(ShellAction::Continue(self.redact_text(&out)?))
+            }
+            "usage" => {
+                if !raw_args.is_empty() {
+                    return Err(Error::type_error("Use /usage."));
+                }
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+                let out = format_usage(&self.display, self.last_measured_seat.as_ref(), now_ms);
+                Ok(ShellAction::Continue(self.redact_text(&out)?))
+            }
+            "status" => {
+                let fields = if raw_args.is_empty() {
+                    Vec::new()
+                } else {
+                    raw_args.split_whitespace().collect::<Vec<_>>()
+                };
+                let offline_count = fields.iter().filter(|&&f| f == "--offline").count();
+                let numbers = fields
+                    .iter()
+                    .copied()
+                    .filter(|&f| f != "--offline")
+                    .collect::<Vec<_>>();
+                if offline_count > 1
+                    || numbers.len() > 1
+                    || numbers
+                        .first()
+                        .is_some_and(|n| crate::start::parse_issue_number(n).is_err())
+                {
+                    return Err(Error::type_error("Use /status [N] [--offline]."));
+                }
+                if numbers.is_empty() {
+                    let state_val = Value::object(vec![
+                        ("display", self.display.clone()),
+                        (
+                            "lastRun",
+                            match &self.last_worktree {
+                                Some(wt) => Value::object(vec![(
+                                    "worktreePath",
+                                    Value::string(&wt.display().to_string()),
+                                )]),
+                                None => Value::Null,
+                            },
+                        ),
+                    ]);
+                    let out = format_session_status(&state_val, Some(&self.environment))?;
+                    return Ok(ShellAction::Continue(out));
+                }
+                let number = crate::start::parse_issue_number(numbers[0])?;
+                let offline = offline_count > 0;
+                let source = crate::cancel::CancellationSource::default();
+                let token = source.token();
+                let opts = crate::status::Options {
+                    issue: number,
+                    offline,
+                    json: false,
+                };
+                let root = self.current_root();
+                let snap = if offline {
+                    crate::status::observe(&root, &self.environment, &opts, &token).await?
+                } else {
+                    let mut transport =
+                        crate::llm::http::HttpTransport::new().map_err(|failure| *failure.error)?;
+                    crate::status::read(
+                        &mut transport,
+                        &self.installation,
+                        &root,
+                        &self.environment,
+                        &opts,
+                        &token,
+                    )
+                    .await?
+                };
+                Ok(ShellAction::Continue(snap.format(false)?))
+            }
+            "model" => {
+                if raw_args.is_empty() {
+                    let model = self
+                        .config
+                        .get("llm")
+                        .and_then(|l| l.get("model"))
+                        .and_then(Value::as_string)
+                        .and_then(|t| t.to_utf8().ok())
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| "(unset)".to_owned());
+                    let out = format!("Model: {model}\nHost: {}\n", self.host_str());
+                    return Ok(ShellAction::Continue(self.redact_text(&out)?));
+                }
+                let parts = raw_args.split_whitespace().collect::<Vec<_>>();
+                if parts.is_empty()
+                    || parts.len() > 2
+                    || parts[0].starts_with('-')
+                    || (parts.len() == 2 && parts[1] != "--save")
+                {
+                    return Err(Error::type_error("Use /model [ID|clear] [--save]."));
+                }
+                let save = parts.len() == 2;
+                let selected = if parts[0] == "clear" {
+                    String::new()
+                } else {
+                    let resolved = crate::run::resolve_publish_model(
+                        None,
+                        Some(&Value::object(vec![("AI_MODEL", Value::string(parts[0]))])),
+                        None,
+                        false,
+                    )?;
+                    if resolved == "builtin-stub" {
+                        return Err(Error::type_error(
+                            "Use an actual served model ID, not builtin-stub.",
+                        ));
+                    }
+                    if self.redact_text(&resolved)? != resolved {
+                        return Err(Error::type_error("Use a public model ID, not a secret."));
+                    }
+                    resolved
+                };
+                if save {
+                    let source = crate::cancel::CancellationSource::default();
+                    set_config_value(
+                        &self.installation,
+                        &self.cwd,
+                        "model",
+                        &selected,
+                        Some(&source.token()),
+                    )
+                    .await?;
+                }
+                let mut llm = self
+                    .config
+                    .get("llm")
+                    .cloned()
+                    .unwrap_or_else(|| Value::object(Vec::new()));
+                domain::put(&mut llm, "model", Value::string(&selected))?;
+                domain::put(&mut self.config, "llm", llm)?;
+                self.route_next = selected.is_empty();
+                self.sync_model_display();
+                let label = if selected.is_empty() {
+                    "(unset)"
+                } else {
+                    &selected
+                };
+                let out = format!("Model: {label}\nHost: {}\n", self.host_str());
+                Ok(ShellAction::Continue(self.redact_text(&out)?))
+            }
+            "effort" => {
+                if raw_args.is_empty() || raw_args == "status" {
+                    let eff = self
+                        .config
+                        .get("llm")
+                        .and_then(|l| l.get("effort"))
+                        .and_then(Value::as_string)
+                        .and_then(|t| t.to_utf8().ok())
+                        .unwrap_or_else(|| "h".to_owned());
+                    return Ok(ShellAction::Continue(format!("Effort: {eff}\n")));
+                }
+                if !matches!(raw_args, "l" | "m" | "h" | "x" | "none") {
+                    return Err(Error::type_error("Use /effort l|m|h|x|none|status."));
+                }
+                let mut llm = self
+                    .config
+                    .get("llm")
+                    .cloned()
+                    .unwrap_or_else(|| Value::object(Vec::new()));
+                domain::put(&mut llm, "effort", Value::string(raw_args))?;
+                domain::put(&mut llm, "effort_override", Value::string(raw_args))?;
+                domain::put(&mut self.config, "llm", llm)?;
+                self.sync_model_display();
+                Ok(ShellAction::Continue(format!("Effort: {raw_args}\n")))
+            }
+            "provider" => {
+                if !raw_args.is_empty() {
+                    return Err(Error::type_error("Use /provider."));
+                }
+                let prof = self.fleet_profile_id.clone().unwrap_or_else(|| {
+                    self.config
+                        .get("llm")
+                        .and_then(|l| l.get("profile"))
+                        .and_then(Value::as_string)
+                        .and_then(|t| t.to_utf8().ok())
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| "(custom)".to_owned())
+                });
+                let out = format!("Profile: {prof}\nHost: {}\n", self.host_str());
+                Ok(ShellAction::Continue(self.redact_text(&out)?))
+            }
+            "fleet" => {
+                let words = arguments::split(&Text::from(raw_args), crate::fleet::FLEET_CLI_USAGE)?
+                    .into_iter()
+                    .map(|w| w.to_utf8())
+                    .collect::<Result<Vec<_>, _>>()?;
+                let sub = words.first().map_or("list", String::as_str);
+                let root = self.current_root();
+                if sub == "list" {
+                    if words.len() > 1 {
+                        return Err(Error::type_error("Use /fleet or /fleet list."));
+                    }
+                    let loaded = crate::fleet::load(&root)?;
+                    if loaded.profiles().is_empty() {
+                        return Ok(ShellAction::Continue(
+                            "No fleet profiles configured.\n".to_owned(),
+                        ));
+                    }
+                    let mut out = String::new();
+                    for prof in loaded.profiles() {
+                        let pv = prof.as_value();
+                        let id = clean_display(pv.get("id"), "-");
+                        let base_url = clean_display(pv.get("base_url"), "");
+                        let host = url::Url::parse(&base_url)
+                            .ok()
+                            .and_then(|u| {
+                                let h = u.host_str()?.to_owned();
+                                Some(match u.port() {
+                                    Some(p) => format!("{h}:{p}"),
+                                    None => h,
+                                })
+                            })
+                            .unwrap_or_else(|| "-".to_owned());
+                        let model = clean_display(pv.get("model"), "-");
+                        let ctx = domain::safe_integer(pv.get("context_max"))
+                            .filter(|&n| n > 0)
+                            .map_or_else(|| "-".to_owned(), |n| n.to_string());
+                        out.push_str(&format!("{id} | {host} | {model} | ctx {ctx}\n"));
+                    }
+                    return Ok(ShellAction::Continue(self.redact_text(&out)?));
+                }
+                if sub == "use" {
+                    if words.len() != 2 {
+                        return Err(Error::type_error("Use /fleet use ID."));
+                    }
+                    let loaded = crate::fleet::load(&root)?;
+                    let prof = crate::fleet::get_profile(&loaded, &Value::string(&words[1]))?;
+                    let next_cfg = crate::fleet::with_profile(&self.config, prof.as_value())?;
+                    let id = clean_display(prof.as_value().get("id"), &words[1]);
+                    let model = clean_display(prof.as_value().get("model"), "-");
+                    self.config = next_cfg;
+                    self.fleet_profile_id = Some(id.clone());
+                    self.route_next = false;
+                    self.sync_model_display();
+                    let out = format!(
+                        "Session profile: {id}\nModel: {model}\nHost: {}\n",
+                        self.host_str()
+                    );
+                    return Ok(ShellAction::Continue(self.redact_text(&out)?));
+                }
+                let parsed_cmd = crate::fleet::parse_fleet_cli_args(&words)?;
+                let mut transport =
+                    crate::llm::http::HttpTransport::new().map_err(|failure| *failure.error)?;
+                let source = crate::cancel::CancellationSource::default();
+                let out = crate::fleet::run_fleet_cli(
+                    &parsed_cmd,
+                    &root,
+                    &self.installation,
+                    &self.environment,
+                    true,
+                    &mut transport,
+                    Some(&source.token()),
+                )
+                .await?;
+                Ok(ShellAction::Continue(self.redact_text(&out)?))
+            }
+            "config" => {
+                let words = arguments::split(
+                    &Text::from(raw_args),
+                    "Use /config, /config path, or /config set KEY VALUE.",
+                )?
+                .into_iter()
+                .map(|w| w.to_utf8())
+                .collect::<Result<Vec<_>, _>>()?;
+                if words.is_empty() {
+                    let out =
+                        public_config(&self.installation, &self.cwd, Some(&self.environment))?;
+                    return Ok(ShellAction::Continue(out));
+                }
+                if words.len() == 1 && words[0] == "path" {
+                    let path = private_config_path(&self.installation, &self.cwd)?;
+                    return Ok(ShellAction::Continue(format!("{}\n", path.display())));
+                }
+                if words.len() != 3 || words[0] != "set" {
+                    return Err(Error::type_error(
+                        "Use /config, /config path, or /config set KEY VALUE.",
+                    ));
+                }
+                let api_key_env = self.api_key_env();
+                let setting = config_setting(
+                    &words[1],
+                    &words[2],
+                    Some(&self.environment),
+                    api_key_env.as_deref(),
+                )?;
+                match setting.field {
+                    "statusbar" => {
+                        self.statusbar = setting.value == ConfigSettingValue::Boolean(true);
+                    }
+                    "debug" => {
+                        self.debug
+                            .set_enabled(setting.value == ConfigSettingValue::Boolean(true))?;
+                    }
+                    "effort" | "context_budget" => {
+                        let ConfigSettingValue::Text(val_str) = setting.value else {
+                            return Err(Error::type_error("Config setting must be text"));
+                        };
+                        let source = crate::cancel::CancellationSource::default();
+                        let saved = set_config_value(
+                            &self.installation,
+                            &self.cwd,
+                            setting.field,
+                            &val_str,
+                            Some(&source.token()),
+                        )
+                        .await?;
+                        self.config = saved;
+                        self.sync_model_display();
+                    }
+                    _ => {}
+                }
+                let suffix = if matches!(setting.field, "statusbar" | "debug") {
+                    " for this process"
+                } else {
+                    ""
+                };
+                Ok(ShellAction::Continue(format!(
+                    "Config {} set{suffix}.\n",
+                    setting.field
+                )))
+            }
+            "vault" => {
+                if raw_args.is_empty() || raw_args == "list" {
+                    let vault = crate::vault::FileVault::from_environment(&self.environment)?;
+                    let names = vault.list()?;
+                    if names.is_empty() {
+                        return Ok(ShellAction::Continue("No secrets stored.\n".to_owned()));
+                    }
+                    return Ok(ShellAction::Continue(format!("{}\n", names.join("\n"))));
+                }
+                if let Some(name) = raw_args.strip_prefix("get ").map(str::trim) {
+                    if !name.is_empty() && !name.chars().any(char::is_whitespace) {
+                        crate::vault::validate_secret_name(&Text::from(name))?;
+                        let vault = crate::vault::FileVault::from_environment(&self.environment)?;
+                        if vault.get(name)?.is_none() {
+                            return Err(Error::new(
+                                "Error",
+                                format!("No secret stored for {name}."),
+                            ));
+                        }
+                        return Ok(ShellAction::Continue(format!(
+                            "{name} is stored (value hidden; pipe roster vault get NAME to retrieve it).\n"
+                        )));
+                    }
+                }
+                if let Some(name) = raw_args.strip_prefix("set ").map(str::trim) {
+                    if !name.is_empty() && !name.chars().any(char::is_whitespace) {
+                        crate::vault::validate_secret_name(&Text::from(name))?;
+                        self.pending_secret = Some(name.to_owned());
+                        return Ok(ShellAction::PromptSecret(
+                            "Secret (input hidden): ".to_owned(),
+                        ));
+                    }
+                }
+                Err(Error::type_error(
+                    "Use /vault [list], /vault get NAME, or /vault set NAME.",
+                ))
+            }
+            "doctor" => {
+                let words = arguments::split(
+                    &Text::from(raw_args),
+                    "Use /doctor, /doctor warm, or /doctor copilot [--opt-in] [--runtime PATH] [--model ID].",
+                )?
+                .into_iter()
+                .map(|w| w.to_utf8())
+                .collect::<Result<Vec<_>, _>>()?;
+                if words.first().map(String::as_str) == Some("copilot") {
+                    let mut opts = crate::capabilities::parse_copilot_doctor_args(&words[1..])?;
+                    opts.is_tty = Some(true);
+                    let report = crate::capabilities::check_copilot_doctor(&opts)?;
+                    let out = crate::capabilities::format_copilot_doctor(&report)?;
+                    return Ok(ShellAction::Continue(self.redact_text(&out)?));
+                }
+                if words.is_empty() {
+                    let source = crate::cancel::CancellationSource::default();
+                    let root = self.current_root();
+                    let report = crate::local_cli::doctor(
+                        &self.installation,
+                        &root,
+                        &self.environment,
+                        &source.token(),
+                    )
+                    .await?;
+                    return Ok(ShellAction::Continue(self.redact_text(&report.output)?));
+                }
+                if words.len() == 1 && words[0] == "warm" {
+                    let mut transport =
+                        crate::llm::http::HttpTransport::new().map_err(|failure| *failure.error)?;
+                    let source = crate::cancel::CancellationSource::default();
+                    let report = crate::diagnostics::warm_doctor(
+                        &self.config,
+                        &self.environment,
+                        &mut transport,
+                        &source.token(),
+                    )
+                    .await?;
+                    let status_str = if report.skipped {
+                        "skipped".to_owned()
+                    } else {
+                        report
+                            .status
+                            .map_or_else(|| "unknown".to_owned(), |s| s.to_string())
+                    };
+                    let out = format!("Warm probe: host={} status={status_str}\n", self.host_str());
+                    return Ok(ShellAction::Continue(self.redact_text(&out)?));
+                }
+                Err(Error::type_error(
+                    "Use /doctor, /doctor warm, or /doctor copilot [--opt-in] [--runtime PATH] [--model ID].",
+                ))
+            }
+            "stats" => {
+                let root = self.current_root();
+                let source = crate::cancel::CancellationSource::default();
+                let token = source.token();
+                let mut opts = crate::metrics::Options::default();
+                let mut json_flag = false;
+                if !raw_args.is_empty() {
+                    if raw_args.starts_with('-') {
+                        for word in raw_args.split_whitespace() {
+                            match word {
+                                "--delivery" => opts.delivery = true,
+                                "--json" => json_flag = true,
+                                _ => {
+                                    return Err(Error::type_error(
+                                        "Use /stats [REF] | /stats --delivery [--json].",
+                                    ));
+                                }
+                            }
+                        }
+                    } else if raw_args.chars().any(char::is_whitespace) {
+                        return Err(Error::type_error("Use /stats [REF]."));
+                    } else {
+                        opts.reference = Some(raw_args.to_owned());
+                    }
+                }
+                let evidence =
+                    crate::metrics::load(&root, &self.environment, &opts, &token).await?;
+                let out = if opts.delivery {
+                    let groups = evidence.delivery_groups()?;
+                    if json_flag {
+                        format!("{}\n", Value::Array(groups).pretty())
+                    } else {
+                        crate::learning::format_delivery_metrics(&groups)?
+                    }
+                } else {
+                    let groups = evidence.groups()?;
+                    if json_flag {
+                        format!("{}\n", Value::Array(groups).pretty())
+                    } else {
+                        let mut table = crate::learning::format_metrics(&groups)?;
+                        let proposals = crate::metrics::list_failure_proposals(&root)?;
+                        table.push_str(&crate::learning::format_failure_proposals(&proposals)?);
+                        table
+                    }
+                };
+                Ok(ShellAction::Continue(out))
+            }
+            "learn" => {
+                if raw_args != "--recurring" {
+                    return Err(Error::type_error("Use /learn --recurring."));
+                }
+                let root = self.current_root();
+                let res = crate::metrics::propose_recurring_failures(
+                    &self.installation,
+                    &root,
+                    &self.environment,
+                )?;
+                Ok(ShellAction::Continue(format!(
+                    "Recurring failures: {} draft proposals created; {} existing drafts preserved. Human review required.\n",
+                    res.created.len(),
+                    res.existing.len()
+                )))
+            }
+            "recommend" => {
+                let mut task_class = "feat".to_owned();
+                let mut difficulty = 2_u8;
+                if !raw_args.is_empty() {
+                    let words = raw_args.split_whitespace().collect::<Vec<_>>();
+                    if !crate::learning::TASK_CLASSES.contains(&words[0]) {
+                        return Err(Error::type_error(
+                            "Use /recommend [feat|fix|docs|test] [--difficulty 1-5].",
+                        ));
+                    }
+                    task_class = words[0].to_owned();
+                    if words.len() == 3 && words[1] == "--difficulty" {
+                        difficulty = words[2]
+                            .parse::<u8>()
+                            .ok()
+                            .filter(|d| (1..=5).contains(d))
+                            .ok_or_else(|| {
+                                Error::type_error(
+                                    "Use /recommend [feat|fix|docs|test] [--difficulty 1-5].",
+                                )
+                            })?;
+                    } else if words.len() != 1 {
+                        return Err(Error::type_error(
+                            "Use /recommend [feat|fix|docs|test] [--difficulty 1-5].",
+                        ));
+                    }
+                }
+                let root = self.current_root();
+                let source = crate::cancel::CancellationSource::default();
+                let evidence = crate::metrics::load(
+                    &root,
+                    &self.environment,
+                    &crate::metrics::Options::default(),
+                    &source.token(),
+                )
+                .await?;
+                let rec = evidence.recommendation(&task_class, Some(difficulty))?;
+                let out = crate::learning::format_recommendation(
+                    rec.as_ref(),
+                    &task_class,
+                    &self.config,
+                    &self.environment,
+                )?;
+                Ok(ShellAction::Continue(out))
+            }
+            "eval" => {
+                if domain::truthy(self.environment.get("ROSTER_SEAT").unwrap_or(&Value::Null)) {
+                    return Err(Error::new(
+                        "Error",
+                        "AI-Eval is human-only; an agent seat cannot record an evaluation.",
+                    ));
+                }
+                let parsed = parse_shell_evaluation_args(raw_args)?;
+                let flags = vec![
+                    parsed.values[0].clone(),
+                    parsed.values[1].clone(),
+                    parsed.values[2].clone(),
+                    parsed.values[3].clone(),
+                    "--local".to_owned(),
+                    "--minutes".to_owned(),
+                    parsed.minutes.to_string(),
+                    "--comment".to_owned(),
+                    parsed.comment,
+                ];
+                let decision = crate::evaluation::Decision::parse(&flags)?;
+                let root = self.current_root();
+                let source = crate::cancel::CancellationSource::default();
+                let recorded =
+                    crate::evaluation::record(&root, &self.environment, &decision, &source.token())
+                        .await?;
+                Ok(ShellAction::Continue(recorded.format()))
+            }
+            "log" => {
+                if raw_args == "debug" {
+                    if !self.debug.enabled() {
+                        return Err(Error::new(
+                            "Error",
+                            "Debug logging is off. Use /debug on before /log debug.",
+                        ));
+                    }
+                    let tail = self.debug.tail(50)?;
+                    let out = match tail {
+                        Some((_, lines)) if !lines.is_empty() => format!("{}\n", lines.join("\n")),
+                        _ => "No debug events recorded in this process.\n".to_owned(),
+                    };
+                    return Ok(ShellAction::Continue(out));
+                }
+                let issue = crate::start::parse_issue_number(raw_args)
+                    .map_err(|_| Error::type_error("Use /log N."))?;
+                let root = self.current_root();
+                let api_key_env = self.api_key_env();
+                let logs = crate::diagnostics::read_issue_logs(
+                    &root,
+                    issue,
+                    Some(&self.environment),
+                    api_key_env.as_deref(),
+                    50,
+                )?;
+                if logs.is_empty() {
+                    return Ok(ShellAction::Continue(format!(
+                        "No local run logs for issue #{issue}.\n"
+                    )));
+                }
+                let mut out = String::new();
+                for log in logs {
+                    out.push_str(&format!(
+                        "{}\n{}\n",
+                        log.path.display(),
+                        log.lines.join("\n")
+                    ));
+                }
+                Ok(ShellAction::Continue(out))
+            }
+            "queue" => {
+                if raw_args.is_empty() || raw_args == "list" {
+                    if self.ask_queue.is_empty() {
+                        return Ok(ShellAction::Continue("No Asks queued.\n".to_owned()));
+                    }
+                    let mut out = String::new();
+                    for (idx, ask) in self.ask_queue.iter().enumerate() {
+                        out.push_str(&format!("{}. {ask}\n", idx + 1));
+                    }
+                    return Ok(ShellAction::Continue(out));
+                }
+                if raw_args == "clear" {
+                    self.ask_queue.clear();
+                    return Ok(ShellAction::Continue("Ask queue cleared.\n".to_owned()));
+                }
+                if let Some(num_str) = raw_args.strip_prefix("drop ").map(str::trim) {
+                    if let Ok(idx) = num_str.parse::<usize>() {
+                        if (1..=8).contains(&idx) {
+                            if idx > self.ask_queue.len() {
+                                return Err(Error::type_error(
+                                    "No queued Ask at that number. Use /queue list.",
+                                ));
+                            }
+                            let removed = self.ask_queue.remove(idx - 1);
+                            return Ok(ShellAction::Continue(format!(
+                                "Dropped {idx}. {removed}\n"
+                            )));
+                        }
+                    }
+                }
+                if raw_args.len() > 4096 || self.redact_text(raw_args)? != raw_args {
+                    return Err(Error::type_error(
+                        "Queued Ask is empty, longer than 4096 characters, or contains secret material.",
+                    ));
+                }
+                if self.ask_queue.len() >= 8 {
+                    return Err(Error::type_error(
+                        "Ask queue is full (8). Use /queue drop N or /queue clear.",
+                    ));
+                }
+                self.ask_queue.push(raw_args.to_owned());
+                let preview: String = raw_args.chars().take(120).collect();
+                Ok(ShellAction::Continue(format!(
+                    "Queued Ask {}: {preview}\n",
+                    self.ask_queue.len()
+                )))
+            }
+            "clarify" => {
+                let root = self.current_root();
+                let api_key_env = self.api_key_env();
+                let opts = crate::ask::ClarificationOptions {
+                    repo_root: &root,
+                    env: Some(&self.environment),
+                    api_key_env: api_key_env.as_deref(),
+                    id: None,
+                };
+                if raw_args.is_empty() || raw_args == "show" {
+                    let record = crate::ask::read_clarification(&opts)?;
+                    let out = crate::ask::format_clarification_checkpoint(record.as_ref(), true)?;
+                    return Ok(ShellAction::Continue(self.redact_text(&out)?));
+                }
+                if raw_args == "cancel" {
+                    let cancelled = crate::ask::cancel_clarification(&opts)?;
+                    return Ok(ShellAction::Continue(if cancelled {
+                        "Clarification cancelled. No new execution or publication started.\n"
+                            .to_owned()
+                    } else {
+                        "No pending clarification.\n".to_owned()
+                    }));
+                }
+                let answer = if raw_args == "continue" {
+                    None
+                } else {
+                    Some(raw_args)
+                };
+                let resumed = crate::ask::resume_clarification(
+                    answer,
+                    &crate::ask::ClarificationOptions {
+                        repo_root: &root,
+                        env: Some(&self.environment),
+                        api_key_env: api_key_env.as_deref(),
+                        id: None,
+                    },
+                )?;
+                let out = self.run_ask_text(&resumed.ask).await?;
+                let _ = crate::ask::cancel_clarification(&crate::ask::ClarificationOptions {
+                    repo_root: &root,
+                    env: Some(&self.environment),
+                    api_key_env: api_key_env.as_deref(),
+                    id: Some(&resumed.record.id),
+                });
+                Ok(ShellAction::Continue(out))
+            }
+            "question" => {
+                if raw_args.is_empty() {
+                    return Err(Error::type_error(
+                        "Use /question TEXT with an explicit Files allowed section.",
+                    ));
+                }
+                let q_text = if raw_args.starts_with("--files") {
+                    let words = arguments::split(
+                        &Text::from(raw_args),
+                        "Use /question [--files PATH,PATH --] TEXT.",
+                    )?
+                    .into_iter()
+                    .map(|w| w.to_utf8())
+                    .collect::<Result<Vec<_>, _>>()?;
+                    crate::ask::repository_question_text(&words)?
+                } else {
+                    raw_args.to_owned()
+                };
+                let out = self.run_question_text(&q_text).await?;
+                Ok(ShellAction::Continue(out))
+            }
+            "btw" => {
+                if raw_args.is_empty() {
+                    return Err(Error::type_error("Use /btw QUESTION."));
+                }
+                let mut transport =
+                    crate::llm::http::HttpTransport::new().map_err(|failure| *failure.error)?;
+                let source = crate::cancel::CancellationSource::default();
+                let token = source.token();
+                let mut side_opts = crate::ask::SideQuestionOptions {
+                    worktree_path: self.last_worktree.as_deref(),
+                    run_ask: None,
+                    config: &self.config,
+                    env: Some(&self.environment),
+                    vault: None,
+                    transport: &mut transport,
+                    signal: Some(&token),
+                };
+                let ans = crate::ask::ask_side_question(raw_args, &mut side_opts).await?;
+                Ok(ShellAction::Continue(format!(
+                    "{}\n",
+                    self.redact_text(&ans)?
+                )))
+            }
+            "ask" => {
+                if raw_args.is_empty() {
+                    return Err(Error::type_error("Use /ask TEXT."));
+                }
+                let out = self.run_ask_text(raw_args).await?;
+                Ok(ShellAction::Continue(out))
+            }
+            "plan" => {
+                if raw_args.is_empty() {
+                    return Err(Error::type_error("Use /plan TEXT, or /run N --plan."));
+                }
+                let mut transport =
+                    crate::llm::http::HttpTransport::new().map_err(|failure| *failure.error)?;
+                let source = crate::cancel::CancellationSource::default();
+                let token = source.token();
+                let root = self.current_root();
+                let mut write_opts = crate::ask::WriteAskOptions {
+                    repo_root: &root,
+                    config: &self.config,
+                    id: None,
+                    env: Some(&self.environment),
+                    vault: None,
+                    transport: &mut transport,
+                    signal: Some(&token),
+                };
+                let outcome = crate::ask::write_ask(raw_args, &mut write_opts).await?;
+                Ok(ShellAction::Continue(crate::ask::format_ask(&outcome)))
+            }
+            "map" => {
+                if !raw_args.is_empty() {
+                    return Err(Error::type_error("Use /map."));
+                }
+                let wt = self
+                    .last_worktree
+                    .clone()
+                    .unwrap_or_else(|| self.current_root());
+                let api_key_env = self.api_key_env();
+                let (_, lines) = crate::diagnostics::write_repo_map(
+                    &wt,
+                    Some(&self.environment),
+                    api_key_env.as_deref(),
+                )?;
+                Ok(ShellAction::Continue(format!(
+                    "Repo map: {lines} filename-only lines (cap 80).\n"
+                )))
+            }
+            "diff" => {
+                if !raw_args.is_empty() {
+                    return Err(Error::type_error("Use /diff."));
+                }
+                let wt = self
+                    .last_worktree
+                    .clone()
+                    .unwrap_or_else(|| self.current_root());
+                let raw = run_banner_git(
+                    &wt,
+                    &[
+                        "--no-pager",
+                        "diff",
+                        "--no-ext-diff",
+                        "--no-textconv",
+                        "--name-only",
+                        "-z",
+                        "HEAD",
+                        "--",
+                    ],
+                )
+                .unwrap_or_default();
+                let names = crate::start::parse_diff_names(&raw);
+                if names.is_empty() {
+                    Ok(ShellAction::Continue("No tracked diff.\n".to_owned()))
+                } else {
+                    Ok(ShellAction::Continue(format!("{}\n", names.join("\n"))))
+                }
+            }
+            "worktrees" => {
+                if !raw_args.is_empty() {
+                    return Err(Error::type_error("Use /worktrees."));
+                }
+                let root = self.current_root();
+                let raw = run_banner_git(&root, &["worktree", "list", "--porcelain", "-z"])
+                    .unwrap_or_default();
+                let inv = crate::start::parse_inventory(raw.as_bytes()).unwrap_or_default();
+                let issue_wts = inv
+                    .into_iter()
+                    .filter(|wt| {
+                        wt.branch
+                            .as_deref()
+                            .and_then(crate::start::parse_issue_branch)
+                            .is_some()
+                    })
+                    .collect::<Vec<_>>();
+                if issue_wts.is_empty() {
+                    return Ok(ShellAction::Continue(
+                        "No registered issue worktrees.\n".to_owned(),
+                    ));
+                }
+                let mut out = String::new();
+                for wt in issue_wts {
+                    let br = wt.branch.as_deref().unwrap_or("-");
+                    out.push_str(&format!(
+                        "{} | {br} | coder | registered\n",
+                        wt.path.display()
+                    ));
+                }
+                Ok(ShellAction::Continue(self.redact_text(&out)?))
+            }
+            "recap" => {
+                if !raw_args.is_empty() {
+                    return Err(Error::type_error("Use /recap."));
+                }
+                let wt = self
+                    .last_worktree
+                    .clone()
+                    .unwrap_or_else(|| self.current_root());
+                let recap = crate::start::format_run_recap(
+                    &wt,
+                    None,
+                    self.last_finish_reason.as_deref(),
+                    Some(&self.environment),
+                )?;
+                Ok(ShellAction::Continue(recap))
+            }
+            "issues" => {
+                if !raw_args.is_empty() {
+                    return Err(Error::type_error("Use /issues."));
+                }
+                let root = self.current_root();
+                let origin = run_banner_git(&root, &["remote", "get-url", "origin"])?;
+                let repo = crate::ask::github_repository(&origin)?;
+                let out = StdCommand::new("gh")
+                    .current_dir(&root)
+                    .env("GH_PROMPT_DISABLED", "1")
+                    .args([
+                        "issue",
+                        "list",
+                        "--repo",
+                        &repo,
+                        "--state",
+                        "open",
+                        "--limit",
+                        "100",
+                        "--json",
+                        "number,title",
+                    ])
+                    .output()
+                    .map_err(|e| Error::new("Error", e.to_string()))?;
+                if !out.status.success() {
+                    return Err(Error::new(
+                        "Error",
+                        "Could not read board metadata with gh; check repository access and connectivity.",
+                    ));
+                }
+                let raw = String::from_utf8_lossy(&out.stdout);
+                let issues = crate::start::parse_open_issues_json(&raw)?;
+                if issues.is_empty() {
+                    return Ok(ShellAction::Continue("No open issues.\n".to_owned()));
+                }
+                let mut text = String::new();
+                for item in &issues {
+                    let num = domain::safe_integer(item.get("number")).unwrap_or(0);
+                    let title = clean_display(item.get("title"), "-");
+                    text.push_str(&format!("#{num} {title}\n"));
+                }
+                if issues.len() == 100 {
+                    text.push_str(
+                        "Showing the first 100 open issues; use GitHub for the remaining board.\n",
+                    );
+                }
+                Ok(ShellAction::Continue(self.redact_text(&text)?))
+            }
+            "issue" => {
+                let number = crate::start::parse_issue_number(raw_args)
+                    .map_err(|_| Error::type_error("Use /issue N."))?;
+                if let Some(cached) = self.issue_cache.get(&number) {
+                    let summary =
+                        crate::start::format_issue_summary(cached, Some(&self.environment))?;
+                    return Ok(ShellAction::Continue(summary));
+                }
+                let root = self.current_root();
+                let origin = run_banner_git(&root, &["remote", "get-url", "origin"])?;
+                let repo = crate::ask::github_repository(&origin)?;
+                let out = StdCommand::new("gh")
+                    .current_dir(&root)
+                    .env("GH_PROMPT_DISABLED", "1")
+                    .args([
+                        "issue",
+                        "view",
+                        &number.to_string(),
+                        "--repo",
+                        &repo,
+                        "--json",
+                        "number,title,state",
+                    ])
+                    .output()
+                    .map_err(|e| Error::new("Error", e.to_string()))?;
+                if !out.status.success() {
+                    return Err(Error::new(
+                        "Error",
+                        format!("Could not read issue #{number} metadata with gh."),
+                    ));
+                }
+                let issue_json =
+                    crate::json::parse(&Text::from(String::from_utf8_lossy(&out.stdout).as_ref()))?;
+                let cached = Value::object(vec![
+                    ("issue", issue_json),
+                    ("branch", Value::string(&format!("agents/{number}"))),
+                    ("openPr", Value::Null),
+                ]);
+                self.issue_cache.insert(number, cached.clone());
+                let summary = crate::start::format_issue_summary(&cached, Some(&self.environment))?;
+                Ok(ShellAction::Continue(summary))
+            }
+            "remediate" => {
+                let files = raw_args
+                    .split_whitespace()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                let root = self.current_root();
+                let task = crate::fleet::remediation_task(&files, &root.display().to_string())?;
+                let loaded_fleet = crate::fleet::load(&root)?;
+                let prof_vals = loaded_fleet
+                    .profiles()
+                    .iter()
+                    .map(|p| p.as_value().clone())
+                    .collect::<Vec<_>>();
+                let selected = crate::fleet::select_remediation_profile(
+                    &prof_vals,
+                    self.fleet_profile_id.as_deref(),
+                );
+                let prof_label = if let Some(ref p) = selected {
+                    let id = clean_display(p.get("id"), "current");
+                    self.config = crate::fleet::with_profile(&self.config, p)?;
+                    self.fleet_profile_id = Some(id.clone());
+                    self.sync_model_display();
+                    id
+                } else {
+                    self.fleet_profile_id
+                        .clone()
+                        .unwrap_or_else(|| "current".to_owned())
+                };
+                let task_files = task
+                    .get("files")
+                    .and_then(domain::items)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|i| i.as_string()?.to_utf8().ok())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                    .unwrap_or_default();
+                let header = format!(
+                    "Remediation agent for {}\nFiles: {task_files}\nProfile: {prof_label}\n",
+                    root.display()
+                );
+                Ok(ShellAction::Continue(self.redact_text(&header)?))
+            }
+            "publish" => {
+                config::require_publication_enabled(&self.config)?;
+                let parsed = crate::run::parse_publish_args(raw_args)?;
+                let subject = parsed
+                    .subject
+                    .unwrap_or_else(|| "<conventional subject>".to_owned());
+                let root = self
+                    .last_worktree
+                    .clone()
+                    .unwrap_or_else(|| self.current_root());
+                let task_slug = crate::run::publication_task(
+                    &root,
+                    Some(&self.environment),
+                    self.last_task.as_deref(),
+                )?;
+                let publish_env = crate::run::build_publish_env(
+                    &self.config,
+                    &self.environment,
+                    None,
+                    parsed.model.as_deref(),
+                    None,
+                    Some(&task_slug),
+                )?;
+                let model = publish_env
+                    .get("AI_MODEL")
+                    .and_then(Value::as_string)
+                    .and_then(|t| t.to_utf8().ok())
+                    .unwrap_or_else(|| "GPT-6.1-Sol".to_owned());
+                let msg = crate::run::build_publish_message(&crate::run::PublishMessageOptions {
+                    subject: &subject,
+                    model: &model,
+                    summary: &subject,
+                    tests_skipped: false,
+                    issue_number: self.last_issue,
+                    seats: None,
+                    ghcp: true,
+                    scope_files: &[],
+                })?;
+                let env_block = crate::run::format_publish_environment(&publish_env);
+                let cmd_line =
+                    crate::run::format_publish_command(&msg, &model, None, cfg!(windows))?;
+                let out = format!(
+                    "From {}, publish reviewed changes:\nSet these metadata values (empty values clear inherited fields):\n{env_block}{cmd_line}\n",
+                    root.display()
+                );
+                Ok(ShellAction::Continue(out))
+            }
+            "stop" => {
+                if !raw_args.is_empty() {
+                    return Err(Error::type_error("Use /stop."));
+                }
+                Ok(ShellAction::Continue("No active run.\n".to_owned()))
+            }
+            "batch" => Err(Error::new(
+                "Error",
+                "One seat at a time. Worktrees are isolated.",
+            )),
+            "steer" => {
+                if raw_args.is_empty() {
+                    return Err(Error::type_error("Use /steer TEXT."));
+                }
+                Err(Error::new(
+                    "Error",
+                    "Steering requires a drafting coder model call; it cannot change planner or reviewer scope.",
+                ))
+            }
+            "checkpoints" | "rewind" => {
+                let Some(wt) = &self.last_worktree else {
+                    return Err(Error::new(
+                        "Error",
+                        "Run or resume a task worktree before using checkpoints.",
+                    ));
+                };
+                let Some(task) = &self.last_task else {
+                    return Err(Error::new(
+                        "Error",
+                        "Run or resume a task worktree before using checkpoints.",
+                    ));
+                };
+                if command == "checkpoints" {
+                    if !raw_args.is_empty() {
+                        return Err(Error::type_error("Use /checkpoints."));
+                    }
+                    let cp_dir = wt
+                        .join(".roster")
+                        .join("checkpoints")
+                        .join(&crate::identity::sha256_hex(task.as_bytes())[..16]);
+                    let records_file = cp_dir.join("records.jsonl");
+                    let Some(snap) = secure::read(&records_file, 65_536)? else {
+                        return Ok(ShellAction::Continue("No checkpoints.\n".to_owned()));
+                    };
+                    let text = String::from_utf8(snap.bytes)
+                        .map_err(|e| Error::new("Error", e.to_string()))?;
+                    let mut out = String::new();
+                    for line in text.lines().filter(|l| !l.trim().is_empty()) {
+                        let rec = crate::json::parse(&Text::from(line))?;
+                        let num = domain::safe_integer(rec.get("number")).unwrap_or(0);
+                        let seat = clean_display(rec.get("seat"), "-");
+                        let status = clean_display(rec.get("status"), "-");
+                        let time = clean_display(rec.get("time"), "-");
+                        out.push_str(&format!("{num} | {seat} | {status} | {time}\n"));
+                    }
+                    if out.is_empty() {
+                        return Ok(ShellAction::Continue("No checkpoints.\n".to_owned()));
+                    }
+                    return Ok(ShellAction::Continue(out));
+                }
+                Err(Error::new(
+                    "Error",
+                    "Rewind requires the current TASK.md product scope.",
+                ))
+            }
+            "resume" => {
+                if raw_args.is_empty() {
+                    return Ok(ShellAction::Continue("No local issue runs.\n".to_owned()));
+                }
+                let parts = arguments::split(&Text::from(raw_args), "Use /resume [N] [--green].")?
+                    .into_iter()
+                    .map(|w| w.to_utf8())
+                    .collect::<Result<Vec<_>, _>>()?;
+                let number = parts
+                    .first()
+                    .and_then(|s| crate::start::parse_issue_number(s).ok())
+                    .ok_or_else(|| Error::type_error("Use /resume [N] [--green]."))?;
+                let root = self.current_root();
+                let wt = root.join(".worktrees").join(format!("issue-{number}"));
+                let info = crate::start::inspect_local_issue_worktree(number, &wt)?;
+                self.last_worktree = Some(wt);
+                self.last_issue = Some(number);
+                self.last_task = Some(format!("issue-{number}"));
+                let state = clean_display(info.get("state"), "idle");
+                let _ = domain::put(&mut self.display, "issue", Value::Number(number as f64));
+                let _ = domain::put(&mut self.display, "state", Value::string(&state));
+                Ok(ShellAction::Continue(format!(
+                    "Resumed local issue #{number} ({state}).\n"
+                )))
+            }
+            "waves" => {
+                if !raw_args.is_empty() && raw_args != "open" {
+                    return Err(Error::type_error("Use /waves or /waves open."));
+                }
+                let Some(wt) = &self.last_worktree else {
+                    return Err(Error::new(
+                        "Error",
+                        "Run or resume a plan worktree before /waves.",
+                    ));
+                };
+                let wave_plan = crate::start::read_wave_plan(wt)?;
+                let mut out = String::new();
+                if let Some(issues) = wave_plan.plan.get("issues").and_then(domain::items) {
+                    for draft in issues {
+                        let w = domain::safe_integer(draft.get("wave")).unwrap_or(1);
+                        let title = clean_display(draft.get("title"), "-");
+                        out.push_str(&format!("wave:{w} | {title} | todo\n"));
+                    }
+                }
+                Ok(ShellAction::Continue(self.redact_text(&out)?))
+            }
+            "run" | "review" | "retry" => Err(Error::new(
+                "Error",
+                format!(
+                    "Use `roster run` from the CLI or supply an Ask directly at `roster> ` (/{command})."
+                ),
+            )),
+            _ => Err(Error::new("Error", unknown.trim())),
+        }
+    }
+
+    async fn run_question_text(&mut self, text: &str) -> Result<String, Error> {
+        let mut transport =
+            crate::llm::http::HttpTransport::new().map_err(|failure| *failure.error)?;
+        let source = crate::cancel::CancellationSource::default();
+        let token = source.token();
+        let root = self.current_root();
+        let mut q_opts = crate::ask::QuestionOptions {
+            cwd: &root,
+            config: &self.config,
+            env: Some(&self.environment),
+            vault: None,
+            transport: &mut transport,
+            signal: Some(&token),
+        };
+        let res = crate::ask::answer_repository_question(text, &mut q_opts).await?;
+        Ok(format!("{}\n", self.redact_text(&res.answer)?))
+    }
+
+    async fn run_ask_text(&mut self, text: &str) -> Result<String, Error> {
+        let mut transport =
+            crate::llm::http::HttpTransport::new().map_err(|failure| *failure.error)?;
+        let source = crate::cancel::CancellationSource::default();
+        let token = source.token();
+        let root = self.current_root();
+        let mut sub_opts = crate::ask::SubmitAskOptions {
+            cwd: &self.cwd,
+            repo_root: &self.installation,
+            checkpoint_root: &root,
+            config: &self.config,
+            env: Some(&self.environment),
+            id: None,
+            vault: None,
+            transport: &mut transport,
+            signal: Some(&token),
+            run_command: None,
+        };
+        let outcome = crate::ask::submit_ask(text, &mut sub_opts).await?;
+        if let crate::ask::AskOutcome::Draft { ref draft, .. } = outcome {
+            if let Some(parent) = draft.ask_path.parent() {
+                self.last_worktree = Some(parent.to_path_buf());
+            }
+        }
+        Ok(crate::ask::format_ask(&outcome))
+    }
+}
+
+fn terminal_columns() -> usize {
+    std::env::var("COLUMNS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&c| c >= 20)
+        .unwrap_or(80)
+}
+
+pub async fn start_repl(
+    cwd: &Path,
+    installation: &Path,
+    environment: &Value,
+    debug_enabled: bool,
+) -> Result<u8, Error> {
+    use std::io::BufRead;
+    let mut session = ShellSession::new(cwd, installation, environment, debug_enabled)?;
+    let color = std::env::var_os("NO_COLOR").is_none();
+    let facts = collect_banner_facts(cwd, installation, environment, &session.config);
+    let banner = format_banner(&facts, color);
+    let mut stdout = std::io::stdout();
+    stdout
+        .write_all(banner.as_bytes())
+        .and_then(|()| stdout.flush())
+        .map_err(|e| Error::new("Error", e.to_string()))?;
+
+    let stdin = std::io::stdin();
+    let mut reader = stdin.lock();
+    let mut prev_bar_lines: usize;
+    loop {
+        let cols = terminal_columns();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+        let (tray_block, prompt, bar_lines) = render_tray_block(
+            &session.display,
+            &session.ask_queue,
+            session.statusbar,
+            session.debug.enabled(),
+            cols,
+            color,
+            now_ms,
+        );
+        prev_bar_lines = bar_lines;
+        stdout
+            .write_all(format!("{tray_block}{prompt}").as_bytes())
+            .and_then(|()| stdout.flush())
+            .map_err(|e| Error::new("Error", e.to_string()))?;
+
+        let mut line = String::new();
+        let read_bytes = reader
+            .read_line(&mut line)
+            .map_err(|e| Error::new("Error", e.to_string()))?;
+        if read_bytes == 0 {
+            stdout
+                .write_all(b"\n")
+                .and_then(|()| stdout.flush())
+                .map_err(|e| Error::new("Error", e.to_string()))?;
+            break;
+        }
+        if prev_bar_lines > 0 && color {
+            let up = prev_bar_lines + 1;
+            let _ = stdout.write_all(format!("\x1b[{up}A\r\x1b[J").as_bytes());
+            let shown_line = if session.pending_secret.is_some() {
+                "Secret (input hidden): ********\n".to_owned()
+            } else {
+                format!("{prompt}{}", line.trim_end_matches(['\r', '\n'])) + "\n"
+            };
+            let _ = stdout.write_all(shown_line.as_bytes());
+            let _ = stdout.flush();
+        }
+        let trimmed_line = line.trim_end_matches(['\r', '\n']);
+        match session.dispatch_line(trimmed_line).await {
+            Ok(ShellAction::Continue(out)) => {
+                if !out.is_empty() {
+                    stdout
+                        .write_all(out.as_bytes())
+                        .and_then(|()| stdout.flush())
+                        .map_err(|e| Error::new("Error", e.to_string()))?;
+                }
+            }
+            Ok(ShellAction::ClearScreen) => {
+                stdout
+                    .write_all(b"\x1b[2J\x1b[H")
+                    .and_then(|()| stdout.flush())
+                    .map_err(|e| Error::new("Error", e.to_string()))?;
+            }
+            Ok(ShellAction::Redraw) => {}
+            Ok(ShellAction::PromptSecret(prompt_str)) => {
+                stdout
+                    .write_all(prompt_str.as_bytes())
+                    .and_then(|()| stdout.flush())
+                    .map_err(|e| Error::new("Error", e.to_string()))?;
+                let mut sec_line = String::new();
+                let n = reader
+                    .read_line(&mut sec_line)
+                    .map_err(|e| Error::new("Error", e.to_string()))?;
+                let _ = stdout.write_all(b"\n");
+                if n == 0 {
+                    break;
+                }
+                let sec_trimmed = sec_line.trim_end_matches(['\r', '\n']);
+                if let Ok(ShellAction::Continue(out)) = session.dispatch_line(sec_trimmed).await {
+                    let _ = stdout.write_all(out.as_bytes());
+                    let _ = stdout.flush();
+                }
+            }
+            Ok(ShellAction::Exit) => break,
+            Err(err) => {
+                let mut stderr = std::io::stderr();
+                let _ = stderr.write_all(format!("{}\n", err.message).as_bytes());
+                let _ = stderr.flush();
+            }
+        }
+    }
+    Ok(0)
+}
+
+pub async fn run_onboard(
+    cwd: &Path,
+    installation: &Path,
+    environment: &Value,
+    discover_all: bool,
+) -> Result<u8, Error> {
+    use std::io::BufRead;
+    let platform = if cfg!(windows) {
+        "win32"
+    } else if cfg!(target_os = "macos") {
+        "darwin"
+    } else {
+        "linux"
+    };
+    let mut stdout = std::io::stdout();
+    let write_out = |out: &mut std::io::Stdout, text: &str| -> Result<(), Error> {
+        out.write_all(text.as_bytes())
+            .and_then(|()| out.flush())
+            .map_err(|e| Error::new("Error", e.to_string()))
+    };
+    write_out(
+        &mut stdout,
+        &format!("Roster onboarding\n\n1. Platform\nOS: {platform}\n"),
+    )?;
+    let project_root = paths::resolve_project_root(cwd)?;
+    let config_path = project_root.join(".roster").join("config.yml");
+    let fleet_path = project_root.join(".roster").join("fleet.yml");
+    paths::ensure_local_path(&config_path, &project_root)?;
+    let previous = settings::read_private_file(&project_root, settings::Name::Config)?;
+    let base_source = match &previous {
+        Some(src) => src.clone(),
+        None => settings::read_config_file(&project_root.join("roster.config.example.yml"))
+            .or_else(|_| {
+                settings::read_config_file(&installation.join("roster.config.example.yml"))
+            })?,
+    };
+    let base = config::parse(&base_source)?.as_value().clone();
+    let previous_fleet = settings::read_private_file(&project_root, settings::Name::Fleet)?;
+    let fleet_val = match &previous_fleet {
+        Some(src) => crate::fleet::parse(src)?,
+        None => {
+            crate::fleet::validate(&Value::object(vec![("profiles", Value::Array(Vec::new()))]))?
+        }
+    };
+    let api_key_env = base
+        .get("profiles")
+        .and_then(|p| p.get("vllm-local"))
+        .and_then(|v| v.get("api_key_env"))
+        .and_then(Value::as_string)
+        .and_then(|t| t.to_utf8().ok())
+        .unwrap_or_else(|| "ROSTER_API_KEY".to_owned());
+
+    let stdin = std::io::stdin();
+    let reader = std::cell::RefCell::new(stdin.lock());
+    let ask = |out: &mut std::io::Stdout, prompt: &str, fallback: &str| -> Result<String, Error> {
+        write_out(out, prompt)?;
+        let mut line = String::new();
+        let n = reader
+            .borrow_mut()
+            .read_line(&mut line)
+            .map_err(|e| Error::new("Error", e.to_string()))?;
+        if n == 0 {
+            return Err(Error::new(
+                "Error",
+                "Onboarding ended before all questions were answered",
+            ));
+        }
+        let trimmed = line.trim();
+        Ok(if trimmed.is_empty() {
+            fallback.to_owned()
+        } else {
+            trimmed.to_owned()
+        })
+    };
+    let yes_no =
+        |out: &mut std::io::Stdout, prompt: &str, default_yes: bool| -> Result<bool, Error> {
+            let def_str = if default_yes { "yes" } else { "no" };
+            loop {
+                let ans = ask(out, &format!("{prompt}? [{def_str}] "), def_str)?.to_lowercase();
+                if matches!(ans.as_str(), "yes" | "y") {
+                    return Ok(true);
+                }
+                if matches!(ans.as_str(), "no" | "n") {
+                    return Ok(false);
+                }
+                write_out(out, "Please answer yes or no.\n")?;
+            }
+        };
+    let ask_int = |out: &mut std::io::Stdout,
+                   prompt: &str,
+                   fallback: u64,
+                   min: u64,
+                   max: u64|
+     -> Result<u64, Error> {
+        loop {
+            let raw = ask(
+                out,
+                &format!("{prompt} [{fallback}]: "),
+                &fallback.to_string(),
+            )?;
+            if let Ok(n) = raw.parse::<u64>() {
+                if n >= min && n <= max {
+                    return Ok(n);
+                }
+            }
+            write_out(out, &format!("Enter an integer from {min} to {max}.\n"))?;
+        }
+    };
+
+    if previous.is_some()
+        && !yes_no(
+            &mut stdout,
+            "Replace onboarding settings in the existing private config",
+            false,
+        )?
+    {
+        write_out(&mut stdout, "Kept existing private config unchanged.\n")?;
+        return Ok(0);
+    }
+    write_out(
+        &mut stdout,
+        "\n2. LLM endpoint\nWSL talking to a Windows-hosted server may need the Windows host IP, not localhost.\n",
+    )?;
+    write_out(
+        &mut stdout,
+        if discover_all {
+            "Scanning local, LAN, and ROSTER_DISCOVER_HOSTS endpoints (unauthenticated metadata probes only).\n"
+        } else {
+            "Scanning local and configured endpoints (unauthenticated metadata probes only).\n"
+        },
+    )?;
+
+    let mut transport = crate::llm::http::HttpTransport::new().map_err(|failure| *failure.error)?;
+    let candidates = if discover_all {
+        crate::fleet::discovery_candidates(Some(environment), &[])
+    } else {
+        crate::fleet::local_candidates()
+    };
+    let mut found = Vec::new();
+    let mut failures = 0_usize;
+    for candidate in candidates {
+        match crate::fleet::probe_model_details(
+            &candidate,
+            &mut transport,
+            Some(environment),
+            Some(&api_key_env),
+            false,
+            Some(2_000),
+        )
+        .await
+        {
+            Ok(models) => found.push((candidate, models)),
+            Err(_) => failures += 1,
+        }
+    }
+    if failures > 0 {
+        write_out(
+            &mut stdout,
+            &format!("{failures} discovery probe(s) failed or timed out.\n"),
+        )?;
+    }
+    if found.is_empty() {
+        write_out(
+            &mut stdout,
+            "No OpenAI-compatible server answered. Enter a base URL manually.\n",
+        )?;
+    }
+    for (idx, (url_str, models)) in found.iter().enumerate() {
+        let model_list = models
+            .iter()
+            .filter_map(|m| {
+                let id = m.get("id")?.as_string()?.to_utf8().ok()?;
+                let ctx = domain::safe_integer(m.get("context_max"))
+                    .map_or_else(|| "ctx=unreported".to_owned(), |c| format!("ctx={c}"));
+                Some(format!("{id} {ctx}"))
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        write_out(
+            &mut stdout,
+            &format!("  {}. {url_str} models={model_list}\n", idx + 1),
+        )?;
+    }
+
+    let default_url = found
+        .first()
+        .map(|(u, _)| u.clone())
+        .or_else(|| {
+            base.get("llm")
+                .and_then(|l| l.get("base_url"))
+                .and_then(Value::as_string)
+                .and_then(|t| t.to_utf8().ok())
+                .filter(|s| !s.is_empty())
+        })
+        .unwrap_or_else(|| "http://127.0.0.1:8000/v1".to_owned());
+
+    let base_url = loop {
+        let raw = ask(
+            &mut stdout,
+            &format!("vLLM base URL [{default_url}]: "),
+            &default_url,
+        )?;
+        match crate::fleet::normalize_base_url(&Value::string(&raw)) {
+            Ok(norm) => break norm.to_utf8()?,
+            Err(_) => {
+                write_out(
+                    &mut stdout,
+                    "Enter an HTTP(S) base URL without credentials, a query, or a fragment; not a full /models or /chat/completions endpoint.\n",
+                )?;
+            }
+        }
+    };
+
+    let probed = crate::fleet::probe_model_details(
+        &base_url,
+        &mut transport,
+        Some(environment),
+        Some(&api_key_env),
+        true,
+        Some(5_000),
+    )
+    .await
+    .ok();
+    let (model, reported_ctx) = if let Some(ref details) = probed {
+        write_out(&mut stdout, "Available models:\n")?;
+        for (idx, m) in details.iter().enumerate() {
+            let id = clean_display(m.get("id"), "-");
+            write_out(&mut stdout, &format!("  {}. {id}\n", idx + 1))?;
+        }
+        loop {
+            let choice = ask(&mut stdout, "Select a model [1]: ", "1")?;
+            if let Ok(idx) = choice.parse::<usize>() {
+                if idx >= 1 && idx <= details.len() {
+                    let entry = &details[idx - 1];
+                    let id = clean_display(entry.get("id"), "");
+                    let ctx = domain::safe_integer(entry.get("context_max"));
+                    break (id, ctx);
+                }
+            }
+            write_out(&mut stdout, "Enter a listed model number.\n")?;
+        }
+    } else {
+        write_out(&mut stdout, "Model probe failed: unavailable\n")?;
+        let id = loop {
+            let raw = ask(&mut stdout, "Model ID [required]: ", "")?;
+            if let Ok(valid) = crate::run::resolve_publish_model(
+                None,
+                Some(&Value::object(vec![("AI_MODEL", Value::string(&raw))])),
+                None,
+                false,
+            ) {
+                if valid != "builtin-stub" {
+                    break valid;
+                }
+            }
+            write_out(
+                &mut stdout,
+                "Enter the actual single-line served model ID, not unknown or a secret.\n",
+            )?;
+        };
+        (id, None)
+    };
+
+    let default_ctx = base
+        .get("llm")
+        .and_then(|l| l.get("context_max"))
+        .and_then(|v| domain::safe_integer(Some(v)))
+        .unwrap_or(32_768);
+    let context_max = match reported_ctx {
+        Some(c) => {
+            write_out(
+                &mut stdout,
+                &format!("Using context_max={c} reported by /v1/models.\n"),
+            )?;
+            c
+        }
+        None => ask_int(
+            &mut stdout,
+            "Model context tokens (0 = unknown)",
+            default_ctx,
+            0,
+            MAX_SAFE_INTEGER,
+        )?,
+    };
+
+    if !yes_no(
+        &mut stdout,
+        "Add more endpoints later with roster fleet add. Continue",
+        true,
+    )? {
+        write_out(&mut stdout, "Private config and fleet were not changed.\n")?;
+        return Ok(0);
+    }
+
+    write_out(
+        &mut stdout,
+        "\n3. Permissions (local preferences, not GitHub policy grants)\nThese flags do not grant contracts policy.\n",
+    )?;
+    let publish = yes_no(&mut stdout, "Allow publish through GitHub App", true)?;
+    let reviewer = yes_no(&mut stdout, "Require reviewer before publish", true)?;
+    let run_test = yes_no(&mut stdout, "Allow run_test", true)?;
+    let advanced = yes_no(&mut stdout, "Show advanced settings", false)?;
+    let mut internet = None;
+    let mut turns = base
+        .get("loop")
+        .and_then(|l| l.get("turns"))
+        .and_then(|v| domain::safe_integer(Some(v)))
+        .unwrap_or(12);
+    let mut budget = base
+        .get("context")
+        .and_then(|c| c.get("budget"))
+        .and_then(|v| domain::safe_integer(Some(v)))
+        .unwrap_or(8_000);
+    if advanced {
+        write_out(&mut stdout, "\nAdvanced\n")?;
+        internet = Some(yes_no(
+            &mut stdout,
+            "Internet search and research outside the worktree (stored only)",
+            true,
+        )?);
+        turns = ask_int(&mut stdout, "Max tool turns", turns, 1, 64)?;
+        budget = ask_int(
+            &mut stdout,
+            "Context char budget",
+            budget,
+            1,
+            MAX_SAFE_INTEGER,
+        )?;
+    }
+
+    let next_cfg = render_onboard_config(
+        &base,
+        &OnboardConfigOptions {
+            base_url: &base_url,
+            model: &model,
+            context_max,
+            publish,
+            internet,
+            run_test,
+            reviewer,
+            turns,
+            budget,
+        },
+    )?;
+    let default_prof = Value::object(vec![
+        ("id", Value::string("default")),
+        ("base_url", Value::string(&base_url)),
+        ("model", Value::string(&model)),
+        ("provider", Value::string("vllm")),
+        ("context_max", Value::Number(context_max as f64)),
+        ("concurrency", Value::Number(1.0)),
+        ("hardware", Value::string("unspecified")),
+        (
+            "notes",
+            Value::string("Default endpoint selected during onboarding."),
+        ),
+    ]);
+    let mut seeded_profiles = vec![default_prof];
+    for p in fleet_val.profiles() {
+        if !domain::is_text(p.as_value().get("id"), "default") {
+            seeded_profiles.push(p.as_value().clone());
+        }
+    }
+    let seeded_fleet = crate::fleet::format(&Value::object(vec![(
+        "profiles",
+        Value::Array(seeded_profiles),
+    )]))?;
+
+    if publish {
+        let app_status = check_app_identity(&project_root, Some(environment))?;
+        let app_text = format_app_identity(&app_status)?;
+        write_out(
+            &mut stdout,
+            &format!("\nApp identity (environment only)\n{app_text}"),
+        )?;
+    }
+    write_out(
+        &mut stdout,
+        &format!(
+            "\n4. Review\nConfig: {}\nFleet: {} (default profile; other profiles kept)\nDiscovered models with reported context limits are added; unreported limits require fleet add --context.\nEndpoint: {base_url}\nModel: {model}\nModels probe: {}\nModel context tokens: {}\nPublish enabled: {publish}\nrun_test allowed: {run_test}\nReviewer required: {reviewer}\nInternet preference: {} (stored only; no live internet tool)\nMax tool turns: {turns}\nContext char budget: {budget}\nGitHub App publication still requires GITHUB_APP_ID, a private key, and human-owned policy.\n",
+            config_path.display(),
+            fleet_path.display(),
+            if probed.is_some() {
+                "succeeded"
+            } else {
+                "failed; model supplied manually"
+            },
+            if context_max == 0 {
+                "unknown".to_owned()
+            } else {
+                context_max.to_string()
+            },
+            match internet {
+                Some(b) => b.to_string(),
+                None => "not set".to_owned(),
+            }
+        ),
+    )?;
+    if !yes_no(&mut stdout, "Confirm write .roster/config.yml", true)? {
+        write_out(&mut stdout, "Private config was not changed.\n")?;
+        return Ok(0);
+    }
+    let source = crate::cancel::CancellationSource::default();
+    settings::ensure_private_files_ignored(
+        &project_root,
+        &[settings::Name::Config, settings::Name::Fleet],
+        Some(&source.token()),
+    )
+    .await?;
+    settings::write_private_documents(
+        &project_root,
+        &[
+            settings::Document {
+                name: settings::Name::Fleet,
+                source: seeded_fleet,
+                expected_source: Some(previous_fleet),
+            },
+            settings::Document {
+                name: settings::Name::Config,
+                source: next_cfg,
+                expected_source: Some(previous),
+            },
+        ],
+    )?;
+    write_out(
+        &mut stdout,
+        &format!(
+            "\nSaved private config: {}\nSaved fleet: {}\n\n5. Doctor\n",
+            config_path.display(),
+            fleet_path.display()
+        ),
+    )?;
+    let checked =
+        crate::local_cli::doctor(installation, &project_root, environment, &source.token()).await?;
+    write_out(&mut stdout, &checked.output)?;
+    if !checked.ok {
+        write_out(
+            &mut stdout,
+            "Doctor found missing prerequisites; config is saved, not a grant to publish.\n",
+        )?;
+        return Ok(1);
+    }
+    Ok(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2290,6 +4689,69 @@ mod tests {
         assert_eq!(events[0].get("kind"), Some(&Value::string("phase")));
         assert_eq!(events[1].get("kind"), Some(&Value::string("tool")));
         assert_eq!(events[2].get("kind"), Some(&Value::string("verdict")));
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn shell_session_dispatcher_banner_and_tray_block_work_end_to_end() -> Result<(), Error> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let env = Value::object(Vec::new());
+        let mut session = ShellSession::new(root, root, &env, false)?;
+        let facts = collect_banner_facts(root, root, &env, &session.config);
+        let banner = format_banner(&facts, false);
+        assert!(banner.contains("github-agent-roster"));
+        assert!(banner.contains("contracts"));
+
+        let (block, prompt, bar_lines) = render_tray_block(
+            &session.display,
+            &session.ask_queue,
+            true,
+            false,
+            80,
+            false,
+            1000.0,
+        );
+        assert_eq!(bar_lines, 3);
+        assert!(block.contains("idle"));
+        assert_eq!(prompt, "roster> ");
+
+        let help_act = session.dispatch_line("/help").await?;
+        assert!(matches!(help_act, ShellAction::Continue(ref s) if s.contains("Commands:\n")));
+
+        let status_act = session.dispatch_line("/status").await?;
+        assert!(matches!(status_act, ShellAction::Continue(ref s) if s.contains("State: idle\n")));
+
+        let eff_act = session.dispatch_line("/effort m").await?;
+        assert_eq!(eff_act, ShellAction::Continue("Effort: m\n".to_owned()));
+
+        let sb_act = session.dispatch_line("/statusbar off").await?;
+        assert_eq!(
+            sb_act,
+            ShellAction::Continue("Status bars off.\n".to_owned())
+        );
+        assert!(!session.statusbar);
+
+        let q_act = session
+            .dispatch_line("/queue Add a Status section to README.md.")
+            .await?;
+        assert!(matches!(q_act, ShellAction::Continue(ref s) if s.contains("Queued Ask 1:")));
+        let q_list = session.dispatch_line("/queue list").await?;
+        assert!(
+            matches!(q_list, ShellAction::Continue(ref s) if s.contains("1. Add a Status section to README.md."))
+        );
+        let q_clear = session.dispatch_line("/queue clear").await?;
+        assert_eq!(
+            q_clear,
+            ShellAction::Continue("Ask queue cleared.\n".to_owned())
+        );
+
+        assert_eq!(
+            session.dispatch_line("/clear").await?,
+            ShellAction::ClearScreen
+        );
+        assert_eq!(session.dispatch_line("/redraw").await?, ShellAction::Redraw);
+        assert_eq!(session.dispatch_line("/quit").await?, ShellAction::Exit);
+        let _ = fs::remove_file(root.join(".roster").join("history"));
         Ok(())
     }
 }
