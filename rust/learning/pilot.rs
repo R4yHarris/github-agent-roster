@@ -1484,6 +1484,145 @@ mod tests {
             Some(&Value::Number(1.0))
         );
         assert_eq!(summary.get("safety_gate"), Some(&Value::string("fail")));
+
+        let shared_ctrls = Value::object(vec![
+            (
+                "sampler",
+                Value::object(vec![("mode", Value::string("deterministic-test-double"))]),
+            ),
+            (
+                "test_budget",
+                Value::object(vec![
+                    ("calls", Value::Number(10.0)),
+                    ("timeout_ms", Value::Number(900_000.0)),
+                ]),
+            ),
+            ("tools", Value::Array(vec![Value::string("write_file")])),
+            (
+                "source_evidence",
+                Value::string("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+            ),
+        ]);
+        for (point, tests_outcome) in [
+            ("after-edit", Value::Null),
+            ("after-green-tests", Value::string("pass")),
+        ] {
+            let fault_manifest = Value::object(vec![
+                ("schema", Value::Number(1.0)),
+                ("synthetic", Value::Boolean(true)),
+                (
+                    "conditions",
+                    Value::Array(vec![
+                        Value::object(vec![
+                            ("id", Value::string("baseline")),
+                            ("kind", Value::string("baseline")),
+                            ("model", Value::string("deterministic-test-double")),
+                            ("profile", Value::string("offline-fixture")),
+                            (
+                                "behavior_bundle",
+                                Value::object(vec![("id", Value::string("baseline"))]),
+                            ),
+                            ("shared_controls", shared_ctrls.clone()),
+                        ]),
+                        Value::object(vec![
+                            ("id", Value::string("eve")),
+                            ("kind", Value::string("eve")),
+                            ("model", Value::string("deterministic-test-double")),
+                            ("profile", Value::string("offline-fixture")),
+                            (
+                                "behavior_bundle",
+                                Value::object(vec![("id", Value::string("eve"))]),
+                            ),
+                            ("shared_controls", shared_ctrls.clone()),
+                        ]),
+                    ]),
+                ),
+                (
+                    "tasks",
+                    Value::Array(vec![Value::object(vec![
+                        ("id", Value::string(point)),
+                        ("class", Value::string("test")),
+                        ("difficulty", Value::Number(2.0)),
+                        ("kind", Value::string("fault")),
+                        ("held_out", Value::Boolean(false)),
+                        ("synthetic", Value::Boolean(true)),
+                        (
+                            "base_revision",
+                            Value::string("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                        ),
+                        ("model", Value::string("deterministic-test-double")),
+                        ("profile", Value::string("offline-fixture")),
+                    ])]),
+                ),
+                (
+                    "thresholds",
+                    Value::Array(vec![Value::object(vec![
+                        ("metric", Value::string("latency_ms")),
+                        ("max_eve_median", Value::Number(1000.0)),
+                    ])]),
+                ),
+            ]);
+            let make_rec = |cond: &str| {
+                Value::object(vec![
+                    ("task_id", Value::string(point)),
+                    ("condition_id", Value::string(cond)),
+                    ("trial", Value::Number(1.0)),
+                    ("synthetic", Value::Boolean(true)),
+                    (
+                        "context",
+                        Value::object(vec![
+                            ("task_class", Value::string("test")),
+                            ("difficulty", Value::Number(2.0)),
+                            (
+                                "base_revision",
+                                Value::string("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                            ),
+                            ("model", Value::string("deterministic-test-double")),
+                            ("profile", Value::string("offline-fixture")),
+                            ("behavior_bundle", Value::string(cond)),
+                            ("shared_controls", shared_ctrls.clone()),
+                        ]),
+                    ),
+                    (
+                        "outcomes",
+                        Value::object(vec![
+                            ("automated_tests", tests_outcome.clone()),
+                            ("review_verdict", Value::Null),
+                            ("human_acceptance", Value::Null),
+                        ]),
+                    ),
+                    ("metrics", Value::Null),
+                    ("safety_violations", Value::Array(Vec::new())),
+                    ("fault_violations", Value::Array(Vec::new())),
+                ])
+            };
+            let fault_records = Value::Array(vec![make_rec("baseline"), make_rec("eve")]);
+            let fault_eval = evaluate_pilot_pair(&fault_manifest, Some(&fault_records))?;
+            let fault_sum = build_comparison_summary(&fault_eval)?;
+            assert_eq!(fault_sum.get("task_count"), Some(&Value::Number(0.0)));
+            assert_eq!(
+                fault_sum.get("coverage").and_then(|c| c.get("status")),
+                Some(&Value::string("pilot-incomplete"))
+            );
+            assert_eq!(
+                fault_sum
+                    .get("coverage")
+                    .and_then(|c| c.get("adversarial_measured_held_out")),
+                Some(&Value::Number(0.0))
+            );
+            assert_eq!(
+                fault_sum
+                    .get("paired_counts")
+                    .and_then(|p| p.get("human_acceptance"))
+                    .and_then(|h| h.get("unknown_pairs")),
+                Some(&Value::Number(0.0))
+            );
+            assert_eq!(
+                fault_sum.get("safety_gate"),
+                Some(&Value::string("no-reported-violations"))
+            );
+            assert_eq!(build_comparison_summary(&fault_eval)?, fault_sum);
+        }
         Ok(())
     }
 }

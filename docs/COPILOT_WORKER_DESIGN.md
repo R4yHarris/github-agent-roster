@@ -373,6 +373,36 @@ absence of production wiring. No blocking defects were identified in this
 descriptor-only scope. Parent review does not identify the unknown child model
 or discharge any live qualification, publication or human acceptance gate.
 
+## 10. Native Rust offline contracts and calibration gates (#570–#573)
+
+In the native Rust runtime ([`rust/capabilities.rs`](../rust/capabilities.rs)):
+
+- **#570 (`offline_copilot_inference_context`, `run_offline_copilot_turn`)**:
+  validates single-turn request/event/tool mapping (`assistant.usage`,
+  `fixture.tool_request`, `assistant.message`, `session.idle`), scoped
+  `read_file` execution, missing/partial/zero usage preservation, and empty
+  inference environment isolation. See
+  [`COPILOT_FEASIBILITY.md`](COPILOT_FEASIBILITY.md).
+- **#571 (`OfflineWorkerAttempt`, `offline_copilot_digest`, `offline_copilot_host_review`, `assess_copilot_worker_capabilities`)**:
+  enforces Gates B1–B4 (immutable Ask/task/base/scope/config anchors, structural
+  JSON bounds, scoped `read_file` callback budget, `inference`/`idle`/`exit`/`cleanup`
+  lifecycle ordering, preflighted candidate file/deletion import, logical clock
+  deadline and revocation, requested-vs-served model and unit-aware usage
+  provenance, and independent host receipt review binding) plus closed
+  capability descriptor validation.
+- **#572 (`parse_copilot_doctor_args`, `check_copilot_doctor`, `format_copilot_doctor`)**:
+  provides `roster doctor --copilot` and `/doctor copilot` offline readiness
+  diagnostics with UNC/device/URI and ASCII control path rejection before
+  metadata inspection.
+- **#573 (`assess_copilot_smoke_admission`, `evaluate_copilot_calibration_scorecard`)**:
+  enforces pre-prompt human approval preflight (`repository`,
+  `dataClassification`, `accountRoute`, `policyApproved`, `selectedModels`,
+  `creditCeiling`, `stopConditions`, `approver`) and matched M1–M3 calibration
+  scorecards (requiring identical task/SHA/scope/tests/effort/reviewer per tier,
+  sequential easy $\rightarrow$ medium $\rightarrow$ hard gate progression,
+  complete attempt/failure/unknown retention, and no superiority claim without
+  reviewed matched sample size and human `AI-Eval`).
+
 ## Sources and preparation record
 
 No new web research or provider transfer was performed for this proposal.
