@@ -1258,6 +1258,293 @@ pub fn format_issue_run_status_lines(lines: &[String]) -> Vec<String> {
         .collect()
 }
 
+pub fn recorded_coder_run(
+    runs: &[crate::json::Value],
+    run: &RunRecord,
+) -> Result<RunRecord, Error> {
+    let session =
+        run.metrics.session.as_deref().ok_or_else(|| {
+            Error::type_error("Publication requires a measured coder session/task")
+        })?;
+    let task =
+        run.metrics.task.as_deref().ok_or_else(|| {
+            Error::type_error("Publication requires a measured coder session/task")
+        })?;
+    let record = runs
+        .iter()
+        .rev()
+        .find(|entry| {
+            crate::domain::is_text(entry.get("session"), session)
+                && crate::domain::is_text(entry.get("task"), task)
+        })
+        .ok_or_else(|| {
+            Error::new(
+                "Error",
+                "Coder run is missing from .roster/runs JSONL; publication is refused",
+            )
+        })?;
+    let provider_str = record
+        .get("provider")
+        .and_then(crate::json::Value::as_string)
+        .and_then(|t| t.to_utf8().ok())
+        .unwrap_or_else(|| run.metrics.provider.as_str().to_owned());
+    let provider = Provider::parse(&provider_str)
+        .ok_or_else(|| Error::type_error("Recorded coder metrics contain an invalid provider"))?;
+    let model = record
+        .get("model")
+        .and_then(crate::json::Value::as_string)
+        .and_then(|t| t.to_utf8().ok())
+        .ok_or_else(|| Error::type_error("Recorded coder metrics require a model"))?;
+    let effort = record
+        .get("effort")
+        .and_then(crate::json::Value::as_string)
+        .and_then(|t| t.to_utf8().ok())
+        .unwrap_or_else(|| "-".to_owned());
+    let context_max = match record.get("context_max") {
+        Some(crate::json::Value::Number(n)) if n.is_finite() && *n >= 1.0 => {
+            Some(Capacity::Number(*n as u64))
+        }
+        Some(crate::json::Value::String(s)) => Some(Capacity::Decimal(s.to_utf8()?)),
+        _ => None,
+    };
+    let prompt_tokens = crate::domain::safe_integer(record.get("prompt_tokens"))
+        .or_else(|| crate::domain::safe_integer(record.get("context_used")));
+    let completion_tokens = crate::domain::safe_integer(record.get("completion_tokens"))
+        .or_else(|| crate::domain::safe_integer(record.get("context_out")));
+    let measured = materialize(
+        RunMetrics {
+            provider,
+            model,
+            effort,
+            context_max,
+            usage: Usage {
+                prompt_tokens,
+                completion_tokens,
+            },
+            context_used: prompt_tokens,
+            context_out: completion_tokens,
+            session: Some(session.to_owned()),
+            task: Some(task.to_owned()),
+        },
+        &run.version,
+    )?;
+    let expected = materialize(run.metrics.clone(), &run.version)?;
+    if measured.metrics() != expected.metrics() {
+        return Err(Error::new(
+            "Error",
+            "Recorded coder metrics differ from the reviewed run; rerun before publication",
+        ));
+    }
+    Ok(measured)
+}
+
+pub struct MergedIssueCommentOptions<'a> {
+    pub issue_number: u64,
+    pub pull_number: u64,
+    pub slug: &'a str,
+    pub pr: &'a crate::json::Value,
+    pub current_issue: &'a crate::json::Value,
+    pub run: Option<&'a RunRecord>,
+    pub model: Option<&'a str>,
+    pub run_line: Option<&'a str>,
+}
+
+pub fn build_merged_issue_comment(
+    options: &MergedIssueCommentOptions<'_>,
+) -> Result<crate::json::Value, Error> {
+    let issue_number = options.issue_number;
+    let pull_number = options.pull_number;
+    let slug = options.slug;
+    let pr = options.pr;
+    let current_issue = options.current_issue;
+    let run = options.run;
+    let model = options.model;
+    let run_line = options.run_line;
+    if !(1..=MAX_SAFE_INTEGER).contains(&issue_number) {
+        return Err(Error::type_error(
+            "Issue number must be a positive safe integer",
+        ));
+    }
+    if !(1..=MAX_SAFE_INTEGER).contains(&pull_number) {
+        return Err(Error::type_error(
+            "Merged PR number must be a positive safe integer",
+        ));
+    }
+    let actual_model = match run {
+        Some(rec) => rec.metrics.model.clone(),
+        None => resolve_publish_model(None, None, model, true)?,
+    };
+    let effective_run_line = match run {
+        Some(rec) => Some(rec.line().to_owned()),
+        None => run_line.map(str::to_owned),
+    };
+    if let Some(ref rl) = effective_run_line {
+        if rl.is_empty() || rl.contains(['\r', '\n']) {
+            return Err(Error::type_error("AI-Run must be one nonempty line"));
+        }
+        if parse_compact(
+            &Text::from(rl.as_str()),
+            Some(&Text::from(actual_model.as_str())),
+        )?
+        .is_none()
+        {
+            return Err(Error::new(
+                "Error",
+                "Coder AI-Run must match the published model",
+            ));
+        }
+    }
+    let branches = crate::start::issue_branches(issue_number, None)?;
+    let head_ref = pr
+        .get("head")
+        .and_then(|h| h.get("ref"))
+        .and_then(crate::json::Value::as_string)
+        .and_then(|t| t.to_utf8().ok())
+        .unwrap_or_default();
+    let head_repo = pr
+        .get("head")
+        .and_then(|h| h.get("repo"))
+        .and_then(|r| r.get("full_name"))
+        .and_then(crate::json::Value::as_string)
+        .and_then(|t| t.to_utf8().ok())
+        .unwrap_or_default();
+    let base_repo = pr
+        .get("base")
+        .and_then(|b| b.get("repo"))
+        .and_then(|r| r.get("full_name"))
+        .and_then(crate::json::Value::as_string)
+        .and_then(|t| t.to_utf8().ok())
+        .unwrap_or_default();
+    let html_url = pr
+        .get("html_url")
+        .and_then(crate::json::Value::as_string)
+        .and_then(|t| t.to_utf8().ok())
+        .unwrap_or_default();
+    let pr_body = pr
+        .get("body")
+        .and_then(crate::json::Value::as_string)
+        .and_then(|t| t.to_utf8().ok())
+        .unwrap_or_default();
+    let expected_url = format!("https://github.com/{slug}/pull/{pull_number}");
+    let refs_re = regex_lite::Regex::new(&format!(r"(?m)^Refs #{issue_number}\r?$"))
+        .map_err(|e| Error::new("Error", e.to_string()))?;
+    if pr.get("merged") != Some(&crate::json::Value::Boolean(true))
+        || !crate::domain::is_text(pr.get("state"), "closed")
+        || !branches.contains(&head_ref)
+        || !head_repo.eq_ignore_ascii_case(slug)
+        || !base_repo.eq_ignore_ascii_case(slug)
+        || !html_url.eq_ignore_ascii_case(&expected_url)
+        || !refs_re.is_match(&pr_body)
+    {
+        return Err(Error::new(
+            "Error",
+            "PR was not confirmed merged for this issue; leaving the issue unchanged",
+        ));
+    }
+    if crate::domain::safe_integer(current_issue.get("number")) != Some(issue_number)
+        || !crate::domain::is_text(current_issue.get("state"), "open")
+    {
+        return Err(Error::new(
+            "Error",
+            "Issue must remain open for human AI-Eval; no comment was posted",
+        ));
+    }
+    let mut body = format!("Merged {html_url} for issue #{issue_number}.\n\nModel: {actual_model}");
+    if let Some(rec) = run {
+        body.push_str(&format!("\nProvider: {}", rec.metrics.provider.as_str()));
+        if let Some(pt) = rec.metrics.usage.prompt_tokens {
+            body.push_str(&format!("\nPrompt tokens: {pt}"));
+        }
+        if let Some(ct) = rec.metrics.usage.completion_tokens {
+            body.push_str(&format!("\nCompletion tokens: {ct}"));
+        }
+        if let Some(ref cm) = rec.metrics.context_max {
+            body.push_str(&format!("\nContext max: {}", cm.text()));
+        }
+        if let Some(ref s) = rec.metrics.session {
+            body.push_str(&format!("\nSession: {s}"));
+        }
+        if let Some(ref t) = rec.metrics.task {
+            body.push_str(&format!("\nTask: {t}"));
+        }
+    }
+    if let Some(rl) = effective_run_line {
+        body.push_str(&format!("\nAI-Run: {rl}"));
+    }
+    body.push_str("\n\nIssue remains open for human AI-Eval.");
+    Ok(crate::json::Value::object(vec![
+        (
+            "issueNumber",
+            crate::json::Value::Number(issue_number as f64),
+        ),
+        ("pullNumber", crate::json::Value::Number(pull_number as f64)),
+        ("issueState", crate::json::Value::string("open")),
+        ("body", crate::json::Value::string(&body)),
+    ]))
+}
+
+pub fn build_issue_run_status_update(
+    issue_number: u64,
+    status: &str,
+    detail: &[String],
+    current_labels: &[String],
+) -> Result<crate::json::Value, Error> {
+    if !(1..=MAX_SAFE_INTEGER).contains(&issue_number) {
+        return Err(Error::type_error(
+            "Issue number must be a positive safe integer",
+        ));
+    }
+    let Some(&(_, label_name, color, desc)) = RUN_STATUS_LABELS
+        .iter()
+        .find(|&&(key, _, _, _)| key == status)
+    else {
+        return Err(Error::type_error(
+            "Run status must be one of in-progress, review, blocked",
+        ));
+    };
+    let heading = match status {
+        "in-progress" => "Roster run started",
+        "review" => "Roster run delivered for review",
+        "blocked" => "Roster run blocked",
+        _ => "Roster run status",
+    };
+    let mut remove_labels = Vec::new();
+    for &(_, other_name, _, _) in RUN_STATUS_LABELS {
+        if other_name != label_name && current_labels.iter().any(|l| l == other_name) {
+            remove_labels.push(crate::json::Value::string(other_name));
+        }
+    }
+    let already_present = current_labels.iter().any(|l| l == label_name);
+    let lines = format_issue_run_status_lines(detail);
+    let mut body = format!("{heading} for issue #{issue_number}.");
+    if !lines.is_empty() {
+        let bullets = lines
+            .iter()
+            .map(|l| format!("- {l}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        body.push_str(&format!("\n\n{bullets}"));
+    }
+    body.push_str(&format!("\n\nStatus label: `{label_name}`."));
+    Ok(crate::json::Value::object(vec![
+        (
+            "issueNumber",
+            crate::json::Value::Number(issue_number as f64),
+        ),
+        ("status", crate::json::Value::string(status)),
+        ("label", crate::json::Value::string(label_name)),
+        ("color", crate::json::Value::string(color)),
+        ("description", crate::json::Value::string(desc)),
+        ("addLabel", crate::json::Value::Boolean(!already_present)),
+        ("removeLabels", crate::json::Value::Array(remove_labels)),
+        (
+            "claimed",
+            crate::json::Value::Boolean(status == "in-progress" && already_present),
+        ),
+        ("commentBody", crate::json::Value::string(&body)),
+    ]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1431,6 +1718,89 @@ mod tests {
         assert_eq!(
             missing_run.get("ok"),
             Some(&crate::json::Value::Boolean(false))
+        );
+
+        let coder_run = materialize(metrics(), "-")?;
+        let runs_list = vec![crate::json::Value::object(vec![
+            ("session", crate::json::Value::string("native-session")),
+            ("task", crate::json::Value::string("issue-42")),
+            ("provider", crate::json::Value::string("vllm")),
+            ("model", crate::json::Value::string("owner/model")),
+            ("effort", crate::json::Value::string("h")),
+            ("context_max", crate::json::Value::Number(32768.0)),
+        ])];
+        let verified_coder = recorded_coder_run(&runs_list, &coder_run)?;
+        assert_eq!(verified_coder.line(), coder_run.line());
+
+        let pr_obj = crate::json::Value::object(vec![
+            ("merged", crate::json::Value::Boolean(true)),
+            ("state", crate::json::Value::string("closed")),
+            (
+                "head",
+                crate::json::Value::object(vec![
+                    ("ref", crate::json::Value::string("agents/42")),
+                    (
+                        "repo",
+                        crate::json::Value::object(vec![(
+                            "full_name",
+                            crate::json::Value::string("owner/repo"),
+                        )]),
+                    ),
+                ]),
+            ),
+            (
+                "base",
+                crate::json::Value::object(vec![(
+                    "repo",
+                    crate::json::Value::object(vec![(
+                        "full_name",
+                        crate::json::Value::string("owner/repo"),
+                    )]),
+                )]),
+            ),
+            (
+                "html_url",
+                crate::json::Value::string("https://github.com/owner/repo/pull/99"),
+            ),
+            ("body", crate::json::Value::string("Summary\n\nRefs #42\n")),
+        ]);
+        let open_issue = crate::json::Value::object(vec![
+            ("number", crate::json::Value::Number(42.0)),
+            ("state", crate::json::Value::string("open")),
+        ]);
+        let merged_comment = build_merged_issue_comment(&MergedIssueCommentOptions {
+            issue_number: 42,
+            pull_number: 99,
+            slug: "owner/repo",
+            pr: &pr_obj,
+            current_issue: &open_issue,
+            run: Some(&coder_run),
+            model: None,
+            run_line: None,
+        })?;
+        let body_str = merged_comment
+            .get("body")
+            .and_then(crate::json::Value::as_string)
+            .ok_or_else(|| Error::type_error("missing body"))?
+            .to_utf8()?;
+        assert!(body_str.contains("Merged https://github.com/owner/repo/pull/99 for issue #42."));
+        assert!(body_str.contains("Issue remains open for human AI-Eval."));
+
+        let status_upd = build_issue_run_status_update(
+            42,
+            "review",
+            &["PR #99 merged; awaiting human AI-Eval.".to_owned()],
+            &["roster:in-progress".to_owned(), "enhancement".to_owned()],
+        )?;
+        assert_eq!(
+            status_upd.get("label"),
+            Some(&crate::json::Value::string("roster:review"))
+        );
+        assert_eq!(
+            status_upd.get("removeLabels"),
+            Some(&crate::json::Value::Array(vec![
+                crate::json::Value::string("roster:in-progress")
+            ]))
         );
         Ok(())
     }

@@ -1040,6 +1040,150 @@ pub fn inspect_local_issue_worktree(number: u64, worktree_path: &Path) -> Result
     ]))
 }
 
+fn issue_has_board_label(issue: &Value, name: &str) -> bool {
+    let prefixed = format!("roster:{name}");
+    issue
+        .get("labels")
+        .and_then(crate::domain::items)
+        .is_some_and(|labels| {
+            labels.iter().any(|l| {
+                let label_str = l
+                    .as_string()
+                    .or_else(|| l.get("name").and_then(Value::as_string))
+                    .and_then(|t| t.to_utf8().ok())
+                    .unwrap_or_default();
+                label_str == name || label_str == prefixed
+            })
+        })
+}
+
+pub fn compute_wave_board_rows(
+    plan: &Value,
+    linked_issues: &[Value],
+    active_issue: Option<u64>,
+    active_state: Option<&str>,
+) -> Result<Vec<Value>, Error> {
+    let Some(drafts) = plan.get("issues").and_then(crate::domain::items) else {
+        return Err(Error::type_error("Wave plan requires issues"));
+    };
+    let draft_re = regex_lite::Regex::new(r"<!-- Roster-Draft: ([1-9]\d*) -->")
+        .map_err(|e| Error::new("Error", e.to_string()))?;
+    let mut matched = std::collections::BTreeMap::new();
+    for issue in linked_issues {
+        let body = issue
+            .get("body")
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .unwrap_or_default();
+        let draft_idx = draft_re
+            .captures(&body)
+            .and_then(|c| c.get(1))
+            .and_then(|m| m.as_str().parse::<usize>().ok())
+            .filter(|&idx| (1..=drafts.len()).contains(&idx))
+            .ok_or_else(|| Error::new("Error", "Linked GitHub drafts conflict with PLAN.md"))?;
+        let expected_wave = crate::domain::safe_integer(drafts[draft_idx - 1].get("wave"));
+        if matched.contains_key(&draft_idx) || issue_wave(issue)? != expected_wave {
+            return Err(Error::new(
+                "Error",
+                "Linked GitHub drafts conflict with PLAN.md",
+            ));
+        }
+        matched.insert(draft_idx, issue.clone());
+    }
+    let mut rows = Vec::with_capacity(drafts.len());
+    for (idx, draft) in drafts.iter().enumerate() {
+        let wave_num = crate::domain::safe_integer(draft.get("wave")).unwrap_or(1);
+        let title = draft
+            .get("title")
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .unwrap_or_default();
+        let issue_opt = matched.get(&(idx + 1));
+        let mut deps_open = false;
+        if let Some(issue) = issue_opt {
+            if !crate::domain::is_text(issue.get("state"), "CLOSED") {
+                match issue_dependencies(issue)? {
+                    Some(dep_nums) => {
+                        for dep_num in dep_nums {
+                            let dep_closed = matched.values().any(|cand| {
+                                crate::domain::safe_integer(cand.get("number")) == Some(dep_num)
+                                    && crate::domain::is_text(cand.get("state"), "CLOSED")
+                            });
+                            if !dep_closed {
+                                deps_open = true;
+                            }
+                        }
+                    }
+                    None => {
+                        deps_open = matched.values().any(|earlier| {
+                            issue_wave(earlier).ok().flatten().unwrap_or(wave_num) < wave_num
+                                && crate::domain::is_text(earlier.get("state"), "OPEN")
+                        });
+                    }
+                }
+            }
+        } else {
+            deps_open = matched.values().any(|earlier| {
+                issue_wave(earlier).ok().flatten().unwrap_or(wave_num) < wave_num
+                    && crate::domain::is_text(earlier.get("state"), "OPEN")
+            });
+        }
+        let issue_num = issue_opt.and_then(|iss| crate::domain::safe_integer(iss.get("number")));
+        let state = match issue_opt {
+            Some(iss) if crate::domain::is_text(iss.get("state"), "CLOSED") => "done",
+            Some(iss) if deps_open || issue_has_board_label(iss, "blocked") => "blocked",
+            Some(_)
+                if issue_num.is_some()
+                    && active_issue == issue_num
+                    && matches!(active_state, Some("planning" | "drafting" | "testing")) =>
+            {
+                "running"
+            }
+            Some(iss)
+                if (issue_num.is_some()
+                    && active_issue == issue_num
+                    && matches!(active_state, Some("reviewing" | "passed")))
+                    || issue_has_board_label(iss, "review") =>
+            {
+                "review"
+            }
+            Some(iss) if issue_has_board_label(iss, "in-progress") => "running",
+            None if deps_open => "blocked",
+            _ => "todo",
+        };
+        rows.push(Value::object(vec![
+            ("wave", Value::Number(wave_num as f64)),
+            ("title", Value::string(&title)),
+            ("state", Value::string(state)),
+            (
+                "issue",
+                issue_num.map_or(Value::Null, |n| Value::Number(n as f64)),
+            ),
+        ]));
+    }
+    Ok(rows)
+}
+
+pub fn select_ready_wave_batch(
+    waves: &[Value],
+    attempted: &BTreeSet<u64>,
+    parallel: Option<&Value>,
+    capacity: Option<&Value>,
+) -> Result<(u64, Vec<Value>), Error> {
+    let limit = parallel_limit(parallel)?.min(parallel_limit(capacity)?);
+    let ready = waves
+        .iter()
+        .filter(|row| {
+            crate::domain::is_text(row.get("state"), "todo")
+                && crate::domain::safe_integer(row.get("issue"))
+                    .is_some_and(|n| !attempted.contains(&n))
+        })
+        .take(limit as usize)
+        .cloned()
+        .collect::<Vec<_>>();
+    Ok((limit, ready))
+}
+
 pub fn parse_issue_branch(branch: &str) -> Option<IssueBranch> {
     let tail = branch
         .strip_prefix("agents/")
@@ -3115,6 +3259,30 @@ mod repository_path_tests {
             parse_diff_names("README.md\0src/app.rs\0"),
             vec!["README.md".to_owned(), "src/app.rs".to_owned()]
         );
+        let wave_plan_val = crate::json::parse(&Text::from(
+            r#"{"issues":[{"wave":1,"title":"Slice 1"},{"wave":2,"title":"Slice 2"}]}"#,
+        ))?;
+        let linked = vec![
+            crate::json::parse(&Text::from(
+                r#"{"number":10,"state":"CLOSED","body":"<!-- Roster-Draft: 1 -->","labels":[{"name":"wave:1"}]}"#,
+            ))?,
+            crate::json::parse(&Text::from(
+                r#"{"number":11,"state":"OPEN","body":"Depends on: #10\n<!-- Roster-Draft: 2 -->","labels":[{"name":"wave:2"}]}"#,
+            ))?,
+        ];
+        let board_rows = compute_wave_board_rows(&wave_plan_val, &linked, None, None)?;
+        assert_eq!(board_rows.len(), 2);
+        assert_eq!(board_rows[0].get("state"), Some(&Value::string("done")));
+        assert_eq!(board_rows[1].get("state"), Some(&Value::string("todo")));
+        let (limit, ready) = select_ready_wave_batch(
+            &board_rows,
+            &BTreeSet::new(),
+            Some(&Value::Number(2.0)),
+            Some(&Value::Number(1.0)),
+        )?;
+        assert_eq!(limit, 1);
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].get("issue"), Some(&Value::Number(11.0)));
         Ok(())
     }
 }
