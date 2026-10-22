@@ -391,6 +391,60 @@ fn cli_ask_clarification_checkpoint_and_question_subcommands()
     let after = run_in_root(&["ask", "--pending"])?;
     assert!(String::from_utf8(after.stdout)?.contains("No pending clarification"));
 
+    let install_root = root.join("poisoned-install");
+    std::fs::create_dir_all(install_root.join(".roster"))?;
+    std::fs::write(
+        install_root.join(".roster").join("config.yml"),
+        "version: 1\nllm:\n  provider: vllm\n  base_url: http://127.0.0.1:1/v1\n  model: poisoned-live-model\n",
+    )?;
+    let consumer_cfg_dir = root.join(".roster");
+    std::fs::create_dir_all(&consumer_cfg_dir)?;
+    let offline_cfg = include_str!("../roster.config.example.yml");
+    let consumer_cfg_path = consumer_cfg_dir.join("config.yml");
+    std::fs::write(&consumer_cfg_path, offline_cfg)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&consumer_cfg_dir, std::fs::Permissions::from_mode(0o700))?;
+        std::fs::set_permissions(&consumer_cfg_path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    let question_ask = "How does this work?\n\n## Files allowed\n- `src/api.mjs`";
+    for args in [
+        &[
+            "question",
+            "--files",
+            "src/api.mjs",
+            "--",
+            "How does this work?",
+        ][..],
+        &["ask", question_ask][..],
+        &[
+            "question",
+            "--files",
+            "src/api.mjs",
+            "--",
+            "How does this work?",
+        ][..],
+    ] {
+        let restart = Command::new(env!("CARGO_BIN_EXE_roster"))
+            .current_dir(&root)
+            .env("PATH", &git_dir)
+            .env("ROSTER_INSTALLATION_ROOT", &install_root)
+            .env("ROSTER_API_KEY", "")
+            .env("OPENAI_API_KEY", "")
+            .env("GITHUB_APP_ID", "")
+            .env("GITHUB_APP_PRIVATE_KEY_PATH", "")
+            .args(args)
+            .output()?;
+        assert!(
+            restart.status.success(),
+            "{}",
+            String::from_utf8_lossy(&restart.stderr)
+        );
+        assert!(String::from_utf8(restart.stdout)?.contains("1: export const value = 42;"));
+    }
+    assert_eq!(std::fs::read_to_string(&consumer_cfg_path)?, offline_cfg);
+
     let _ = std::fs::remove_dir_all(&root);
     Ok(())
 }

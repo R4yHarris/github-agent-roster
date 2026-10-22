@@ -1693,7 +1693,8 @@ pub async fn run_fleet_cli<T: crate::llm::http::Transport>(
             ));
         }
     }
-    let repo_root = crate::paths::resolve_project_root(cwd)?;
+    let repo_root = crate::config::shared_config_root(cwd)
+        .or_else(|_| crate::paths::resolve_project_root(cwd))?;
     let previous_fleet = settings::read_private_file(&repo_root, settings::Name::Fleet)?;
     let fleet_val = match &previous_fleet {
         Some(src) => parse(src)?,
