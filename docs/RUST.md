@@ -37,9 +37,15 @@ The library contains:
   and selected-only endpoint credentials in the actual local run path.
 - Ask drafting/submission, clarification checkpoints, scoped repository
   questions, side questions (`/btw`), bounded state/provenance cleanup,
-  benchmark/debug-log/repo-map/run-log diagnostics, publication/trailer and
-  wave/attempt helpers, hardware/routing/discovery/remediation helpers, shell/
-  onboard helpers and paired Eve pilot evaluation.
+  benchmark/debug-log/repo-map/run-log diagnostics, publication/trailer/board
+  and wave/attempt/scheduler helpers (`recorded_coder_run`,
+  `build_merged_issue_comment`, `build_issue_run_status_update`,
+  `compute_wave_board_rows`, `select_ready_wave_batch`),
+  hardware/routing/discovery/remediation helpers, shell/onboard helpers
+  (including in-shell `/plan` + Enter and `/run` local `planner` $\rightarrow$
+  `coder` $\rightarrow$ `reviewer` delivery with active session fleet profile
+  inheritance), Copilot worker offline contracts/diagnostics/scorecards
+  (`#570`–`#573`), and paired Eve pilot evaluation.
 
 The public CLI supports the interactive shell (`roster`, `roster shell`),
 process-only debug JSONL logging (`roster --debug [COMMAND]`), interactive

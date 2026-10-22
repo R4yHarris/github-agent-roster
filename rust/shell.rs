@@ -4079,6 +4079,14 @@ impl ShellSession {
                 if !raw_args.is_empty() && raw_args != "open" {
                     return Err(Error::type_error("Use /waves or /waves open."));
                 }
+                if raw_args == "open"
+                    && domain::truthy(self.environment.get("ROSTER_SEAT").unwrap_or(&Value::Null))
+                {
+                    return Err(Error::new(
+                        "Error",
+                        "Opening wave drafts requires an explicit human command, not an agent seat.",
+                    ));
+                }
                 let Some(wt) = &self.last_worktree else {
                     return Err(Error::new(
                         "Error",
@@ -4086,13 +4094,24 @@ impl ShellSession {
                     ));
                 };
                 let wave_plan = crate::start::read_wave_plan(wt)?;
+                let rows = crate::start::compute_wave_board_rows(
+                    &wave_plan.plan,
+                    &[],
+                    self.last_issue,
+                    self.display
+                        .get("state")
+                        .and_then(Value::as_string)
+                        .and_then(|t| t.to_utf8().ok())
+                        .as_deref(),
+                )?;
                 let mut out = String::new();
-                if let Some(issues) = wave_plan.plan.get("issues").and_then(domain::items) {
-                    for draft in issues {
-                        let w = domain::safe_integer(draft.get("wave")).unwrap_or(1);
-                        let title = clean_display(draft.get("title"), "-");
-                        out.push_str(&format!("wave:{w} | {title} | todo\n"));
-                    }
+                for row in rows {
+                    let w = domain::safe_integer(row.get("wave")).unwrap_or(1);
+                    let title = clean_display(row.get("title"), "-");
+                    let state = clean_display(row.get("state"), "todo");
+                    let issue_suffix = domain::safe_integer(row.get("issue"))
+                        .map_or_else(String::new, |n| format!(" | #{n}"));
+                    out.push_str(&format!("wave:{w} | {title} | {state}{issue_suffix}\n"));
                 }
                 Ok(ShellAction::Continue(self.redact_text(&out)?))
             }
@@ -4371,7 +4390,13 @@ impl ShellSession {
         };
         let root = self.current_root();
         let env_with_tools = ensure_delivery_tool_env(&self.environment);
-        let loaded = config::load(&self.installation, &root, &env_with_tools)?;
+        let mut loaded = config::load(&self.installation, &root, &env_with_tools)?;
+        if let Some(ref prof_id) = self.fleet_profile_id {
+            let fleet_root = config::shared_config_root(&root)?;
+            let fleet_cat = crate::fleet::load(&fleet_root)?;
+            let prof = crate::fleet::get_profile(&fleet_cat, &Value::string(prof_id))?;
+            loaded.config = loaded.config.with_profile(prof)?;
+        }
         let exe = std::env::current_exe()
             .map_err(|_| Error::new("Error", "Cannot resolve the current native CLI image"))?;
         let Ok((host, approval)) = crate::host::invocation_host(&env_with_tools, &exe) else {
@@ -4381,7 +4406,18 @@ impl ShellSession {
                 ask_file.parent().unwrap_or(&ask_file).display()
             ));
         };
-        let start = crate::start::Options::resolve(&loaded.config, None, None)?;
+        if !root.join(".git").exists() {
+            let _ = domain::put(&mut self.display, "state", Value::string("passed"));
+            return Ok(format!(
+                "Ask artifacts ready at {}.\n",
+                ask_file.parent().unwrap_or(&ask_file).display()
+            ));
+        }
+        let start = crate::start::Options::resolve(
+            &loaded.config,
+            Some("current"),
+            Some(crate::start::Sync::Offline),
+        )?;
         let credentials = crate::delivery::native_invocation_credentials(&env_with_tools, &loaded)?;
         let mut transport =
             crate::llm::http::HttpTransport::new().map_err(|failure| *failure.error)?;
@@ -4437,12 +4473,11 @@ impl ShellSession {
                 );
                 Ok(outcome.format())
             }
-            Err(_) => {
-                let _ = domain::put(&mut self.display, "state", Value::string("passed"));
-                Ok(format!(
-                    "Ask artifacts ready at {}.\n",
-                    ask_file.parent().unwrap_or(&ask_file).display()
-                ))
+            Err(err) => {
+                let _ = domain::put(&mut self.display, "state", Value::string("failed"));
+                let safe_err = crate::delivery::safe_invocation_error(&err, &loaded, &credentials)
+                    .unwrap_or(err);
+                Err(safe_err)
             }
         }
     }

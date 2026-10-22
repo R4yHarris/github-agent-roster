@@ -1962,6 +1962,58 @@ impl OfflineWorkerAttempt {
         res
     }
 
+    pub fn emit_managed_artifacts(
+        &mut self,
+        receipt: &Value,
+        current_anchors: &Value,
+        summary: &str,
+        now_ms: u64,
+    ) -> Result<Value, Error> {
+        let eligibility = self.review_eligibility(receipt, current_anchors, now_ms)?;
+        if summary.trim().is_empty() || summary.contains('\0') {
+            self.revoke("invalid-summary");
+            return Err(Error::new("Error", "Expected nonempty text"));
+        }
+        let prov = self.provenance();
+        let result_body = format!(
+            "# Result\n\n- Kind: external-full-agent\n- Evidence: synthetic\n- Requested model: {}\n- Model status: {}\n- Summary: {}\n",
+            self.requested_model,
+            prov.get("modelStatus")
+                .and_then(Value::as_string)
+                .and_then(|t| t.to_utf8().ok())
+                .unwrap_or_else(|| "unknown".to_owned()),
+            summary.trim()
+        );
+        let review_body = "# Review\n\nVerdict: pass\nSource: synthetic-independent-host\nNote: Read-only independent review receipt; external full-agent attempt is not a builtin seat and remains nonpublishable.\n";
+        let result_path = self.root.join("RESULT.md");
+        let review_path = self.root.join("REVIEW.md");
+        std::fs::write(&result_path, result_body.as_bytes())
+            .map_err(|e| Error::new("Error", e.to_string()))?;
+        std::fs::write(&review_path, review_body.as_bytes())
+            .map_err(|e| Error::new("Error", e.to_string()))?;
+        Ok(Value::object(vec![
+            (
+                "resultPath",
+                Value::string(&result_path.display().to_string()),
+            ),
+            (
+                "reviewPath",
+                Value::string(&review_path.display().to_string()),
+            ),
+            ("reviewVerdict", Value::string("pass")),
+            (
+                "hostReviewEligible",
+                eligibility
+                    .get("hostReviewEligible")
+                    .cloned()
+                    .unwrap_or(Value::Boolean(false)),
+            ),
+            ("builtinSeat", Value::Boolean(false)),
+            ("publishable", Value::Boolean(false)),
+            ("aiRun", Value::Null),
+        ]))
+    }
+
     pub fn provenance(&self) -> Value {
         let mut models = Vec::new();
         for call in &self.calls {
@@ -2825,6 +2877,17 @@ mod tests {
             Some(&Value::Boolean(true))
         );
         assert_eq!(rev_elig.get("publishable"), Some(&Value::Boolean(false)));
+        let emitted = attempt.emit_managed_artifacts(
+            &receipt,
+            &anchors,
+            "Updated sample.txt and removed remove.txt.",
+            85,
+        )?;
+        assert_eq!(emitted.get("reviewVerdict"), Some(&Value::string("pass")));
+        assert_eq!(emitted.get("builtinSeat"), Some(&Value::Boolean(false)));
+        assert_eq!(emitted.get("publishable"), Some(&Value::Boolean(false)));
+        assert!(root.join("RESULT.md").is_file());
+        assert!(root.join("REVIEW.md").is_file());
         let prov = attempt.provenance();
         assert_eq!(prov.get("modelStatus"), Some(&Value::string("known")));
         assert_eq!(prov.get("mismatch"), Some(&Value::Boolean(true)));
