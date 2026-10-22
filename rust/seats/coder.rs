@@ -439,14 +439,9 @@ impl Progress {
             tests.get("native") == Some(&Value::Boolean(true)),
         )?;
         let take_utf16_prefix = |units: &[u16], limit: usize| -> Text {
-            if units.len() <= limit {
-                return Text(units.to_vec());
-            }
-            let mut end = limit;
-            if matches!(units.get(end.saturating_sub(1)), Some(0xd800..=0xdbff))
-                && matches!(units.get(end), Some(0xdc00..=0xdfff))
-            {
-                end = end.saturating_sub(1);
+            let mut end = units.len().min(limit);
+            while end > 0 && matches!(units.get(end - 1), Some(0xd800..=0xdbff)) {
+                end -= 1;
             }
             Text(units[..end].to_vec())
         };
@@ -517,10 +512,7 @@ impl Progress {
         let mut feedback = Text::from(format!("Actual approved tests failed (exit {exit}). Repair {} of {}. No change is verified. Repair only task-authorized files, do not weaken checks or classify unmeasured failures as preexisting. Change strategy instead of repeating a failed repair.\n\n", self.repairs, self.repair_budget).as_str());
         let tail = Text::from(output.as_str());
         let mut start = tail.0.len().saturating_sub(4096);
-        if start > 0
-            && matches!(tail.0.get(start), Some(0xdc00..=0xdfff))
-            && matches!(tail.0.get(start - 1), Some(0xd800..=0xdbff))
-        {
+        while matches!(tail.0.get(start), Some(0xdc00..=0xdfff)) {
             start += 1;
         }
         feedback.0.extend(tail.0.iter().skip(start));

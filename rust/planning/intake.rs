@@ -339,7 +339,12 @@ pub fn requirements(input: &Value, allow_missing: bool) -> Result<Requirements, 
             {
                 continue;
             }
-            files.push(file.to_owned());
+            let normalized = if file.eq_ignore_ascii_case("readme.md") {
+                "README.md".to_owned()
+            } else {
+                file.to_owned()
+            };
+            files.push(normalized);
         }
         distinct(files)
     };

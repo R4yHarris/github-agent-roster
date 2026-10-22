@@ -537,19 +537,7 @@ struct Responses {
 
 impl Responses {
     fn observe(&mut self, completion: &Completion) -> Result<(), Error> {
-        self.samples.push(crate::run::UsageSample {
-            prompt_tokens: completion
-                .usage
-                .as_ref()
-                .and_then(|usage| usage.get("prompt_tokens"))
-                .and_then(Value::as_number),
-            completion_tokens: completion
-                .usage
-                .as_ref()
-                .and_then(|usage| usage.get("completion_tokens"))
-                .and_then(Value::as_number),
-        });
-        self.reported |= completion.usage.is_some();
+        self.record_usage(completion.usage.as_ref());
         self.response = Some(LastResponse {
             model: completion.model.clone(),
             usage: self
@@ -560,18 +548,18 @@ impl Responses {
         Ok(())
     }
 
+    fn record_usage(&mut self, usage: Option<&Value>) {
+        if let Some(usage) = usage {
+            self.samples.push(crate::run::UsageSample {
+                prompt_tokens: usage.get("prompt_tokens").and_then(Value::as_number),
+                completion_tokens: usage.get("completion_tokens").and_then(Value::as_number),
+            });
+            self.reported = true;
+        }
+    }
+
     fn failed(&mut self, chat: &BuiltinChat<'_>) -> Result<(), Error> {
-        self.samples.push(crate::run::UsageSample {
-            prompt_tokens: chat
-                .last_usage()
-                .and_then(|usage| usage.get("prompt_tokens"))
-                .and_then(Value::as_number),
-            completion_tokens: chat
-                .last_usage()
-                .and_then(|usage| usage.get("completion_tokens"))
-                .and_then(Value::as_number),
-        });
-        self.reported |= chat.last_usage().is_some();
+        self.record_usage(chat.last_usage());
         if let Some(response) = chat.last_response() {
             self.response = Some(LastResponse {
                 model: response.model.clone(),
@@ -678,6 +666,12 @@ impl Evidence {
         selected.dedup();
         let imports =
             execution::regex(r#"(?:\bfrom\s*|\bimport\s*\(?\s*)['"](\.{1,2}/[^'"\n]+)['"]"#)?;
+        let rust_mods = execution::regex(
+            r"(?m)^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;",
+        )?;
+        let rust_uses = execution::regex(
+            r"\b(?:use\s+)?(?:crate|super|self)::([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)",
+        )?;
         let mut additional = Vec::new();
         for file in &selected {
             if !policy::exact_path(file) || planning::forbidden_read(file) {
@@ -686,14 +680,15 @@ impl Evidence {
                 ));
             }
             if let Some(source) = evidence::read_product(boundary.root(), file, 65_536)? {
-                for captures in imports.captures_iter(&source.to_utf8()?) {
+                let source_utf8 = source.to_utf8()?;
+                let parent = boundary
+                    .root()
+                    .join(file)
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .ok_or_else(|| Error::type_error("Review import requires a parent"))?;
+                for captures in imports.captures_iter(&source_utf8) {
                     if let Some(relative) = captures.get(1) {
-                        let parent = boundary
-                            .root()
-                            .join(file)
-                            .parent()
-                            .map(Path::to_path_buf)
-                            .ok_or_else(|| Error::type_error("Review import requires a parent"))?;
                         let path = crate::paths::resolve(&parent, Path::new(relative.as_str()))?;
                         crate::paths::ensure_local_path(&path, boundary.root())?;
                         let path = path
@@ -707,6 +702,82 @@ impl Evidence {
                             && evidence::read_product(boundary.root(), &path, 65_536)?.is_some()
                         {
                             additional.push(path);
+                        }
+                    }
+                }
+                let mut try_add_resolved = |resolved: PathBuf| -> Result<(), Error> {
+                    if crate::paths::ensure_local_path(&resolved, boundary.root()).is_err() {
+                        return Ok(());
+                    }
+                    let Ok(rel) = resolved.strip_prefix(boundary.root()) else {
+                        return Ok(());
+                    };
+                    let Some(rel_str) = rel.to_str() else {
+                        return Ok(());
+                    };
+                    let path = rel_str.replace('\\', "/");
+                    if policy::exact_path(&path)
+                        && !planning::forbidden_read(&path)
+                        && evidence::read_product(boundary.root(), &path, 65_536)?.is_some()
+                    {
+                        additional.push(path);
+                    }
+                    Ok(())
+                };
+                if file.ends_with(".rs") {
+                    if !file.ends_with("/mod.rs")
+                        && !file.ends_with("/lib.rs")
+                        && !file.ends_with("/main.rs")
+                    {
+                        try_add_resolved(parent.join("mod.rs"))?;
+                        try_add_resolved(parent.join("lib.rs"))?;
+                        if let Some(dir_name) = parent.file_name().and_then(|n| n.to_str()) {
+                            if let Some(grandparent) = parent.parent() {
+                                try_add_resolved(grandparent.join(format!("{dir_name}.rs")))?;
+                            }
+                        }
+                    }
+                    let mod_base = if file.ends_with("/mod.rs")
+                        || file.ends_with("/lib.rs")
+                        || file.ends_with("/main.rs")
+                    {
+                        parent.clone()
+                    } else {
+                        let stem = Path::new(file)
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("");
+                        parent.join(stem)
+                    };
+                    for captures in rust_mods.captures_iter(&source_utf8) {
+                        if let Some(mod_name) = captures.get(1) {
+                            let m = mod_name.as_str();
+                            try_add_resolved(mod_base.join(format!("{m}.rs")))?;
+                            try_add_resolved(mod_base.join(m).join("mod.rs"))?;
+                            try_add_resolved(parent.join(format!("{m}.rs")))?;
+                            try_add_resolved(parent.join(m).join("mod.rs"))?;
+                        }
+                    }
+                    let crate_root = if file.starts_with("rust/") {
+                        boundary.root().join("rust")
+                    } else if file.starts_with("src/") {
+                        boundary.root().join("src")
+                    } else {
+                        parent.clone()
+                    };
+                    for captures in rust_uses.captures_iter(&source_utf8) {
+                        if let Some(path_match) = captures.get(1) {
+                            let mut parts = path_match.as_str().split("::").collect::<Vec<_>>();
+                            while !parts.is_empty() {
+                                let joined = parts.join("/");
+                                try_add_resolved(crate_root.join(format!("{joined}.rs")))?;
+                                try_add_resolved(crate_root.join(&joined).join("mod.rs"))?;
+                                try_add_resolved(parent.join(format!("{joined}.rs")))?;
+                                if let Some(gp) = parent.parent() {
+                                    try_add_resolved(gp.join(format!("{joined}.rs")))?;
+                                }
+                                parts.pop();
+                            }
                         }
                     }
                 }
@@ -1178,6 +1249,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
             ),
         ]));
         let audited = audited?;
+        draft.responses.record_usage(audited.usage.as_ref());
         evidence.check(boundary, coder, &options.projection).await?;
         let mut audit = grounded_audit(
             &response_content(&audited)?,
