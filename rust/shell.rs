@@ -3012,11 +3012,12 @@ impl ShellSession {
                     .collect::<Result<Vec<_>, _>>()?;
                 let sub = words.first().map_or("list", String::as_str);
                 let root = self.current_root();
+                let fleet_root = config::shared_config_root(&root)?;
                 if sub == "list" {
                     if words.len() > 1 {
                         return Err(Error::type_error("Use /fleet or /fleet list."));
                     }
-                    let loaded = crate::fleet::load(&root)?;
+                    let loaded = crate::fleet::load(&fleet_root)?;
                     if loaded.profiles().is_empty() {
                         return Ok(ShellAction::Continue(
                             "No fleet profiles configured.\n".to_owned(),
@@ -3049,7 +3050,7 @@ impl ShellSession {
                     if words.len() != 2 {
                         return Err(Error::type_error("Use /fleet use ID."));
                     }
-                    let loaded = crate::fleet::load(&root)?;
+                    let loaded = crate::fleet::load(&fleet_root)?;
                     let prof = crate::fleet::get_profile(&loaded, &Value::string(&words[1]))?;
                     let next_cfg = crate::fleet::with_profile(&self.config, prof.as_value())?;
                     let id = clean_display(prof.as_value().get("id"), &words[1]);
@@ -3534,7 +3535,7 @@ impl ShellSession {
                 let token = source.token();
                 let mut side_opts = crate::ask::SideQuestionOptions {
                     worktree_path: self.last_worktree.as_deref(),
-                    run_ask: None,
+                    run_ask: self.last_ask_text.as_deref(),
                     config: &self.config,
                     env: Some(&self.environment),
                     vault: None,
@@ -3875,47 +3876,173 @@ impl ShellSession {
                         "Run or resume a task worktree before using checkpoints.",
                     ));
                 };
+                let cp_identity = task.strip_prefix("issue-").unwrap_or(task.as_str());
+                let primary_dir = wt.join(".roster").join("checkpoints").join(cp_identity);
+                let read_numbered_records = || -> Result<Vec<Value>, Error> {
+                    if !primary_dir.is_dir() {
+                        return Ok(Vec::new());
+                    }
+                    let mut numbered = Vec::new();
+                    for name in secure::entries(&primary_dir)? {
+                        if !name.is_empty()
+                            && !name.starts_with('0')
+                            && name.bytes().all(|b| b.is_ascii_digit())
+                        {
+                            let n = crate::start::parse_issue_number(&name).map_err(|_| {
+                                Error::new(
+                                    "Error",
+                                    "Checkpoint metadata does not match the requested task",
+                                )
+                            })?;
+                            numbered.push((n, name));
+                        }
+                    }
+                    numbered.sort_by_key(|(n, _)| *n);
+                    let mut records = Vec::with_capacity(numbered.len());
+                    let time_re =
+                        regex_lite::Regex::new(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$")
+                            .map_err(|e| Error::new("Error", e.to_string()))?;
+                    for (expected_num, name) in numbered {
+                        let file = primary_dir.join(name);
+                        let snap = secure::read(&file, 262_144)?.ok_or_else(|| {
+                            Error::new("Error", "Checkpoint metadata disappeared")
+                        })?;
+                        if paths::file_information(&file)?.links != 1 {
+                            return Err(Error::new(
+                                "Error",
+                                "Checkpoint metadata must be a bounded regular single-link file",
+                            ));
+                        }
+                        let text = String::from_utf8(snap.bytes)
+                            .map_err(|_| Error::new("Error", "Checkpoint metadata is invalid"))?;
+                        let rec = crate::json::parse(&Text::from(text.as_str()))
+                            .map_err(|_| Error::new("Error", "Checkpoint metadata is invalid"))?;
+                        let status = clean_display(rec.get("status"), "");
+                        let tree = clean_display(rec.get("tree"), "");
+                        let time = clean_display(rec.get("time"), "");
+                        let valid_oid = [40, 64].contains(&tree.len())
+                            && tree
+                                .bytes()
+                                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+                        let scope_ok = rec.get("scope").and_then(domain::items).is_some_and(|s| {
+                            s.len() <= 64 && s.iter().all(|f| f.as_string().is_some())
+                        });
+                        if domain::safe_integer(rec.get("number")) != Some(expected_num)
+                            || !domain::is_text(rec.get("task"), task)
+                            || !domain::is_text(rec.get("seat"), "coder")
+                            || !matches!(status.as_str(), "before-write" | "verified")
+                            || !valid_oid
+                            || !domain::is_text(
+                                rec.get("ref"),
+                                &format!("refs/roster/checkpoints/{task}/{expected_num}"),
+                            )
+                            || !scope_ok
+                            || !time_re.is_match(&time)
+                        {
+                            return Err(Error::new(
+                                "Error",
+                                "Checkpoint metadata does not match the requested task",
+                            ));
+                        }
+                        records.push(rec);
+                    }
+                    Ok(records)
+                };
                 if command == "checkpoints" {
                     if !raw_args.is_empty() {
                         return Err(Error::type_error("Use /checkpoints."));
                     }
-                    let cp_dir = wt
-                        .join(".roster")
-                        .join("checkpoints")
-                        .join(&crate::identity::sha256_hex(task.as_bytes())[..16]);
-                    let records_file = cp_dir.join("records.jsonl");
-                    let Some(snap) = secure::read(&records_file, 65_536)? else {
+                    let mut records = read_numbered_records()?;
+                    if records.is_empty() {
+                        let cp_dir = wt
+                            .join(".roster")
+                            .join("checkpoints")
+                            .join(&crate::identity::sha256_hex(task.as_bytes())[..16]);
+                        let records_file = cp_dir.join("records.jsonl");
+                        if let Some(snap) = secure::read(&records_file, 65_536)? {
+                            let text = String::from_utf8(snap.bytes)
+                                .map_err(|e| Error::new("Error", e.to_string()))?;
+                            for line in text.lines().filter(|l| !l.trim().is_empty()) {
+                                records.push(crate::json::parse(&Text::from(line))?);
+                            }
+                        }
+                    }
+                    if records.is_empty() {
                         return Ok(ShellAction::Continue("No checkpoints.\n".to_owned()));
-                    };
-                    let text = String::from_utf8(snap.bytes)
-                        .map_err(|e| Error::new("Error", e.to_string()))?;
+                    }
                     let mut out = String::new();
-                    for line in text.lines().filter(|l| !l.trim().is_empty()) {
-                        let rec = crate::json::parse(&Text::from(line))?;
+                    for rec in &records {
                         let num = domain::safe_integer(rec.get("number")).unwrap_or(0);
                         let seat = clean_display(rec.get("seat"), "-");
                         let status = clean_display(rec.get("status"), "-");
                         let time = clean_display(rec.get("time"), "-");
                         out.push_str(&format!("{num} | {seat} | {status} | {time}\n"));
                     }
-                    if out.is_empty() {
-                        return Ok(ShellAction::Continue("No checkpoints.\n".to_owned()));
-                    }
                     return Ok(ShellAction::Continue(out));
                 }
-                Err(Error::new(
-                    "Error",
-                    "Rewind requires the current TASK.md product scope.",
-                ))
+                let latest = input_cmd.eq_ignore_ascii_case("undo");
+                if latest {
+                    if !raw_args.is_empty() {
+                        return Err(Error::type_error(
+                            "Use /undo for the latest checkpoint only.",
+                        ));
+                    }
+                } else {
+                    let _ = crate::start::parse_issue_number(raw_args)
+                        .map_err(|_| Error::type_error("Use /rewind N."))?;
+                }
+                if secure::read(&wt.join("TASK.md"), 65_536)?.is_none() {
+                    return Err(Error::new(
+                        "Error",
+                        "Rewind requires the current TASK.md product scope.",
+                    ));
+                }
+                crate::execution::checkpoints::require_restore_integration()?;
+                unreachable!()
             }
             "resume" => {
                 if raw_args.is_empty() {
-                    return Ok(ShellAction::Continue("No local issue runs.\n".to_owned()));
+                    let wt_root = self.current_root().join(".worktrees");
+                    if !wt_root.is_dir() {
+                        return Ok(ShellAction::Continue("No local issue runs.\n".to_owned()));
+                    }
+                    let mut found = Vec::new();
+                    for name in secure::entries(&wt_root)? {
+                        if let Some(num_str) = name.strip_prefix("issue-") {
+                            if let Ok(number) = crate::start::parse_issue_number(num_str) {
+                                let wt = wt_root.join(&name);
+                                if let Ok(info) =
+                                    crate::start::inspect_local_issue_worktree(number, &wt)
+                                {
+                                    found.push((number, info));
+                                }
+                            }
+                        }
+                    }
+                    found.sort_by_key(|(number, _)| *number);
+                    if found.is_empty() {
+                        return Ok(ShellAction::Continue("No local issue runs.\n".to_owned()));
+                    }
+                    let mut out = String::new();
+                    for (number, info) in found {
+                        let title =
+                            clean_display(info.get("issue").and_then(|iss| iss.get("title")), "-");
+                        let seat = clean_display(info.get("seat"), "coder");
+                        let state = clean_display(info.get("state"), "idle");
+                        out.push_str(&format!(
+                            "#{number} | {title} | {seat} | {state} | issue-{number}\n"
+                        ));
+                    }
+                    return Ok(ShellAction::Continue(out));
                 }
                 let parts = arguments::split(&Text::from(raw_args), "Use /resume [N] [--green].")?
                     .into_iter()
                     .map(|w| w.to_utf8())
                     .collect::<Result<Vec<_>, _>>()?;
+                let green = parts.len() == 2 && parts[1] == "--green";
+                if !green && parts.len() != 1 {
+                    return Err(Error::type_error("Use /resume [N] [--green]."));
+                }
                 let number = parts
                     .first()
                     .and_then(|s| crate::start::parse_issue_number(s).ok())
@@ -3923,6 +4050,21 @@ impl ShellSession {
                 let root = self.current_root();
                 let wt = root.join(".worktrees").join(format!("issue-{number}"));
                 let info = crate::start::inspect_local_issue_worktree(number, &wt)?;
+                if green {
+                    if info.get("planMode") == Some(&Value::Boolean(true)) {
+                        return Err(Error::new(
+                            "Error",
+                            "Green resume requires an executable TASK.md, not a plan",
+                        ));
+                    }
+                    if secure::read(&wt.join("TASK.md"), 65_536)?.is_none() {
+                        return Err(Error::new(
+                            "Error",
+                            "Green resume requires the current TASK.md",
+                        ));
+                    }
+                    crate::execution::checkpoints::require_restore_integration()?;
+                }
                 self.last_worktree = Some(wt);
                 self.last_issue = Some(number);
                 self.last_task = Some(format!("issue-{number}"));
@@ -4130,13 +4272,49 @@ impl ShellSession {
                 );
             }
             if let Some(usage) = &draft.usage {
+                let mut meas = vec![
+                    ("seat", Value::string("planner")),
+                    (
+                        "provider",
+                        self.config
+                            .get("llm")
+                            .and_then(|l| l.get("provider"))
+                            .cloned()
+                            .unwrap_or_else(|| Value::string("vllm")),
+                    ),
+                    (
+                        "model",
+                        self.display.get("model").cloned().unwrap_or(Value::Null),
+                    ),
+                    (
+                        "effort",
+                        self.display.get("effort").cloned().unwrap_or(Value::Null),
+                    ),
+                    (
+                        "contextMax",
+                        self.display
+                            .get("contextMax")
+                            .cloned()
+                            .unwrap_or(Value::Null),
+                    ),
+                    (
+                        "finishReason",
+                        self.display
+                            .get("lastFinishReason")
+                            .cloned()
+                            .unwrap_or_else(|| Value::string("stop")),
+                    ),
+                ];
                 if let Some(pt) = domain::safe_integer(usage.get("prompt_tokens")) {
                     let _ = domain::put(&mut self.display, "contextUsed", Value::Number(pt as f64));
+                    meas.push(("input", Value::Number(pt as f64)));
                 }
                 if let Some(ct) = domain::safe_integer(usage.get("completion_tokens")) {
                     let _ =
                         domain::put(&mut self.display, "outputTokens", Value::Number(ct as f64));
+                    meas.push(("output", Value::Number(ct as f64)));
                 }
+                self.last_measured_seat = Some(Value::object(meas));
             }
             if let Some(ref task_path) = draft.task_path {
                 if let Ok(task_src) = fs::read_to_string(task_path) {
@@ -4159,8 +4337,14 @@ impl ShellSession {
                     }
                 }
             }
-            if let Some(parent) = draft.ask_path.parent() {
-                self.last_worktree = Some(parent.to_path_buf());
+            if let Some(dir) = draft
+                .task_path
+                .as_deref()
+                .and_then(Path::parent)
+                .or_else(|| draft.plan_path.as_deref().and_then(Path::parent))
+                .or_else(|| draft.ask_path.parent())
+            {
+                self.last_worktree = Some(dir.to_path_buf());
             }
         }
         if confirm_after_plan {
@@ -5493,6 +5677,57 @@ mod tests {
             session.display.get("contextUsed"),
             Some(&Value::Number(1200.0))
         );
+
+        assert_eq!(
+            session.dispatch_line("/resume").await?,
+            ShellAction::Continue("No local issue runs.\n".to_owned())
+        );
+        assert!(session.dispatch_line("/resume 42 --invalid").await.is_err());
+        let issue_wt = root.join(".worktrees").join("issue-42");
+        let cp_dir = issue_wt.join(".roster").join("checkpoints").join("42");
+        files::create_private_directories(&cp_dir)?;
+        fs::write(
+            issue_wt.join("ASSIGNMENT.md"),
+            "# Assignment\n\n- Issue URL: https://github.com/example/project/issues/42\n- Issue number: 42\n- Title: Add status\n\n## Ask\n\nAdd a Status section to README.md.\n",
+        )
+        .map_err(|e| Error::new("Error", e.to_string()))?;
+        fs::write(
+            issue_wt.join("TASK.md"),
+            "# Task: Add status\n\ndifficulty: 1\ntask_class: docs\n\n## Acceptance checks\n- README has Status\n\n## Files allowed\n- `README.md`\n\n## Ask\nAdd a Status section to README.md.\n",
+        )
+        .map_err(|e| Error::new("Error", e.to_string()))?;
+        fs::write(
+            cp_dir.join("1"),
+            "{\"number\":1,\"task\":\"issue-42\",\"seat\":\"coder\",\"status\":\"before-write\",\"time\":\"2026-10-20T00:00:00.000Z\",\"ref\":\"refs/roster/checkpoints/issue-42/1\",\"tree\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"scope\":[\"README.md\"]}\n",
+        )
+        .map_err(|e| Error::new("Error", e.to_string()))?;
+        fs::write(
+            cp_dir.join("2"),
+            "{\"number\":2,\"task\":\"issue-42\",\"seat\":\"coder\",\"status\":\"verified\",\"time\":\"2026-10-20T00:05:00.000Z\",\"ref\":\"refs/roster/checkpoints/issue-42/2\",\"tree\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"scope\":[\"README.md\"]}\n",
+        )
+        .map_err(|e| Error::new("Error", e.to_string()))?;
+        let resume_list = session.dispatch_line("/resume").await?;
+        assert_eq!(
+            resume_list,
+            ShellAction::Continue("#42 | Add status | coder | idle | issue-42\n".to_owned())
+        );
+        assert!(session.dispatch_line("/resume 42 --green").await.is_err());
+        let resume_act = session.dispatch_line("/resume 42").await?;
+        assert_eq!(
+            resume_act,
+            ShellAction::Continue("Resumed local issue #42 (idle).\n".to_owned())
+        );
+        let cp_act = session.dispatch_line("/checkpoints").await?;
+        assert_eq!(
+            cp_act,
+            ShellAction::Continue(
+                "1 | coder | before-write | 2026-10-20T00:00:00.000Z\n2 | coder | verified | 2026-10-20T00:05:00.000Z\n".to_owned()
+            )
+        );
+        assert!(session.dispatch_line("/undo 1").await.is_err());
+        assert!(session.dispatch_line("/rewind invalid").await.is_err());
+        assert!(session.dispatch_line("/rewind 1").await.is_err());
+        assert!(session.dispatch_line("/undo").await.is_err());
 
         assert_eq!(
             session.dispatch_line("/clear").await?,

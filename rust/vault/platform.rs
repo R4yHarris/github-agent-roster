@@ -174,6 +174,15 @@ impl Pending<'_> {
         }
         if native::publish(self.directory, &self.name, name, exclusive)? {
             self.active = false;
+            let published = self.directory.inspect(name)?.ok_or(VaultError::Changed)?;
+            if paths::handle_information(&published)
+                .map_err(|_| VaultError::Io)?
+                .identity
+                != self.identity
+            {
+                return Err(VaultError::Changed);
+            }
+            drop(published);
             native::sync(self.directory)?;
             self.directory.current()?;
             Ok(true)

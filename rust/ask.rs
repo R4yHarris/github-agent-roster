@@ -340,9 +340,18 @@ fn seed_os_runtime_env(command: &mut StdCommand) {
     }
 }
 
-fn spawn_git_sync(repo_root: &Path, args: &[&str], env: Option<&Value>) -> Result<String, Error> {
+fn build_git_command(
+    repo_root: &Path,
+    args: &[&str],
+    env: Option<&Value>,
+) -> Result<StdCommand, Error> {
     let mut command = StdCommand::new(git_executable());
-    command.current_dir(repo_root).args(args);
+    command
+        .current_dir(repo_root)
+        .args(args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
     if let Some(env_value) = env {
         command.env_clear();
         seed_os_runtime_env(&mut command);
@@ -354,14 +363,26 @@ fn spawn_git_sync(repo_root: &Path, args: &[&str], env: Option<&Value>) -> Resul
             }
         }
     }
-    let output = command
-        .output()
+    Ok(command)
+}
+
+fn wait_git_child(child: std::process::Child) -> Result<String, Error> {
+    let output = child
+        .wait_with_output()
         .map_err(|error| Error::new("Error", error.to_string()))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(Error::new("Error", stderr.trim().to_owned()));
     }
     String::from_utf8(output.stdout).map_err(|error| Error::new("Error", error.to_string()))
+}
+
+#[cfg(test)]
+fn spawn_git_sync(repo_root: &Path, args: &[&str], env: Option<&Value>) -> Result<String, Error> {
+    let child = build_git_command(repo_root, args, env)?
+        .spawn()
+        .map_err(|error| Error::new("Error", error.to_string()))?;
+    wait_git_child(child)
 }
 
 fn private_checkpoint_path(repo_root: &Path, env: Option<&Value>) -> Result<PathBuf, Error> {
@@ -387,7 +408,7 @@ fn private_checkpoint_path(repo_root: &Path, env: Option<&Value>) -> Result<Path
                 "Clarification storage must be untracked and gitignored; ignore .roster/asks/. No execution started.",
             )
         };
-        let tracked = spawn_git_sync(
+        let mut tracked_cmd = build_git_command(
             repo_root,
             &[
                 "ls-files",
@@ -396,14 +417,13 @@ fn private_checkpoint_path(repo_root: &Path, env: Option<&Value>) -> Result<Path
                 ".roster/asks/clarification.json.*",
             ],
             env,
-        )
-        .map_err(|_| private_error())?;
-        let ignore_main = spawn_git_sync(
+        )?;
+        let mut ignore_main_cmd = build_git_command(
             repo_root,
             &["check-ignore", "--quiet", "--", RELATIVE_CHECKPOINT_FILE],
             env,
-        );
-        let ignore_tmp = spawn_git_sync(
+        )?;
+        let mut ignore_tmp_cmd = build_git_command(
             repo_root,
             &[
                 "check-ignore",
@@ -412,7 +432,30 @@ fn private_checkpoint_path(repo_root: &Path, env: Option<&Value>) -> Result<Path
                 ".roster/asks/clarification.json.tmp",
             ],
             env,
-        );
+        )?;
+        let mut tracked_child = tracked_cmd.spawn().map_err(|_| private_error())?;
+        let mut ignore_main_child = match ignore_main_cmd.spawn() {
+            Ok(child) => child,
+            Err(_) => {
+                let _ = tracked_child.kill();
+                let _ = tracked_child.wait();
+                return Err(private_error());
+            }
+        };
+        let ignore_tmp_child = match ignore_tmp_cmd.spawn() {
+            Ok(child) => child,
+            Err(_) => {
+                let _ = tracked_child.kill();
+                let _ = tracked_child.wait();
+                let _ = ignore_main_child.kill();
+                let _ = ignore_main_child.wait();
+                return Err(private_error());
+            }
+        };
+        let tracked = wait_git_child(tracked_child);
+        let ignore_main = wait_git_child(ignore_main_child);
+        let ignore_tmp = wait_git_child(ignore_tmp_child);
+        let tracked = tracked.map_err(|_| private_error())?;
         if !tracked.trim().is_empty() || ignore_main.is_err() || ignore_tmp.is_err() {
             return Err(private_error());
         }
@@ -814,7 +857,7 @@ pub fn resume_clarification(
         paths::ensure_local_path(&temporary, options.repo_root)?;
         let write_result = (|| -> Result<(), Error> {
             write_private_new_file(&temporary, &format!("{}\n", next.as_value().json()))?;
-            let current = read_clarification(options)?;
+            let current = read_checkpoint(&file, options)?;
             if current.as_ref() != Some(&record) {
                 return Err(Error::new(
                     "Error",
@@ -1228,6 +1271,7 @@ pub async fn answer_repository_question<T: Transport>(
         .cloned()
         .unwrap_or_else(|| Value::object(Vec::new()));
     put(&mut chat_llm, "max_tokens", Value::Number(1024.0))?;
+    put(&mut chat_llm, "thinking", Value::Boolean(false))?;
     put(&mut chat_config, "llm", chat_llm)?;
     let admission = Admission::default();
     let mut chat = BuiltinChat::new(
@@ -1277,10 +1321,16 @@ pub async fn answer_repository_question<T: Transport>(
         .await
         .map_err(|failure| *failure.error)?;
     check_signal(options.signal)?;
-    if domain::is_text(response.finish_reason.as_ref(), "tool_calls")
-        || response.message.get("tool_calls").is_some()
-        || response.message.get("function_call").is_some()
-    {
+    let has_tool_call = domain::is_text(response.finish_reason.as_ref(), "tool_calls")
+        || response
+            .message
+            .get("tool_calls")
+            .is_some_and(|v| domain::items(v).map_or(*v != Value::Null, |items| !items.is_empty()))
+        || response
+            .message
+            .get("function_call")
+            .is_some_and(|v| *v != Value::Null);
+    if has_tool_call {
         return Err(Error::new(
             "Error",
             "Repository questions are read-only; model tool requests are refused.",
@@ -1423,6 +1473,7 @@ pub async fn ask_side_question<T: Transport>(
         .cloned()
         .unwrap_or_else(|| Value::object(Vec::new()));
     put(&mut chat_llm, "max_tokens", Value::Number(1024.0))?;
+    put(&mut chat_llm, "thinking", Value::Boolean(false))?;
     put(&mut chat_config, "llm", chat_llm)?;
     let admission = Admission::default();
     let mut chat = BuiltinChat::new(
@@ -1477,10 +1528,16 @@ pub async fn ask_side_question<T: Transport>(
         .await
         .map_err(|failure| *failure.error)?;
     check_signal(options.signal)?;
-    if domain::is_text(response.finish_reason.as_ref(), "tool_calls")
-        || response.message.get("tool_calls").is_some()
-        || response.message.get("function_call").is_some()
-    {
+    let has_tool_call = domain::is_text(response.finish_reason.as_ref(), "tool_calls")
+        || response
+            .message
+            .get("tool_calls")
+            .is_some_and(|v| domain::items(v).map_or(*v != Value::Null, |items| !items.is_empty()))
+        || response
+            .message
+            .get("function_call")
+            .is_some_and(|v| *v != Value::Null);
+    if has_tool_call {
         return Err(Error::new(
             "Error",
             "/btw is read-only; model tool calls are refused.",
@@ -2419,6 +2476,42 @@ mod tests {
             .collect::<Vec<_>>();
         started.sort();
         assert_eq!(started, vec!["check-ignore", "check-ignore", "ls-files"]);
+        let resume_trace_file = trace_root.join("trace2-resume.json");
+        let resume_trace_env = Value::object(vec![(
+            "GIT_TRACE2_EVENT",
+            Value::string(&resume_trace_file.display().to_string()),
+        )]);
+        let resumed_traced = resume_clarification(
+            Some(
+                "Add a Status heading.\n\n## Allowed Files\n- `README.md`\n\n## Acceptance checks\n- README has a Status heading",
+            ),
+            &ClarificationOptions {
+                repo_root: &trace_root,
+                env: Some(&resume_trace_env),
+                api_key_env: None,
+                id: None,
+            },
+        )?;
+        let mut resume_started = fs::read_to_string(&resume_trace_file)
+            .map_err(|error| test_err(error.to_string()))?
+            .lines()
+            .filter_map(|line| json::parse(&Text::from(line)).ok())
+            .filter(|event| domain::is_text(event.get("event"), "start"))
+            .filter_map(|event| {
+                event
+                    .get("argv")
+                    .and_then(domain::items)?
+                    .iter()
+                    .filter_map(Value::as_string)
+                    .filter_map(|part| part.to_utf8().ok())
+                    .find(|part| matches!(part.as_str(), "ls-files" | "check-ignore"))
+            })
+            .collect::<Vec<_>>();
+        resume_started.sort();
+        assert_eq!(
+            resume_started,
+            vec!["check-ignore", "check-ignore", "ls-files"]
+        );
         let pending_traced = read_clarification(&ClarificationOptions {
             repo_root: &trace_root,
             env: None,
@@ -2426,7 +2519,8 @@ mod tests {
             id: None,
         })?
         .ok_or_else(|| test_err("expected pending"))?;
-        assert_eq!(pending_traced.id, traced.id);
+        assert_ne!(traced.id, resumed_traced.record.id);
+        assert_eq!(pending_traced.id, resumed_traced.record.id);
 
         let cp_file = trace_root
             .join(".roster")

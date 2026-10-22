@@ -116,6 +116,26 @@ fn independent_nist_aes256_gcm_and_native_dotnet_wire_bytes() -> Result<(), Erro
     assert!(directory.atomic("544f4b454e.json", WIRE.as_bytes(), false)?);
     drop(directory);
     assert_eq!(f.vault()?.get("TOKEN")?.as_deref(), Some(SECRET));
+    let directory =
+        platform::Directory::prepare(&f.directory, false)?.ok_or(VaultError::Directory)?;
+    let mut pending = directory.complete(WIRE.as_bytes())?;
+    let temp_name = fs::read_dir(&f.directory)
+        .map_err(io)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .find(|n| n.starts_with(".tmp-"))
+        .ok_or(VaultError::Changed)?;
+    let temp_path = f.directory.join(&temp_name);
+    fs::remove_file(&temp_path).map_err(io)?;
+    fs::write(&temp_path, b"foreign-replacement").map_err(io)?;
+    assert_eq!(
+        pending.publish("544f4b454e.json", false),
+        Err(VaultError::Changed)
+    );
+    drop(pending);
+    assert_eq!(fs::read(&temp_path).map_err(io)?, b"foreign-replacement");
+    fs::remove_file(&temp_path).map_err(io)?;
+    drop(directory);
     f.finish()
 }
 

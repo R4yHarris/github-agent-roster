@@ -465,7 +465,7 @@ fn run(args: &[String]) -> Result<Output, Error> {
         _ => (false, args),
     };
     let is_tty = io::stdin().is_terminal() && io::stdout().is_terminal();
-    if is_tty && (effective_args.is_empty() || effective_args == ["shell"]) {
+    if (is_tty && effective_args.is_empty()) || effective_args == ["shell"] {
         let environment = environment()?;
         let installation = host::selected_path(&environment, "ROSTER_INSTALLATION_ROOT")?
             .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf());
