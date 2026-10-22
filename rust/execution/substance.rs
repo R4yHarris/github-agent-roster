@@ -193,10 +193,11 @@ fn code_slice(source: &str, start: usize, end: usize) -> &str {
 }
 
 pub fn is_test_file(file: &str) -> Result<bool, Error> {
-    Ok(
-        regex(r"\.(test|spec)\.[cm]?[jt]s$|(^|/)(tests?|__tests__)/.+\.[cm]?[jt]s$")?
-            .is_match(&file.replace('\\', "/")),
-    )
+    let normalized = file.replace('\\', "/");
+    Ok(regex(
+        r"\.(test|spec)\.[cm]?[jt]s$|(^|/)(tests?|__tests__)/.+\.[cm]?[jt]s$|(^|/)tests/.+\.rs$|(_test|_tests|tests)\.rs$",
+    )?
+    .is_match(&normalized))
 }
 
 fn interpolation_end(source: &[u8], start: usize) -> Option<usize> {
@@ -893,6 +894,11 @@ pub fn adds_test_evidence(added: &Text) -> Result<bool, Error> {
     if !blocks(added, &masked)?.is_empty() {
         return Ok(true);
     }
+    if regex(r"#\[\s*(?:(?:tokio|async_std)::)?test\b|\bassert(?:_eq|_ne|_matches)?!\s*\(")?
+        .is_match(&masked)
+    {
+        return Ok(true);
+    }
     Ok(
         regex(r"(?:assert(?:\.[A-Za-z]+)?|expect|t\.assert\.[A-Za-z]+)\s*\(")?
             .find_iter(&masked)
@@ -909,6 +915,8 @@ pub fn adds_only_imports(added: &Text) -> Result<bool, Error> {
     let source = regex(r"(?m)^\s*//.*$")?.replace_all(&source, "");
     let source = regex(r#"\bimport\s+(?:[\w$*{}\s,]+?\s+from\s+)?['"][^'"\n]+['"]\s*;?"#)?
         .replace_all(&source, "");
+    let source =
+        regex(r"(?m)^\s*(?:pub(?:\([^)]*\))?\s+)?use\s+[^;]+;\s*$")?.replace_all(&source, "");
     let source = regex(r"(?m)^\s*;\s*$")?.replace_all(&source, "");
     Ok(source.trim().is_empty())
 }

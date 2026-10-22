@@ -82,7 +82,11 @@ fn cargo_failure_diagnostics(container: &Path, failures: &[Value]) -> Result<Str
             "Owned Cargo diagnostic exceeded its explicit bound",
         ));
     }
-    secure::write_exclusive(&path, json.as_bytes())?;
+    let snapshot = secure::Snapshot {
+        identity: secure::write_exclusive(&path, json.as_bytes())?,
+        bytes: json.as_bytes().to_vec(),
+    };
+    let _ = secure::remove_matching(&path, &snapshot, 131_072);
     Ok(Value::object(vec![
         ("file", Value::string(&name)),
         ("transitions", Value::Array(summary)),
