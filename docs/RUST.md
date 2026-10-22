@@ -48,15 +48,17 @@ parsing, argument splitting, offline initialization/diagnostics (`init`,
 `doctor`, `doctor --copilot`, `bench`), Ask and clarification checkpoints
 (`ask`, `ask --pending|--cancel|--resume` with concurrent Git privacy checks
 and single-pass path validation), read-only scoped repository questions
-(`question`), durable provenance history queries (`history list|show`),
-bounded state/provenance cleanup (`clean`), encrypted file-vault operations
-(`vault set|list|get` with post-publication handle-identity verification),
-analytics and recurring failure proposals (`stats [--delivery]`,
-`learn --recurring`, `recommend`, `eval`), and the local TASK/Ask delivery
-coordinator, including fresh App issue intake and the fixed-profile outer
-continuations below. GitHub publication/resume and automatic fleet
-recovery/routing are not integrated at the top-level CLI. Unsupported commands
-return an explicit error rather than invoke the old runtime or claim success.
+(`question` and `/btw` with `thinking: false` and empty `tool_calls` array
+compatibility for OpenAI/vLLM responses), durable provenance history queries
+(`history list|show`), bounded state/provenance cleanup (`clean`), encrypted
+file-vault operations (`vault set|list|get` with post-publication
+handle-identity verification), analytics and recurring failure proposals
+(`stats [--delivery]`, `learn --recurring`, `recommend`, `eval`), and the local
+TASK/Ask delivery coordinator, including fresh App issue intake and the
+fixed-profile outer continuations below. GitHub publication/resume and
+automatic fleet recovery/routing are not integrated at the top-level CLI.
+Unsupported commands return an explicit error rather than invoke the old
+runtime or claim success.
 
 ## Native read-only analytics checkpoint
 
