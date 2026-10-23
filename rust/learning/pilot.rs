@@ -1386,6 +1386,317 @@ pub fn build_comparison_summary(evaluation: &Value) -> Result<Value, Error> {
     ]))
 }
 
+pub fn validate_eve_worker_identity(record: &Value) -> Result<Value, Error> {
+    let entries = domain::members(record).ok_or_else(|| {
+        pilot_error(
+            "invalid-input",
+            "worker_identity",
+            "expected a plain JSON object",
+        )
+    })?;
+    let required = [
+        "schema",
+        "worker_id",
+        "seat",
+        "model",
+        "session",
+        "app_principal",
+    ];
+    let mut seen = BTreeSet::new();
+    for (k, _) in entries {
+        let name = k.to_utf8().map_err(|_| {
+            pilot_error(
+                "invalid-input",
+                "worker_identity",
+                "invalid UTF-8 field name",
+            )
+        })?;
+        if !required.contains(&name.as_str()) || !seen.insert(name) {
+            return Err(pilot_error(
+                "invalid-input",
+                "worker_identity",
+                "unexpected or duplicate field",
+            ));
+        }
+    }
+    if required.iter().any(|r| !seen.contains(*r)) {
+        return Err(pilot_error(
+            "invalid-input",
+            "worker_identity",
+            "missing required identity field",
+        ));
+    }
+    if domain::safe_integer(record.get("schema")) != Some(1) {
+        return Err(pilot_error(
+            "invalid-input",
+            "worker_identity.schema",
+            "expected schema 1",
+        ));
+    }
+    let get_nonempty = |key: &str| -> Result<String, Error> {
+        record
+            .get(key)
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .filter(|s| !s.trim().is_empty() && !s.contains(['\0', '\r', '\n']))
+            .ok_or_else(|| {
+                pilot_error(
+                    "invalid-input",
+                    key,
+                    "expected nonempty single-line identifier",
+                )
+            })
+    };
+    let worker_id = get_nonempty("worker_id")?;
+    let seat = get_nonempty("seat")?;
+    let model = get_nonempty("model")?;
+    let session = get_nonempty("session")?;
+    let app_principal = get_nonempty("app_principal")?;
+    if worker_id != "eve" {
+        return Err(pilot_error(
+            "invalid-input",
+            "worker_identity.worker_id",
+            "expected worker_id \"eve\"",
+        ));
+    }
+    if !matches!(seat.as_str(), "planner" | "coder" | "reviewer") {
+        return Err(pilot_error(
+            "invalid-input",
+            "worker_identity.seat",
+            "seat must be planner, coder or reviewer",
+        ));
+    }
+    if !crate::run::is_model_id(&model) {
+        return Err(pilot_error(
+            "invalid-input",
+            "worker_identity.model",
+            "model must be a valid model ID",
+        ));
+    }
+    if worker_id == seat
+        || worker_id == model
+        || worker_id == session
+        || worker_id == app_principal
+        || app_principal == model
+        || app_principal == session
+    {
+        return Err(pilot_error(
+            "invalid-input",
+            "worker_identity",
+            "worker_id, seat, model, session and app_principal must remain distinct",
+        ));
+    }
+    Ok(Value::object(vec![
+        ("schema", Value::Number(1.0)),
+        ("worker_id", Value::string(&worker_id)),
+        ("seat", Value::string(&seat)),
+        ("model", Value::string(&model)),
+        ("session", Value::string(&session)),
+        ("app_principal", Value::string(&app_principal)),
+        ("policy_owner", Value::string("human")),
+        ("publishing_principal", Value::string(&app_principal)),
+    ]))
+}
+
+pub fn curate_eve_memory_entries(
+    entries: &[Value],
+    current_sources: &Value,
+    repo_identity: &str,
+    seat: &str,
+) -> Result<Vec<Value>, Error> {
+    if repo_identity.trim().is_empty() || !matches!(seat, "planner" | "coder" | "reviewer") {
+        return Err(pilot_error(
+            "invalid-input",
+            "curated_memory",
+            "requires valid repo_identity and seat",
+        ));
+    }
+    if domain::members(current_sources).is_none() {
+        return Err(pilot_error(
+            "invalid-input",
+            "current_sources",
+            "expected source-hash object",
+        ));
+    }
+    let mut unpromoted = BTreeSet::new();
+    let mut superseded = BTreeSet::new();
+    for entry in entries {
+        if !domain::is_text(entry.get("repoIdentity"), repo_identity)
+            || !domain::is_text(entry.get("seat"), seat)
+        {
+            continue;
+        }
+        if let Some(unp) = entry
+            .get("unpromote")
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .filter(|s| !s.is_empty())
+        {
+            unpromoted.insert(unp);
+        }
+        if let Some(sup) = entry
+            .get("supersedes")
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .filter(|s| !s.is_empty())
+        {
+            superseded.insert(sup);
+        }
+    }
+    let mut active = Vec::new();
+    for entry in entries {
+        if !domain::is_text(entry.get("repoIdentity"), repo_identity)
+            || !domain::is_text(entry.get("seat"), seat)
+        {
+            continue;
+        }
+        if entry.get("unpromote").is_some_and(|v| *v != Value::Null) {
+            continue;
+        }
+        let id = entry
+            .get("id")
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| pilot_error("invalid-input", "entry.id", "missing entry id"))?;
+        if unpromoted.contains(&id) || superseded.contains(&id) {
+            continue;
+        }
+        let Some(summary) = entry
+            .get("summary")
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .filter(|s| !s.trim().is_empty())
+        else {
+            return Err(pilot_error(
+                "invalid-input",
+                "entry.summary",
+                "missing summary",
+            ));
+        };
+        if let Some(src_file) = entry
+            .get("sourceFile")
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .filter(|s| !s.is_empty())
+        {
+            let expected_hash = entry
+                .get("sourceHash")
+                .and_then(Value::as_string)
+                .and_then(|t| t.to_utf8().ok())
+                .unwrap_or_default();
+            let actual_hash = current_sources
+                .get(&src_file)
+                .and_then(Value::as_string)
+                .and_then(|t| t.to_utf8().ok());
+            if actual_hash.as_deref() != Some(expected_hash.as_str()) {
+                continue;
+            }
+        }
+        active.push(Value::object(vec![
+            ("id", Value::string(&id)),
+            ("repoIdentity", Value::string(repo_identity)),
+            ("seat", Value::string(seat)),
+            ("summary", Value::string(&summary)),
+            (
+                "supersedes",
+                entry.get("supersedes").cloned().unwrap_or(Value::Null),
+            ),
+        ]));
+    }
+    Ok(active)
+}
+
+pub fn plan_eve_followup_waves() -> Value {
+    Value::object(vec![
+        ("parent", Value::Number(473.0)),
+        ("initiative", Value::Number(477.0)),
+        ("dependsOn", Value::Array(vec![Value::Number(476.0)])),
+        (
+            "waves",
+            Value::Array(vec![
+                Value::object(vec![
+                    ("wave", Value::Number(1.0)),
+                    (
+                        "title",
+                        Value::string(
+                            "Wave 1: Eve worker identity and source-invalidating curated memory",
+                        ),
+                    ),
+                    (
+                        "allowedFiles",
+                        Value::Array(vec![
+                            Value::string("rust/learning/pilot.rs"),
+                            Value::string("rust/state/provenance/api.rs"),
+                            Value::string("docs/EVE_IMPLEMENTATION.md"),
+                        ]),
+                    ),
+                    (
+                        "acceptanceChecks",
+                        Value::Array(vec![
+                            Value::string(
+                                "Worker identity remains distinct from seat, model, session and App principal",
+                            ),
+                            Value::string(
+                                "Curated memory enforces repository/seat scope isolation, source-hash invalidation, additive corrections and unpromotion",
+                            ),
+                        ]),
+                    ),
+                ]),
+                Value::object(vec![
+                    ("wave", Value::Number(2.0)),
+                    (
+                        "title",
+                        Value::string(
+                            "Wave 2: Hardware liveness/cancellation and uncertainty-aware escalation",
+                        ),
+                    ),
+                    (
+                        "allowedFiles",
+                        Value::Array(vec![
+                            Value::string("rust/delivery/continuation.rs"),
+                            Value::string("rust/learning/pilot.rs"),
+                        ]),
+                    ),
+                    (
+                        "acceptanceChecks",
+                        Value::Array(vec![
+                            Value::string(
+                                "GPU-seconds are recorded separately from unknown energy",
+                            ),
+                            Value::string(
+                                "Bounded alternatives and escalation preserve unchanged TASK acceptance checks",
+                            ),
+                        ]),
+                    ),
+                ]),
+                Value::object(vec![
+                    ("wave", Value::Number(3.0)),
+                    (
+                        "title",
+                        Value::string(
+                            "Wave 3: Conditional independent council specialization gated on measured marginal gain",
+                        ),
+                    ),
+                    (
+                        "allowedFiles",
+                        Value::Array(vec![
+                            Value::string("rust/seats/reviewer.rs"),
+                            Value::string("rust/learning/pilot.rs"),
+                        ]),
+                    ),
+                    (
+                        "acceptanceChecks",
+                        Value::Array(vec![Value::string(
+                            "Council specialization remains disabled unless paired evaluation proves positive marginal quality/resource gain",
+                        )]),
+                    ),
+                ]),
+            ]),
+        ),
+    ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1623,6 +1934,95 @@ mod tests {
             );
             assert_eq!(build_comparison_summary(&fault_eval)?, fault_sum);
         }
+
+        let valid_id = Value::object(vec![
+            ("schema", Value::Number(1.0)),
+            ("worker_id", Value::string("eve")),
+            ("seat", Value::string("coder")),
+            ("model", Value::string("qwen3.8-27b")),
+            ("session", Value::string("roster-42-coder")),
+            ("app_principal", Value::string("r4yharris-agent-coder[bot]")),
+        ]);
+        let validated_id = validate_eve_worker_identity(&valid_id)?;
+        assert_eq!(
+            validated_id.get("policy_owner"),
+            Some(&Value::string("human"))
+        );
+        let mut conflated = valid_id.clone();
+        domain::put(&mut conflated, "app_principal", Value::string("eve"))?;
+        assert!(validate_eve_worker_identity(&conflated).is_err());
+
+        let sources = Value::object(vec![
+            ("rust/ask.rs", Value::string("hash-current")),
+            ("rust/shell.rs", Value::string("hash-shell")),
+        ]);
+        let mem_entries = vec![
+            Value::object(vec![
+                ("id", Value::string("m1")),
+                ("repoIdentity", Value::string("sha256-repo1")),
+                ("seat", Value::string("coder")),
+                ("summary", Value::string("Initial ask note")),
+                ("sourceFile", Value::string("rust/ask.rs")),
+                ("sourceHash", Value::string("hash-current")),
+            ]),
+            Value::object(vec![
+                ("id", Value::string("m2")),
+                ("repoIdentity", Value::string("sha256-repo1")),
+                ("seat", Value::string("coder")),
+                ("summary", Value::string("Corrected ask note")),
+                ("supersedes", Value::string("m1")),
+                ("sourceFile", Value::string("rust/ask.rs")),
+                ("sourceHash", Value::string("hash-current")),
+            ]),
+            Value::object(vec![
+                ("id", Value::string("m3")),
+                ("repoIdentity", Value::string("sha256-repo1")),
+                ("seat", Value::string("coder")),
+                ("summary", Value::string("Stale source note")),
+                ("sourceFile", Value::string("rust/ask.rs")),
+                ("sourceHash", Value::string("hash-stale")),
+            ]),
+            Value::object(vec![
+                ("id", Value::string("m4")),
+                ("repoIdentity", Value::string("sha256-repo1")),
+                ("seat", Value::string("coder")),
+                ("summary", Value::string("To be unpromoted")),
+            ]),
+            Value::object(vec![
+                ("id", Value::string("m5")),
+                ("repoIdentity", Value::string("sha256-repo1")),
+                ("seat", Value::string("coder")),
+                ("unpromote", Value::string("m4")),
+            ]),
+            Value::object(vec![
+                ("id", Value::string("m6")),
+                ("repoIdentity", Value::string("sha256-repo2")),
+                ("seat", Value::string("coder")),
+                ("summary", Value::string("Other repo note")),
+            ]),
+            Value::object(vec![
+                ("id", Value::string("m7")),
+                ("repoIdentity", Value::string("sha256-repo1")),
+                ("seat", Value::string("planner")),
+                ("summary", Value::string("Other seat note")),
+            ]),
+        ];
+        let curated = curate_eve_memory_entries(&mem_entries, &sources, "sha256-repo1", "coder")?;
+        assert_eq!(curated.len(), 1);
+        assert_eq!(curated[0].get("id"), Some(&Value::string("m2")));
+        assert_eq!(
+            curated[0].get("summary"),
+            Some(&Value::string("Corrected ask note"))
+        );
+
+        let wave_plan = plan_eve_followup_waves();
+        assert_eq!(
+            wave_plan
+                .get("waves")
+                .and_then(domain::items)
+                .map(|w| w.len()),
+            Some(3)
+        );
         Ok(())
     }
 }

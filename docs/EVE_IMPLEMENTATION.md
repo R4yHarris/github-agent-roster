@@ -196,6 +196,23 @@ idempotent merge-resume path. Do not generate duplicate commits, rewrite the
 vendor pack, or use human push/PR credentials to conceal that limitation.
 Confirm the latest head and trusted checks before resolving the merge blocker.
 
+## Native Rust Wave-2 follow-up plan (#477)
+
+In the native Rust runtime ([`rust/learning/pilot.rs`](../rust/learning/pilot.rs)):
+
+- **`validate_eve_worker_identity`**: enforces a stable `worker_id: "eve"`
+  (schema 1) separated from `seat` (`planner`/`coder`/`reviewer`), `model`,
+  `session`, and `app_principal`, with `policy_owner: "human"`.
+- **`curate_eve_memory_entries`**: enforces repository (`repoIdentity`) and
+  seat scope isolation, source-hash invalidation (`sourceFile` + `sourceHash`),
+  additive corrections (`supersedes`), and explicit unpromotion (`unpromote`)
+  without mutating raw provenance history.
+- **`plan_eve_followup_waves`**: defines the bounded three-wave plan for
+  [#477](https://github.com/R4yHarris/github-agent-roster/issues/477) (Wave 1:
+  worker identity and source-invalidating curated memory; Wave 2: hardware
+  liveness/cancellation and uncertainty-aware escalation; Wave 3: conditional
+  council specialization gated on measured marginal gain).
+
 ## Spec trace and non-goals
 
 This plan traces to [FEATURE_SPEC](FEATURE_SPEC.md) sections 5.2
