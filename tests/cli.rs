@@ -664,3 +664,39 @@ fn cli_bench_writes_six_numeric_secret_free_timings() -> Result<(), Box<dyn std:
     );
     Ok(())
 }
+
+#[test]
+fn cli_openshell_doctor_reports_offline_blockers_and_rejects_unknown_flags()
+-> Result<(), Box<dyn std::error::Error>> {
+    let default_out = Command::new(env!("CARGO_BIN_EXE_roster"))
+        .args(["doctor", "--openshell"])
+        .output()?;
+    assert!(!default_out.status.success());
+    let stdout = String::from_utf8(default_out.stdout)?;
+    assert!(stdout.contains("OpenShell doctor: blocked"));
+    assert!(stdout.contains("OPENSHELL_NOT_OPTED_IN"));
+
+    let opted_out = Command::new(env!("CARGO_BIN_EXE_roster"))
+        .args([
+            "doctor",
+            "--openshell",
+            "--opt-in",
+            "--gateway",
+            "http://127.0.0.1:8080",
+            "--provider",
+            "rtx-3090-qwen",
+        ])
+        .output()?;
+    assert!(!opted_out.status.success());
+    let opted_stdout = String::from_utf8(opted_out.stdout)?;
+    assert!(opted_stdout.contains("Gateway URL syntax validated offline"));
+    assert!(opted_stdout.contains("OPENSHELL_RUNTIME_UNPINNED"));
+    assert!(opted_stdout.contains("OPENSHELL_POLICY_MISSING"));
+
+    let bad_out = Command::new(env!("CARGO_BIN_EXE_roster"))
+        .args(["doctor", "--openshell", "--unknown"])
+        .output()?;
+    assert!(!bad_out.status.success());
+    assert!(String::from_utf8(bad_out.stderr)?.contains("roster doctor --openshell"));
+    Ok(())
+}

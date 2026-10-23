@@ -28,6 +28,7 @@ pub const HELP: &str = "Usage:
   roster question [--files PATH,PATH --] TEXT
   roster doctor
   roster doctor --copilot [--opt-in] [--runtime PATH] [--model ID]
+  roster doctor --openshell [--opt-in] [--runtime PATH] [--gateway URL] [--policy PATH] [--provider ID]
   roster fleet list
   roster history list [--format json|text|summary] [--store DIR] [--repo HASH] [--issue N] [--seat NAME] [--model MODEL] [--outcome VALUE] [--since TIME] [--until TIME]
   roster history show <session-or-run-or-record-id> [--format json|text|summary] [--store DIR]
@@ -112,6 +113,7 @@ pub enum Command {
     Question(Vec<String>),
     Doctor,
     CopilotDoctor(crate::capabilities::CopilotDoctorOptions),
+    OpenShellDoctor(crate::openshell::OpenShellDoctorOptions),
     FleetList,
     History(history::Request),
     Clean(crate::state::clean::CliOptions),
@@ -343,6 +345,9 @@ pub fn parse(args: &[String]) -> Result<Command, Error> {
         [command] if command == "doctor" => Ok(Command::Doctor),
         [command, flag, rest @ ..] if command == "doctor" && flag == "--copilot" => Ok(
             Command::CopilotDoctor(crate::capabilities::parse_copilot_doctor_args(rest)?),
+        ),
+        [command, flag, rest @ ..] if command == "doctor" && flag == "--openshell" => Ok(
+            Command::OpenShellDoctor(crate::openshell::parse_openshell_doctor_args(rest)?),
         ),
         [command, operation] if command == "fleet" && operation == "list" => Ok(Command::FleetList),
         [command, flags @ ..] if command == "history" => {

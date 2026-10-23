@@ -69,6 +69,7 @@ All CLI subcommands below are implemented in the native Rust `roster` binary
 | `roster question [--files PATH,PATH --] TEXT` | **Working (Native Rust)** | Answer a read-only repository question using only public source excerpts matching the explicit file allowlist; never starts a task or writes files. |
 | `roster doctor` | **Working (Native Rust)** | Offline check of repository configuration, approved `ROSTER_GIT`/`ROSTER_NODE20`/`ROSTER_CARGO` images, and initialized `vendor/github-agent-contracts` submodule. |
 | `roster doctor --copilot [--opt-in] [--runtime PATH] [--model ID]` | **Working (Native Rust)** | Offline Copilot worker capability and blocker assessment; never launches a worker or network login. |
+| `roster doctor --openshell [--opt-in] [--runtime PATH] [--gateway URL] [--policy PATH] [--provider ID]` | **Working (Native Rust)** | Offline NVIDIA OpenShell sandbox, policy, and inference provider readiness diagnostics; never opens a gateway or network connection. |
 | `roster fleet list` | **Working (Native Rust)** | Read and format validated `.roster/fleet.yml` profiles (`ID`, `MODEL`, `BASE_URL`, `CONTEXT_MAX`, `CONCURRENCY`, `HARDWARE`, `TASK_CLASS`) with secret redaction. |
 | `roster history list [FLAGS]` | **Working (Native Rust)** | Query durable provenance records (`--format json\|text\|summary`, `--store DIR`, `--repo HASH`, `--issue N`, `--seat NAME`, `--model MODEL`, `--outcome VALUE`, `--since TIME`, `--until TIME`). |
 | `roster history show <ID> [FLAGS]` | **Working (Native Rust)** | Inspect a single provenance record, run, or session in `text`, `json`, or `summary` format. |
@@ -165,7 +166,7 @@ available ([`rust/shell.rs`](rust/shell.rs)):
 | --- | --- | --- | --- |
 | `/statusbar on\|off` | — | **Working** | Toggle the pinned status rail and rules for the current shell process. |
 | `/debug on\|off\|status` | — | **Working** | Toggle or inspect process-only debug JSONL logging (adds `*` and `thinking · max_tokens` detail to the rail). |
-| `/doctor [warm\|copilot [FLAGS]]` | — | **Working** | Run offline prerequisite checks (`/doctor`), probe `/v1/models` with the configured request timeout (`/doctor warm`), or run offline Copilot diagnostics (`/doctor copilot`). |
+| `/doctor [warm\|copilot\|openshell [FLAGS]]` | — | **Working** | Run offline prerequisite checks (`/doctor`), probe `/v1/models` with the configured request timeout (`/doctor warm`), or run offline Copilot/OpenShell diagnostics (`/doctor copilot`, `/doctor openshell`). |
 | `/config [path\|set KEY VALUE]` | — | **Working** | Display redacted `.roster/config.yml`, print its path (`/config path`), or update `effort`, `context.budget`, `statusbar`, or `debug`. |
 | `/vault [list\|get NAME\|set NAME]` | — | **Working** | List stored secret names, verify presence without printing the secret (`/vault get NAME`), or prompt with hidden input (`/vault set NAME`). |
 
