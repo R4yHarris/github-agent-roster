@@ -45,13 +45,16 @@ The library contains:
   (including in-shell `/plan` + Enter and `/run` local `planner` $\rightarrow$
   `coder` $\rightarrow$ `reviewer` delivery with active session fleet profile
   inheritance), Copilot worker offline contracts/diagnostics/scorecards
-  (`#570`–`#573`), and paired Eve pilot evaluation.
+  (`#570`–`#573`), NVIDIA OpenShell v1 policy compilation, formal boundary
+  prover, fleet inference provider profile bridge, per-attempt sandbox
+  lifecycle/revocation/import gates, and `doctor --openshell` (`#675`–`#679`),
+  and paired Eve pilot evaluation.
 
 The public CLI supports the interactive shell (`roster`, `roster shell`),
 process-only debug JSONL logging (`roster --debug [COMMAND]`), interactive
 onboarding (`roster onboard [--discover]`), help, recipe validation, catalog
 parsing, argument splitting, offline initialization/diagnostics (`init`,
-`doctor`, `doctor --copilot`, `bench`), Ask and clarification checkpoints
+`doctor`, `doctor --copilot`, `doctor --openshell`, `bench`), Ask and clarification checkpoints
 (`ask`, `ask --pending|--cancel|--resume` with concurrent Git privacy checks
 and single-pass path validation), read-only scoped repository questions
 (`question` and `/btw` with `thinking: false` and empty `tool_calls` array

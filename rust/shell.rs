@@ -3198,6 +3198,13 @@ impl ShellSession {
                     let out = crate::capabilities::format_copilot_doctor(&report)?;
                     return Ok(ShellAction::Continue(self.redact_text(&out)?));
                 }
+                if words.first().map(String::as_str) == Some("openshell") {
+                    let mut opts = crate::openshell::parse_openshell_doctor_args(&words[1..])?;
+                    opts.is_tty = Some(true);
+                    let report = crate::openshell::check_openshell_doctor(&opts)?;
+                    let out = crate::openshell::format_openshell_doctor(&report)?;
+                    return Ok(ShellAction::Continue(self.redact_text(&out)?));
+                }
                 if words.is_empty() {
                     let source = crate::cancel::CancellationSource::default();
                     let root = self.current_root();

@@ -543,6 +543,15 @@ fn run(args: &[String]) -> Result<Output, Error> {
                 diagnostic: None,
             });
         }
+        local_cli::Command::OpenShellDoctor(options) => {
+            let report = github_agent_roster::openshell::check_openshell_doctor(&options)?;
+            let stdout = github_agent_roster::openshell::format_openshell_doctor(&report)?;
+            return Ok(Output {
+                stdout,
+                success: false,
+                diagnostic: None,
+            });
+        }
         local_cli::Command::History(request) => {
             let cwd = env::current_dir()
                 .map_err(|_| Error::new("Error", "Cannot resolve the invocation directory"))?;

@@ -19,6 +19,7 @@ pub mod learning;
 pub mod llm;
 pub mod local_cli;
 pub mod metrics;
+pub mod openshell;
 pub mod paths;
 pub mod planning;
 pub mod process;
