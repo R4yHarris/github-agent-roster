@@ -172,6 +172,8 @@ Without a configured endpoint the stub does not implement or claim delivery.
 | `/recommend [feat\|fix\|docs\|test] [--difficulty 1-5]` | Read a route without changing any model/default. With no args use the last task class/difficulty, otherwise default to feat/difficulty2. Print its evals/prior reason or insufficient data. |
 | `/doctor` | Run the existing six offline prerequisite checks without printing secret values. |
 | `/doctor warm` | Run the existing read-only models warm probe using the session endpoint; print only host and status. Ctrl+C cancels it. |
+| `/doctor copilot [FLAGS]` | Run offline Copilot worker readiness diagnostics (`--opt-in`, `--runtime PATH`, `--model ID`). |
+| `/doctor openshell [FLAGS]` | Run offline NVIDIA OpenShell sandbox, policy, and inference provider readiness diagnostics (`--opt-in`, `--runtime PATH`, `--gateway URL`, `--policy PATH`, `--provider ID`). |
 | `/config` or `/config path` | Show validated private config with secret material and PEM paths redacted, or only its resolved path. An absent private file is explicitly identified before showing installed defaults. |
 | `/config set KEY VALUE` | Save only effort or positive context budget (character budget, not model token capacity). Supported context aliases include `context.budget` and `seat.context_chars`. Debug/statusbar changes are process-only. Endpoint keys, model selection, PEM paths, secrets and policy are refused; use dedicated model/fleet commands for their deliberate actions. |
 | `/vault` or `/vault list` | List vault entry names, never values. |

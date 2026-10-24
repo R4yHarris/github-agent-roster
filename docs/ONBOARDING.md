@@ -1,56 +1,56 @@
 # Onboarding wizard
 
-**Native migration status:** Roster is now a Rust executable; `roster onboard`
-and discovery are not implemented yet. The Node installation/wizard flows
-below are historical compatibility requirements, not commands for this branch.
-Use [native installation](INSTALL.md) and the current
-[read-only fleet listing](FLEET.md#native-scope) for existing private catalogs.
-Listing never starts onboarding or contacts a model endpoint.
+**Native Rust status:** Roster is a native Rust executable (`roster` /
+`roster.exe`) with zero runtime npm dependencies and a locked offline Cargo
+dependency graph (`Cargo.toml`, Rust 2024, MSRV 1.85). Both `roster onboard
+[--discover]` and interactive `/onboard` are implemented in native Rust
+([`rust/shell.rs`](../rust/shell.rs)), and onboarded `.roster/fleet.yml`
+profiles bridge directly into NVIDIA OpenShell inference provider profiles via
+[`rust/openshell.rs`](../rust/openshell.rs).
 
-Roster is a Node 20+ ESM executable with no runtime npm dependencies.
 Install from a persistent clone with its contracts submodule, then run
 the wizard in the project you want to configure. Git and `gh` are needed
 for the issue and PR workflow; the wizard never installs App credentials,
 policy, or workflows.
 
-## Windows PowerShell
+## Windows PowerShell (Native — WSL Not Required)
 
-Install Node 20+, Git, and GitHub CLI for Windows, then in PowerShell:
+Install Rust 1.85+, Git, and GitHub CLI for Windows, then in PowerShell:
 
 ```powershell
 git clone --recurse-submodules https://github.com/R4yHarris/github-agent-roster.git
 cd github-agent-roster
-npm install -g .
+cargo build --release --locked --offline
 ```
 
 For a first run in this clone:
 
 ```powershell
-roster --help
-roster onboard
-roster doctor
-roster
+.\target\release\roster.exe --help
+.\target\release\roster.exe onboard
+.\target\release\roster.exe doctor
+.\target\release\roster.exe
 ```
 
-To configure another repository, change to that worktree before
-`roster onboard`. Keep Node and npm's global bin directory on PATH;
-restart PowerShell after changing User environment variables.
+`roster.exe` runs natively on Windows using Win32 Job Objects (`process-wrap` +
+`win32job`) and Windows ACLs; **WSL is not required** to install Roster, run
+`roster onboard`, open `roster shell`, execute builtin `planner -> coder ->
+reviewer` slices, or run `roster doctor --openshell`.
 
-## WSL
+## WSL (Optional for WSL-Hosted Models or Live OpenShell Landlock Sandboxes)
 
-Install Node 20+, Git, and GitHub CLI **inside WSL**. Windows and WSL have
-separate Node installations, global bins, filesystem paths, and shell
-environment. Do not reuse a Windows Node executable as the WSL runtime or
-forward a human's GitHub credentials to an agent worker.
+If you choose to run Roster inside WSL, or use WSL 2 to host NVIDIA OpenShell's
+Linux Landlock (ABI v3+) kernel sandbox on a Windows machine, build the native
+Linux binary inside WSL:
 
 ```sh
 git clone --recurse-submodules https://github.com/R4yHarris/github-agent-roster.git
 cd github-agent-roster
-npm install -g .
-roster --help
-roster onboard
-roster doctor
-roster
+cargo build --release --locked --offline
+./target/release/roster --help
+./target/release/roster onboard
+./target/release/roster doctor
+./target/release/roster
 ```
 
 vLLM may run inside WSL, on Windows, or on a DGX host. Its default API port
@@ -172,6 +172,32 @@ finite budget and spend authorization are unknown. No live setup, provider
 enablement or inference follows from a successful metadata check. Full #572
 remains open until #571 and explicit auth/data/account/model/spend gates permit
 production setup.
+
+### Optional NVIDIA OpenShell offline diagnostics and fleet bridge
+
+OpenShell (`v0.1.x`) is an opt-in, deny-by-default kernel-enforced sandbox and
+zero-knowledge inference provider router ([feasibility](OPENSHELL_FEASIBILITY.md),
+[design](OPENSHELL_DESIGN.md)). Onboarding (`roster onboard`) does not require
+OpenShell, Docker, or WSL to be installed. When you want to inspect OpenShell
+readiness offline, run:
+
+```powershell
+roster doctor --openshell
+roster doctor --openshell --opt-in --runtime "C:\approved\openshell.exe" --gateway http://127.0.0.1:8080 --policy "D:\repo\policy.yml" --provider rtx-3090-qwen
+```
+
+In the interactive shell use `/doctor openshell` with the same flags.
+Diagnostics never open a network connection, start a gateway or container, or
+read secret values, and report deterministic blocker codes
+(`OPENSHELL_NOT_OPTED_IN`, `OPENSHELL_RUNTIME_UNPINNED`,
+`OPENSHELL_GATEWAY_UNCONFIGURED`, `OPENSHELL_POLICY_MISSING`,
+`OPENSHELL_PROVIDER_UNBOUND`, `OPENSHELL_LANDLOCK_UNVERIFIED`,
+`OPENSHELL_LIVE_DISPATCH_UNAPPROVED`). Any profile onboarded in
+`.roster/fleet.yml` can be compiled into an OpenShell `category: inference`
+provider profile via `openshell::compile_fleet_provider_profile`, which maps
+local loopback endpoints (`127.0.0.1`/`localhost`) to `host.openshell.internal`
+and emits `placeholder_only: true` for `api_key_env` secrets while rejecting
+`GITHUB_APP_*` credentials.
 
 ### Existing local wizard
 
