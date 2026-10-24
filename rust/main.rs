@@ -546,11 +546,25 @@ fn run(args: &[String]) -> Result<Output, Error> {
         local_cli::Command::OpenShellDoctor(options) => {
             let report = github_agent_roster::openshell::check_openshell_doctor(&options)?;
             let stdout = github_agent_roster::openshell::format_openshell_doctor(&report)?;
+            let ok = report.get("ok") == Some(&json::Value::Boolean(true));
             return Ok(Output {
                 stdout,
-                success: false,
+                success: ok,
                 diagnostic: None,
             });
+        }
+        local_cli::Command::ResumeGreen(issue) => {
+            let cwd = env::current_dir()
+                .map_err(|_| Error::new("Error", "Cannot resolve the invocation directory"))?;
+            let project_root = paths::resolve_project_root(&cwd)?;
+            let plan = start::plan_green_checkpoint_resume(&project_root, issue, true, true)?;
+            github_agent_roster::execution::checkpoints::require_restore_integration()?;
+            let msg = plan
+                .get("message")
+                .and_then(json::Value::as_string)
+                .ok_or_else(|| Error::type_error("Missing green resume message"))?
+                .to_utf8()?;
+            return Ok(Output::success(msg));
         }
         local_cli::Command::History(request) => {
             let cwd = env::current_dir()

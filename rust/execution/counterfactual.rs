@@ -458,3 +458,187 @@ pub async fn run(
     stamp.require_current(owner).await?;
     Ok(Report { stamp, value, pass })
 }
+
+pub fn extract_inline_rust_test_module(source: &str) -> Result<Option<(String, String)>, Error> {
+    if source.len() > MAX_FILE_BYTES as usize {
+        return Err(Error::type_error(
+            "Inline Rust counterfactual source exceeds maximum file size",
+        ));
+    }
+    let pattern = regex(
+        r"(?m)^\s*#\[\s*cfg\s*\(\s*test\s*\)\s*\]\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+[A-Za-z_][A-Za-z0-9_]*\s*\{",
+    )?;
+    let mut matches = pattern.find_iter(source);
+    let Some(first) = matches.next() else {
+        if source.contains("#[cfg(test)]") {
+            return Err(Error::type_error(
+                "Inline #[cfg(test)] attribute must be attached to a single mod <name> { ... } block",
+            ));
+        }
+        return Ok(None);
+    };
+    if matches.next().is_some() {
+        return Err(Error::type_error(
+            "Inline Rust counterfactual source must not contain multiple #[cfg(test)] modules",
+        ));
+    }
+    let prefix = &source[..first.start()];
+    if prefix.contains("#[cfg(test)]") {
+        return Err(Error::type_error(
+            "Production prefix must not contain #[cfg(test)] attributes",
+        ));
+    }
+    let mod_slice = &source[first.start()..];
+    let bytes = mod_slice.as_bytes();
+    let mut idx = 0;
+    let mut depth = 0_usize;
+    let mut started_brace = false;
+    let mut close_offset = None;
+    while idx < bytes.len() {
+        let b = bytes[idx];
+        if b == b'/' && idx + 1 < bytes.len() && bytes[idx + 1] == b'/' {
+            idx += 2;
+            while idx < bytes.len() && bytes[idx] != b'\n' {
+                idx += 1;
+            }
+            continue;
+        }
+        if b == b'/' && idx + 1 < bytes.len() && bytes[idx + 1] == b'*' {
+            idx += 2;
+            while idx + 1 < bytes.len() && !(bytes[idx] == b'*' && bytes[idx + 1] == b'/') {
+                idx += 1;
+            }
+            idx = (idx + 2).min(bytes.len());
+            continue;
+        }
+        if (b == b'r' || (b == b'b' && idx + 1 < bytes.len() && bytes[idx + 1] == b'r'))
+            && idx + 1 < bytes.len()
+        {
+            let mut r_idx = if b == b'b' { idx + 2 } else { idx + 1 };
+            let mut hashes = 0_usize;
+            while r_idx < bytes.len() && bytes[r_idx] == b'#' {
+                hashes += 1;
+                r_idx += 1;
+            }
+            if r_idx < bytes.len() && bytes[r_idx] == b'"' {
+                idx = r_idx + 1;
+                while idx < bytes.len() {
+                    if bytes[idx] == b'"'
+                        && idx + hashes < bytes.len()
+                        && bytes[idx + 1..=idx + hashes].iter().all(|c| *c == b'#')
+                    {
+                        idx += hashes + 1;
+                        break;
+                    }
+                    idx += 1;
+                }
+                continue;
+            }
+        }
+        if b == b'\'' {
+            if idx + 2 < bytes.len() && bytes[idx + 1] == b'\\' {
+                let mut c_idx = idx + 2;
+                while c_idx < bytes.len() && bytes[c_idx] != b'\'' && bytes[c_idx] != b'\n' {
+                    c_idx += 1;
+                }
+                if c_idx < bytes.len() && bytes[c_idx] == b'\'' {
+                    idx = c_idx + 1;
+                    continue;
+                }
+            } else if idx + 2 < bytes.len() && bytes[idx + 2] == b'\'' {
+                idx += 3;
+                continue;
+            }
+        }
+        if b == b'"' {
+            idx += 1;
+            while idx < bytes.len() {
+                if bytes[idx] == b'\\' {
+                    idx = (idx + 2).min(bytes.len());
+                    continue;
+                }
+                if bytes[idx] == b'"' {
+                    idx += 1;
+                    break;
+                }
+                idx += 1;
+            }
+            continue;
+        }
+        if b == b'{' {
+            depth += 1;
+            started_brace = true;
+        } else if b == b'}' {
+            if depth == 0 {
+                return Err(Error::type_error(
+                    "Unbalanced closing brace in #[cfg(test)] module",
+                ));
+            }
+            depth -= 1;
+            if started_brace && depth == 0 {
+                close_offset = Some(idx + 1);
+                break;
+            }
+        }
+        idx += 1;
+    }
+    let Some(end_pos) = close_offset else {
+        return Err(Error::type_error(
+            "Unterminated #[cfg(test)] module in Rust source",
+        ));
+    };
+    let trailing = &mod_slice[end_pos..];
+    if !trailing.trim().is_empty() {
+        return Err(Error::type_error(
+            "Inline #[cfg(test)] module must be the final item in the file with no trailing production code",
+        ));
+    }
+    let test_block = mod_slice[..end_pos].to_owned();
+    if !test_block.contains("#[test]") && !test_block.contains("#[tokio::test") {
+        return Err(Error::type_error(
+            "Inline #[cfg(test)] module must contain at least one #[test] or #[tokio::test] function",
+        ));
+    }
+    Ok(Some((prefix.to_owned(), test_block)))
+}
+
+pub fn graft_inline_rust_tests_onto_base(
+    base_source: &str,
+    candidate_source: &str,
+) -> Result<String, Error> {
+    let base_prod = match extract_inline_rust_test_module(base_source)? {
+        Some((prod, _)) => prod,
+        None => base_source.to_owned(),
+    };
+    let Some((_, candidate_test_block)) = extract_inline_rust_test_module(candidate_source)? else {
+        return Err(Error::type_error(
+            "Candidate Rust source has no extractable inline #[cfg(test)] module",
+        ));
+    };
+    Ok(format!(
+        "{}\n\n{}\n",
+        base_prod.trim_end(),
+        candidate_test_block.trim()
+    ))
+}
+
+#[cfg(test)]
+mod inline_tests {
+    use super::*;
+
+    #[test]
+    fn inline_rust_test_extraction_grafts_only_test_module_onto_untouched_base_production()
+    -> Result<(), Error> {
+        let base = "pub fn compute(x: u32) -> u32 {\n    x + 1\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn base_case() {\n        assert_eq!(compute(1), 2);\n    }\n}\n";
+        let candidate = "pub fn compute(x: u32) -> u32 {\n    x + 10\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n    #[test]\n    fn new_increment_behavior() {\n        assert_eq!(compute(1), 11);\n    }\n}\n";
+        let grafted = graft_inline_rust_tests_onto_base(base, candidate)?;
+        assert!(grafted.contains("x + 1"));
+        assert!(!grafted.contains("x + 10"));
+        assert!(grafted.contains("fn new_increment_behavior()"));
+        assert!(!grafted.contains("fn base_case()"));
+
+        let trailing_prod = format!("{candidate}\npub fn sneaked_in() -> u32 {{ 99 }}\n");
+        assert!(extract_inline_rust_test_module(&trailing_prod).is_err());
+        Ok(())
+    }
+}

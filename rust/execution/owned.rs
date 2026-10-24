@@ -1,23 +1,23 @@
 use std::cell::Cell;
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 use std::io;
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 use std::process::ExitStatus;
 use std::process::Stdio;
 use std::sync::Arc;
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 use std::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 use std::time::Duration;
 
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 use super::timing::{self, Label, ProcessTrace, Span};
 use crate::Error;
 use crate::cancel::CancellationToken;
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 use crate::cancel::Reason;
 use crate::process::{Captured, Failure, FailureKind, Limits, Output};
 
@@ -282,7 +282,7 @@ impl Submission {
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 enum ReadError {
     Io(io::Error),
     Limit,
@@ -290,7 +290,7 @@ enum ReadError {
     EarlyLeaderExit(ExitStatus),
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 async fn collect(
     mut pipe: impl AsyncRead + Unpin,
     output: &mut Vec<u8>,
@@ -309,6 +309,158 @@ async fn collect(
         if read > available {
             return Err(ReadError::Limit);
         }
+    }
+}
+
+pub fn unix_process_group_containment_plan(
+    pid: u32,
+    max_output_bytes: usize,
+    timeout_ms: Option<u64>,
+) -> Result<crate::json::Value, Error> {
+    use crate::json::Value;
+    if pid == 0 || i32::try_from(pid).map_or(true, |raw| raw <= 0) {
+        return Err(Error::type_error(
+            "Unix process-group containment requires a positive i32 leader PID",
+        ));
+    }
+    if max_output_bytes == 0 || max_output_bytes > 32 * 1024 * 1024 {
+        return Err(Error::type_error(
+            "Unix process-group output limit must be within 1..=33554432 bytes",
+        ));
+    }
+    Ok(Value::object(vec![
+        ("provider", Value::string("unix-process-group")),
+        ("spawnMode", Value::string("process_group(0)")),
+        ("leaderPid", Value::Number(f64::from(pid))),
+        ("pgid", Value::Number(f64::from(pid))),
+        ("killSignal", Value::string("SIGKILL")),
+        (
+            "emptyProbe",
+            Value::string("test_kill_process_group(ESRCH)"),
+        ),
+        ("maxOutputBytes", Value::Number(max_output_bytes as f64)),
+        (
+            "timeoutMs",
+            timeout_ms.map_or(Value::Null, |ms| Value::Number(ms as f64)),
+        ),
+    ]))
+}
+
+#[cfg(unix)]
+mod unix {
+    use std::io;
+    use std::process::ExitStatus;
+    use std::time::Duration;
+    use tokio::io::AsyncWriteExt;
+    use tokio::process::Command;
+
+    use crate::Error;
+    use crate::process::{Captured, Failure, FailureKind};
+
+    pub(super) struct Child {
+        inner: tokio::process::Child,
+        pid: u32,
+        pgid: rustix::process::Pid,
+    }
+
+    impl Child {
+        pub(super) fn spawn(mut command: Command) -> Result<Self, Failure> {
+            command.process_group(0);
+            let mut inner = command.spawn().map_err(|err| Failure {
+                kind: FailureKind::Spawn,
+                captured: Captured::default(),
+                cleanup_complete: true,
+                source: Some(err),
+            })?;
+            let Some(pid) = inner.id() else {
+                let _ = inner.start_kill();
+                return Err(Failure {
+                    kind: FailureKind::Spawn,
+                    captured: Captured::default(),
+                    cleanup_complete: false,
+                    source: Some(io::Error::other("Unix child exited without exposing PID")),
+                });
+            };
+            let Some(pgid) = i32::try_from(pid)
+                .ok()
+                .and_then(rustix::process::Pid::from_raw)
+            else {
+                let _ = inner.start_kill();
+                return Err(Failure {
+                    kind: FailureKind::Spawn,
+                    captured: Captured {
+                        pid: Some(pid),
+                        ..Captured::default()
+                    },
+                    cleanup_complete: false,
+                    source: Some(io::Error::other("Unix child PID cannot form a valid PGID")),
+                });
+            };
+            Ok(Self { inner, pid, pgid })
+        }
+
+        pub(super) fn id(&self) -> Option<u32> {
+            Some(self.pid)
+        }
+
+        pub(super) fn inner_mut(&mut self) -> &mut tokio::process::Child {
+            &mut self.inner
+        }
+
+        fn empty(&self) -> io::Result<bool> {
+            match rustix::process::test_kill_process_group(self.pgid) {
+                Ok(()) => Ok(false),
+                Err(rustix::io::Errno::SRCH) => Ok(true),
+                Err(rustix::io::Errno::PERM) => Ok(false),
+                Err(err) => Err(io::Error::from_raw_os_error(err.raw_os_error())),
+            }
+        }
+
+        pub(super) async fn wait(&mut self) -> io::Result<ExitStatus> {
+            let status = self.inner.wait().await?;
+            loop {
+                if self.empty()? {
+                    return Ok(status);
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }
+
+        pub(super) async fn wait_leader(&mut self) -> io::Result<ExitStatus> {
+            self.inner.wait().await
+        }
+
+        pub(super) async fn stop(&mut self) -> io::Result<()> {
+            for _ in 0..200 {
+                match rustix::process::kill_process_group(self.pgid, rustix::process::Signal::KILL)
+                {
+                    Ok(()) => tokio::time::sleep(Duration::from_millis(10)).await,
+                    Err(rustix::io::Errno::SRCH) => break,
+                    Err(err) => return Err(io::Error::from_raw_os_error(err.raw_os_error())),
+                }
+            }
+            self.inner.wait().await?;
+            if !self.empty()? {
+                return Err(io::Error::other(
+                    "Owned Unix process group still contains processes after SIGKILL",
+                ));
+            }
+            Ok(())
+        }
+    }
+
+    pub(super) async fn write_all_and_close(
+        mut stdin: tokio::process::ChildStdin,
+        bytes: &[u8],
+    ) -> io::Result<()> {
+        stdin.write_all(bytes).await?;
+        stdin.flush().await?;
+        drop(stdin);
+        Ok(())
+    }
+
+    pub(super) fn input_error(message: &str) -> Box<Error> {
+        Box::new(Error::new("OwnedInputError", message).coded("ROSTER_PROCESS_INPUT"))
     }
 }
 
@@ -570,7 +722,7 @@ mod windows {
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 async fn cancellation(token: Option<&CancellationToken>) -> Result<Reason, Error> {
     match token {
         Some(token) => token.cancelled().await,
@@ -578,7 +730,7 @@ async fn cancellation(token: Option<&CancellationToken>) -> Result<Reason, Error
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 async fn deadline(timeout: Option<Duration>) {
     match timeout {
         Some(timeout) => tokio::time::sleep(timeout).await,
@@ -586,7 +738,7 @@ async fn deadline(timeout: Option<Duration>) {
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, unix))]
 enum End {
     Exited(Result<ExitStatus, ReadError>),
     Cancelled(Result<Reason, Error>),
@@ -777,7 +929,7 @@ async fn execute_core(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     timing::finish(preflight, None);
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, unix)))]
     {
         let _ = command;
         let _ = submission;
@@ -786,6 +938,180 @@ async fn execute_core(
         Err(initial(super::unsupported(
             "Strict native job ownership on this platform requires an approved containment provider",
         )))
+    }
+    #[cfg(unix)]
+    {
+        let _ = diagnostics;
+        if let Some(submission) = submission {
+            submission.attempted_at.set(Some(std::time::Instant::now()));
+        }
+        let mut child = unix::Child::spawn(command)?;
+        if let Some(submission) = submission {
+            submission.pid.set(child.id());
+            submission.spawned_at.set(Some(std::time::Instant::now()));
+        }
+        let mut captured = Captured {
+            pid: child.id(),
+            ..Captured::default()
+        };
+        let stdin_pipe = if input.is_some() {
+            match child.inner_mut().stdin.take() {
+                Some(stdin) => Some(stdin),
+                None => {
+                    let cleanup = tokio::time::timeout(Duration::from_secs(5), child.stop()).await;
+                    return Err(Failure {
+                        kind: FailureKind::Control(unix::input_error(
+                            "Owned finite input pipe is missing",
+                        )),
+                        captured,
+                        cleanup_complete: matches!(cleanup, Ok(Ok(()))),
+                        source: None,
+                    });
+                }
+            }
+        } else {
+            None
+        };
+        let stdout = child.inner_mut().stdout.take();
+        let stderr = child.inner_mut().stderr.take();
+        let (Some(stdout), Some(stderr)) = (stdout, stderr) else {
+            let cleanup = tokio::time::timeout(Duration::from_secs(5), child.stop()).await;
+            return Err(Failure {
+                kind: FailureKind::Io,
+                captured,
+                cleanup_complete: matches!(cleanup, Ok(Ok(()))),
+                source: None,
+            });
+        };
+        let budget = Arc::new(AtomicUsize::new(0));
+        let end = if let (Some(stdin), Some(finite)) = (stdin_pipe, input) {
+            let work = async {
+                let wait_after_input = async {
+                    let writing = unix::write_all_and_close(stdin, &finite.bytes);
+                    tokio::pin!(writing);
+                    tokio::select! {
+                        biased;
+                        res = &mut writing => res.map_err(ReadError::Input)?,
+                        status = child.wait_leader() => {
+                            return Err(ReadError::EarlyLeaderExit(status.map_err(ReadError::Io)?));
+                        }
+                    }
+                    child.wait().await.map_err(ReadError::Io)
+                };
+                let ((), (), status) = tokio::try_join!(
+                    biased;
+                    collect(stdout, &mut captured.stdout, budget.clone(), limits.max_output_bytes),
+                    collect(stderr, &mut captured.stderr, budget.clone(), limits.max_output_bytes),
+                    wait_after_input,
+                )?;
+                Ok(status)
+            };
+            tokio::pin!(work);
+            tokio::select! {
+                biased;
+                reason = cancellation(token) => End::Cancelled(reason),
+                () = deadline(limits.timeout) => End::Timeout,
+                status = &mut work => End::Exited(status),
+            }
+        } else {
+            let work = async {
+                let (status, (), ()) = tokio::try_join!(
+                    async { child.wait().await.map_err(ReadError::Io) },
+                    collect(
+                        stdout,
+                        &mut captured.stdout,
+                        budget.clone(),
+                        limits.max_output_bytes
+                    ),
+                    collect(
+                        stderr,
+                        &mut captured.stderr,
+                        budget.clone(),
+                        limits.max_output_bytes
+                    ),
+                )?;
+                Ok(status)
+            };
+            tokio::pin!(work);
+            tokio::select! {
+                status = &mut work => End::Exited(status),
+                reason = cancellation(token) => End::Cancelled(reason),
+                () = deadline(limits.timeout) => End::Timeout,
+            }
+        };
+        let (kind, source) = match end {
+            End::Exited(Ok(status)) => {
+                if let Some(token) = token {
+                    match token.reason() {
+                        Ok(Some(reason)) => {
+                            return Err(Failure {
+                                kind: FailureKind::Cancelled(reason),
+                                captured,
+                                cleanup_complete: true,
+                                source: None,
+                            });
+                        }
+                        Err(error) => {
+                            return Err(Failure {
+                                kind: FailureKind::Control(Box::new(error)),
+                                captured,
+                                cleanup_complete: true,
+                                source: None,
+                            });
+                        }
+                        Ok(None) => {}
+                    }
+                }
+                if status.success() {
+                    return Ok(Output { status, captured });
+                }
+                return Err(Failure {
+                    kind: FailureKind::Exit(status.code()),
+                    captured,
+                    cleanup_complete: true,
+                    source: None,
+                });
+            }
+            End::Exited(Err(ReadError::Io(error))) => (FailureKind::Io, Some(error)),
+            End::Exited(Err(ReadError::Limit)) => (FailureKind::OutputLimit, None),
+            End::Exited(Err(ReadError::Input(error))) => (
+                FailureKind::Control(unix::input_error("Owned finite input delivery failed")),
+                Some(error),
+            ),
+            End::Exited(Err(ReadError::EarlyLeaderExit(status))) => (
+                FailureKind::Control(unix::input_error(&format!(
+                    "Owned leader exited before finite input delivery and EOF; exit_code={:?}",
+                    status.code()
+                ))),
+                None,
+            ),
+            End::Cancelled(Ok(reason)) => (FailureKind::Cancelled(reason), None),
+            End::Cancelled(Err(error)) => (FailureKind::Control(Box::new(error)), None),
+            End::Timeout => (FailureKind::Timeout, None),
+        };
+        match tokio::time::timeout(Duration::from_secs(5), child.stop()).await {
+            Ok(Ok(())) => Err(Failure {
+                kind,
+                captured,
+                cleanup_complete: true,
+                source,
+            }),
+            Ok(Err(error)) => Err(Failure {
+                kind: FailureKind::Cleanup,
+                captured,
+                cleanup_complete: false,
+                source: Some(error),
+            }),
+            Err(_) => Err(Failure {
+                kind: FailureKind::Cleanup,
+                captured,
+                cleanup_complete: false,
+                source: Some(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Owned Unix process-group shutdown deadline expired",
+                )),
+            }),
+        }
     }
     #[cfg(windows)]
     {
