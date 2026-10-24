@@ -4,12 +4,20 @@ This feature branch is a Rust rewrite, not the old Node/npm application.
 There is no npm package entry point, parallel Node implementation or legacy
 oracle checkout. Main and Git history retain the former application.
 
-The native CLI implements help, recipe validation, catalog parsing, argument
-splitting, offline `init`/`doctor`, Windows-native local TASK/Ask and fresh
-App-authenticated issue delivery, including fixed-profile rescoping,
-fresh-context perspectives and independent review repairs. GitHub publication,
-onboarding,
-interactive shell, resume and automatic fleet recovery/routing remain unavailable.
+The native CLI implements the interactive shell (`roster` / `roster shell`),
+interactive onboarding (`roster onboard [--discover]`), help, recipe
+validation, catalog parsing, argument splitting, offline `init`/`doctor`
+(including `doctor --copilot` and `doctor --openshell`), Ask and clarification
+checkpoints (`ask`, `ask --pending|--cancel|--resume`), read-only repository
+questions (`question`), fleet listing (`fleet list`), durable provenance
+history (`history list|show`), bounded state cleanup (`clean`), encrypted file
+vault (`vault set|list|get`), analytics and learning (`stats`, `learn --recurring`,
+`recommend`, `eval`), Windows-native local TASK/Ask and fresh App-authenticated
+issue delivery, including fixed-profile rescoping, fresh-context perspectives
+and independent review repairs, plus the native NVIDIA OpenShell policy
+compiler, formal boundary prover, fleet inference provider bridge and sandbox
+attempt lifecycle (`rust/openshell.rs`). Top-level CLI GitHub publication,
+resume and automatic fleet recovery/routing remain unavailable.
 
 ## Prerequisites
 

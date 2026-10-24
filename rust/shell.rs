@@ -618,9 +618,9 @@ pub fn commands() -> &'static [CommandPage] {
         CommandPage {
             name: "doctor",
             group: "Settings",
-            usage: "/doctor [warm|copilot [--opt-in] [--runtime PATH] [--model ID]]",
-            description: "Run existing prerequisite checks, a read-only warm probe, or blocked offline Copilot diagnostics; never enables a worker or starts login.",
-            example: "/doctor copilot --opt-in",
+            usage: "/doctor [warm|copilot [--opt-in] [--runtime PATH] [--model ID]|openshell [--opt-in] [--runtime PATH] [--gateway URL] [--policy PATH] [--provider ID]]",
+            description: "Run existing prerequisite checks, a read-only warm probe, or blocked offline Copilot/OpenShell diagnostics; never enables a worker or starts login.",
+            example: "/doctor openshell --opt-in",
             flags: &[],
             aliases: &[],
         },
@@ -3186,7 +3186,7 @@ impl ShellSession {
             "doctor" => {
                 let words = arguments::split(
                     &Text::from(raw_args),
-                    "Use /doctor, /doctor warm, or /doctor copilot [--opt-in] [--runtime PATH] [--model ID].",
+                    "Use /doctor, /doctor warm, /doctor copilot [--opt-in] [--runtime PATH] [--model ID], or /doctor openshell [--opt-in] [--runtime PATH] [--gateway URL] [--policy PATH] [--provider ID].",
                 )?
                 .into_iter()
                 .map(|w| w.to_utf8())
@@ -3239,7 +3239,7 @@ impl ShellSession {
                     return Ok(ShellAction::Continue(self.redact_text(&out)?));
                 }
                 Err(Error::type_error(
-                    "Use /doctor, /doctor warm, or /doctor copilot [--opt-in] [--runtime PATH] [--model ID].",
+                    "Use /doctor, /doctor warm, /doctor copilot [--opt-in] [--runtime PATH] [--model ID], or /doctor openshell [--opt-in] [--runtime PATH] [--gateway URL] [--policy PATH] [--provider ID].",
                 ))
             }
             "stats" => {
@@ -4478,6 +4478,18 @@ impl ShellSession {
                     "state",
                     Value::string(if passed { "passed" } else { "failed" }),
                 );
+                let rev_verdict = if passed {
+                    "pass".to_owned()
+                } else {
+                    outcome
+                        .reviewer_report
+                        .as_ref()
+                        .and_then(|r| r.get("verdict"))
+                        .and_then(Value::as_string)
+                        .and_then(|t| t.to_utf8().ok())
+                        .unwrap_or_else(|| "fail".to_owned())
+                };
+                let _ = domain::put(&mut self.display, "review", Value::string(&rev_verdict));
                 Ok(outcome.format())
             }
             Err(err) => {

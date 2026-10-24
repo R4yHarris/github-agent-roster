@@ -1275,10 +1275,6 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                     attempt.annotate("selfReview", report.as_value().clone());
                     return Err(error);
                 }
-                if domain::is_text(report.as_value().get("status"), "unavailable") {
-                    return Err(Handoff::Unavailable
-                        .error("Required self-review response was invalid or unavailable"));
-                }
                 attempt.attach_self_review(report)?;
                 progress.stages.push("self_review".to_owned());
             }

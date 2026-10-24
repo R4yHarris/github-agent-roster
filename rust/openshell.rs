@@ -1979,4 +1979,95 @@ mod tests {
         }
         Ok(())
     }
+
+    #[test]
+    fn fleet_catalog_compiles_all_six_profiles_into_verified_openshell_policies_and_providers()
+    -> Result<(), Error> {
+        let catalog_src = Text::from(concat!(
+            "profiles:\n",
+            "  - id: default\n",
+            "    base_url: http://127.0.0.1:11435/v1\n",
+            "    model: qwen3.8:27b-smtek\n",
+            "    provider: vllm\n",
+            "    context_max: 64500\n",
+            "    concurrency: 1\n",
+            "    hardware: unspecified\n",
+            "    notes: default\n",
+            "  - id: rtx-3090-qwen\n",
+            "    base_url: http://127.0.0.1:11435/v1\n",
+            "    model: qwen3.8:27b-smtek\n",
+            "    provider: vllm\n",
+            "    context_max: 65536\n",
+            "    concurrency: 1\n",
+            "    hardware: rtx-3090-24gb\n",
+            "    task_class: [fix, docs, test]\n",
+            "    notes: local\n",
+            "  - id: aperture-qwen\n",
+            "    base_url: https://aperture.xen.blackmesaresearch.ai/v1\n",
+            "    model: qwen3.8-27b\n",
+            "    provider: vllm\n",
+            "    context_max: 262144\n",
+            "    concurrency: 1\n",
+            "    hardware: rtx-6000-ada-48gb\n",
+            "    task_class: [feat, fix, docs, test]\n",
+            "    notes: aperture\n",
+            "  - id: aperture-glm\n",
+            "    base_url: https://aperture.xen.blackmesaresearch.ai/v1\n",
+            "    model: glm-5.3-flash\n",
+            "    provider: vllm\n",
+            "    context_max: 1048576\n",
+            "    concurrency: 1\n",
+            "    hardware: dgx-spark-2n\n",
+            "    task_class: [feat, fix, docs, test]\n",
+            "    notes: aperture-glm\n",
+            "  - id: aperture-dsv4\n",
+            "    base_url: https://aperture.xen.blackmesaresearch.ai/v1\n",
+            "    model: deepseek-v4-flash\n",
+            "    provider: vllm\n",
+            "    context_max: 1048576\n",
+            "    concurrency: 1\n",
+            "    hardware: dgx-spark-2n\n",
+            "    task_class: [feat, fix, docs, test]\n",
+            "    notes: aperture-dsv4\n",
+            "  - id: spark-dsv41\n",
+            "    base_url: http://192.168.1.48:8000/v1\n",
+            "    model: deepseek-v4.1-flash\n",
+            "    provider: vllm\n",
+            "    context_max: 1048576\n",
+            "    concurrency: 1\n",
+            "    hardware: dgx-spark-4n\n",
+            "    task_class: [feat, fix, docs, test]\n",
+            "    notes: spark\n",
+        ));
+        let catalog = fleet::parse(&catalog_src)?;
+        assert_eq!(catalog.profiles().len(), 6);
+        let bins = vec!["/usr/local/bin/roster".to_owned()];
+        for profile in catalog.profiles() {
+            let compiled = compile_fleet_provider_profile(profile.as_value(), &bins)?;
+            let env = openshell_launch_environment("http://127.0.0.1:8080", &compiled)?;
+            assert_eq!(
+                env.get("OPENSHELL_TELEMETRY_ENABLED"),
+                Some(&Value::string("false"))
+            );
+            let policy = compile_task_policy(&OpenShellPolicySpec {
+                read_only_files: vec!["docs/OPENSHELL_DESIGN.md".to_owned()],
+                read_write_files: vec!["rust/openshell.rs".to_owned()],
+                run_as_user: "1500".to_owned(),
+                run_as_group: "1500".to_owned(),
+                landlock_compatibility: "hard_requirement".to_owned(),
+                network_rules: vec![OpenShellNetworkRule {
+                    name: compiled.id.clone(),
+                    host: compiled.endpoint_host.clone(),
+                    port: compiled.endpoint_port,
+                    protocol: "rest".to_owned(),
+                    methods: vec!["POST".to_owned()],
+                    binaries: bins.clone(),
+                    access: "read-write".to_owned(),
+                }],
+            })?;
+            let proof = prove_openshell_policy_boundary(&policy, &policy)?;
+            assert_eq!(proof.get("verified"), Some(&Value::Boolean(true)));
+        }
+        Ok(())
+    }
 }

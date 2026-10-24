@@ -2,13 +2,16 @@
 
 ## Native scope
 
-The native Rust CLI implements `roster fleet list` only. It reads the checked
+The native Rust CLI implements `roster fleet list` at the top level and full
+`/fleet [list|use|probe|add|discover|hardware|default|remove]` management inside
+the interactive shell (`roster` / `roster shell`), plus programmatic fleet CLI
+execution via `fleet::run_fleet_cli` and OpenShell inference provider profile
+compilation via `openshell::compile_fleet_provider_profile`. It reads the checked
 canonical repository's private catalog, including from subdirectories and
 linked worktrees, and preserves the tabular ID/model/base URL/capacity/
 concurrency/hardware/task-class display. An onboard-default capacity of zero
 prints `unknown`. Missing or explicitly empty catalogs retain the existing
-empty message; its setup suggestions are not evidence that native onboarding
-or fleet registration has shipped.
+empty message.
 
 Listing never probes or warms an endpoint, reads a vault or credential file,
 changes a default/route, or writes settings/history. Notes and API-key names

@@ -233,8 +233,32 @@ verification/review gates as local delivery. A stub does not edit code or claim
 tests. No issue or PR write, queue-status update, publication or human
 acceptance is implied.
 
-See [installation and host configuration](docs/INSTALL.md) and the exact
+See [installation and host configuration](docs/INSTALL.md),
+[OpenShell feasibility](docs/OPENSHELL_FEASIBILITY.md),
+[OpenShell architecture](docs/OPENSHELL_DESIGN.md), and the exact
 [local-delivery contract](docs/RUST.md#native-local-delivery-checkpoint).
+
+## NVIDIA OpenShell Integration & Onboarding (`rust/openshell.rs`)
+
+Roster integrates **NVIDIA OpenShell (`v0.1.x`)** as an opt-in, deny-by-default
+kernel-enforced sandbox, task-scoped YAML policy compiler, and zero-knowledge
+inference provider router ([`rust/openshell.rs`](rust/openshell.rs)):
+
+1. **Installation & Native Windows vs. WSL 2 Operation**:
+   - `github-agent-roster` builds and runs **100% natively on Windows, Linux, and macOS** (`cargo build --release --locked --offline`) with **zero new Cargo dependencies** (no `openshell-sdk` or gRPC dependency bloat).
+   - **WSL is not required** to install Roster, run `roster` / `roster shell`, run `roster onboard`, compile/verify OpenShell policies (`compile_task_policy`, `prove_openshell_policy_boundary`), or run `roster doctor --openshell`. On Windows, Roster uses native Win32 Job Objects (`process-wrap` + `win32job`) for host process-tree containment and Windows ACLs for `.roster/` and Vault files.
+   - When executing live OpenShell sandboxes on a Windows host, OpenShell's gateway and sandbox workload run inside **WSL 2** (with Docker/Podman or MicroVM) because OpenShell's `filesystem_policy` relies on the **Linux kernel Landlock LSM (ABI v3+)** (`landlock.compatibility: "hard_requirement"`).
+2. **Onboarding & `.roster/fleet.yml` Bridge**:
+   - `roster onboard [--discover]` configures `.roster/config.yml` and `.roster/fleet.yml` as usual without requiring OpenShell to be installed.
+   - `compile_fleet_provider_profile` translates any profile in `.roster/fleet.yml` into an OpenShell `category: inference` provider profile:
+     - Host-local endpoints (`127.0.0.1`, `localhost`, `[::1]`) are mapped to `host.openshell.internal:<port>` so sandboxed workloads reach host vLLM/Ollama servers through the OpenShell supervisor proxy.
+     - Remote/LAN endpoints (`aperture.xen.blackmesaresearch.ai:443`, `192.168.1.48:8000`) keep their exact host/port and binary allow-list (`binaries`).
+     - `api_key_env` is emitted as `placeholder_only: true` (`OPENSHELL_SUPERVISOR_PLACEHOLDER` in `openshell_launch_environment`) with `OPENSHELL_TELEMETRY_ENABLED=false`; `GITHUB_APP_*` credentials are strictly rejected.
+3. **Offline Readiness Diagnostics (`roster doctor --openshell` / `/doctor openshell`)**:
+   ```powershell
+   roster doctor --openshell --opt-in --runtime <PATH> --gateway http://127.0.0.1:8080 --policy <PATH> --provider rtx-3090-qwen
+   ```
+   Evaluates declared readiness offline and reports deterministic blocker codes (`OPENSHELL_NOT_OPTED_IN`, `OPENSHELL_RUNTIME_UNPINNED`, `OPENSHELL_GATEWAY_UNCONFIGURED`, `OPENSHELL_POLICY_MISSING`, `OPENSHELL_PROVIDER_UNBOUND`, `OPENSHELL_LANDLOCK_UNVERIFIED`, `OPENSHELL_LIVE_DISPATCH_UNAPPROVED`).
 
 See [native runtime status](docs/RUST.md), [testing](docs/TESTING.md), and
 [contracts dependency](docs/DEPENDENCY.md).
