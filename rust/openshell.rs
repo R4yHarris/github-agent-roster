@@ -11,7 +11,7 @@ use crate::run;
 use crate::state::{files, secure};
 use crate::text::{Text, trim};
 
-pub const OPENSHELL_DOCTOR_USAGE: &str = "Use roster doctor --openshell [--opt-in] [--runtime PATH] [--gateway URL] [--policy PATH] [--provider ID].";
+pub const OPENSHELL_DOCTOR_USAGE: &str = "Use roster doctor --openshell [--opt-in] [--approve-live] [--runtime PATH] [--gateway URL] [--policy PATH] [--provider ID].";
 const MAX_POLICY_PATHS: usize = 256;
 const MAX_PATH_BYTES: usize = 4096;
 const MAX_CANDIDATE_FILE_BYTES: u64 = 1024 * 1024;
@@ -78,6 +78,7 @@ pub struct OpenShellProviderProfile {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenShellDoctorOptions {
     pub opt_in: bool,
+    pub approve_live: bool,
     pub runtime_path: Option<String>,
     pub gateway_url: Option<String>,
     pub policy_path: Option<String>,
@@ -90,6 +91,7 @@ impl Default for OpenShellDoctorOptions {
     fn default() -> Self {
         Self {
             opt_in: false,
+            approve_live: false,
             runtime_path: None,
             gateway_url: None,
             policy_path: None,
@@ -1351,6 +1353,7 @@ pub fn parse_openshell_doctor_args(args: &[String]) -> Result<OpenShellDoctorOpt
     while let Some(flag) = args.get(index) {
         if ![
             "--opt-in",
+            "--approve-live",
             "--runtime",
             "--gateway",
             "--policy",
@@ -1363,6 +1366,8 @@ pub fn parse_openshell_doctor_args(args: &[String]) -> Result<OpenShellDoctorOpt
         }
         if flag == "--opt-in" {
             options.opt_in = true;
+        } else if flag == "--approve-live" {
+            options.approve_live = true;
         } else {
             index += 1;
             let value = args
@@ -1479,15 +1484,25 @@ pub fn check_openshell_doctor(options: &OpenShellDoctorOptions) -> Result<Value,
         blockers.push("OPENSHELL_GATEWAY_UNCONFIGURED");
     }
     let mut policy_present = false;
+    let mut policy_landlock_hard = options.landlock_state == "hard_requirement";
     let policy_reason = if !options.opt_in {
         "Policy check skipped until --opt-in is supplied."
     } else if let Some(policy_path) = &options.policy_path {
         match fs::symlink_metadata(policy_path) {
-            Ok(meta) if meta.is_file() && !secure::linked(&meta) => {
+            Ok(meta) if meta.is_file() && !secure::linked(&meta) && meta.len() <= 65_536 => {
                 policy_present = true;
+                if let Ok(content) = fs::read_to_string(policy_path) {
+                    if content.lines().any(|l| l.trim() == "version: 1")
+                        && content
+                            .lines()
+                            .any(|l| l.trim() == "compatibility: hard_requirement")
+                    {
+                        policy_landlock_hard = true;
+                    }
+                }
                 "Regular nonsymlink policy file present."
             }
-            Ok(_) => "Policy path is not a regular nonsymlink file.",
+            Ok(_) => "Policy path is not a bounded regular nonsymlink file.",
             Err(_) => "Policy file is missing or unreadable.",
         }
     } else {
@@ -1500,14 +1515,19 @@ pub fn check_openshell_doctor(options: &OpenShellDoctorOptions) -> Result<Value,
     if !provider_ok {
         blockers.push("OPENSHELL_PROVIDER_UNBOUND");
     }
-    if options.landlock_state != "hard_requirement" {
+    if !policy_landlock_hard {
         blockers.push("OPENSHELL_LANDLOCK_UNVERIFIED");
     }
-    blockers.push("OPENSHELL_LIVE_DISPATCH_UNAPPROVED");
+    if !options.approve_live {
+        blockers.push("OPENSHELL_LIVE_DISPATCH_UNAPPROVED");
+    }
+    let ok = blockers.is_empty();
+    let status = if ok { "ready" } else { "blocked" };
     Ok(Value::object(vec![
-        ("ok", Value::Boolean(false)),
-        ("status", Value::string("blocked")),
+        ("ok", Value::Boolean(ok)),
+        ("status", Value::string(status)),
         ("optIn", Value::Boolean(options.opt_in)),
+        ("approveLive", Value::Boolean(options.approve_live)),
         ("runtimePresent", Value::Boolean(runtime_present)),
         ("runtimeReason", Value::string(runtime_reason)),
         ("gatewayConfigured", Value::Boolean(gateway_ok)),
@@ -1543,18 +1563,270 @@ pub fn format_openshell_doctor(result: &Value) -> Result<String, Error> {
         .and_then(Value::as_string)
         .ok_or_else(|| Error::type_error("Missing OpenShell policyReason"))?
         .to_utf8()?;
-    let blockers = result
+    let blockers_list = result
         .get("blockers")
         .and_then(domain::items)
         .ok_or_else(|| Error::type_error("Missing OpenShell blockers"))?
         .iter()
         .filter_map(Value::as_string)
         .map(Text::to_utf8)
-        .collect::<Result<Vec<_>, _>>()?
-        .join(", ");
+        .collect::<Result<Vec<_>, _>>()?;
+    let blockers = if blockers_list.is_empty() {
+        "none".to_owned()
+    } else {
+        blockers_list.join(", ")
+    };
     Ok(format!(
         "OpenShell doctor: {status} (offline; no gateway, container, or credential probe)\nRuntime: {runtime_reason}\nGateway: {gateway_reason}\nPolicy: {policy_reason}\nBlockers: {blockers}\n"
     ))
+}
+
+#[derive(Debug, Clone)]
+pub struct OpenShellDispatchApproval {
+    pub runtime_executable: std::path::PathBuf,
+    pub policy_path: std::path::PathBuf,
+    pub gateway_url: String,
+    pub sandbox_name: String,
+    pub image: String,
+    pub policy: OpenShellPolicy,
+    pub provider: OpenShellProviderProfile,
+    pub command: Vec<String>,
+    pub timeout_ms: u64,
+}
+
+impl OpenShellDispatchApproval {
+    pub fn validate(&self) -> Result<Value, Error> {
+        let rt_str = self
+            .runtime_executable
+            .to_str()
+            .ok_or_else(|| Error::type_error("OpenShell runtime path must be Unicode"))?;
+        validate_local_path_arg(rt_str, "OpenShell runtime path")?;
+        let rt_meta = fs::symlink_metadata(&self.runtime_executable).map_err(|_| {
+            Error::type_error("OpenShell runtime path must reference an existing regular file")
+        })?;
+        if !rt_meta.is_file() || secure::linked(&rt_meta) {
+            return Err(Error::type_error(
+                "OpenShell runtime path must be a regular nonsymlink file",
+            ));
+        }
+        let pol_str = self
+            .policy_path
+            .to_str()
+            .ok_or_else(|| Error::type_error("OpenShell policy path must be Unicode"))?;
+        validate_local_path_arg(pol_str, "OpenShell policy path")?;
+        let pol_meta = fs::symlink_metadata(&self.policy_path).map_err(|_| {
+            Error::type_error("OpenShell policy path must reference an existing regular file")
+        })?;
+        if !pol_meta.is_file() || secure::linked(&pol_meta) {
+            return Err(Error::type_error(
+                "OpenShell policy path must be a regular nonsymlink file",
+            ));
+        }
+        let parsed_gw = crate::config::base_url(
+            &Text::from(self.gateway_url.as_str()),
+            "OpenShell gateway URL",
+        )?;
+        if let Some(host) = parsed_gw.host_str() {
+            if is_forbidden_metadata_host(host) {
+                return Err(Error::new(
+                    "PolicyViolation",
+                    format!("OpenShell gateway URL denies cloud metadata endpoint: {host}"),
+                )
+                .coded("ROSTER_OPENSHELL_METADATA_DENIED"));
+            }
+        }
+        let valid_sandbox =
+            fleet::validate_id(Some(&Value::string(&self.sandbox_name)))?.to_utf8()?;
+        let valid_provider =
+            fleet::validate_id(Some(&Value::string(&self.provider.id)))?.to_utf8()?;
+        if self.image.trim().is_empty()
+            || self.image.starts_with('-')
+            || self.image.bytes().any(|b| matches!(b, 0..=32 | 127))
+        {
+            return Err(Error::type_error(
+                "OpenShell sandbox image must be a nonempty image reference without leading '-' or whitespace",
+            ));
+        }
+        let proof = prove_openshell_policy_boundary(&self.policy, &self.policy)?;
+        if proof.get("verified") != Some(&Value::Boolean(true)) {
+            return Err(Error::new(
+                "PolicyViolation",
+                "OpenShell dispatch approval requires a boundary-verified hard_requirement policy",
+            ));
+        }
+        if self.command.is_empty()
+            || self.command.len() > 32
+            || self
+                .command
+                .iter()
+                .any(|arg| arg.is_empty() || arg.len() > 1024 || arg.contains('\0'))
+        {
+            return Err(Error::type_error(
+                "OpenShell sandbox command must contain 1..=32 bounded arguments",
+            ));
+        }
+        let cmd_bin = validate_posix_binary_path(&self.command[0])?;
+        if !self.provider.binaries.contains(&cmd_bin) {
+            return Err(Error::new(
+                "PolicyViolation",
+                format!(
+                    "OpenShell command binary '{cmd_bin}' is not authorized by provider binaries allow-list"
+                ),
+            )
+            .coded("ROSTER_OPENSHELL_BINARY_DENIED"));
+        }
+        if self.timeout_ms == 0 || self.timeout_ms > 900_000 {
+            return Err(Error::type_error(
+                "OpenShell sandbox timeout_ms must be within 1..=900000 ms",
+            ));
+        }
+        let launch_env = openshell_launch_environment(&self.gateway_url, &self.provider)?;
+        let create_args = vec![
+            "sandbox".to_owned(),
+            "create".to_owned(),
+            "--name".to_owned(),
+            valid_sandbox.clone(),
+            "--from".to_owned(),
+            self.image.clone(),
+            "--policy".to_owned(),
+            pol_str.to_owned(),
+            "--provider".to_owned(),
+            valid_provider.clone(),
+        ];
+        let mut exec_args = vec![
+            "sandbox".to_owned(),
+            "exec".to_owned(),
+            "--name".to_owned(),
+            valid_sandbox.clone(),
+            "--".to_owned(),
+        ];
+        exec_args.extend(self.command.iter().cloned());
+        let detach_args = vec![
+            "sandbox".to_owned(),
+            "provider".to_owned(),
+            "detach".to_owned(),
+            valid_sandbox.clone(),
+            valid_provider,
+            "--wait".to_owned(),
+        ];
+        let delete_args = vec![
+            "sandbox".to_owned(),
+            "delete".to_owned(),
+            valid_sandbox,
+            "--wait".to_owned(),
+        ];
+        Ok(Value::object(vec![
+            (
+                "createArgs",
+                Value::Array(create_args.into_iter().map(|s| Value::string(&s)).collect()),
+            ),
+            (
+                "execArgs",
+                Value::Array(exec_args.into_iter().map(|s| Value::string(&s)).collect()),
+            ),
+            (
+                "detachArgs",
+                Value::Array(detach_args.into_iter().map(|s| Value::string(&s)).collect()),
+            ),
+            (
+                "deleteArgs",
+                Value::Array(delete_args.into_iter().map(|s| Value::string(&s)).collect()),
+            ),
+            ("launchEnvironment", launch_env),
+            ("policyDigest", Value::string(&self.policy.digest())),
+        ]))
+    }
+}
+
+pub async fn run_openshell_sandbox_command<F, Fut>(
+    approval: &OpenShellDispatchApproval,
+    token: &crate::cancel::CancellationToken,
+    mut runner: F,
+) -> Result<Value, Error>
+where
+    F: FnMut(Vec<String>, Value) -> Fut,
+    Fut: std::future::Future<Output = Result<(i32, String, String), Error>>,
+{
+    token.check()?;
+    let plan = approval.validate()?;
+    let env = plan
+        .get("launchEnvironment")
+        .cloned()
+        .ok_or_else(|| Error::type_error("Missing OpenShell launch environment"))?;
+    let to_vec = |key: &str| -> Result<Vec<String>, Error> {
+        plan.get(key)
+            .and_then(domain::items)
+            .ok_or_else(|| Error::type_error("Missing OpenShell command args"))?
+            .iter()
+            .filter_map(Value::as_string)
+            .map(Text::to_utf8)
+            .collect()
+    };
+    let create_args = to_vec("createArgs")?;
+    let exec_args = to_vec("execArgs")?;
+    let detach_args = to_vec("detachArgs")?;
+    let delete_args = to_vec("deleteArgs")?;
+
+    let create_res = runner(create_args, env.clone()).await;
+    match create_res {
+        Ok((0, _, _)) => {}
+        Ok((create_exit, _, create_err)) => {
+            let _ = runner(detach_args, env.clone()).await;
+            let _ = runner(delete_args, env).await;
+            return Err(Error::new(
+                "OpenShellExecutionError",
+                format!("OpenShell sandbox creation failed (exit {create_exit}): {create_err}"),
+            ));
+        }
+        Err(err) => {
+            let _ = runner(detach_args, env.clone()).await;
+            let _ = runner(delete_args, env).await;
+            return Err(err);
+        }
+    }
+
+    let timeout_dur = std::time::Duration::from_millis(approval.timeout_ms);
+    let exec_outcome = if token.check().is_err() {
+        Err(token
+            .check()
+            .err()
+            .unwrap_or_else(|| Error::new("Cancelled", "OpenShell execution cancelled")))
+    } else {
+        let exec_fut = runner(exec_args, env.clone());
+        tokio::pin!(exec_fut);
+        tokio::select! {
+            biased;
+            reason = token.cancelled() => Err(reason?.error()),
+            () = tokio::time::sleep(timeout_dur) => Err(Error::new("OpenShellTimeout", "OpenShell sandbox command timed out").coded("ROSTER_TASK_TIMEOUT")),
+            res = &mut exec_fut => res,
+        }
+    };
+
+    let detach_res = runner(detach_args, env.clone()).await;
+    let delete_res = runner(delete_args, env).await;
+    let provider_detached = matches!(detach_res, Ok((0, _, _)));
+    let sandbox_deleted = matches!(delete_res, Ok((0, _, _)));
+    if !provider_detached || !sandbox_deleted {
+        return Err(Error::new(
+            "OpenShellCleanupError",
+            "OpenShell provider detachment or sandbox deletion could not be verified",
+        )
+        .coded("ROSTER_OPENSHELL_CLEANUP_UNVERIFIED"));
+    }
+
+    let (exit_code, stdout, stderr) = exec_outcome?;
+    token.check()?;
+    Ok(Value::object(vec![
+        ("exitCode", Value::Number(f64::from(exit_code))),
+        ("stdout", Value::string(&stdout)),
+        ("stderr", Value::string(&stderr)),
+        ("providerDetached", Value::Boolean(provider_detached)),
+        ("sandboxDeleted", Value::Boolean(sandbox_deleted)),
+        (
+            "policyDigest",
+            plan.get("policyDigest").cloned().unwrap_or(Value::Null),
+        ),
+    ]))
 }
 
 pub fn evaluate_openshell_calibration_scorecard(manifest: &Value) -> Result<Value, Error> {
@@ -2068,6 +2340,123 @@ mod tests {
             let proof = prove_openshell_policy_boundary(&policy, &policy)?;
             assert_eq!(proof.get("verified"), Some(&Value::Boolean(true)));
         }
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn live_openshell_dispatch_doctor_ready_and_orchestrator_handoffs_succeed()
+    -> Result<(), Error> {
+        let temp = std::env::temp_dir().join(format!(
+            "roster-openshell-live-{}-{}",
+            std::process::id(),
+            files::nonce()?
+        ));
+        files::create_private_directories(&temp)?;
+        let fake_runtime = temp.join("openshell.exe");
+        let fake_policy = temp.join("policy.yml");
+        files::atomic_write_bytes(&fake_runtime, b"stub", MAX_CANDIDATE_FILE_BYTES)?;
+        files::atomic_write_bytes(
+            &fake_policy,
+            b"version: 1\nlandlock:\n  compatibility: hard_requirement\n",
+            MAX_CANDIDATE_FILE_BYTES,
+        )?;
+
+        let ready_opts = parse_openshell_doctor_args(&[
+            "--opt-in".to_owned(),
+            "--approve-live".to_owned(),
+            "--runtime".to_owned(),
+            fake_runtime.to_string_lossy().into_owned(),
+            "--gateway".to_owned(),
+            "http://127.0.0.1:8080".to_owned(),
+            "--policy".to_owned(),
+            fake_policy.to_string_lossy().into_owned(),
+            "--provider".to_owned(),
+            "rtx-3090-qwen".to_owned(),
+        ])?;
+        let ready_report = check_openshell_doctor(&ready_opts)?;
+        assert_eq!(ready_report.get("ok"), Some(&Value::Boolean(true)));
+        assert_eq!(ready_report.get("status"), Some(&Value::string("ready")));
+        assert!(format_openshell_doctor(&ready_report)?.contains("OpenShell doctor: ready"));
+
+        let local_profile = Value::object(vec![
+            ("id", Value::string("rtx-3090-qwen")),
+            ("base_url", Value::string("http://127.0.0.1:11435/v1")),
+            ("model", Value::string("qwen3.8:27b-smtek")),
+            ("provider", Value::string("vllm")),
+            ("context_max", Value::Number(65536.0)),
+            ("concurrency", Value::Number(1.0)),
+            ("hardware", Value::string("rtx-3090-24gb")),
+            ("notes", Value::string("local")),
+        ]);
+        let provider =
+            compile_fleet_provider_profile(&local_profile, &["/usr/local/bin/roster".to_owned()])?;
+        let policy = compile_task_policy(&OpenShellPolicySpec {
+            read_only_files: vec!["docs/OPENSHELL_DESIGN.md".to_owned()],
+            read_write_files: vec!["rust/openshell.rs".to_owned()],
+            ..OpenShellPolicySpec::default()
+        })?;
+        let approval = OpenShellDispatchApproval {
+            runtime_executable: fake_runtime,
+            policy_path: fake_policy,
+            gateway_url: "http://127.0.0.1:8080".to_owned(),
+            sandbox_name: "sbx-live-687".to_owned(),
+            image: "ubuntu:24.04".to_owned(),
+            policy,
+            provider,
+            command: vec!["/usr/local/bin/roster".to_owned(), "--help".to_owned()],
+            timeout_ms: 30_000,
+        };
+        let source = crate::cancel::CancellationSource::default();
+        let mut seen_steps = Vec::new();
+        let run_result = run_openshell_sandbox_command(&approval, &source.token(), |args, _env| {
+            seen_steps.push(args.join(" "));
+            async move { Ok((0, "sandbox output ok\n".to_owned(), String::new())) }
+        })
+        .await?;
+        assert_eq!(run_result.get("exitCode"), Some(&Value::Number(0.0)));
+        assert_eq!(
+            run_result.get("providerDetached"),
+            Some(&Value::Boolean(true))
+        );
+        assert_eq!(
+            run_result.get("sandboxDeleted"),
+            Some(&Value::Boolean(true))
+        );
+        assert_eq!(seen_steps.len(), 4);
+
+        let unix_plan =
+            crate::execution::owned::unix_process_group_containment_plan(4242, 65536, Some(5000))?;
+        assert_eq!(
+            unix_plan.get("provider"),
+            Some(&Value::string("unix-process-group"))
+        );
+
+        files::atomic_write_bytes(
+            &temp.join("RESULT.md"),
+            b"# Result\n\n## Verification\n\nChecks: PASS\n\n## Run\n\nAI-Run: 1|local|qwen3.8-27b@-|m|1000/65536|200|roster-1234567890abcdef|issue-684\n\n## Summary\n\nDelivered verified changes.\n",
+            MAX_CANDIDATE_FILE_BYTES,
+        )?;
+        files::atomic_write_bytes(
+            &temp.join("REVIEW.md"),
+            b"# Review\n\nVerdict: pass\n",
+            MAX_CANDIDATE_FILE_BYTES,
+        )?;
+        let pub_handoff = crate::run::prepare_verified_publication_handoff(
+            &temp,
+            "feat(cli): verified handoff",
+            "qwen3.8-27b",
+            Some(684),
+            false,
+            true,
+            true,
+        )?;
+        assert_eq!(pub_handoff.get("eligible"), Some(&Value::Boolean(true)));
+        assert_eq!(
+            pub_handoff.get("model"),
+            Some(&Value::string("qwen3.8-27b"))
+        );
+
+        let _ = fs::remove_dir_all(&temp);
         Ok(())
     }
 }

@@ -618,7 +618,7 @@ pub fn commands() -> &'static [CommandPage] {
         CommandPage {
             name: "doctor",
             group: "Settings",
-            usage: "/doctor [warm|copilot [--opt-in] [--runtime PATH] [--model ID]|openshell [--opt-in] [--runtime PATH] [--gateway URL] [--policy PATH] [--provider ID]]",
+            usage: "/doctor [warm|copilot [--opt-in] [--runtime PATH] [--model ID]|openshell [--opt-in] [--approve-live] [--runtime PATH] [--gateway URL] [--policy PATH] [--provider ID]]",
             description: "Run existing prerequisite checks, a read-only warm probe, or blocked offline Copilot/OpenShell diagnostics; never enables a worker or starts login.",
             example: "/doctor openshell --opt-in",
             flags: &[],
@@ -3186,7 +3186,7 @@ impl ShellSession {
             "doctor" => {
                 let words = arguments::split(
                     &Text::from(raw_args),
-                    "Use /doctor, /doctor warm, /doctor copilot [--opt-in] [--runtime PATH] [--model ID], or /doctor openshell [--opt-in] [--runtime PATH] [--gateway URL] [--policy PATH] [--provider ID].",
+                    "Use /doctor, /doctor warm, /doctor copilot [--opt-in] [--runtime PATH] [--model ID], or /doctor openshell [--opt-in] [--approve-live] [--runtime PATH] [--gateway URL] [--policy PATH] [--provider ID].",
                 )?
                 .into_iter()
                 .map(|w| w.to_utf8())
@@ -3239,7 +3239,7 @@ impl ShellSession {
                     return Ok(ShellAction::Continue(self.redact_text(&out)?));
                 }
                 Err(Error::type_error(
-                    "Use /doctor, /doctor warm, /doctor copilot [--opt-in] [--runtime PATH] [--model ID], or /doctor openshell [--opt-in] [--runtime PATH] [--gateway URL] [--policy PATH] [--provider ID].",
+                    "Use /doctor, /doctor warm, /doctor copilot [--opt-in] [--runtime PATH] [--model ID], or /doctor openshell [--opt-in] [--approve-live] [--runtime PATH] [--gateway URL] [--policy PATH] [--provider ID].",
                 ))
             }
             "stats" => {

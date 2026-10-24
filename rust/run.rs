@@ -1545,6 +1545,108 @@ pub fn build_issue_run_status_update(
     ]))
 }
 
+pub fn prepare_verified_publication_handoff(
+    worktree: &std::path::Path,
+    subject: &str,
+    model: &str,
+    issue_number: Option<u64>,
+    skip_review: bool,
+    review_required: bool,
+    platform_windows: bool,
+) -> Result<crate::json::Value, Error> {
+    if skip_review && review_required {
+        return Err(Error::type_error(
+            "--skip-review requires private review.required: false; required review was not bypassed",
+        ));
+    }
+    let result_path = worktree.join("RESULT.md");
+    crate::paths::ensure_local_path(&result_path, worktree)?;
+    let result_snap = crate::state::secure::read(&result_path, 65_536)?.ok_or_else(|| {
+        Error::new(
+            "PublicationError",
+            "Verified publication requires an existing RESULT.md in the worktree",
+        )
+    })?;
+    let result_text = String::from_utf8(result_snap.bytes)
+        .map_err(|error| Error::new("PublicationError", error.to_string()))?;
+    if !result_text
+        .lines()
+        .any(|line| line.trim() == "Checks: PASS")
+    {
+        return Err(Error::new(
+            "PublicationError",
+            "Publication requires RESULT.md with Checks: PASS",
+        ));
+    }
+    let review_path = worktree.join("REVIEW.md");
+    crate::paths::ensure_local_path(&review_path, worktree)?;
+    let review_snap = crate::state::secure::read(&review_path, 65_536)?;
+    let mut review_verdict = "skipped".to_owned();
+    if !skip_review {
+        let snap = review_snap.ok_or_else(|| {
+            Error::new(
+                "PublicationError",
+                "Verified publication requires an existing REVIEW.md unless --skip-review is authorized",
+            )
+        })?;
+        let review_text = String::from_utf8(snap.bytes)
+            .map_err(|error| Error::new("PublicationError", error.to_string()))?;
+        if !review_text
+            .lines()
+            .any(|line| line.trim() == "Verdict: pass")
+        {
+            return Err(Error::new(
+                "PublicationError",
+                "Publication requires REVIEW.md with Verdict: pass",
+            ));
+        }
+        review_verdict = "pass".to_owned();
+    }
+    let run_record = match result_text
+        .lines()
+        .find_map(|line| line.strip_prefix("AI-Run: "))
+    {
+        Some(raw) => Some(
+            parse_compact(&Text::from(raw.trim()), None)?
+                .ok_or_else(|| Error::type_error("RESULT.md contains an empty AI-Run trailer"))?,
+        ),
+        None => None,
+    };
+    let resolved_model = resolve_publish_model(
+        run_record.as_ref(),
+        Some(&crate::json::Value::object(vec![(
+            "AI_MODEL",
+            crate::json::Value::string(model),
+        )])),
+        None,
+        false,
+    )?;
+    let summary_section = result_text
+        .split("## Summary")
+        .nth(1)
+        .map(|s| s.split("\n## ").next().unwrap_or(s).trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Verified slice delivery.");
+    let pr_message = build_publish_message(&PublishMessageOptions {
+        subject,
+        model: &resolved_model,
+        summary: summary_section,
+        tests_skipped: result_text.contains("Tests skipped:"),
+        issue_number,
+        scope_files: &[],
+        seats: None,
+        ghcp: run_record.is_none(),
+    })?;
+    let command = format_publish_command(&pr_message, &resolved_model, None, platform_windows)?;
+    Ok(crate::json::Value::object(vec![
+        ("eligible", crate::json::Value::Boolean(true)),
+        ("model", crate::json::Value::string(&resolved_model)),
+        ("reviewVerdict", crate::json::Value::string(&review_verdict)),
+        ("message", crate::json::Value::string(&pr_message)),
+        ("command", crate::json::Value::string(&command)),
+    ]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

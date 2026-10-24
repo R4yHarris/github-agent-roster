@@ -2870,6 +2870,121 @@ async fn prepare_task(
     })
 }
 
+pub fn plan_green_checkpoint_resume(
+    repo_root: &Path,
+    issue_number: u64,
+    green: bool,
+    yes: bool,
+) -> Result<Value, Error> {
+    if issue_number == 0 || issue_number > crate::MAX_SAFE_INTEGER || !green || !yes {
+        return Err(Error::type_error(
+            "Use roster resume N --green --yes; explicit --yes authorizes product restore, not execution.",
+        ));
+    }
+    let worktree = repo_root
+        .join(".worktrees")
+        .join(format!("issue-{issue_number}"));
+    let info = inspect_local_issue_worktree(issue_number, &worktree)?;
+    if info.get("planMode") == Some(&Value::Boolean(true)) {
+        return Err(Error::new(
+            "Error",
+            "Green resume requires an executable TASK.md",
+        ));
+    }
+    let task_path = worktree.join("TASK.md");
+    if secure::read(&task_path, 65_536)?.is_none() {
+        return Err(Error::new(
+            "Error",
+            "Green resume requires an executable TASK.md",
+        ));
+    }
+    let task_id = format!("issue-{issue_number}");
+    let mut checkpoints = Vec::new();
+    for dir_name in [issue_number.to_string(), task_id.clone()] {
+        let cp_dir = worktree.join(".roster").join("checkpoints").join(&dir_name);
+        if cp_dir.is_dir() {
+            for index in 1_u64..=1000 {
+                let file = cp_dir.join(index.to_string());
+                let Some(snap) = secure::read(&file, 65_536)? else {
+                    break;
+                };
+                let text = String::from_utf8(snap.bytes)
+                    .map_err(|e| Error::new("Error", e.to_string()))?;
+                checkpoints.push(crate::json::parse(&Text::from(text.trim()))?);
+            }
+            if !checkpoints.is_empty() {
+                break;
+            }
+        }
+    }
+    if checkpoints.is_empty() {
+        let hashed_dir = worktree
+            .join(".roster")
+            .join("checkpoints")
+            .join(&crate::identity::sha256_hex(task_id.as_bytes())[..16]);
+        let records_file = hashed_dir.join("records.jsonl");
+        if let Some(snap) = secure::read(&records_file, 65_536)? {
+            let text =
+                String::from_utf8(snap.bytes).map_err(|e| Error::new("Error", e.to_string()))?;
+            for line in text.lines().filter(|l| !l.trim().is_empty()) {
+                checkpoints.push(crate::json::parse(&Text::from(line))?);
+            }
+        }
+    }
+    let verified = checkpoints
+        .iter()
+        .rev()
+        .find(|cp| crate::domain::is_text(cp.get("status"), "verified"))
+        .ok_or_else(|| {
+            Error::new(
+                "Error",
+                "No verified checkpoint is recorded for this issue worktree",
+            )
+        })?;
+    let cp_number = crate::domain::safe_integer(verified.get("number"))
+        .ok_or_else(|| Error::type_error("Verified checkpoint is missing its number"))?;
+    let msg = format!(
+        "Restored verified checkpoint {cp_number}; later edits preserved in a new checkpoint. Fresh checks/review required.\n"
+    );
+    Ok(Value::object(vec![
+        ("issue", Value::Number(issue_number as f64)),
+        ("checkpointNumber", Value::Number(cp_number as f64)),
+        ("worktree", Value::string(&worktree.to_string_lossy())),
+        ("message", Value::string(&msg)),
+        ("pausedBeforeExecution", Value::Boolean(true)),
+    ]))
+}
+
+pub fn orchestrate_wave_attempts(
+    plan: &Value,
+    linked_issues: &[Value],
+    active_issues: &BTreeSet<u64>,
+    parallel: Option<&Value>,
+    concurrency: Option<&Value>,
+    attempts_per_issue: Option<&Value>,
+    completed_attempts: &std::collections::BTreeMap<u64, Vec<Value>>,
+) -> Result<Value, Error> {
+    let rows = compute_wave_board_rows(plan, linked_issues, None, None)?;
+    let (batch_limit, ready_batch) =
+        select_ready_wave_batch(&rows, active_issues, parallel, concurrency)?;
+    let attempts_k = attempt_limit(attempts_per_issue, None)?;
+    let mut winners = Vec::new();
+    for (&issue_num, candidates) in completed_attempts {
+        let selected = select_attempt(candidates).unwrap_or(Value::Null);
+        winners.push(Value::object(vec![
+            ("issue", Value::Number(issue_num as f64)),
+            ("winner", selected),
+        ]));
+    }
+    Ok(Value::object(vec![
+        ("batchLimit", Value::Number(batch_limit as f64)),
+        ("attemptsPerIssue", Value::Number(attempts_k as f64)),
+        ("readyBatch", Value::Array(ready_batch)),
+        ("boardRows", Value::Array(rows)),
+        ("selectedWinners", Value::Array(winners)),
+    ]))
+}
+
 #[cfg(test)]
 mod repository_path_tests {
     use super::*;

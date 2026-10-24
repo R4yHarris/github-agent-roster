@@ -110,6 +110,7 @@ pub enum Command {
     Help,
     Init,
     Ask(AskCommand),
+    ResumeGreen(u64),
     Question(Vec<String>),
     Doctor,
     CopilotDoctor(crate::capabilities::CopilotDoctorOptions),
@@ -342,6 +343,18 @@ pub fn parse(args: &[String]) -> Result<Command, Error> {
                 "Use roster ask \"TEXT\" or roster ask --pending, --cancel, or --resume \"TEXT\".",
             )),
         },
+        [command, flags @ ..] if command == "resume" => {
+            if let [num_str, flag1, flag2] = flags {
+                if flag1 == "--green" && flag2 == "--yes" {
+                    if let Ok(issue) = start::parse_issue_number(num_str) {
+                        return Ok(Command::ResumeGreen(issue));
+                    }
+                }
+            }
+            Err(Error::type_error(
+                "Use roster resume N --green --yes; explicit --yes authorizes product restore, not execution.",
+            ))
+        }
         [command] if command == "doctor" => Ok(Command::Doctor),
         [command, flag, rest @ ..] if command == "doctor" && flag == "--copilot" => Ok(
             Command::CopilotDoctor(crate::capabilities::parse_copilot_doctor_args(rest)?),
