@@ -10,8 +10,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 #[cfg(any(windows, unix))]
 use std::time::Duration;
 
+#[cfg(windows)]
+use tokio::io::AsyncWriteExt;
 #[cfg(any(windows, unix))]
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
 use super::timing::{self, Label, ProcessTrace, Span};

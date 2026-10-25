@@ -8,6 +8,7 @@ use crate::json::Value;
 const MAX_RECORDS: usize = 128;
 const MAX_ACTIVE: usize = 64;
 
+#[cfg_attr(not(windows), allow(dead_code))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Label {
     Local,
@@ -568,6 +569,7 @@ pub(crate) fn finish(span: Option<Span>, error: Option<&Error>) {
     }
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 pub(crate) struct ProcessTrace {
     root: Span,
     leader: std::sync::atomic::AtomicBool,
@@ -575,6 +577,7 @@ pub(crate) struct ProcessTrace {
     members: std::sync::atomic::AtomicBool,
 }
 
+#[cfg_attr(not(windows), allow(dead_code))]
 impl ProcessTrace {
     pub(crate) fn new(parent: &Span, label: Label) -> Arc<Self> {
         Arc::new(Self {

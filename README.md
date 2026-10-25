@@ -252,6 +252,9 @@ installed on the native Linux filesystem (`~`, not `/mnt/c` or `/mnt/d`, so
 POSIX `0700`/`0600` permissions are enforced):
 
 ```bash
+# 0. Install Linux OpenSSL headers and pkg-config required by native-tls on Ubuntu/Debian WSL
+sudo apt-get update && sudo apt-get install -y build-essential pkg-config libssl-dev
+
 # 1. Install Rust toolchain (1.85+) if not yet installed in WSL
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
