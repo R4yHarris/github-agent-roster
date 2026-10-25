@@ -487,6 +487,15 @@ pub fn load(repo_root: &Path) -> Result<Fleet, Error> {
     }
 }
 
+pub fn load_with_env(
+    cwd: &Path,
+    installation: Option<&Path>,
+    environment: Option<&Value>,
+) -> Result<Fleet, Error> {
+    let root = config::resolve_fleet_root_with_env(installation, cwd, environment)?;
+    load(&root)
+}
+
 struct HardwareSpec {
     id: &'static str,
     class: &'static str,
@@ -1693,15 +1702,19 @@ pub async fn run_fleet_cli<T: crate::llm::http::Transport>(
             ));
         }
     }
-    let repo_root = crate::config::shared_config_root(cwd)
-        .or_else(|_| crate::paths::resolve_project_root(cwd))?;
+    let repo_root =
+        crate::config::resolve_fleet_root_with_env(Some(installation), cwd, Some(environment))
+            .or_else(|_| crate::paths::resolve_project_root(cwd))?;
+    let cfg_root =
+        crate::config::resolve_config_root_with_env(installation, cwd, Some(environment))
+            .unwrap_or_else(|_| repo_root.clone());
     let previous_fleet = settings::read_private_file(&repo_root, settings::Name::Fleet)?;
     let fleet_val = match &previous_fleet {
         Some(src) => parse(src)?,
         None => validate(&Value::object(vec![("profiles", Value::Array(Vec::new()))]))?,
     };
     let current_cfg = || -> Result<(Option<Text>, Value), Error> {
-        let prev = settings::read_private_file(&repo_root, settings::Name::Config)?;
+        let prev = settings::read_private_file(&cfg_root, settings::Name::Config)?;
         let cfg = match &prev {
             Some(src) => config::parse(src)?.as_value().clone(),
             None => config::load(installation, cwd, environment)?
@@ -1715,8 +1728,10 @@ pub async fn run_fleet_cli<T: crate::llm::http::Transport>(
         FleetCliCommand::List => list(&fleet_val)?.to_utf8(),
         FleetCliCommand::Hardware { id, hardware } => {
             let (updated, _, msg) = apply_fleet_hardware(&fleet_val, id, hardware)?;
-            settings::ensure_private_files_ignored(&repo_root, &[settings::Name::Fleet], token)
-                .await?;
+            if repo_root.join(".git").exists() || repo_root.join(".gitignore").exists() {
+                settings::ensure_private_files_ignored(&repo_root, &[settings::Name::Fleet], token)
+                    .await?;
+            }
             settings::write_private_documents(
                 &repo_root,
                 &[settings::Document {
@@ -1730,10 +1745,12 @@ pub async fn run_fleet_cli<T: crate::llm::http::Transport>(
         FleetCliCommand::Default { id } => {
             let (prev_cfg, cfg_val) = current_cfg()?;
             let (_, formatted_cfg, msg) = apply_fleet_default(&cfg_val, &fleet_val, id)?;
-            settings::ensure_private_files_ignored(&repo_root, &[settings::Name::Config], token)
-                .await?;
+            if cfg_root.join(".git").exists() || cfg_root.join(".gitignore").exists() {
+                settings::ensure_private_files_ignored(&cfg_root, &[settings::Name::Config], token)
+                    .await?;
+            }
             settings::write_private_documents(
-                &repo_root,
+                &cfg_root,
                 &[settings::Document {
                     name: settings::Name::Config,
                     source: formatted_cfg,
@@ -1745,8 +1762,10 @@ pub async fn run_fleet_cli<T: crate::llm::http::Transport>(
         FleetCliCommand::Remove { id } => {
             let (_, cfg_val) = current_cfg()?;
             let (updated, msg) = apply_fleet_remove(&cfg_val, &fleet_val, id)?;
-            settings::ensure_private_files_ignored(&repo_root, &[settings::Name::Fleet], token)
-                .await?;
+            if repo_root.join(".git").exists() || repo_root.join(".gitignore").exists() {
+                settings::ensure_private_files_ignored(&repo_root, &[settings::Name::Fleet], token)
+                    .await?;
+            }
             settings::write_private_documents(
                 &repo_root,
                 &[settings::Document {
@@ -1809,8 +1828,14 @@ pub async fn run_fleet_cli<T: crate::llm::http::Transport>(
             }
             let merged = merge_discovered_profiles(&fleet_val.as_value(), &endpoints)?;
             if *save && merged.profiles().len() != fleet_val.profiles().len() {
-                settings::ensure_private_files_ignored(&repo_root, &[settings::Name::Fleet], token)
+                if repo_root.join(".git").exists() || repo_root.join(".gitignore").exists() {
+                    settings::ensure_private_files_ignored(
+                        &repo_root,
+                        &[settings::Name::Fleet],
+                        token,
+                    )
                     .await?;
+                }
                 settings::write_private_documents(
                     &repo_root,
                     &[settings::Document {
@@ -1946,8 +1971,10 @@ pub async fn run_fleet_cli<T: crate::llm::http::Transport>(
                 "profiles",
                 Value::Array(all_profiles),
             )]))?;
-            settings::ensure_private_files_ignored(&repo_root, &[settings::Name::Fleet], token)
-                .await?;
+            if repo_root.join(".git").exists() || repo_root.join(".gitignore").exists() {
+                settings::ensure_private_files_ignored(&repo_root, &[settings::Name::Fleet], token)
+                    .await?;
+            }
             settings::write_private_documents(
                 &repo_root,
                 &[settings::Document {
@@ -2070,7 +2097,9 @@ pub async fn run_fleet_cli<T: crate::llm::http::Transport>(
                 });
                 names.push(settings::Name::Config);
             }
-            settings::ensure_private_files_ignored(&repo_root, &names, token).await?;
+            if repo_root.join(".git").exists() || repo_root.join(".gitignore").exists() {
+                settings::ensure_private_files_ignored(&repo_root, &names, token).await?;
+            }
             settings::write_private_documents(&repo_root, &docs)?;
             out.push_str(&format!(
                 "Updated saved model for {id}. {}",

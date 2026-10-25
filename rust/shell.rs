@@ -1091,9 +1091,12 @@ impl ShellHistory {
 }
 
 pub fn private_config_path(installation: &Path, cwd: &Path) -> Result<PathBuf, Error> {
-    Ok(config::resolve_config_root(installation, cwd)?
-        .join(".roster")
-        .join("config.yml"))
+    let env_val = crate::ask::environment_value_from_process();
+    Ok(
+        config::resolve_config_root_with_env(installation, cwd, Some(&env_val))?
+            .join(".roster")
+            .join("config.yml"),
+    )
 }
 
 pub fn public_config(
@@ -1104,7 +1107,9 @@ pub fn public_config(
     let env_val = env
         .cloned()
         .unwrap_or_else(crate::ask::environment_value_from_process);
-    let file = private_config_path(installation, cwd)?;
+    let file = config::resolve_config_root_with_env(installation, cwd, Some(&env_val))?
+        .join(".roster")
+        .join("config.yml");
     let (cfg, is_defaults) = match settings::read_config_file(&file) {
         Ok(source) => (config::parse(&source)?, false),
         Err(error) if error.code == Some("ENOENT") => (config::defaults()?, true),
@@ -2461,7 +2466,9 @@ pub async fn set_config_value(
     }
     let formatted = config::format(&cfg)?;
     let validated = config::parse(&formatted)?.as_value().clone();
-    settings::ensure_private_files_ignored(&root, &[settings::Name::Config], token).await?;
+    if root.join(".git").exists() || root.join(".gitignore").exists() {
+        settings::ensure_private_files_ignored(&root, &[settings::Name::Config], token).await?;
+    }
     settings::write_private_documents(
         &root,
         &[settings::Document {
@@ -3012,12 +3019,15 @@ impl ShellSession {
                     .collect::<Result<Vec<_>, _>>()?;
                 let sub = words.first().map_or("list", String::as_str);
                 let root = self.current_root();
-                let fleet_root = config::shared_config_root(&root)?;
                 if sub == "list" {
                     if words.len() > 1 {
                         return Err(Error::type_error("Use /fleet or /fleet list."));
                     }
-                    let loaded = crate::fleet::load(&fleet_root)?;
+                    let loaded = crate::fleet::load_with_env(
+                        &root,
+                        Some(&self.installation),
+                        Some(&self.environment),
+                    )?;
                     if loaded.profiles().is_empty() {
                         return Ok(ShellAction::Continue(
                             "No fleet profiles configured.\n".to_owned(),
@@ -3050,7 +3060,11 @@ impl ShellSession {
                     if words.len() != 2 {
                         return Err(Error::type_error("Use /fleet use ID."));
                     }
-                    let loaded = crate::fleet::load(&fleet_root)?;
+                    let loaded = crate::fleet::load_with_env(
+                        &root,
+                        Some(&self.installation),
+                        Some(&self.environment),
+                    )?;
                     let prof = crate::fleet::get_profile(&loaded, &Value::string(&words[1]))?;
                     let next_cfg = crate::fleet::with_profile(&self.config, prof.as_value())?;
                     let id = clean_display(prof.as_value().get("id"), &words[1]);
@@ -3761,7 +3775,11 @@ impl ShellSession {
                     .collect::<Vec<_>>();
                 let root = self.current_root();
                 let task = crate::fleet::remediation_task(&files, &root.display().to_string())?;
-                let loaded_fleet = crate::fleet::load(&root)?;
+                let loaded_fleet = crate::fleet::load_with_env(
+                    &root,
+                    Some(&self.installation),
+                    Some(&self.environment),
+                )?;
                 let prof_vals = loaded_fleet
                     .profiles()
                     .iter()
@@ -4399,8 +4417,11 @@ impl ShellSession {
         let env_with_tools = ensure_delivery_tool_env(&self.environment);
         let mut loaded = config::load(&self.installation, &root, &env_with_tools)?;
         if let Some(ref prof_id) = self.fleet_profile_id {
-            let fleet_root = config::shared_config_root(&root)?;
-            let fleet_cat = crate::fleet::load(&fleet_root)?;
+            let fleet_cat = crate::fleet::load_with_env(
+                &root,
+                Some(&self.installation),
+                Some(&self.environment),
+            )?;
             let prof = crate::fleet::get_profile(&fleet_cat, &Value::string(prof_id))?;
             loaded.config = loaded.config.with_profile(prof)?;
         }
@@ -5058,7 +5079,8 @@ pub async fn run_onboard(
         &mut stdout,
         &format!("Roster onboarding\n\n1. Platform\nOS: {platform}\n"),
     )?;
-    let project_root = paths::resolve_project_root(cwd)?;
+    let project_root = config::resolve_config_root_with_env(installation, cwd, Some(environment))
+        .or_else(|_| paths::resolve_project_root(cwd))?;
     let config_path = project_root.join(".roster").join("config.yml");
     let fleet_path = project_root.join(".roster").join("fleet.yml");
     paths::ensure_local_path(&config_path, &project_root)?;
@@ -5068,7 +5090,8 @@ pub async fn run_onboard(
         None => settings::read_config_file(&project_root.join("roster.config.example.yml"))
             .or_else(|_| {
                 settings::read_config_file(&installation.join("roster.config.example.yml"))
-            })?,
+            })
+            .unwrap_or_else(|_| Text::from(include_str!("../roster.config.example.yml"))),
     };
     let base = config::parse(&base_source)?.as_value().clone();
     let previous_fleet = settings::read_private_file(&project_root, settings::Name::Fleet)?;
@@ -5437,12 +5460,14 @@ pub async fn run_onboard(
         return Ok(0);
     }
     let source = crate::cancel::CancellationSource::default();
-    settings::ensure_private_files_ignored(
-        &project_root,
-        &[settings::Name::Config, settings::Name::Fleet],
-        Some(&source.token()),
-    )
-    .await?;
+    if project_root.join(".git").exists() || project_root.join(".gitignore").exists() {
+        settings::ensure_private_files_ignored(
+            &project_root,
+            &[settings::Name::Config, settings::Name::Fleet],
+            Some(&source.token()),
+        )
+        .await?;
+    }
     settings::write_private_documents(
         &project_root,
         &[

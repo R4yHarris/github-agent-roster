@@ -954,6 +954,7 @@ pub struct Loaded {
     seal: Option<(Text, crate::paths::FileIdentity)>,
     critic: Option<crate::fleet::Profile>,
     critic_seal: Option<(Text, crate::paths::FileIdentity)>,
+    fleet_root: PathBuf,
 }
 
 impl Loaded {
@@ -961,7 +962,7 @@ impl Loaded {
         if private_config(&self.root)? != self.seal
             || self.target != self.root && private_config(&self.target)?.is_some()
             || self.critic.is_some()
-                && private_settings(&self.root, settings::Name::Fleet)? != self.critic_seal
+                && private_settings(&self.fleet_root, settings::Name::Fleet)? != self.critic_seal
         {
             return Err(Error::new(
                 "StaleConfiguration",
@@ -1041,7 +1042,7 @@ fn private_config(root: &Path) -> Result<Option<(Text, crate::paths::FileIdentit
     private_settings(root, settings::Name::Config)
 }
 
-fn installation_config_root(installation: &Path) -> Result<PathBuf, Error> {
+pub(crate) fn installation_config_root(installation: &Path) -> Result<PathBuf, Error> {
     let installation = crate::paths::absolute(installation)?;
     crate::state::secure::check_components(&installation)?;
     match std::fs::symlink_metadata(installation.join(".git")) {
@@ -1055,12 +1056,134 @@ fn installation_config_root(installation: &Path) -> Result<PathBuf, Error> {
     }
 }
 
+pub fn machine_config_root(environment: Option<&Value>) -> Result<Option<PathBuf>, Error> {
+    let Some(env) = environment else {
+        return Ok(None);
+    };
+    if !matches!(env, Value::Object(_)) {
+        return Ok(None);
+    }
+    if environment_value(env, "ROSTER_ANALYTICS_CONFIG_DEFAULTS_ONLY")?
+        .is_some_and(|v| v == &Text::from("true"))
+    {
+        return Ok(None);
+    }
+    if let Some(explicit) = environment_value(env, "ROSTER_MACHINE_HOME")? {
+        let raw = explicit.to_utf8()?;
+        let abs = crate::paths::absolute(Path::new(&raw))?;
+        crate::state::secure::check_components(&abs)?;
+        return Ok(Some(abs));
+    }
+    let home_text = if cfg!(windows) {
+        match environment_value(env, "USERPROFILE")? {
+            Some(v) => Some(v),
+            None => environment_value(env, "HOME")?,
+        }
+    } else {
+        match environment_value(env, "HOME")? {
+            Some(v) => Some(v),
+            None => environment_value(env, "USERPROFILE")?,
+        }
+    };
+    let Some(home_text) = home_text else {
+        return Ok(None);
+    };
+    let home_str = home_text.to_utf8()?;
+    let Ok(home_path) = crate::paths::absolute(Path::new(&home_str)) else {
+        return Ok(None);
+    };
+    if crate::state::secure::check_components(&home_path).is_err() {
+        return Ok(None);
+    }
+    if let Some(inst_text) = environment_value(env, "ROSTER_INSTALLATION_ROOT")? {
+        if let Ok(inst_str) = inst_text.to_utf8() {
+            let inst_path = Path::new(&inst_str);
+            let allowed_real_install = inst_path.starts_with(home_path.join(".roster"))
+                || inst_path.starts_with(home_path.join("repos"))
+                || inst_path == Path::new(env!("CARGO_MANIFEST_DIR"));
+            if !allowed_real_install {
+                return Ok(None);
+            }
+        }
+    }
+    Ok(Some(home_path))
+}
+
+pub fn default_installation_root(environment: &Value) -> Result<PathBuf, Error> {
+    if let Some(selected) = crate::host::selected_path(environment, "ROSTER_INSTALLATION_ROOT")? {
+        return Ok(selected);
+    }
+    if let Some(machine) = machine_config_root(Some(environment))? {
+        let installed = machine.join(".roster").join("installation");
+        if installed.join("principals").is_dir()
+            && installed
+                .join("vendor")
+                .join("github-agent-contracts")
+                .exists()
+        {
+            return Ok(installed);
+        }
+    }
+    Ok(Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf())
+}
+
 pub fn resolve_config_root(installation: &Path, cwd: &Path) -> Result<PathBuf, Error> {
+    resolve_config_root_with_env(installation, cwd, None)
+}
+
+pub fn resolve_config_root_with_env(
+    installation: &Path,
+    cwd: &Path,
+    environment: Option<&Value>,
+) -> Result<PathBuf, Error> {
     let project = shared_config_root(cwd)?;
     if private_config(&project)?.is_some() {
         return Ok(project);
     }
+    if let Some(machine) = machine_config_root(environment)? {
+        if private_config(&machine)?.is_some() {
+            return Ok(machine);
+        }
+        if let Ok(inst_root) = installation_config_root(installation) {
+            if private_config(&inst_root)?.is_some() {
+                return Ok(inst_root);
+            }
+        }
+        return Ok(machine);
+    }
     installation_config_root(installation)
+}
+
+pub fn resolve_fleet_root_with_env(
+    installation: Option<&Path>,
+    cwd: &Path,
+    environment: Option<&Value>,
+) -> Result<PathBuf, Error> {
+    let project = shared_config_root(cwd)?;
+    if private_settings(&project, settings::Name::Fleet)?.is_some() {
+        return Ok(project);
+    }
+    if let Some(machine) = machine_config_root(environment)? {
+        if private_settings(&machine, settings::Name::Fleet)?.is_some() {
+            return Ok(machine);
+        }
+        if let Some(inst) = installation {
+            if let Ok(inst_root) = installation_config_root(inst) {
+                if private_settings(&inst_root, settings::Name::Fleet)?.is_some() {
+                    return Ok(inst_root);
+                }
+            }
+        }
+        return Ok(machine);
+    }
+    if let Some(inst) = installation {
+        if let Ok(inst_root) = installation_config_root(inst) {
+            if private_settings(&inst_root, settings::Name::Fleet)?.is_some() {
+                return Ok(inst_root);
+            }
+        }
+    }
+    Ok(project)
 }
 
 pub fn environment_value<'a>(
@@ -1196,12 +1319,24 @@ pub fn load(installation: &Path, cwd: &Path, environment: &Value) -> Result<Load
         return Err(invalid("Invocation environment must be an object"));
     }
     let target = shared_config_root(cwd)?;
+    let machine = machine_config_root(Some(environment))?;
     let (root, seal) = match private_config(&target)? {
         Some(source) => (target.clone(), Some(source)),
         None => {
-            let root = installation_config_root(installation)?;
-            let source = private_config(&root)?;
-            (root, source)
+            let mut found_machine = None;
+            if let Some(ref m_root) = machine {
+                if let Some(source) = private_config(m_root)? {
+                    found_machine = Some((m_root.clone(), Some(source)));
+                }
+            }
+            match found_machine {
+                Some(pair) => pair,
+                None => {
+                    let root = installation_config_root(installation)?;
+                    let source = private_config(&root)?;
+                    (root, source)
+                }
+            }
         }
     };
     let (config, source) = match &seal {
@@ -1212,13 +1347,31 @@ pub fn load(installation: &Path, cwd: &Path, environment: &Value) -> Result<Load
         None => (defaults()?, Source::Defaults),
     };
     let config = invocation_overrides(config, environment)?;
+    let mut fleet_root = root.clone();
     let (critic, critic_seal) = match config
         .as_value()
         .get("planner")
         .and_then(|value| value.get("critic_profile"))
     {
         Some(name) => {
-            let source = private_settings(&root, settings::Name::Fleet)?.ok_or_else(|| invalid(
+            let mut fleet_src = private_settings(&root, settings::Name::Fleet)?;
+            if fleet_src.is_none() {
+                if let Some(ref m_root) = machine {
+                    if let Some(s) = private_settings(m_root, settings::Name::Fleet)? {
+                        fleet_root = m_root.clone();
+                        fleet_src = Some(s);
+                    }
+                }
+            }
+            if fleet_src.is_none() {
+                if let Ok(inst_root) = installation_config_root(installation) {
+                    if let Some(s) = private_settings(&inst_root, settings::Name::Fleet)? {
+                        fleet_root = inst_root;
+                        fleet_src = Some(s);
+                    }
+                }
+            }
+            let source = fleet_src.ok_or_else(|| invalid(
                 "planner.critic_profile requires a private fleet.yml containing that exact profile",
             ))?;
             let fleet = crate::fleet::parse(&source.0)?;
@@ -1248,6 +1401,7 @@ pub fn load(installation: &Path, cwd: &Path, environment: &Value) -> Result<Load
         seal,
         critic,
         critic_seal,
+        fleet_root,
     })
 }
 
