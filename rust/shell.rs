@@ -6604,8 +6604,17 @@ pub fn run_self_update(
             let _ = fs::create_dir_all(parent);
         }
         if cfg!(windows) {
-            let old_dest = PathBuf::from(format!("{}.old", dest.display()));
-            let _ = fs::remove_file(&old_dest);
+            if let Some(parent) = dest.parent() {
+                if let Ok(rd) = fs::read_dir(parent) {
+                    for entry in rd.flatten() {
+                        let p = entry.path();
+                        if p.extension().and_then(|e| e.to_str()) == Some("old") {
+                            let _ = fs::remove_file(&p);
+                        }
+                    }
+                }
+            }
+            let old_dest = PathBuf::from(format!("{}.{}.old", dest.display(), std::process::id()));
             if fs::copy(&built_bin, dest).is_err() {
                 let _ = fs::rename(dest, &old_dest);
                 fs::copy(&built_bin, dest)
