@@ -7,12 +7,27 @@ $BinDir = Join-Path $RosterHome 'bin'
 $DotnetTools = Join-Path $UserHome '.dotnet\tools'
 $RepoUrl = 'https://github.com/R4yHarris/github-agent-roster.git'
 
-Write-Host '=== github-agent-roster installer (Windows PowerShell) ===' -ForegroundColor Cyan
+$CargoBin = Join-Path $UserHome '.cargo\bin'
+if (Test-Path (Join-Path $CargoBin 'cargo.exe')) {
+  $env:PATH = "$CargoBin;$env:PATH"
+} else {
+  $IsolatedToolchain = Get-ChildItem (Join-Path $UserHome '.copilot\session-state\*\files\rust-toolchain') -Directory -ErrorAction SilentlyContinue | Select-Object -Last 1
+  if ($IsolatedToolchain -and (Test-Path (Join-Path $IsolatedToolchain.FullName 'cargo\bin\cargo.exe'))) {
+    $root = $IsolatedToolchain.FullName
+    $env:CARGO_HOME = Join-Path $root 'cargo'
+    $env:RUSTUP_HOME = Join-Path $root 'rustup'
+    $env:PATH = "$(Join-Path $root 'cargo\bin');$env:PATH"
+    $dlltool = Join-Path $root 'llvm-dlltool-20261006\llvm-dlltool.exe'
+    if (Test-Path $dlltool) {
+      $env:RUSTFLAGS = "-C dlltool=$dlltool"
+    }
+  }
+}
 
 foreach ($dir in @($RosterHome, (Join-Path $RosterHome 'vault'), $BinDir, $DotnetTools)) {
   New-Item -ItemType Directory -Force -Path $dir | Out-Null
 }
-icacls $RosterHome /inheritance:r /grant:r "$($env:USERNAME):(OI)(CI)F" | Out-Null
+icacls $RosterHome /inheritance:r /grant:r "$($env:USERNAME):F" | Out-Null
 icacls (Join-Path $RosterHome 'vault') /inheritance:r /grant:r "$($env:USERNAME):(OI)(CI)F" | Out-Null
 
 $ScriptSourceDir = $null
@@ -23,26 +38,31 @@ if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot 'Cargo.toml'))) {
 }
 
 if ($ScriptSourceDir -and ((Resolve-Path $ScriptSourceDir).Path -eq $InstallDir)) {
-  git -C $InstallDir submodule update --init --recursive
+  git -c core.autocrlf=false -C $InstallDir submodule update --init --recursive
 } elseif (Test-Path (Join-Path $InstallDir '.git')) {
   Write-Host "-> Updating installation at $InstallDir..."
-  git -C $InstallDir fetch --prune origin
-  git -C $InstallDir merge --ff-only origin/main
-  git -C $InstallDir submodule update --init --recursive
+  git -c core.autocrlf=false -C $InstallDir fetch --prune origin
+  git -c core.autocrlf=false -C $InstallDir checkout -B main origin/main
+  git -c core.autocrlf=false -C $InstallDir submodule update --init --recursive
 } elseif ($ScriptSourceDir) {
   Write-Host "-> Cloning local checkout $ScriptSourceDir into $InstallDir..."
-  git clone --recurse-submodules $ScriptSourceDir $InstallDir
+  git -c core.autocrlf=false clone --branch main --recurse-submodules $ScriptSourceDir $InstallDir
   git -C $InstallDir remote set-url origin $RepoUrl
 } else {
   Write-Host "-> Cloning $RepoUrl into $InstallDir..."
-  git clone --recurse-submodules $RepoUrl $InstallDir
+  git -c core.autocrlf=false clone --branch main --recurse-submodules $RepoUrl $InstallDir
+}
+git -C $InstallDir config core.autocrlf false
+$SubmoduleDir = Join-Path $InstallDir 'vendor\github-agent-contracts'
+if (Test-Path $SubmoduleDir) {
+  git -C $SubmoduleDir config core.autocrlf false
+  git -C $SubmoduleDir rm --cached -r . | Out-Null
+  git -C $SubmoduleDir reset --hard HEAD | Out-Null
 }
 
 $BuiltExe = $null
-if ($ScriptSourceDir -and (Test-Path (Join-Path $ScriptSourceDir 'target\release\roster.exe'))) {
-  $BuiltExe = Join-Path $ScriptSourceDir 'target\release\roster.exe'
-} elseif ($ScriptSourceDir -and (Test-Path (Join-Path $ScriptSourceDir 'target\debug\roster.exe'))) {
-  $BuiltExe = Join-Path $ScriptSourceDir 'target\debug\roster.exe'
+if ($env:ROSTER_PREBUILT_EXE -and (Test-Path $env:ROSTER_PREBUILT_EXE)) {
+  $BuiltExe = $env:ROSTER_PREBUILT_EXE
 } else {
   Write-Host '-> Building native Rust release binary (roster.exe)...'
   cargo build --manifest-path (Join-Path $InstallDir 'Cargo.toml') --release --locked
@@ -102,10 +122,10 @@ $env:ROSTER_INSTALLATION_ROOT = $InstallDir
 if ($GitPath) { $env:ROSTER_GIT = $GitPath }
 if ($Node20Path) { $env:ROSTER_NODE20 = $Node20Path }
 
-[Environment]::SetEnvironmentVariable('ROSTER_MACHINE_HOME', $UserHome, 'User')
-[Environment]::SetEnvironmentVariable('ROSTER_INSTALLATION_ROOT', $InstallDir, 'User')
-if ($GitPath) { [Environment]::SetEnvironmentVariable('ROSTER_GIT', $GitPath, 'User') }
-if ($Node20Path) { [Environment]::SetEnvironmentVariable('ROSTER_NODE20', $Node20Path, 'User') }
+Set-ItemProperty -Path 'HKCU:\Environment' -Name 'ROSTER_MACHINE_HOME' -Value $UserHome
+Set-ItemProperty -Path 'HKCU:\Environment' -Name 'ROSTER_INSTALLATION_ROOT' -Value $InstallDir
+if ($GitPath) { Set-ItemProperty -Path 'HKCU:\Environment' -Name 'ROSTER_GIT' -Value $GitPath }
+if ($Node20Path) { Set-ItemProperty -Path 'HKCU:\Environment' -Name 'ROSTER_NODE20' -Value $Node20Path }
 
 Write-Host ''
 Write-Host "=== Machine-scoped configuration initialized in $RosterHome ===" -ForegroundColor Green

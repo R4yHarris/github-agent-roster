@@ -66,25 +66,37 @@ fi
 
 if [ -n "$SCRIPT_SOURCE_DIR" ] && [ "$SCRIPT_SOURCE_DIR" = "$INSTALL_DIR" ]; then
   echo "-> Using existing installation at $INSTALL_DIR..."
-  git -C "$INSTALL_DIR" submodule update --init --recursive
+  git -c core.autocrlf=false -C "$INSTALL_DIR" submodule update --init --recursive
 elif [ -d "$INSTALL_DIR/.git" ]; then
   echo "-> Updating installation at $INSTALL_DIR..."
-  git -C "$INSTALL_DIR" fetch --prune origin
-  git -C "$INSTALL_DIR" merge --ff-only origin/main || true
-  git -C "$INSTALL_DIR" submodule update --init --recursive
+  git -c core.autocrlf=false -C "$INSTALL_DIR" fetch --prune origin
+  git -c core.autocrlf=false -C "$INSTALL_DIR" merge --ff-only origin/main || true
+  git -c core.autocrlf=false -C "$INSTALL_DIR" submodule update --init --recursive
 elif [ -n "$SCRIPT_SOURCE_DIR" ]; then
   echo "-> Cloning local source checkout $SCRIPT_SOURCE_DIR into $INSTALL_DIR..."
-  git clone --recurse-submodules "$SCRIPT_SOURCE_DIR" "$INSTALL_DIR"
+  git -c core.autocrlf=false clone --recurse-submodules "$SCRIPT_SOURCE_DIR" "$INSTALL_DIR"
   git -C "$INSTALL_DIR" remote set-url origin "$REPO_URL" || true
 else
   echo "-> Cloning $REPO_URL into $INSTALL_DIR..."
-  git clone --recurse-submodules "$REPO_URL" "$INSTALL_DIR"
+  git -c core.autocrlf=false clone --recurse-submodules "$REPO_URL" "$INSTALL_DIR"
+fi
+git -C "$INSTALL_DIR" config core.autocrlf false
+if [ -d "$INSTALL_DIR/vendor/github-agent-contracts" ]; then
+  git -C "$INSTALL_DIR/vendor/github-agent-contracts" config core.autocrlf false
+  git -C "$INSTALL_DIR/vendor/github-agent-contracts" rm --cached -r . >/dev/null 2>&1 || true
+  git -C "$INSTALL_DIR/vendor/github-agent-contracts" reset --hard HEAD >/dev/null 2>&1 || true
 fi
 
-echo "-> Building native Rust release binary (roster)..."
-(cd "$INSTALL_DIR" && cargo build --release --locked)
-cp "$INSTALL_DIR/target/release/roster" "$ROSTER_BIN_DIR/roster"
-cp "$INSTALL_DIR/target/release/roster" "$BIN_DIR/roster"
+if [ -n "${ROSTER_PREBUILT_BIN:-}" ] && [ -f "$ROSTER_PREBUILT_BIN" ]; then
+  echo "-> Installing prebuilt binary from $ROSTER_PREBUILT_BIN..."
+  cp "$ROSTER_PREBUILT_BIN" "$ROSTER_BIN_DIR/roster"
+  cp "$ROSTER_PREBUILT_BIN" "$BIN_DIR/roster"
+else
+  echo "-> Building native Rust release binary (roster)..."
+  (cd "$INSTALL_DIR" && cargo build --release --locked)
+  cp "$INSTALL_DIR/target/release/roster" "$ROSTER_BIN_DIR/roster"
+  cp "$INSTALL_DIR/target/release/roster" "$BIN_DIR/roster"
+fi
 chmod 755 "$ROSTER_BIN_DIR/roster" "$BIN_DIR/roster"
 
 SEED_SOURCE_DIR=""
