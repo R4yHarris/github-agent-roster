@@ -527,6 +527,16 @@ fn run(args: &[String]) -> Result<Output, Error> {
             )
             .map(Output::success);
         }
+        local_cli::Command::Update { check_only } => {
+            let environment = environment()?;
+            let installation = config::default_installation_root(&environment)?;
+            let out = github_agent_roster::shell::run_self_update(
+                &installation,
+                &environment,
+                check_only,
+            )?;
+            return Ok(Output::success(out));
+        }
         local_cli::Command::FleetList => {
             let cwd = env::current_dir()
                 .map_err(|_| Error::new("Error", "Cannot resolve the invocation directory"))?;

@@ -23,6 +23,7 @@ pub const HELP: &str = "Usage:
   roster --help
   roster init
   roster onboard [--discover]
+  roster update [--check]
   roster ask \"TEXT\"
   roster ask --pending|--cancel|--resume [\"TEXT\"]
   roster question [--files PATH,PATH --] TEXT
@@ -109,6 +110,7 @@ pub enum VaultCommand {
 pub enum Command {
     Help,
     Init,
+    Update { check_only: bool },
     Ask(AskCommand),
     ResumeGreen(u64),
     Question(Vec<String>),
@@ -397,6 +399,11 @@ pub fn parse(args: &[String]) -> Result<Command, Error> {
             Ok(Command::Eval(evaluation::Decision::parse(flags)?))
         }
         [command, flags @ ..] if command == "run" => Ok(Command::Run(parse_run(flags)?)),
+        [command, rest @ ..] if command == "update" => match rest {
+            [] => Ok(Command::Update { check_only: false }),
+            [flag] if flag == "--check" => Ok(Command::Update { check_only: true }),
+            _ => Err(Error::type_error("Use roster update [--check].")),
+        },
         [command, operation, file] if command == "recipe" && operation == "validate" => {
             Ok(Command::Recipe(PathBuf::from(file)))
         }

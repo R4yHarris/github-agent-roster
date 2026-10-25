@@ -642,6 +642,15 @@ pub fn commands() -> &'static [CommandPage] {
             flags: &[],
             aliases: &[],
         },
+        CommandPage {
+            name: "update",
+            group: "Settings",
+            usage: "/update [--check]",
+            description: "Check for or install the latest Roster release from origin/main into ~/.roster.",
+            example: "/update --check",
+            flags: &["--check"],
+            aliases: &[],
+        },
     ]
 }
 
@@ -2783,6 +2792,14 @@ impl ShellSession {
                     return Err(Error::type_error("Use /clear."));
                 }
                 Ok(ShellAction::ClearScreen)
+            }
+            "update" => {
+                if !raw_args.is_empty() && raw_args != "--check" {
+                    return Err(Error::type_error("Use /update [--check]."));
+                }
+                let out =
+                    run_self_update(&self.installation, &self.environment, raw_args == "--check")?;
+                Ok(ShellAction::Continue(self.redact_text(&out)?))
             }
             "redraw" => {
                 if !raw_args.is_empty() {
@@ -6075,6 +6092,14 @@ pub fn translate_natural_language_command(text: &str) -> Option<String> {
             r"(?i)^(?:please\s+|can\s+you\s+)*(?:show|view|check)\s+(?:me\s+)?(?:the\s+|my\s+|delivery\s+)*(?:stats|statistics|metrics)[?.!]*$",
             "/stats",
         ),
+        (
+            r"(?i)^(?:please\s+|can\s+you\s+)*(?:check\s+for\s+(?:roster\s+)?updates?|is\s+roster\s+up\s+to\s+date)[?.!]*$",
+            "/update --check",
+        ),
+        (
+            r"(?i)^(?:please\s+|can\s+you\s+)*(?:update|upgrade)\s+roster[?.!]*$",
+            "/update",
+        ),
     ];
     for (pat, cmd) in patterns {
         if regex_lite::Regex::new(pat).ok()?.is_match(trimmed) {
@@ -6351,6 +6376,264 @@ pub fn parse_natural_language_translation_json(
             })
         }
         _ => None,
+    }
+}
+
+pub fn run_self_update(
+    installation: &Path,
+    environment: &Value,
+    check_only: bool,
+) -> Result<String, Error> {
+    let install_dir =
+        if installation.join("Cargo.toml").is_file() && installation.join(".git").exists() {
+            installation.to_path_buf()
+        } else {
+            config::default_installation_root(environment)?
+        };
+    if !install_dir.join("Cargo.toml").is_file() || !install_dir.join(".git").exists() {
+        return Err(Error::new(
+            "Error",
+            format!(
+                "Roster installation directory {} is not a complete Git source checkout; run install.sh or install.ps1 first.",
+                install_dir.display()
+            ),
+        ));
+    }
+    let git_bin = config::environment_value(environment, "ROSTER_GIT")
+        .ok()
+        .flatten()
+        .and_then(|t| t.to_utf8().ok())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "git".to_owned());
+
+    let run_git = |dir: &Path, args: &[&str]| -> Result<String, Error> {
+        let out = StdCommand::new(&git_bin)
+            .arg("-c")
+            .arg("core.autocrlf=false")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .map_err(|e| Error::new("Error", format!("git {}: {e}", args.join(" "))))?;
+        if !out.status.success() {
+            let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+            return Err(Error::new(
+                "Error",
+                if stderr.is_empty() {
+                    format!("git {} failed", args.join(" "))
+                } else {
+                    stderr
+                },
+            ));
+        }
+        String::from_utf8(out.stdout)
+            .map(|s| s.trim().to_owned())
+            .map_err(|e| Error::new("Error", e.to_string()))
+    };
+
+    let before_full = run_git(&install_dir, &["rev-parse", "HEAD"])?;
+    let before_short = run_git(&install_dir, &["rev-parse", "--short", "HEAD"])?;
+
+    let fetch_ok = run_git(&install_dir, &["fetch", "--prune", "origin", "main"]).is_ok();
+    let target_ref = if fetch_ok && run_git(&install_dir, &["rev-parse", "FETCH_HEAD"]).is_ok() {
+        "FETCH_HEAD"
+    } else if run_git(&install_dir, &["rev-parse", "refs/remotes/origin/main"]).is_ok() {
+        "refs/remotes/origin/main"
+    } else {
+        "HEAD"
+    };
+    let remote_full = run_git(&install_dir, &["rev-parse", target_ref])?;
+    let remote_short = run_git(&install_dir, &["rev-parse", "--short", target_ref])?;
+
+    if check_only {
+        if before_full == remote_full {
+            return Ok(format!(
+                "Roster is up to date at {before_short} ({}).\n",
+                install_dir.display()
+            ));
+        }
+        let behind = run_git(
+            &install_dir,
+            &["rev-list", "--count", &format!("HEAD..{remote_full}")],
+        )
+        .unwrap_or_else(|_| "1+".to_owned());
+        return Ok(format!(
+            "Update available: {before_short} -> {remote_short} ({behind} commit(s) behind origin/main). Run `roster update` or `/update` to install.\n"
+        ));
+    }
+
+    if before_full != remote_full
+        && run_git(&install_dir, &["merge", "--ff-only", &remote_full]).is_err()
+    {
+        let _ = run_git(&install_dir, &["checkout", "-B", "main", &remote_full])?;
+    }
+    let _ = run_git(&install_dir, &["config", "core.autocrlf", "false"]);
+    let _ = run_git(
+        &install_dir,
+        &["submodule", "update", "--init", "--recursive"],
+    );
+    let sub_dir = install_dir.join("vendor").join("github-agent-contracts");
+    if sub_dir.is_dir() {
+        let _ = run_git(&sub_dir, &["config", "core.autocrlf", "false"]);
+        let _ = run_git(&sub_dir, &["rm", "--cached", "-r", "."]);
+        let _ = run_git(&sub_dir, &["reset", "--hard", "HEAD"]);
+    }
+
+    let home = config::environment_value(
+        environment,
+        if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+    )
+    .ok()
+    .flatten()
+    .and_then(|t| t.to_utf8().ok())
+    .map(PathBuf::from)
+    .or_else(|| {
+        std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from)
+    })
+    .unwrap_or_else(|| install_dir.clone());
+
+    let mut cargo_bin = config::environment_value(environment, "ROSTER_CARGO")
+        .ok()
+        .flatten()
+        .and_then(|t| t.to_utf8().ok())
+        .filter(|s| !s.is_empty() && Path::new(s).is_file())
+        .map(PathBuf::from);
+    if cargo_bin.is_none() {
+        let user_cargo =
+            home.join(".cargo")
+                .join("bin")
+                .join(if cfg!(windows) { "cargo.exe" } else { "cargo" });
+        if user_cargo.is_file() {
+            cargo_bin = Some(user_cargo);
+        }
+    }
+    let mut extra_cargo_home = None;
+    let mut extra_rustup_home = None;
+    let mut extra_rustflags = None;
+    if cargo_bin.is_none() && cfg!(windows) {
+        let session_states = home.join(".copilot").join("session-state");
+        if let Ok(rd) = fs::read_dir(&session_states) {
+            for entry in rd.flatten() {
+                let tc_root = entry.path().join("files").join("rust-toolchain");
+                let candidate = tc_root.join("cargo").join("bin").join("cargo.exe");
+                if candidate.is_file() {
+                    cargo_bin = Some(candidate);
+                    extra_cargo_home = Some(tc_root.join("cargo"));
+                    extra_rustup_home = Some(tc_root.join("rustup"));
+                    let dlltool = tc_root
+                        .join("llvm-dlltool-20261006")
+                        .join("llvm-dlltool.exe");
+                    if dlltool.is_file() {
+                        extra_rustflags = Some(format!("-C dlltool={}", dlltool.display()));
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    let cargo_exe = cargo_bin
+        .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "cargo.exe" } else { "cargo" }));
+
+    let mut build_cmd = StdCommand::new(&cargo_exe);
+    build_cmd
+        .current_dir(&install_dir)
+        .args(["build", "--release", "--locked"]);
+    if let Some(ch) = extra_cargo_home {
+        build_cmd.env("CARGO_HOME", &ch);
+        if let Some(bin_parent) = cargo_exe.parent() {
+            let cur_path = std::env::var_os("PATH").unwrap_or_default();
+            let mut paths = vec![bin_parent.to_path_buf()];
+            paths.extend(std::env::split_paths(&cur_path));
+            if let Ok(joined) = std::env::join_paths(paths) {
+                build_cmd.env("PATH", joined);
+            }
+        }
+    }
+    if let Some(rh) = extra_rustup_home {
+        build_cmd.env("RUSTUP_HOME", rh);
+    }
+    if let Some(rf) = extra_rustflags {
+        build_cmd.env("RUSTFLAGS", rf);
+    }
+    let build_out = build_cmd
+        .output()
+        .map_err(|e| Error::new("Error", format!("cargo build failed: {e}")))?;
+    if !build_out.status.success() {
+        let stderr = String::from_utf8_lossy(&build_out.stderr).trim().to_owned();
+        return Err(Error::new(
+            "Error",
+            format!("cargo build --release --locked failed: {stderr}"),
+        ));
+    }
+
+    let built_bin = install_dir
+        .join("target")
+        .join("release")
+        .join(if cfg!(windows) {
+            "roster.exe"
+        } else {
+            "roster"
+        });
+    if !built_bin.is_file() {
+        return Err(Error::new(
+            "Error",
+            format!(
+                "Expected release binary at {} was not produced",
+                built_bin.display()
+            ),
+        ));
+    }
+
+    let roster_home = config::machine_config_root(Some(environment))?
+        .unwrap_or_else(|| home.clone())
+        .join(".roster");
+    let targets = if cfg!(windows) {
+        vec![
+            roster_home.join("bin").join("roster.exe"),
+            home.join(".dotnet").join("tools").join("roster.exe"),
+        ]
+    } else {
+        vec![
+            home.join(".local").join("bin").join("roster"),
+            roster_home.join("bin").join("roster"),
+        ]
+    };
+
+    for dest in &targets {
+        if let Some(parent) = dest.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if cfg!(windows) {
+            let old_dest = PathBuf::from(format!("{}.old", dest.display()));
+            let _ = fs::remove_file(&old_dest);
+            if fs::copy(&built_bin, dest).is_err() {
+                let _ = fs::rename(dest, &old_dest);
+                fs::copy(&built_bin, dest)
+                    .map_err(|e| Error::new("Error", format!("{}: {e}", dest.display())))?;
+            }
+        } else {
+            let _ = fs::remove_file(dest);
+            fs::copy(&built_bin, dest)
+                .map_err(|e| Error::new("Error", format!("{}: {e}", dest.display())))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(dest, fs::Permissions::from_mode(0o755));
+            }
+        }
+    }
+
+    let primary = &targets[0];
+    if before_full == remote_full {
+        Ok(format!(
+            "Roster is up to date at {remote_short}; verified and refreshed binary at {}.\n",
+            primary.display()
+        ))
+    } else {
+        Ok(format!(
+            "Updated Roster {before_short} -> {remote_short} and installed {}.\n",
+            primary.display()
+        ))
     }
 }
 
@@ -8118,6 +8401,11 @@ mod tests {
         );
         assert!(root.join("DEPLOY_CHECKLIST.md").is_file());
 
+        let upd_check = session.dispatch_line("/update --check").await?;
+        assert!(
+            matches!(upd_check, ShellAction::Continue(ref s) if s.contains("Roster is up to date") || s.contains("Update available:"))
+        );
+
         let _ = fs::remove_dir_all(&root);
         Ok(())
     }
@@ -8140,6 +8428,14 @@ mod tests {
         assert_eq!(
             translate_natural_language_command("list open github issues"),
             Some("/issues".to_owned())
+        );
+        assert_eq!(
+            translate_natural_language_command("check for updates"),
+            Some("/update --check".to_owned())
+        );
+        assert_eq!(
+            translate_natural_language_command("update roster"),
+            Some("/update".to_owned())
         );
 
         let ws_files = vec!["README.md".to_owned(), "rust/shell.rs".to_owned()];
