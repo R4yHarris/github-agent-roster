@@ -4351,7 +4351,8 @@ impl ShellSession {
         }
         let mut chat_cfg = self.config.clone();
         let mut chat_llm = llm.clone();
-        let _ = domain::put(&mut chat_llm, "max_tokens", Value::Number(1536.0));
+        let _ = domain::put(&mut chat_llm, "max_tokens", Value::Number(4096.0));
+        let _ = domain::put(&mut chat_llm, "effort", Value::string("none"));
         let _ = domain::put(&mut chat_llm, "thinking", Value::Boolean(false));
         let _ = domain::put(&mut chat_cfg, "llm", chat_llm);
         let admission = crate::llm::admission::Admission::default();
@@ -4359,7 +4360,7 @@ impl ShellSession {
             &chat_cfg,
             &admission,
             crate::llm::builtin::Options {
-                retry_length: false,
+                retry_length: true,
                 stream: false,
             },
         )
@@ -4469,6 +4470,9 @@ impl ShellSession {
                 let _ = domain::put(&mut self.display, "outputTokens", Value::Number(ct as f64));
             }
         }
+        if domain::is_text(res.finish_reason.as_ref(), "length") {
+            return None;
+        }
         res.message
             .get("content")
             .and_then(Value::as_string)
@@ -4491,7 +4495,8 @@ impl ShellSession {
         }
         let mut chat_cfg = self.config.clone();
         let mut chat_llm = llm.clone();
-        let _ = domain::put(&mut chat_llm, "max_tokens", Value::Number(256.0));
+        let _ = domain::put(&mut chat_llm, "max_tokens", Value::Number(1024.0));
+        let _ = domain::put(&mut chat_llm, "effort", Value::string("none"));
         let _ = domain::put(&mut chat_llm, "thinking", Value::Boolean(false));
         let _ = domain::put(&mut chat_cfg, "llm", chat_llm);
         let admission = crate::llm::admission::Admission::default();
@@ -4599,7 +4604,8 @@ impl ShellSession {
         }
         let mut chat_cfg = self.config.clone();
         let mut chat_llm = llm.clone();
-        let _ = domain::put(&mut chat_llm, "max_tokens", Value::Number(384.0));
+        let _ = domain::put(&mut chat_llm, "max_tokens", Value::Number(1024.0));
+        let _ = domain::put(&mut chat_llm, "effort", Value::string("none"));
         let _ = domain::put(&mut chat_llm, "thinking", Value::Boolean(false));
         let _ = domain::put(&mut chat_cfg, "llm", chat_llm);
         let admission = crate::llm::admission::Admission::default();
@@ -4719,7 +4725,8 @@ impl ShellSession {
             {
                 let mut chat_cfg = self.config.clone();
                 let mut chat_llm = llm.clone();
-                let _ = domain::put(&mut chat_llm, "max_tokens", Value::Number(1536.0));
+                let _ = domain::put(&mut chat_llm, "max_tokens", Value::Number(4096.0));
+                let _ = domain::put(&mut chat_llm, "effort", Value::string("none"));
                 let _ = domain::put(&mut chat_llm, "thinking", Value::Boolean(false));
                 let _ = domain::put(&mut chat_cfg, "llm", chat_llm);
                 let admission = crate::llm::admission::Admission::default();
