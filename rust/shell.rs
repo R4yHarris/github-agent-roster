@@ -4203,6 +4203,38 @@ impl ShellSession {
         }
     }
 
+    fn llm_credentials(&self) -> crate::llm::openai::Credentials {
+        let mut vault_obj = Vec::new();
+        if let Ok(vault) = crate::vault::FileVault::from_environment(&self.environment) {
+            for key_name in ["APERTURE_API_KEY", "ROSTER_API_KEY", "OPENAI_API_KEY"] {
+                if let Ok(Some(val)) = vault.get(key_name) {
+                    if !val.is_empty() {
+                        vault_obj.push((Text::from(key_name), Value::string(val.as_str())));
+                    }
+                }
+            }
+            if let Some(custom_key) = self.api_key_env() {
+                if !vault_obj
+                    .iter()
+                    .any(|(k, _)| k.0 == Text::from(custom_key.as_str()).0)
+                {
+                    if let Ok(Some(val)) = vault.get(&custom_key) {
+                        if !val.is_empty() {
+                            vault_obj.push((
+                                Text::from(custom_key.as_str()),
+                                Value::string(val.as_str()),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        crate::llm::openai::Credentials {
+            environment: Some(self.environment.clone()),
+            vault_entries: Some(Value::Object(vault_obj)),
+        }
+    }
+
     async fn run_question_text(&mut self, text: &str) -> Result<String, Error> {
         if is_workspace_inventory_ask(text)? {
             return self.execute_workspace_inventory(text).await;
@@ -4227,11 +4259,12 @@ impl ShellSession {
         } else {
             text.to_owned()
         };
+        let creds = self.llm_credentials();
         let mut q_opts = crate::ask::QuestionOptions {
             cwd: &root,
             config: &self.config,
             env: Some(&self.environment),
-            vault: None,
+            vault: creds.vault_entries.as_ref(),
             transport: &mut transport,
             signal: Some(&token),
         };
@@ -4250,46 +4283,198 @@ impl ShellSession {
         let drives = discover_drives(&self.cwd, &self.environment);
         let repos = discover_repositories(&self.cwd, &self.environment);
 
-        let llm_summary = self
-            .try_summarize_inventory_with_llm(text, &drives, &repos)
-            .await;
-
-        let report_md = render_workspace_inventory_markdown(
-            text,
-            &self.cwd,
-            &drives,
-            &repos,
-            llm_summary.as_deref(),
-        );
-
         let wants_file = regex_lite::Regex::new(
-            r"(?i)\b(?:markdown|\.md\b|file|report|place\s+it|save\s+it|write\s+it|make\s+me)\b",
+            r"(?i)\b(?:markdown|\.md\b|file|report|place\s+it|save\s+it|write\s+it|make\s+me\s+a)\b",
         )
         .map_err(|e| Error::new("Error", e.to_string()))?
         .is_match(text);
 
-        let mut out = String::new();
         if wants_file {
+            let llm_summary = self
+                .try_summarize_inventory_with_llm(text, &drives, &repos)
+                .await;
+            let report_md = render_workspace_inventory_markdown(
+                text,
+                &self.cwd,
+                &drives,
+                &repos,
+                llm_summary.as_deref(),
+            );
             let target_path = resolve_inventory_target_path(text, &self.cwd, &self.environment);
             if let Some(parent) = target_path.parent() {
                 let _ = fs::create_dir_all(parent);
             }
             fs::write(&target_path, report_md.as_bytes())
                 .map_err(|e| Error::new("Error", format!("{}: {e}", target_path.display())))?;
-            out.push_str(&format!(
-                "Wrote markdown report: {}\nDrives discovered: {} | Git repositories/worktrees discovered: {}\n\n",
+            let mut out = format!(
+                "Wrote markdown report: {}\nDrives discovered: {} | Git repositories/worktrees discovered: {}\n\n{}",
                 target_path.display(),
                 drives.len(),
-                repos.len()
-            ));
+                repos.len(),
+                report_md
+            );
+            if !out.ends_with('\n') {
+                out.push('\n');
+            }
+            let _ = domain::put(&mut self.display, "state", Value::string("passed"));
+            let _ = domain::put(&mut self.display, "review", Value::string("pass"));
+            return self.redact_text(&out);
         }
-        out.push_str(&report_md);
+
+        let answer = match self
+            .answer_workspace_query_with_llm(text, &drives, &repos)
+            .await
+        {
+            Some(llm_ans) => llm_ans,
+            None => render_targeted_workspace_answer(text, &self.cwd, &drives, &repos),
+        };
+        let mut out = answer;
         if !out.ends_with('\n') {
             out.push('\n');
         }
         let _ = domain::put(&mut self.display, "state", Value::string("passed"));
         let _ = domain::put(&mut self.display, "review", Value::string("pass"));
         self.redact_text(&out)
+    }
+
+    async fn answer_workspace_query_with_llm(
+        &mut self,
+        ask_text: &str,
+        drives: &[DriveEntry],
+        repos: &[RepoEntry],
+    ) -> Option<String> {
+        let llm = self.config.get("llm")?;
+        if !llm.get("base_url").is_some_and(domain::truthy)
+            || !llm.get("model").is_some_and(domain::truthy)
+        {
+            return None;
+        }
+        let mut chat_cfg = self.config.clone();
+        let mut chat_llm = llm.clone();
+        let _ = domain::put(&mut chat_llm, "max_tokens", Value::Number(1536.0));
+        let _ = domain::put(&mut chat_llm, "thinking", Value::Boolean(false));
+        let _ = domain::put(&mut chat_cfg, "llm", chat_llm);
+        let admission = crate::llm::admission::Admission::default();
+        let mut chat = crate::llm::builtin::BuiltinChat::new(
+            &chat_cfg,
+            &admission,
+            crate::llm::builtin::Options {
+                retry_length: false,
+                stream: false,
+            },
+        )
+        .ok()??;
+        let mut transport = crate::llm::http::HttpTransport::new().ok()?;
+
+        let mut sorted_repos = repos.to_vec();
+        sorted_repos.sort_by_key(|a| std::cmp::Reverse(a.modified_epoch));
+
+        let drive_lines = drives
+            .iter()
+            .map(|d| {
+                format!(
+                    "- {} ({}) | total={} | free={} | used={} | dev_roots={}",
+                    d.mount,
+                    d.kind,
+                    d.total_gib,
+                    d.free_gib,
+                    d.used_pct,
+                    if d.dev_roots.is_empty() {
+                        "-".to_owned()
+                    } else {
+                        d.dev_roots.join(", ")
+                    }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let repo_lines = sorted_repos
+            .iter()
+            .enumerate()
+            .map(|(idx, r)| {
+                let wts = if r.linked_worktrees.is_empty() {
+                    "none".to_owned()
+                } else {
+                    r.linked_worktrees.join(", ")
+                };
+                format!(
+                    "{}. {} | kind={} | path={} | branch={} | state={} | modified_utc={} (epoch={}) | last_commit={} | linked_worktrees=[{}] | remote={}",
+                    idx + 1,
+                    r.name,
+                    r.kind,
+                    r.path,
+                    r.branch,
+                    r.state,
+                    r.modified_utc,
+                    r.modified_epoch,
+                    r.last_commit,
+                    wts,
+                    r.remote
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let user_payload = format!(
+            "Current working directory: {}\n\nDiscovered Drives / Mounts:\n{}\n\nDiscovered Git Repositories & Worktrees (pre-sorted in descending order from most recently modified #1 to oldest):\n{}\n\nUser question / request:\n{}",
+            self.cwd.display(),
+            drive_lines,
+            repo_lines,
+            ask_text
+        );
+
+        let req = Value::object(vec![(
+            "messages",
+            Value::Array(vec![
+                Value::object(vec![
+                    ("role", Value::string("system")),
+                    (
+                        "content",
+                        Value::string(
+                            "You are Roster, an intelligent software engineering and workspace orchestrator CLI. Answer the user's specific question or request directly, accurately, and concisely using the live discovered drive, repository, worktree, and modification-timestamp data provided. Filter, group, or sort the repositories exactly as the user asked (for example, only repositories on a specific drive/directory, which repositories have linked worktrees, the single most recently modified repository directory, or a ranked list in descending order of modification time). Do not dump unrelated boilerplate.",
+                        ),
+                    ),
+                ]),
+                Value::object(vec![
+                    ("role", Value::string("user")),
+                    ("content", Value::string(&user_payload)),
+                ]),
+            ]),
+        )]);
+        let creds = self.llm_credentials();
+        let mut obs = crate::llm::control::NoObserver;
+        let res = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            chat.complete(
+                &req,
+                &mut transport,
+                &mut obs,
+                &creds,
+                crate::llm::openai::CallOptions {
+                    signal: None,
+                    parent: None,
+                    retry_command: None,
+                },
+            ),
+        )
+        .await
+        .ok()?
+        .ok()?;
+        if let Some(usage) = &res.usage {
+            if let Some(pt) = domain::safe_integer(usage.get("prompt_tokens")) {
+                let _ = domain::put(&mut self.display, "contextUsed", Value::Number(pt as f64));
+            }
+            if let Some(ct) = domain::safe_integer(usage.get("completion_tokens")) {
+                let _ = domain::put(&mut self.display, "outputTokens", Value::Number(ct as f64));
+            }
+        }
+        res.message
+            .get("content")
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty())
     }
 
     async fn try_summarize_inventory_with_llm(
@@ -4358,10 +4543,7 @@ impl ShellSession {
                 ]),
             ]),
         )]);
-        let creds = crate::llm::openai::Credentials {
-            environment: Some(self.environment.clone()),
-            vault_entries: None,
-        };
+        let creds = self.llm_credentials();
         let mut obs = crate::llm::control::NoObserver;
         let res = tokio::time::timeout(
             std::time::Duration::from_secs(12),
@@ -4461,10 +4643,7 @@ impl ShellSession {
                 ]),
             ]),
         )]);
-        let creds = crate::llm::openai::Credentials {
-            environment: Some(self.environment.clone()),
-            vault_entries: None,
-        };
+        let creds = self.llm_credentials();
         let mut obs = crate::llm::control::NoObserver;
         let res = tokio::time::timeout(
             std::time::Duration::from_secs(15),
@@ -4583,10 +4762,7 @@ impl ShellSession {
                                 ]),
                             ]),
                         )]);
-                        let creds = crate::llm::openai::Credentials {
-                            environment: Some(self.environment.clone()),
-                            vault_entries: None,
-                        };
+                        let creds = self.llm_credentials();
                         let mut obs = crate::llm::control::NoObserver;
                         if let Ok(Ok(res)) = tokio::time::timeout(
                             std::time::Duration::from_secs(20),
@@ -5499,6 +5675,9 @@ pub struct RepoEntry {
     pub state: String,
     pub remote: String,
     pub last_commit: String,
+    pub modified_epoch: u64,
+    pub modified_utc: String,
+    pub linked_worktrees: Vec<String>,
 }
 
 fn format_gib(bytes: u64) -> String {
@@ -5716,6 +5895,66 @@ fn inspect_git_repo(path: &Path, is_worktree: bool) -> RepoEntry {
         run_git(&["config", "--get", "remote.origin.url"]).unwrap_or_else(|| "-".to_owned());
     let last_commit =
         run_git(&["log", "-1", "--format=%h (%cr) %s"]).unwrap_or_else(|| "-".to_owned());
+    let commit_epoch = run_git(&["log", "-1", "--format=%ct"])
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(0);
+
+    let mut latest_mtime = commit_epoch;
+    for candidate in [
+        path.to_path_buf(),
+        path.join(".git"),
+        path.join(".git").join("index"),
+        path.join(".git").join("HEAD"),
+    ] {
+        if let Ok(meta) = fs::metadata(&candidate) {
+            if let Ok(modified) = meta.modified() {
+                if let Ok(dur) = modified.duration_since(std::time::UNIX_EPOCH) {
+                    latest_mtime = latest_mtime.max(dur.as_secs());
+                }
+            }
+        }
+    }
+    if let Ok(rd) = fs::read_dir(path) {
+        for entry in rd.flatten().take(32) {
+            if let Ok(meta) = entry.metadata() {
+                if let Ok(modified) = meta.modified() {
+                    if let Ok(dur) = modified.duration_since(std::time::UNIX_EPOCH) {
+                        latest_mtime = latest_mtime.max(dur.as_secs());
+                    }
+                }
+            }
+        }
+    }
+    let modified_utc = time::OffsetDateTime::from_unix_timestamp(latest_mtime as i64)
+        .map(|dt| {
+            format!(
+                "{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
+                dt.year(),
+                dt.month() as u8,
+                dt.day(),
+                dt.hour(),
+                dt.minute(),
+                dt.second()
+            )
+        })
+        .unwrap_or_else(|_| "-".to_owned());
+
+    let mut linked_worktrees = Vec::new();
+    if !is_worktree {
+        if let Some(wt_out) = run_git(&["worktree", "list", "--porcelain"]) {
+            let norm_self = path.display().to_string().replace('\\', "/");
+            for line in wt_out.lines() {
+                if let Some(wt_path) = line.strip_prefix("worktree ") {
+                    let trimmed = wt_path.trim();
+                    let norm_wt = trimmed.replace('\\', "/");
+                    if !norm_wt.eq_ignore_ascii_case(&norm_self) {
+                        linked_worktrees.push(trimmed.to_owned());
+                    }
+                }
+            }
+        }
+    }
+
     RepoEntry {
         name,
         path: path.display().to_string(),
@@ -5724,6 +5963,9 @@ fn inspect_git_repo(path: &Path, is_worktree: bool) -> RepoEntry {
         state,
         remote,
         last_commit,
+        modified_epoch: latest_mtime,
+        modified_utc,
+        linked_worktrees,
     }
 }
 
@@ -5997,17 +6239,156 @@ pub fn render_workspace_inventory_markdown(
     if repos.is_empty() {
         md.push_str("_No Git repositories found in the scanned roots._\n");
     } else {
-        md.push_str("| Repository | Kind | Branch | State | Latest Commit | Path | Remote |\n");
-        md.push_str("| --- | --- | --- | --- | --- | --- | --- |\n");
+        md.push_str("| Repository | Kind | Branch | State | Last Modified (UTC) | Latest Commit | Path | Remote |\n");
+        md.push_str("| --- | --- | --- | --- | --- | --- | --- | --- |\n");
         for r in repos {
             let commit_clean = r.last_commit.replace('|', "/");
             md.push_str(&format!(
-                "| **{}** | {} | `{}` | {} | {} | `{}` | `{}` |\n",
-                r.name, r.kind, r.branch, r.state, commit_clean, r.path, r.remote
+                "| **{}** | {} | `{}` | {} | `{}` | {} | `{}` | `{}` |\n",
+                r.name, r.kind, r.branch, r.state, r.modified_utc, commit_clean, r.path, r.remote
             ));
         }
     }
     md
+}
+
+pub fn render_targeted_workspace_answer(
+    ask_text: &str,
+    cwd: &Path,
+    drives: &[DriveEntry],
+    repos: &[RepoEntry],
+) -> String {
+    let lower = ask_text.to_lowercase();
+    let mut filtered = repos.to_vec();
+
+    if let Some(caps) = regex_lite::Regex::new(r"(?i)\b([a-z])\s*(?:drive|:\\)\b")
+        .ok()
+        .and_then(|re| re.captures(ask_text))
+    {
+        if let Some(letter) = caps.get(1).and_then(|m| m.as_str().chars().next()) {
+            let win_prefix = format!("{}:\\", letter.to_ascii_uppercase());
+            let wsl_prefix = format!("/mnt/{}/", letter.to_ascii_lowercase());
+            let drive_matches = filtered
+                .iter()
+                .filter(|r| {
+                    r.path
+                        .to_uppercase()
+                        .starts_with(&win_prefix.to_uppercase())
+                        || r.path.to_lowercase().starts_with(&wsl_prefix)
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            if !drive_matches.is_empty() {
+                filtered = drive_matches;
+            }
+        }
+    } else if lower.contains("this wsl directory") || lower.contains("current directory") {
+        let cwd_prefix = cwd.display().to_string();
+        let cwd_matches = filtered
+            .iter()
+            .filter(|r| r.path.starts_with(&cwd_prefix))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !cwd_matches.is_empty() {
+            filtered = cwd_matches;
+        }
+    }
+
+    let wants_most_recent_single = regex_lite::Regex::new(
+        r"(?i)\b(?:which|what)\b.*\b(?:most\s+recently|latest)\b.*\b(?:modif\w*|updated|changed|touched)\b|\b(?:modif\w*|updated|changed)\s+most\s+recently\b",
+    )
+    .is_ok_and(|re| re.is_match(ask_text))
+        && !lower.contains("list out")
+        && !lower.contains("descending");
+
+    let wants_sorted_recent = regex_lite::Regex::new(
+        r"(?i)\b(?:descending|most\s+recently\s+modif\w*|order\s+of\s+.*modif\w*|by\s+.*modif\w*)\b",
+    )
+    .is_ok_and(|re| re.is_match(ask_text));
+
+    let wants_worktrees = regex_lite::Regex::new(r"(?i)\b(?:working\s+trees?|worktrees?)\b")
+        .is_ok_and(|re| re.is_match(ask_text));
+
+    filtered.sort_by_key(|a| std::cmp::Reverse(a.modified_epoch));
+
+    if wants_most_recent_single {
+        if let Some(top) = filtered.first() {
+            return format!(
+                "Most recently modified repository directory:\n- **{}** (`{}`)\n  - **Last Modified**: `{}`\n  - **Kind**: {} | **Branch**: `{}` | **State**: {}\n  - **Latest Commit**: {}\n",
+                top.name,
+                top.path,
+                top.modified_utc,
+                top.kind,
+                top.branch,
+                top.state,
+                top.last_commit
+            );
+        }
+    }
+
+    if wants_sorted_recent {
+        let mut out = String::from(
+            "Repositories in descending order of most recently modified:\n\n| # | Repository | Kind | Last Modified (UTC) | Branch | State | Path |\n| --- | --- | --- | --- | --- | --- | --- |\n",
+        );
+        for (idx, r) in filtered.iter().enumerate() {
+            out.push_str(&format!(
+                "| {} | **{}** | {} | `{}` | `{}` | {} | `{}` |\n",
+                idx + 1,
+                r.name,
+                r.kind,
+                r.modified_utc,
+                r.branch,
+                r.state,
+                r.path
+            ));
+        }
+        return out;
+    }
+
+    if wants_worktrees {
+        let mut out = format!("Repositories and Working Trees in `{}`:\n\n", cwd.display());
+        for r in &filtered {
+            if r.kind == "Repository" {
+                let wt_info = if r.linked_worktrees.is_empty() {
+                    "no linked worktrees".to_owned()
+                } else {
+                    format!(
+                        "{} linked worktree(s): {}",
+                        r.linked_worktrees.len(),
+                        r.linked_worktrees
+                            .iter()
+                            .map(|w| format!("`{w}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                };
+                out.push_str(&format!(
+                    "- **{}** (`{}`) — branch `{}` ({}) — {}\n",
+                    r.name, r.path, r.branch, r.state, wt_info
+                ));
+            } else {
+                out.push_str(&format!(
+                    "- **{}** [Worktree] (`{}`) — branch `{}` ({})\n",
+                    r.name, r.path, r.branch, r.state
+                ));
+            }
+        }
+        return out;
+    }
+
+    let mut out = String::new();
+    out.push_str("| Repository | Kind | Branch | State | Last Modified (UTC) | Path |\n");
+    out.push_str("| --- | --- | --- | --- | --- | --- |\n");
+    for r in &filtered {
+        out.push_str(&format!(
+            "| **{}** | {} | `{}` | {} | `{}` | `{}` |\n",
+            r.name, r.kind, r.branch, r.state, r.modified_utc, r.path
+        ));
+    }
+    if filtered.is_empty() && !drives.is_empty() {
+        out.push_str("\nNo repositories matched the filter.\n");
+    }
+    out
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -7259,35 +7640,35 @@ fn repaint_editor_line(
     stdout: &mut std::io::Stdout,
     prompt_str: &str,
     editor: &LineEditor,
-    prev_cursor_pos: &mut usize,
     cols: usize,
 ) -> Result<(), Error> {
     if editor.secret_mode {
         return Ok(());
     }
-    let width = cols.max(20);
+    let width = cols.max(40);
     let prompt_len = strip_vt_only(prompt_str).chars().count();
-    let prev_row = *prev_cursor_pos / width;
-    let mut seq = String::new();
-    if prev_row > 0 {
-        seq.push_str(&format!("\x1b[{prev_row}A"));
-    }
-    seq.push_str("\r\x1b[J");
-    let text = editor.text();
+    let max_visible = width.saturating_sub(prompt_len + 2).max(16);
+    let total_chars = editor.chars.len();
+    let cursor = editor.cursor();
+    let (visible_text, cursor_in_visible) = if total_chars <= max_visible {
+        (editor.text(), cursor)
+    } else {
+        let half = max_visible / 2;
+        let start = if cursor <= half {
+            0
+        } else if cursor + half >= total_chars {
+            total_chars.saturating_sub(max_visible)
+        } else {
+            cursor - half
+        };
+        let end = (start + max_visible).min(total_chars);
+        let slice_str: String = editor.chars[start..end].iter().collect();
+        (slice_str, cursor.saturating_sub(start))
+    };
+    let target_col = prompt_len + cursor_in_visible;
+    let mut seq = String::from("\r\x1b[K");
     seq.push_str(prompt_str);
-    seq.push_str(&text);
-    let total_len = prompt_len + editor.chars.len();
-    let end_row = total_len / width;
-    let end_col = total_len - (end_row * width);
-    if total_len > 0 && end_col == 0 {
-        seq.push_str(" \r");
-    }
-    let target_pos = prompt_len + editor.cursor();
-    let target_row = target_pos / width;
-    let target_col = target_pos % width;
-    if end_row > target_row {
-        seq.push_str(&format!("\x1b[{}A", end_row - target_row));
-    }
+    seq.push_str(&visible_text);
     seq.push('\r');
     if target_col > 0 {
         seq.push_str(&format!("\x1b[{target_col}C"));
@@ -7296,7 +7677,6 @@ fn repaint_editor_line(
         .write_all(seq.as_bytes())
         .and_then(|()| stdout.flush())
         .map_err(|e| Error::new("Error", e.to_string()))?;
-    *prev_cursor_pos = target_pos;
     Ok(())
 }
 
@@ -7311,8 +7691,6 @@ fn read_interactive_line(
     if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
         if let Some(guard) = RawTerminalGuard::enter() {
             let mut editor = LineEditor::new(history_lines.to_vec(), secret_mode);
-            let prompt_len = strip_vt_only(prompt_str).chars().count();
-            let mut prev_cursor_pos = prompt_len;
             let mut pending = Vec::new();
             loop {
                 let chunk = guard.read_chunk()?;
@@ -7324,51 +7702,35 @@ fn read_interactive_line(
                 match editor.feed_bytes(&mut pending, &chunk) {
                     EditorStep::Continue { changed } => {
                         if changed {
-                            repaint_editor_line(
-                                stdout,
-                                prompt_str,
-                                &editor,
-                                &mut prev_cursor_pos,
-                                cols,
-                            )?;
+                            repaint_editor_line(stdout, prompt_str, &editor, cols)?;
                         }
                     }
                     EditorStep::CancelLine => {
-                        repaint_editor_line(
-                            stdout,
-                            prompt_str,
-                            &editor,
-                            &mut prev_cursor_pos,
-                            cols,
-                        )?;
+                        repaint_editor_line(stdout, prompt_str, &editor, cols)?;
                     }
                     EditorStep::ClearScreen => {
                         stdout
                             .write_all(b"\x1b[2J\x1b[H")
                             .and_then(|()| stdout.flush())
                             .map_err(|e| Error::new("Error", e.to_string()))?;
-                        prev_cursor_pos = 0;
-                        repaint_editor_line(
-                            stdout,
-                            prompt_str,
-                            &editor,
-                            &mut prev_cursor_pos,
-                            cols,
-                        )?;
+                        repaint_editor_line(stdout, prompt_str, &editor, cols)?;
                     }
                     EditorStep::Submit(line) => {
-                        let _ = editor.move_end();
-                        let _ = repaint_editor_line(
-                            stdout,
-                            prompt_str,
-                            &editor,
-                            &mut prev_cursor_pos,
-                            cols,
-                        );
-                        stdout
-                            .write_all(b"\r\n")
-                            .and_then(|()| stdout.flush())
-                            .map_err(|e| Error::new("Error", e.to_string()))?;
+                        if !secret_mode {
+                            let mut seq = String::from("\r\x1b[K");
+                            seq.push_str(prompt_str);
+                            seq.push_str(&line);
+                            seq.push_str("\r\n");
+                            stdout
+                                .write_all(seq.as_bytes())
+                                .and_then(|()| stdout.flush())
+                                .map_err(|e| Error::new("Error", e.to_string()))?;
+                        } else {
+                            stdout
+                                .write_all(b"\r\n")
+                                .and_then(|()| stdout.flush())
+                                .map_err(|e| Error::new("Error", e.to_string()))?;
+                        }
                         return Ok(Some(line));
                     }
                     EditorStep::Eof => {
