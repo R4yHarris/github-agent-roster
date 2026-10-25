@@ -50,7 +50,7 @@ main() {
   fi
   if ! command -v cargo >/dev/null 2>&1; then
     echo "-> Installing Rust toolchain via rustup..."
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y </dev/null
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
     # shellcheck disable=SC1091
     . "$HOME/.cargo/env"
   fi
@@ -61,7 +61,7 @@ main() {
     . "$NVM_DIR/nvm.sh"
   elif ! (command -v node >/dev/null 2>&1 && node --version 2>/dev/null | grep -q '^v20\.'); then
     echo "-> Installing nvm for Node 20 consumer checks and agent-pr.mjs..."
-    curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash </dev/null
+    curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
     if [ -s "$NVM_DIR/nvm.sh" ]; then
       # shellcheck disable=SC1091
       . "$NVM_DIR/nvm.sh"
