@@ -2588,7 +2588,10 @@ impl ShellSession {
             ("lastTestName", Value::Null),
             ("review", Value::Null),
         ]);
-        let mut history = ShellHistory::new(&project_root, Some(environment));
+        let history_root =
+            config::resolve_config_root_with_env(installation, cwd, Some(environment))
+                .unwrap_or_else(|_| project_root.clone());
+        let mut history = ShellHistory::new(&history_root, Some(environment));
         let _ = history.load();
         let debug = crate::diagnostics::DebugLog::new(
             Some(environment),
@@ -2730,6 +2733,10 @@ impl ShellSession {
             return Ok(ShellAction::Continue(help));
         }
         if !text.starts_with('/') {
+            if is_workspace_inventory_ask(text)? {
+                let out = self.execute_workspace_inventory(text).await?;
+                return Ok(ShellAction::Continue(out));
+            }
             if crate::ask::is_repository_question_ask(text)? {
                 let ans = self.run_question_text(text).await?;
                 return Ok(ShellAction::Continue(ans));
@@ -4171,11 +4178,29 @@ impl ShellSession {
     }
 
     async fn run_question_text(&mut self, text: &str) -> Result<String, Error> {
+        if is_workspace_inventory_ask(text)? {
+            return self.execute_workspace_inventory(text).await;
+        }
         let mut transport =
             crate::llm::http::HttpTransport::new().map_err(|failure| *failure.error)?;
         let source = crate::cancel::CancellationSource::default();
         let token = source.token();
         let root = self.current_root();
+        let reqs = crate::planning::intake::requirements(&Value::string(text), true)?;
+        let effective_text = if !reqs.explicit || reqs.files.is_empty() {
+            let discovered = auto_discover_question_files(&root, text);
+            if discovered.is_empty() {
+                return self.execute_workspace_inventory(text).await;
+            }
+            let bullets = discovered
+                .iter()
+                .map(|f| format!("- {f}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("{text}\n\n## Files allowed\n{bullets}")
+        } else {
+            text.to_owned()
+        };
         let mut q_opts = crate::ask::QuestionOptions {
             cwd: &root,
             config: &self.config,
@@ -4184,8 +4209,165 @@ impl ShellSession {
             transport: &mut transport,
             signal: Some(&token),
         };
-        let res = crate::ask::answer_repository_question(text, &mut q_opts).await?;
+        let res = crate::ask::answer_repository_question(&effective_text, &mut q_opts).await?;
         Ok(format!("{}\n", self.redact_text(&res.answer)?))
+    }
+
+    async fn execute_workspace_inventory(&mut self, text: &str) -> Result<String, Error> {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+        let _ = domain::put(&mut self.display, "state", Value::string("drafting"));
+        let _ = domain::put(&mut self.display, "startedAt", Value::Number(now_ms));
+        self.last_ask_text = Some(text.to_owned());
+
+        let drives = discover_drives(&self.cwd, &self.environment);
+        let repos = discover_repositories(&self.cwd, &self.environment);
+
+        let llm_summary = self
+            .try_summarize_inventory_with_llm(text, &drives, &repos)
+            .await;
+
+        let report_md = render_workspace_inventory_markdown(
+            text,
+            &self.cwd,
+            &drives,
+            &repos,
+            llm_summary.as_deref(),
+        );
+
+        let wants_file = regex_lite::Regex::new(
+            r"(?i)\b(?:markdown|\.md\b|file|report|place\s+it|save\s+it|write\s+it|make\s+me)\b",
+        )
+        .map_err(|e| Error::new("Error", e.to_string()))?
+        .is_match(text);
+
+        let mut out = String::new();
+        if wants_file {
+            let target_path = resolve_inventory_target_path(text, &self.cwd, &self.environment);
+            if let Some(parent) = target_path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            fs::write(&target_path, report_md.as_bytes())
+                .map_err(|e| Error::new("Error", format!("{}: {e}", target_path.display())))?;
+            out.push_str(&format!(
+                "Wrote markdown report: {}\nDrives discovered: {} | Git repositories/worktrees discovered: {}\n\n",
+                target_path.display(),
+                drives.len(),
+                repos.len()
+            ));
+        }
+        out.push_str(&report_md);
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        let _ = domain::put(&mut self.display, "state", Value::string("passed"));
+        let _ = domain::put(&mut self.display, "review", Value::string("pass"));
+        self.redact_text(&out)
+    }
+
+    async fn try_summarize_inventory_with_llm(
+        &mut self,
+        ask_text: &str,
+        drives: &[DriveEntry],
+        repos: &[RepoEntry],
+    ) -> Option<String> {
+        let llm = self.config.get("llm")?;
+        if !llm.get("base_url").is_some_and(domain::truthy)
+            || !llm.get("model").is_some_and(domain::truthy)
+        {
+            return None;
+        }
+        let mut chat_cfg = self.config.clone();
+        let mut chat_llm = llm.clone();
+        let _ = domain::put(&mut chat_llm, "max_tokens", Value::Number(256.0));
+        let _ = domain::put(&mut chat_llm, "thinking", Value::Boolean(false));
+        let _ = domain::put(&mut chat_cfg, "llm", chat_llm);
+        let admission = crate::llm::admission::Admission::default();
+        let mut chat = crate::llm::builtin::BuiltinChat::new(
+            &chat_cfg,
+            &admission,
+            crate::llm::builtin::Options {
+                retry_length: false,
+                stream: false,
+            },
+        )
+        .ok()??;
+        let mut transport = crate::llm::http::HttpTransport::new().ok()?;
+        let drive_summary = drives
+            .iter()
+            .map(|d| {
+                format!(
+                    "{} ({}, free {} / {})",
+                    d.mount, d.kind, d.free_gib, d.total_gib
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        let repo_summary = repos
+            .iter()
+            .take(20)
+            .map(|r| format!("{} [{} | {}] at {}", r.name, r.branch, r.state, r.path))
+            .collect::<Vec<_>>()
+            .join("; ");
+        let prompt = format!(
+            "User request: {ask_text}\nDiscovered drives: {drive_summary}\nDiscovered repositories ({} total): {repo_summary}\nWrite a concise 2-sentence executive summary of the development drives and repository state.",
+            repos.len()
+        );
+        let req = Value::object(vec![(
+            "messages",
+            Value::Array(vec![
+                Value::object(vec![
+                    ("role", Value::string("system")),
+                    (
+                        "content",
+                        Value::string(
+                            "Provide a concise 2-sentence plain-text executive summary of the discovered development drives and Git repositories. Do not use markdown headings or code fences.",
+                        ),
+                    ),
+                ]),
+                Value::object(vec![
+                    ("role", Value::string("user")),
+                    ("content", Value::string(&prompt)),
+                ]),
+            ]),
+        )]);
+        let creds = crate::llm::openai::Credentials {
+            environment: Some(self.environment.clone()),
+            vault_entries: None,
+        };
+        let mut obs = crate::llm::control::NoObserver;
+        let res = tokio::time::timeout(
+            std::time::Duration::from_secs(12),
+            chat.complete(
+                &req,
+                &mut transport,
+                &mut obs,
+                &creds,
+                crate::llm::openai::CallOptions {
+                    signal: None,
+                    parent: None,
+                    retry_command: None,
+                },
+            ),
+        )
+        .await
+        .ok()?
+        .ok()?;
+        if let Some(usage) = &res.usage {
+            if let Some(pt) = domain::safe_integer(usage.get("prompt_tokens")) {
+                let _ = domain::put(&mut self.display, "contextUsed", Value::Number(pt as f64));
+            }
+            if let Some(ct) = domain::safe_integer(usage.get("completion_tokens")) {
+                let _ = domain::put(&mut self.display, "outputTokens", Value::Number(ct as f64));
+            }
+        }
+        res.message
+            .get("content")
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty())
     }
 
     async fn run_ask_text(&mut self, text: &str) -> Result<String, Error> {
@@ -4198,6 +4380,9 @@ impl ShellSession {
         confirm_after_plan: bool,
     ) -> Result<String, Error> {
         let cleaned = crate::planning::intake::clean_ask(&Value::string(text))?;
+        if is_workspace_inventory_ask(&cleaned)? {
+            return self.execute_workspace_inventory(&cleaned).await;
+        }
         if crate::ask::is_repository_question_ask(&cleaned)? {
             return self.run_question_text(&cleaned).await;
         }
@@ -4220,8 +4405,11 @@ impl ShellSession {
                     api_key_env: api_key_env.as_deref(),
                     id: None,
                 },
-            )?;
-            let cp_id = cp.id.clone();
+            )
+            .ok();
+            let cp_id = cp
+                .as_ref()
+                .map_or_else(|| "ephemeral".to_owned(), |c| c.id.clone());
             let detail = crate::planning::intake::clarification(&Value::string(&cleaned))?;
             let str_field = |k: &str| {
                 detail
@@ -4250,7 +4438,7 @@ impl ShellSession {
                 assumptions: list_field("assumptions"),
                 questions: list_field("questions"),
                 template: str_field("template"),
-                checkpoint: Some(cp),
+                checkpoint: cp,
             };
             return Ok(format!(
                 "{}Checkpoint saved privately: {cp_id}. Use /clarify to inspect, /clarify TEXT with explicit Allowed Files to resume, or /clarify cancel.\n",
@@ -4912,6 +5100,603 @@ impl crate::llm::control::Observer for ShellLiveObserver<'_> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriveEntry {
+    pub mount: String,
+    pub kind: String,
+    pub total_gib: String,
+    pub free_gib: String,
+    pub used_pct: String,
+    pub dev_roots: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoEntry {
+    pub name: String,
+    pub path: String,
+    pub kind: String,
+    pub branch: String,
+    pub state: String,
+    pub remote: String,
+    pub last_commit: String,
+}
+
+fn format_gib(bytes: u64) -> String {
+    let gib_tenths = (bytes as u128 * 10) / (1024 * 1024 * 1024);
+    format!("{}.{} GiB", gib_tenths / 10, gib_tenths % 10)
+}
+
+pub fn is_workspace_inventory_ask(text: &str) -> Result<bool, Error> {
+    let reqs = crate::planning::intake::requirements(&Value::string(text), true)?;
+    let has_drive_terms = regex_lite::Regex::new(
+        r"(?i)\b(?:dev\s+drives?|drives?|disks?|mounts?|volumes?|filesystems?)\b",
+    )
+    .map_err(|e| Error::new("Error", e.to_string()))?
+    .is_match(text);
+    let has_repo_plural = regex_lite::Regex::new(r"(?i)\b(?:repositories|repos|worktrees)\b")
+        .map_err(|e| Error::new("Error", e.to_string()))?
+        .is_match(text);
+    let has_machine_context = regex_lite::Regex::new(
+        r"(?i)\b(?:what|which|list|state|status|on\s+this|windows\s+pc|machine|pc|wsl|current\s+.*directory|current\s+folder)\b",
+    )
+    .map_err(|e| Error::new("Error", e.to_string()))?
+    .is_match(text);
+    if has_drive_terms && (has_repo_plural || has_machine_context) {
+        return Ok(true);
+    }
+    if has_repo_plural && has_machine_context && reqs.files.is_empty() {
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+pub fn discover_drives(cwd: &Path, env: &Value) -> Vec<DriveEntry> {
+    let mut entries = Vec::new();
+    let home = config::environment_value(env, if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .ok()
+        .flatten()
+        .and_then(|t| t.to_utf8().ok())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from)
+        });
+
+    let push_mount = |entries: &mut Vec<DriveEntry>,
+                      mount_path: &Path,
+                      label: String,
+                      kind: &str,
+                      candidate_subdirs: &[PathBuf]| {
+        let Ok(total) = fs4::total_space(mount_path) else {
+            return;
+        };
+        if total == 0 {
+            return;
+        }
+        let free = fs4::available_space(mount_path).unwrap_or(0);
+        let used = total.saturating_sub(free);
+        let pct = ((used as u128 * 100) / (total as u128).max(1)) as u64;
+        let mut dev_roots = Vec::new();
+        for sub in candidate_subdirs {
+            if sub.is_dir() {
+                dev_roots.push(sub.display().to_string());
+            }
+        }
+        entries.push(DriveEntry {
+            mount: label,
+            kind: kind.to_owned(),
+            total_gib: format_gib(total),
+            free_gib: format_gib(free),
+            used_pct: format!("{pct}%"),
+            dev_roots,
+        });
+    };
+
+    if cfg!(windows) {
+        for letter in b'A'..=b'Z' {
+            let root_str = format!("{}:\\", letter as char);
+            let root_path = PathBuf::from(&root_str);
+            if !root_path.is_dir() {
+                continue;
+            }
+            let mut candidates = vec![
+                root_path.join("oss"),
+                root_path.join("repos"),
+                root_path.join("dev"),
+                root_path.join("src"),
+                root_path.join("projects"),
+            ];
+            if let Some(ref h) = home {
+                if h.starts_with(&root_path) {
+                    candidates.push(h.join("repos"));
+                    candidates.push(h.join("source").join("repos"));
+                    candidates.push(h.join(".roster").join("installation"));
+                }
+            }
+            let kind = if root_path.join("oss").is_dir() || root_path.join("repos").is_dir() {
+                "Windows Volume (Dev Workspace)"
+            } else {
+                "Windows Volume"
+            };
+            push_mount(&mut entries, &root_path, root_str, kind, &candidates);
+        }
+    } else {
+        let root_path = Path::new("/");
+        let mut root_candidates = Vec::new();
+        if let Some(ref h) = home {
+            root_candidates.push(h.join("repos"));
+            root_candidates.push(h.join("src"));
+            root_candidates.push(h.join("projects"));
+            root_candidates.push(h.join(".roster").join("installation"));
+        }
+        let is_wsl = Path::new("/proc/sys/fs/binfmt_misc/WSLInterop").exists()
+            || std::env::var_os("WSL_DISTRO_NAME").is_some();
+        push_mount(
+            &mut entries,
+            root_path,
+            "/ (Linux root)".to_owned(),
+            if is_wsl {
+                "WSL 2 Virtual Disk (ext4)"
+            } else {
+                "POSIX Root Filesystem"
+            },
+            &root_candidates,
+        );
+        for letter in b'a'..=b'z' {
+            let mnt_str = format!("/mnt/{}", letter as char);
+            let mnt_path = PathBuf::from(&mnt_str);
+            if !mnt_path.is_dir() {
+                continue;
+            }
+            let candidates = vec![
+                mnt_path.join("oss"),
+                mnt_path.join("repos"),
+                mnt_path.join("dev"),
+                mnt_path.join("projects"),
+            ];
+            let label = format!("{mnt_str} ({}:\\)", (letter as char).to_ascii_uppercase());
+            push_mount(
+                &mut entries,
+                &mnt_path,
+                label,
+                "Windows Host Drive (WSL mount)",
+                &candidates,
+            );
+        }
+    }
+
+    if entries.is_empty() {
+        let candidates = vec![cwd.to_path_buf()];
+        push_mount(
+            &mut entries,
+            cwd,
+            cwd.display().to_string(),
+            "Workspace Volume",
+            &candidates,
+        );
+    }
+    entries
+}
+
+fn inspect_git_repo(path: &Path, is_worktree: bool) -> RepoEntry {
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("repo")
+        .to_owned();
+    let kind = if is_worktree {
+        "Worktree"
+    } else {
+        "Repository"
+    }
+    .to_owned();
+    let run_git = |args: &[&str]| -> Option<String> {
+        let out = StdCommand::new("git")
+            .arg("-c")
+            .arg("core.autocrlf=false")
+            .arg("-C")
+            .arg(path)
+            .args(args)
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        String::from_utf8(out.stdout)
+            .ok()
+            .map(|s| s.trim().to_owned())
+    };
+    let branch = run_git(&["rev-parse", "--abbrev-ref", "HEAD"]).unwrap_or_else(|| {
+        if is_worktree {
+            "linked-worktree".to_owned()
+        } else {
+            "-".to_owned()
+        }
+    });
+    let state = match run_git(&["status", "--porcelain=v1"]) {
+        Some(s) if s.is_empty() => "clean".to_owned(),
+        Some(s) => {
+            let mut modified = 0_usize;
+            let mut untracked = 0_usize;
+            for line in s.lines() {
+                if line.starts_with("??") {
+                    untracked += 1;
+                } else if !line.trim().is_empty() {
+                    modified += 1;
+                }
+            }
+            match (modified, untracked) {
+                (0, u) => format!("dirty ({u} untracked)"),
+                (m, 0) => format!("dirty ({m} modified)"),
+                (m, u) => format!("dirty ({m} modified, {u} untracked)"),
+            }
+        }
+        None => "cross-host worktree".to_owned(),
+    };
+    let remote =
+        run_git(&["config", "--get", "remote.origin.url"]).unwrap_or_else(|| "-".to_owned());
+    let last_commit =
+        run_git(&["log", "-1", "--format=%h (%cr) %s"]).unwrap_or_else(|| "-".to_owned());
+    RepoEntry {
+        name,
+        path: path.display().to_string(),
+        kind,
+        branch,
+        state,
+        remote,
+        last_commit,
+    }
+}
+
+pub fn discover_repositories(cwd: &Path, env: &Value) -> Vec<RepoEntry> {
+    let mut scan_roots = Vec::new();
+    let mut push_root = |p: PathBuf| {
+        if p.is_dir() && !scan_roots.iter().any(|existing: &PathBuf| existing == &p) {
+            scan_roots.push(p);
+        }
+    };
+    push_root(cwd.to_path_buf());
+    let home = config::environment_value(env, if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .ok()
+        .flatten()
+        .and_then(|t| t.to_utf8().ok())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from)
+        });
+    if let Some(ref h) = home {
+        push_root(h.join("repos"));
+        push_root(h.join("source").join("repos"));
+        push_root(h.join("projects"));
+        push_root(h.join("dev"));
+        push_root(h.join("workspace"));
+        push_root(h.join(".roster").join("installation"));
+    }
+    if cfg!(windows) {
+        for letter in b'C'..=b'Z' {
+            let root = PathBuf::from(format!("{}:\\", letter as char));
+            if root.is_dir() {
+                push_root(root.join("oss"));
+                push_root(root.join("repos"));
+                push_root(root.join("dev"));
+                push_root(root.join("projects"));
+            }
+        }
+    } else {
+        for letter in b'c'..=b'z' {
+            let mnt = PathBuf::from(format!("/mnt/{}", letter as char));
+            if mnt.is_dir() {
+                push_root(mnt.join("oss"));
+                push_root(mnt.join("repos"));
+                push_root(mnt.join("dev"));
+                push_root(mnt.join("projects"));
+            }
+        }
+    }
+
+    let skip_names = [
+        "AppData",
+        "Application Data",
+        "Local Settings",
+        "Windows",
+        "Program Files",
+        "Program Files (x86)",
+        "ProgramData",
+        "$Recycle.Bin",
+        "System Volume Information",
+        "node_modules",
+        "target",
+        ".cargo",
+        ".rustup",
+        ".nvm",
+        ".local",
+        ".cache",
+        ".dotnet",
+        ".vscode",
+        ".vscode-insiders",
+        ".copilot",
+        ".hermes",
+        "vendor",
+    ];
+
+    let mut seen_paths = std::collections::BTreeSet::new();
+    let mut repos = Vec::new();
+
+    fn walk_dir(
+        dir: &Path,
+        depth: usize,
+        max_depth: usize,
+        skip_names: &[&str],
+        seen: &mut std::collections::BTreeSet<String>,
+        repos: &mut Vec<RepoEntry>,
+    ) {
+        if repos.len() >= 64 {
+            return;
+        }
+        let git_marker = dir.join(".git");
+        if let Ok(meta) = fs::symlink_metadata(&git_marker) {
+            let canonical_key = dir.display().to_string();
+            if seen.insert(canonical_key) {
+                repos.push(inspect_git_repo(dir, meta.is_file()));
+            }
+            let wt_container = dir.join(".worktrees");
+            if wt_container.is_dir() {
+                if let Ok(rd) = fs::read_dir(&wt_container) {
+                    for entry in rd.flatten() {
+                        let p = entry.path();
+                        if p.join(".git").exists() {
+                            let k = p.display().to_string();
+                            if seen.insert(k) {
+                                repos.push(inspect_git_repo(&p, true));
+                            }
+                        }
+                    }
+                }
+            }
+            return;
+        }
+        if depth >= max_depth {
+            return;
+        }
+        let Ok(rd) = fs::read_dir(dir) else {
+            return;
+        };
+        let mut children = rd.flatten().map(|e| e.path()).collect::<Vec<_>>();
+        children.sort();
+        for child in children {
+            let Some(name) = child.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if skip_names.iter().any(|s| s.eq_ignore_ascii_case(name)) {
+                continue;
+            }
+            if name.starts_with('.') && name != ".roster" && !name.ends_with(".worktrees") {
+                continue;
+            }
+            let Ok(meta) = fs::symlink_metadata(&child) else {
+                continue;
+            };
+            if meta.is_dir() && !secure::linked(&meta) {
+                walk_dir(&child, depth + 1, max_depth, skip_names, seen, repos);
+            }
+        }
+    }
+
+    for root in scan_roots {
+        let max_d = if home.as_ref().is_some_and(|h| h == &root) {
+            1
+        } else {
+            2
+        };
+        walk_dir(&root, 0, max_d, &skip_names, &mut seen_paths, &mut repos);
+    }
+    repos
+}
+
+pub fn resolve_inventory_target_path(text: &str, cwd: &Path, env: &Value) -> PathBuf {
+    let home = config::environment_value(env, if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .ok()
+        .flatten()
+        .and_then(|t| t.to_utf8().ok())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from)
+        });
+
+    let filename = regex_lite::Regex::new(r"\b([A-Za-z0-9_.-]+\.md)\b")
+        .ok()
+        .and_then(|re| re.captures(text))
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().to_owned())
+        .unwrap_or_else(|| "DEV_DRIVES_AND_REPOSITORIES.md".to_owned());
+
+    if let Some(ref h) = home {
+        if let Ok(re) = regex_lite::Regex::new(r"(?:^|\s)~(?:/([A-Za-z0-9_./-]+))?") {
+            if let Some(caps) = re.captures(text) {
+                let candidate = match caps.get(1) {
+                    Some(sub) => h.join(sub.as_str().trim_end_matches(['.', ',', ';'])),
+                    None => h.clone(),
+                };
+                if candidate.is_dir() {
+                    return candidate.join(&filename);
+                }
+            }
+        }
+    }
+
+    if cfg!(windows) {
+        if let Ok(re) = regex_lite::Regex::new(r"([A-Za-z]:\\[A-Za-z0-9_.\\-]+)") {
+            for caps in re.captures_iter(text) {
+                if let Some(m) = caps.get(1) {
+                    let p = PathBuf::from(m.as_str().trim_end_matches(['.', ',', ';']));
+                    if p.is_dir() {
+                        return p.join(&filename);
+                    }
+                }
+            }
+        }
+    } else if let Ok(re) = regex_lite::Regex::new(r"(/(?:home|mnt|tmp|var|opt)/[A-Za-z0-9_./-]+)") {
+        for caps in re.captures_iter(text) {
+            if let Some(m) = caps.get(1) {
+                let p = PathBuf::from(m.as_str().trim_end_matches(['.', ',', ';']));
+                if p.is_dir() {
+                    return p.join(&filename);
+                }
+            }
+        }
+    }
+
+    cwd.join(filename)
+}
+
+pub fn render_workspace_inventory_markdown(
+    ask_text: &str,
+    cwd: &Path,
+    drives: &[DriveEntry],
+    repos: &[RepoEntry],
+    llm_summary: Option<&str>,
+) -> String {
+    let platform = if cfg!(windows) {
+        "Windows"
+    } else if Path::new("/proc/sys/fs/binfmt_misc/WSLInterop").exists()
+        || std::env::var_os("WSL_DISTRO_NAME").is_some()
+    {
+        "WSL 2 (Linux)"
+    } else if cfg!(target_os = "macos") {
+        "macOS"
+    } else {
+        "Linux"
+    };
+    let mut md = String::new();
+    md.push_str("# Development Drives & Git Repositories Inventory\n\n");
+    md.push_str(&format!("- **Environment**: {platform}\n"));
+    md.push_str(&format!("- **Working Directory**: `{}`\n", cwd.display()));
+    md.push_str(&format!(
+        "- **Discovered Drives / Mounts**: {}\n",
+        drives.len()
+    ));
+    md.push_str(&format!(
+        "- **Discovered Git Repositories & Worktrees**: {}\n\n",
+        repos.len()
+    ));
+
+    if let Some(summary) = llm_summary {
+        md.push_str("## Executive Summary\n\n");
+        md.push_str(summary);
+        md.push_str("\n\n");
+    } else {
+        md.push_str("## Overview\n\n");
+        md.push_str(&format!(
+            "Scanned development drives and workspace roots for: _{}_\n\n",
+            ask_text.replace('\n', " ")
+        ));
+    }
+
+    md.push_str("## Development Drives & Filesystem Mounts\n\n");
+    md.push_str(
+        "| Mount / Drive | Type | Total Capacity | Free Space | Used | Active Dev Roots |\n",
+    );
+    md.push_str("| --- | --- | --- | --- | --- | --- |\n");
+    for d in drives {
+        let roots = if d.dev_roots.is_empty() {
+            "-".to_owned()
+        } else {
+            d.dev_roots
+                .iter()
+                .map(|r| format!("`{r}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        md.push_str(&format!(
+            "| `{}` | {} | {} | {} | {} | {} |\n",
+            d.mount, d.kind, d.total_gib, d.free_gib, d.used_pct, roots
+        ));
+    }
+    md.push('\n');
+
+    md.push_str("## Git Repositories & Worktrees\n\n");
+    if repos.is_empty() {
+        md.push_str("_No Git repositories found in the scanned roots._\n");
+    } else {
+        md.push_str("| Repository | Kind | Branch | State | Latest Commit | Path | Remote |\n");
+        md.push_str("| --- | --- | --- | --- | --- | --- | --- |\n");
+        for r in repos {
+            let commit_clean = r.last_commit.replace('|', "/");
+            md.push_str(&format!(
+                "| **{}** | {} | `{}` | {} | {} | `{}` | `{}` |\n",
+                r.name, r.kind, r.branch, r.state, commit_clean, r.path, r.remote
+            ));
+        }
+    }
+    md
+}
+
+fn auto_discover_question_files(root: &Path, question: &str) -> Vec<String> {
+    let mut selected = Vec::new();
+    let lower_q = question.to_lowercase();
+    let candidates = [
+        "README.md",
+        "Cargo.toml",
+        "package.json",
+        "AGENTS.md",
+        "docs/FEATURE_SPEC.md",
+        "docs/INSTALL.md",
+        "docs/RUST.md",
+        "src/index.mjs",
+        "src/index.js",
+        "src/main.rs",
+        "rust/lib.rs",
+        "rust/main.rs",
+    ];
+    for cand in candidates {
+        let p = root.join(cand);
+        if let Ok(meta) = fs::symlink_metadata(&p) {
+            if meta.is_file() && !secure::linked(&meta) && meta.len() <= 65_536 {
+                let fname = Path::new(cand)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(cand)
+                    .to_lowercase();
+                if lower_q.contains(&fname) || selected.len() < 4 {
+                    selected.push(cand.to_owned());
+                }
+            }
+        }
+        if selected.len() >= 6 {
+            break;
+        }
+    }
+    if selected.is_empty() {
+        if let Ok(rd) = fs::read_dir(root) {
+            let mut entries = rd.flatten().map(|e| e.path()).collect::<Vec<_>>();
+            entries.sort();
+            for p in entries {
+                let Some(name) = p.file_name().and_then(|s| s.to_str()) else {
+                    continue;
+                };
+                if name.starts_with('.')
+                    || crate::planning::forbidden_read(name)
+                    || crate::execution::policy::managed(name)
+                {
+                    continue;
+                }
+                if let Ok(meta) = fs::symlink_metadata(&p) {
+                    if meta.is_file()
+                        && !secure::linked(&meta)
+                        && meta.len() <= 65_536
+                        && crate::execution::policy::scope_expansion_file(name)
+                    {
+                        selected.push(name.to_owned());
+                        if selected.len() >= 6 {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    selected
+}
+
 fn terminal_columns() -> usize {
     std::env::var("COLUMNS")
         .ok()
@@ -4920,13 +5705,684 @@ fn terminal_columns() -> usize {
         .unwrap_or(80)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EditorStep {
+    Continue { changed: bool },
+    Submit(String),
+    ClearScreen,
+    CancelLine,
+    Eof,
+}
+
+pub struct LineEditor {
+    chars: Vec<char>,
+    cursor: usize,
+    history: Vec<String>,
+    history_index: Option<usize>,
+    saved_draft: String,
+    secret_mode: bool,
+}
+
+impl LineEditor {
+    pub fn new(history: Vec<String>, secret_mode: bool) -> Self {
+        Self {
+            chars: Vec::new(),
+            cursor: 0,
+            history,
+            history_index: None,
+            saved_draft: String::new(),
+            secret_mode,
+        }
+    }
+
+    pub fn text(&self) -> String {
+        self.chars.iter().collect()
+    }
+
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    pub fn move_left(&mut self) -> bool {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn move_right(&mut self) -> bool {
+        if self.cursor < self.chars.len() {
+            self.cursor += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn move_home(&mut self) -> bool {
+        if self.cursor > 0 {
+            self.cursor = 0;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn move_end(&mut self) -> bool {
+        if self.cursor < self.chars.len() {
+            self.cursor = self.chars.len();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn move_word_left(&mut self) -> bool {
+        if self.cursor == 0 {
+            return false;
+        }
+        let mut idx = self.cursor;
+        while idx > 0 && self.chars[idx - 1].is_whitespace() {
+            idx -= 1;
+        }
+        while idx > 0 && !self.chars[idx - 1].is_whitespace() {
+            idx -= 1;
+        }
+        self.cursor = idx;
+        true
+    }
+
+    pub fn move_word_right(&mut self) -> bool {
+        if self.cursor >= self.chars.len() {
+            return false;
+        }
+        let mut idx = self.cursor;
+        while idx < self.chars.len() && !self.chars[idx].is_whitespace() {
+            idx += 1;
+        }
+        while idx < self.chars.len() && self.chars[idx].is_whitespace() {
+            idx += 1;
+        }
+        self.cursor = idx;
+        true
+    }
+
+    pub fn insert_char(&mut self, ch: char) -> bool {
+        self.chars.insert(self.cursor, ch);
+        self.cursor += 1;
+        self.history_index = None;
+        true
+    }
+
+    pub fn backspace(&mut self) -> bool {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+            self.chars.remove(self.cursor);
+            self.history_index = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn delete_forward(&mut self) -> bool {
+        if self.cursor < self.chars.len() {
+            self.chars.remove(self.cursor);
+            self.history_index = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn delete_word_left(&mut self) -> bool {
+        if self.cursor == 0 {
+            return false;
+        }
+        let end = self.cursor;
+        self.move_word_left();
+        let start = self.cursor;
+        self.chars.drain(start..end);
+        self.history_index = None;
+        true
+    }
+
+    pub fn kill_to_end(&mut self) -> bool {
+        if self.cursor < self.chars.len() {
+            self.chars.truncate(self.cursor);
+            self.history_index = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn kill_to_start(&mut self) -> bool {
+        if self.cursor > 0 {
+            self.chars.drain(0..self.cursor);
+            self.cursor = 0;
+            self.history_index = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn history_up(&mut self) -> bool {
+        if self.secret_mode || self.history.is_empty() {
+            return false;
+        }
+        let next_idx = match self.history_index {
+            None => {
+                self.saved_draft = self.text();
+                self.history.len() - 1
+            }
+            Some(0) => return false,
+            Some(idx) => idx - 1,
+        };
+        self.history_index = Some(next_idx);
+        self.chars = self.history[next_idx].chars().collect();
+        self.cursor = self.chars.len();
+        true
+    }
+
+    pub fn history_down(&mut self) -> bool {
+        if self.secret_mode {
+            return false;
+        }
+        let Some(idx) = self.history_index else {
+            return false;
+        };
+        if idx + 1 < self.history.len() {
+            let next_idx = idx + 1;
+            self.history_index = Some(next_idx);
+            self.chars = self.history[next_idx].chars().collect();
+            self.cursor = self.chars.len();
+        } else {
+            self.history_index = None;
+            self.chars = self.saved_draft.chars().collect();
+            self.cursor = self.chars.len();
+        }
+        true
+    }
+
+    pub fn tab_complete(&mut self) -> bool {
+        if self.secret_mode {
+            return false;
+        }
+        let current = self.text();
+        if !current.starts_with('/') || current.contains(' ') {
+            return false;
+        }
+        let (matches, _) = complete_command(&current);
+        match matches.as_slice() {
+            [only] => {
+                let completed = format!("{only} ");
+                self.chars = completed.chars().collect();
+                self.cursor = self.chars.len();
+                true
+            }
+            [first, rest @ ..] => {
+                let mut prefix_len = first.len();
+                for m in rest {
+                    prefix_len = first
+                        .bytes()
+                        .zip(m.bytes())
+                        .take(prefix_len)
+                        .take_while(|(a, b)| a == b)
+                        .count();
+                }
+                if prefix_len > current.len() {
+                    self.chars = first[..prefix_len].chars().collect();
+                    self.cursor = self.chars.len();
+                    true
+                } else {
+                    false
+                }
+            }
+            [] => false,
+        }
+    }
+
+    pub fn feed_bytes(&mut self, pending: &mut Vec<u8>, chunk: &[u8]) -> EditorStep {
+        pending.extend_from_slice(chunk);
+        let mut changed = false;
+        while !pending.is_empty() {
+            let b = pending[0];
+            match b {
+                b'\r' | b'\n' => {
+                    if pending.starts_with(b"\r\n") {
+                        pending.drain(0..2);
+                    } else {
+                        pending.drain(0..1);
+                    }
+                    return EditorStep::Submit(self.text());
+                }
+                0x03 => {
+                    pending.drain(0..1);
+                    if !self.chars.is_empty() {
+                        self.chars.clear();
+                        self.cursor = 0;
+                        self.history_index = None;
+                        return EditorStep::CancelLine;
+                    }
+                    return EditorStep::Eof;
+                }
+                0x04 => {
+                    pending.drain(0..1);
+                    if self.chars.is_empty() {
+                        return EditorStep::Eof;
+                    }
+                    changed |= self.delete_forward();
+                }
+                0x7f | 0x08 => {
+                    pending.drain(0..1);
+                    changed |= self.backspace();
+                }
+                0x01 => {
+                    pending.drain(0..1);
+                    changed |= self.move_home();
+                }
+                0x05 => {
+                    pending.drain(0..1);
+                    changed |= self.move_end();
+                }
+                0x02 => {
+                    pending.drain(0..1);
+                    changed |= self.move_left();
+                }
+                0x06 => {
+                    pending.drain(0..1);
+                    changed |= self.move_right();
+                }
+                0x10 => {
+                    pending.drain(0..1);
+                    changed |= self.history_up();
+                }
+                0x0e => {
+                    pending.drain(0..1);
+                    changed |= self.history_down();
+                }
+                0x0b => {
+                    pending.drain(0..1);
+                    changed |= self.kill_to_end();
+                }
+                0x15 => {
+                    pending.drain(0..1);
+                    changed |= self.kill_to_start();
+                }
+                0x17 => {
+                    pending.drain(0..1);
+                    changed |= self.delete_word_left();
+                }
+                0x0c => {
+                    pending.drain(0..1);
+                    return EditorStep::ClearScreen;
+                }
+                b'\t' => {
+                    pending.drain(0..1);
+                    changed |= self.tab_complete();
+                }
+                0x1b => {
+                    if pending.len() == 1 {
+                        break;
+                    }
+                    if pending[1] == b'[' {
+                        let final_pos =
+                            pending.iter().enumerate().skip(2).find_map(|(idx, &byte)| {
+                                (0x40..=0x7e).contains(&byte).then_some(idx)
+                            });
+                        let Some(end_idx) = final_pos else {
+                            if pending.len() < 16 {
+                                break;
+                            }
+                            pending.clear();
+                            continue;
+                        };
+                        let seq = pending[2..=end_idx].to_vec();
+                        pending.drain(0..=end_idx);
+                        match seq.as_slice() {
+                            b"A" => changed |= self.history_up(),
+                            b"B" => changed |= self.history_down(),
+                            b"C" => changed |= self.move_right(),
+                            b"D" => changed |= self.move_left(),
+                            b"H" | b"1~" | b"7~" => changed |= self.move_home(),
+                            b"F" | b"4~" | b"8~" => changed |= self.move_end(),
+                            b"3~" => changed |= self.delete_forward(),
+                            b"1;5D" | b"1;3D" | b"5D" => changed |= self.move_word_left(),
+                            b"1;5C" | b"1;3C" | b"5C" => changed |= self.move_word_right(),
+                            b"3;5~" => changed |= self.delete_word_left(),
+                            _ => {}
+                        }
+                    } else if pending[1] == b'O' {
+                        if pending.len() < 3 {
+                            break;
+                        }
+                        let code = pending[2];
+                        pending.drain(0..3);
+                        match code {
+                            b'A' => changed |= self.history_up(),
+                            b'B' => changed |= self.history_down(),
+                            b'C' => changed |= self.move_right(),
+                            b'D' => changed |= self.move_left(),
+                            b'H' => changed |= self.move_home(),
+                            b'F' => changed |= self.move_end(),
+                            _ => {}
+                        }
+                    } else {
+                        let code = pending[1];
+                        pending.drain(0..2);
+                        match code {
+                            b'b' | b'B' => changed |= self.move_word_left(),
+                            b'f' | b'F' => changed |= self.move_word_right(),
+                            0x7f | 0x08 => changed |= self.delete_word_left(),
+                            _ => {}
+                        }
+                    }
+                }
+                0x00..=0x1f => {
+                    pending.drain(0..1);
+                }
+                _ => {
+                    let char_len = if b < 0x80 {
+                        1
+                    } else if (b & 0xe0) == 0xc0 {
+                        2
+                    } else if (b & 0xf0) == 0xe0 {
+                        3
+                    } else if (b & 0xf8) == 0xf0 {
+                        4
+                    } else {
+                        1
+                    };
+                    if pending.len() < char_len {
+                        break;
+                    }
+                    if let Ok(s) = std::str::from_utf8(&pending[..char_len]) {
+                        if let Some(ch) = s.chars().next() {
+                            changed |= self.insert_char(ch);
+                        }
+                    }
+                    pending.drain(0..char_len);
+                }
+            }
+        }
+        EditorStep::Continue { changed }
+    }
+}
+
+#[cfg(windows)]
+struct RawTerminalGuard {
+    in_handle: winsafe::HSTD,
+    orig_in_mode: winsafe::co::CONSOLE,
+    out_handle: Option<(winsafe::HSTD, winsafe::co::CONSOLE)>,
+}
+
+#[cfg(windows)]
+impl RawTerminalGuard {
+    fn enter() -> Option<Self> {
+        use winsafe::{self as w, co, prelude::*};
+        let mut in_guard = w::HSTD::GetStdHandle(co::STD_HANDLE::INPUT).ok()?;
+        let in_handle = in_guard.leak();
+        let orig_in_mode = in_handle.GetConsoleMode().ok()?;
+        let mut raw_in = orig_in_mode;
+        raw_in &= !(co::CONSOLE::ENABLE_LINE_INPUT
+            | co::CONSOLE::ENABLE_ECHO_INPUT
+            | co::CONSOLE::ENABLE_PROCESSED_INPUT);
+        raw_in |= co::CONSOLE::ENABLE_VIRTUAL_TERMINAL_INPUT;
+        in_handle.SetConsoleMode(raw_in).ok()?;
+        let out_handle = w::HSTD::GetStdHandle(co::STD_HANDLE::OUTPUT)
+            .ok()
+            .and_then(|mut g| {
+                let h = g.leak();
+                let orig_out = h.GetConsoleMode().ok()?;
+                let _ = h.SetConsoleMode(
+                    orig_out
+                        | co::CONSOLE::ENABLE_PROCESSED_OUTPUT
+                        | co::CONSOLE::ENABLE_VIRTUAL_TERMINAL_PROCESSING,
+                );
+                Some((h, orig_out))
+            });
+        Some(Self {
+            in_handle,
+            orig_in_mode,
+            out_handle,
+        })
+    }
+
+    fn read_chunk(&self) -> Result<Vec<u8>, Error> {
+        use winsafe::{self as w, prelude::*};
+        let mut wbuf = w::WString::new_alloc_buf(64);
+        let n = self
+            .in_handle
+            .ReadConsole(&mut wbuf, None)
+            .map_err(|e| Error::new("Error", e.to_string()))?;
+        if n == 0 {
+            return Ok(Vec::new());
+        }
+        let slice = &wbuf.as_slice()[..n as usize];
+        Ok(String::from_utf16_lossy(slice).into_bytes())
+    }
+}
+
+#[cfg(windows)]
+impl Drop for RawTerminalGuard {
+    fn drop(&mut self) {
+        use winsafe::prelude::*;
+        let _ = self.in_handle.SetConsoleMode(self.orig_in_mode);
+        if let Some((ref out_h, orig_out)) = self.out_handle {
+            let _ = out_h.SetConsoleMode(orig_out);
+        }
+    }
+}
+
+#[cfg(unix)]
+struct RawTerminalGuard {
+    saved_stty: String,
+}
+
+#[cfg(unix)]
+impl RawTerminalGuard {
+    fn enter() -> Option<Self> {
+        use std::io::IsTerminal;
+        use std::process::Stdio;
+        if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+            return None;
+        }
+        let out = StdCommand::new("stty")
+            .arg("-g")
+            .stdin(Stdio::inherit())
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let saved_stty = String::from_utf8(out.stdout).ok()?.trim().to_owned();
+        if saved_stty.is_empty() {
+            return None;
+        }
+        let status = StdCommand::new("stty")
+            .args(["-icanon", "-echo", "-isig", "min", "1", "time", "0"])
+            .stdin(Stdio::inherit())
+            .status()
+            .ok()?;
+        if !status.success() {
+            return None;
+        }
+        Some(Self { saved_stty })
+    }
+
+    fn read_chunk(&self) -> Result<Vec<u8>, Error> {
+        let mut buf = [0_u8; 64];
+        let n = std::io::stdin()
+            .read(&mut buf)
+            .map_err(|e| Error::new("Error", e.to_string()))?;
+        Ok(buf[..n].to_vec())
+    }
+}
+
+#[cfg(unix)]
+impl Drop for RawTerminalGuard {
+    fn drop(&mut self) {
+        use std::process::Stdio;
+        let _ = StdCommand::new("stty")
+            .arg(&self.saved_stty)
+            .stdin(Stdio::inherit())
+            .status();
+    }
+}
+
+fn repaint_editor_line(
+    stdout: &mut std::io::Stdout,
+    prompt_str: &str,
+    editor: &LineEditor,
+    prev_cursor_pos: &mut usize,
+    cols: usize,
+) -> Result<(), Error> {
+    if editor.secret_mode {
+        return Ok(());
+    }
+    let width = cols.max(20);
+    let prompt_len = strip_vt_only(prompt_str).chars().count();
+    let prev_row = *prev_cursor_pos / width;
+    let mut seq = String::new();
+    if prev_row > 0 {
+        seq.push_str(&format!("\x1b[{prev_row}A"));
+    }
+    seq.push_str("\r\x1b[J");
+    let text = editor.text();
+    seq.push_str(prompt_str);
+    seq.push_str(&text);
+    let total_len = prompt_len + editor.chars.len();
+    let end_row = total_len / width;
+    let end_col = total_len - (end_row * width);
+    if total_len > 0 && end_col == 0 {
+        seq.push_str(" \r");
+    }
+    let target_pos = prompt_len + editor.cursor();
+    let target_row = target_pos / width;
+    let target_col = target_pos % width;
+    if end_row > target_row {
+        seq.push_str(&format!("\x1b[{}A", end_row - target_row));
+    }
+    seq.push('\r');
+    if target_col > 0 {
+        seq.push_str(&format!("\x1b[{target_col}C"));
+    }
+    stdout
+        .write_all(seq.as_bytes())
+        .and_then(|()| stdout.flush())
+        .map_err(|e| Error::new("Error", e.to_string()))?;
+    *prev_cursor_pos = target_pos;
+    Ok(())
+}
+
+fn read_interactive_line(
+    stdout: &mut std::io::Stdout,
+    prompt_str: &str,
+    history_lines: &[String],
+    secret_mode: bool,
+    cols: usize,
+) -> Result<Option<String>, Error> {
+    use std::io::{BufRead, IsTerminal};
+    if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
+        if let Some(guard) = RawTerminalGuard::enter() {
+            let mut editor = LineEditor::new(history_lines.to_vec(), secret_mode);
+            let prompt_len = strip_vt_only(prompt_str).chars().count();
+            let mut prev_cursor_pos = prompt_len;
+            let mut pending = Vec::new();
+            loop {
+                let chunk = guard.read_chunk()?;
+                if chunk.is_empty() {
+                    let _ = stdout.write_all(b"\r\n");
+                    let _ = stdout.flush();
+                    return Ok(None);
+                }
+                match editor.feed_bytes(&mut pending, &chunk) {
+                    EditorStep::Continue { changed } => {
+                        if changed {
+                            repaint_editor_line(
+                                stdout,
+                                prompt_str,
+                                &editor,
+                                &mut prev_cursor_pos,
+                                cols,
+                            )?;
+                        }
+                    }
+                    EditorStep::CancelLine => {
+                        repaint_editor_line(
+                            stdout,
+                            prompt_str,
+                            &editor,
+                            &mut prev_cursor_pos,
+                            cols,
+                        )?;
+                    }
+                    EditorStep::ClearScreen => {
+                        stdout
+                            .write_all(b"\x1b[2J\x1b[H")
+                            .and_then(|()| stdout.flush())
+                            .map_err(|e| Error::new("Error", e.to_string()))?;
+                        prev_cursor_pos = 0;
+                        repaint_editor_line(
+                            stdout,
+                            prompt_str,
+                            &editor,
+                            &mut prev_cursor_pos,
+                            cols,
+                        )?;
+                    }
+                    EditorStep::Submit(line) => {
+                        let _ = editor.move_end();
+                        let _ = repaint_editor_line(
+                            stdout,
+                            prompt_str,
+                            &editor,
+                            &mut prev_cursor_pos,
+                            cols,
+                        );
+                        stdout
+                            .write_all(b"\r\n")
+                            .and_then(|()| stdout.flush())
+                            .map_err(|e| Error::new("Error", e.to_string()))?;
+                        return Ok(Some(line));
+                    }
+                    EditorStep::Eof => {
+                        stdout
+                            .write_all(b"\r\n")
+                            .and_then(|()| stdout.flush())
+                            .map_err(|e| Error::new("Error", e.to_string()))?;
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+    }
+    let stdin = std::io::stdin();
+    let mut reader = stdin.lock();
+    let mut line = String::new();
+    let read_bytes = reader
+        .read_line(&mut line)
+        .map_err(|e| Error::new("Error", e.to_string()))?;
+    if read_bytes == 0 {
+        stdout
+            .write_all(b"\n")
+            .and_then(|()| stdout.flush())
+            .map_err(|e| Error::new("Error", e.to_string()))?;
+        return Ok(None);
+    }
+    Ok(Some(line.trim_end_matches(['\r', '\n']).to_owned()))
+}
+
 pub async fn start_repl(
     cwd: &Path,
     installation: &Path,
     environment: &Value,
     debug_enabled: bool,
 ) -> Result<u8, Error> {
-    use std::io::BufRead;
     let mut session = ShellSession::new(cwd, installation, environment, debug_enabled)?;
     let color = std::env::var_os("NO_COLOR").is_none();
     session.live_output = true;
@@ -4939,11 +6395,10 @@ pub async fn start_repl(
         .and_then(|()| stdout.flush())
         .map_err(|e| Error::new("Error", e.to_string()))?;
 
-    let stdin = std::io::stdin();
-    let mut reader = stdin.lock();
+    let mut current_prompt = String::from("roster> ");
     loop {
+        let cols = terminal_columns();
         if !session.tray_visible {
-            let cols = terminal_columns();
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
@@ -4956,6 +6411,7 @@ pub async fn start_repl(
                 color,
                 now_ms,
             );
+            current_prompt = prompt.clone();
             session.bar_lines = bar_lines;
             session.tray_visible = true;
             stdout
@@ -4964,24 +6420,22 @@ pub async fn start_repl(
                 .map_err(|e| Error::new("Error", e.to_string()))?;
         }
 
-        let mut line = String::new();
-        let read_bytes = reader
-            .read_line(&mut line)
-            .map_err(|e| Error::new("Error", e.to_string()))?;
-        session.tray_visible = false;
-        if read_bytes == 0 {
-            stdout
-                .write_all(b"\n")
-                .and_then(|()| stdout.flush())
-                .map_err(|e| Error::new("Error", e.to_string()))?;
+        let Some(trimmed_line) = read_interactive_line(
+            &mut stdout,
+            &current_prompt,
+            session.history.lines(),
+            session.pending_secret.is_some(),
+            cols,
+        )?
+        else {
             break;
-        }
+        };
+        session.tray_visible = false;
         if session.pending_secret.is_some() && color {
             let _ = stdout.write_all(b"\x1b[1A\r\x1b[2KSecret (input hidden): ********\n");
             let _ = stdout.flush();
         }
-        let trimmed_line = line.trim_end_matches(['\r', '\n']);
-        match session.dispatch_line(trimmed_line).await {
+        match session.dispatch_line(&trimmed_line).await {
             Ok(ShellAction::Continue(out)) => {
                 if !out.is_empty() {
                     if session.tray_visible {
@@ -5022,16 +6476,12 @@ pub async fn start_repl(
                     .write_all(prompt_str.as_bytes())
                     .and_then(|()| stdout.flush())
                     .map_err(|e| Error::new("Error", e.to_string()))?;
-                let mut sec_line = String::new();
-                let n = reader
-                    .read_line(&mut sec_line)
-                    .map_err(|e| Error::new("Error", e.to_string()))?;
-                let _ = stdout.write_all(b"\n");
-                if n == 0 {
+                let Some(sec_trimmed) =
+                    read_interactive_line(&mut stdout, &prompt_str, &[], true, cols)?
+                else {
                     break;
-                }
-                let sec_trimmed = sec_line.trim_end_matches(['\r', '\n']);
-                if let Ok(ShellAction::Continue(out)) = session.dispatch_line(sec_trimmed).await {
+                };
+                if let Ok(ShellAction::Continue(out)) = session.dispatch_line(&sec_trimmed).await {
                     let _ = stdout.write_all(out.as_bytes());
                     let _ = stdout.flush();
                 }
@@ -5823,6 +7273,112 @@ mod tests {
         );
         assert_eq!(session.dispatch_line("/redraw").await?, ShellAction::Redraw);
         assert_eq!(session.dispatch_line("/quit").await?, ShellAction::Exit);
+        let _ = fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn line_editor_supports_arrow_navigation_midline_edits_history_and_tab_completion()
+    -> Result<(), Error> {
+        let history = vec!["/status".to_owned(), "/fleet list".to_owned()];
+        let mut editor = LineEditor::new(history, false);
+        let mut pending = Vec::new();
+
+        let step = editor.feed_bytes(&mut pending, b"hello world");
+        assert_eq!(step, EditorStep::Continue { changed: true });
+        assert_eq!(editor.text(), "hello world");
+        assert_eq!(editor.cursor(), 11);
+
+        let _ = editor.feed_bytes(&mut pending, b"\x1b[D\x1b[D\x1b[D\x1b[D\x1b[D");
+        assert_eq!(editor.cursor(), 6);
+        let _ = editor.feed_bytes(&mut pending, b"brave ");
+        assert_eq!(editor.text(), "hello brave world");
+        assert_eq!(editor.cursor(), 12);
+
+        let _ = editor.feed_bytes(&mut pending, b"\x1b[H");
+        assert_eq!(editor.cursor(), 0);
+        let _ = editor.feed_bytes(&mut pending, b"\x1b[3~H");
+        assert_eq!(editor.text(), "Hello brave world");
+        assert_eq!(editor.cursor(), 1);
+
+        let _ = editor.feed_bytes(&mut pending, b"\x1b[F");
+        assert_eq!(editor.cursor(), 17);
+        let _ = editor.feed_bytes(&mut pending, b"\x1b[1;5D");
+        assert_eq!(editor.cursor(), 12);
+        let _ = editor.feed_bytes(&mut pending, b"\x17");
+        assert_eq!(editor.text(), "Hello world");
+        assert_eq!(editor.cursor(), 6);
+
+        let _ = editor.feed_bytes(&mut pending, b"\x1b[A");
+        assert_eq!(editor.text(), "/fleet list");
+        let _ = editor.feed_bytes(&mut pending, b"\x1b[A");
+        assert_eq!(editor.text(), "/status");
+        let _ = editor.feed_bytes(&mut pending, b"\x1b[B");
+        assert_eq!(editor.text(), "/fleet list");
+        let _ = editor.feed_bytes(&mut pending, b"\x1b[B");
+        assert_eq!(editor.text(), "Hello world");
+
+        let cancel = editor.feed_bytes(&mut pending, b"\x03");
+        assert_eq!(cancel, EditorStep::CancelLine);
+        assert_eq!(editor.text(), "");
+        assert_eq!(editor.cursor(), 0);
+
+        let _ = editor.feed_bytes(&mut pending, b"/chek\x7fckp\t");
+        assert_eq!(editor.text(), "/checkpoints ");
+
+        let submit = editor.feed_bytes(&mut pending, b"\r");
+        assert_eq!(submit, EditorStep::Submit("/checkpoints ".to_owned()));
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn workspace_inventory_delivers_markdown_file_for_windows_and_wsl_prompts()
+    -> Result<(), Error> {
+        let install = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let root = std::env::temp_dir().join(format!(
+            "roster-inventory-test-{}-{}",
+            std::process::id(),
+            files::nonce()?
+        ));
+        let repos_dir = root.join("repos");
+        files::create_private_directories(&repos_dir)?;
+        let sample_repo = repos_dir.join("sample-repo");
+        files::create_private_directories(&sample_repo.join(".git"))?;
+
+        let env = Value::object(vec![
+            ("HOME", Value::string(&root.display().to_string())),
+            ("USERPROFILE", Value::string(&root.display().to_string())),
+        ]);
+        let mut session = ShellSession::new(&root, install, &env, false)?;
+        session.config = config::defaults()?.as_value().clone();
+
+        let win_prompt = format!(
+            "What dev drives and repositories are on this windows PC, make me a nice markdown file with the list and state of them and place it in the current {} directory.",
+            root.display()
+        );
+        assert!(is_workspace_inventory_ask(&win_prompt)?);
+        let win_act = session.dispatch_line(&win_prompt).await?;
+        let ShellAction::Continue(win_out) = win_act else {
+            return Err(Error::new("TestError", "expected Continue"));
+        };
+        assert!(win_out.contains("Wrote markdown report:"));
+        let root_report = root.join("DEV_DRIVES_AND_REPOSITORIES.md");
+        assert!(root_report.is_file());
+        let report_text =
+            fs::read_to_string(&root_report).map_err(|e| Error::new("TestError", e.to_string()))?;
+        assert!(report_text.contains("# Development Drives & Git Repositories Inventory"));
+        assert!(report_text.contains("sample-repo"));
+
+        let wsl_prompt = "What dev drives and repositories are on this windows PC, make me a nice markdown file with the list and state of them and place it in the current ~/repos directory in wsl";
+        assert!(is_workspace_inventory_ask(wsl_prompt)?);
+        let wsl_act = session.dispatch_line(wsl_prompt).await?;
+        let ShellAction::Continue(wsl_out) = wsl_act else {
+            return Err(Error::new("TestError", "expected Continue"));
+        };
+        assert!(wsl_out.contains("Wrote markdown report:"));
+        let repos_report = repos_dir.join("DEV_DRIVES_AND_REPOSITORIES.md");
+        assert!(repos_report.is_file());
+
         let _ = fs::remove_dir_all(&root);
         Ok(())
     }

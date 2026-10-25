@@ -430,7 +430,7 @@ pub fn classify(
     let questions = regex(r"^(?:who|what|when|where|why|how|which|can|could|is|are|does|do)\b")?;
     let question = directives.iter().any(|line| questions.is_match(line))
         && !matches(
-            r"\b(?:add|build|create|develop|deliver|launch|implement|fix|update|change|remove|delete|replace|rewrite|refactor|rename|edit)\b",
+            r"\b(?:add|build|create|develop|deliver|launch|implement|fix|update|change|remove|delete|replace|rewrite|refactor|rename|edit|make|write|generate|save|place|put|produce|export|draft)\b",
             &summary,
         )?;
     let result = |kind: Kind, reason: &str| {
