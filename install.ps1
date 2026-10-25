@@ -32,11 +32,13 @@ if (Test-Path (Join-Path $CargoBin 'cargo.exe')) {
   }
 }
 
-foreach ($dir in @($RosterHome, (Join-Path $RosterHome 'vault'), $BinDir, $DotnetTools)) {
+New-Item -ItemType Directory -Force -Path $RosterHome | Out-Null
+icacls $RosterHome /inheritance:r /grant:r "$($env:USERNAME):(OI)(CI)F" | Out-Null
+foreach ($dir in @((Join-Path $RosterHome 'vault'), $BinDir, $DotnetTools)) {
   New-Item -ItemType Directory -Force -Path $dir | Out-Null
 }
-icacls $RosterHome /inheritance:r /grant:r "$($env:USERNAME):F" | Out-Null
 icacls (Join-Path $RosterHome 'vault') /inheritance:r /grant:r "$($env:USERNAME):(OI)(CI)F" | Out-Null
+icacls $BinDir /inheritance:r /grant:r "$($env:USERNAME):(OI)(CI)F" | Out-Null
 
 $ScriptSourceDir = if ($env:ROSTER_INSTALL_SOURCE) { $env:ROSTER_INSTALL_SOURCE } else { $null }
 if (-not $ScriptSourceDir -and $PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot 'Cargo.toml'))) {
