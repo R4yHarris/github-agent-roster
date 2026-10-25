@@ -78,12 +78,13 @@ if ($env:ROSTER_PREBUILT_EXE -and (Test-Path $env:ROSTER_PREBUILT_EXE)) {
 }
 
 foreach ($dest in @((Join-Path $BinDir 'roster.exe'), (Join-Path $DotnetTools 'roster.exe'))) {
+  $parent = Split-Path -Parent $dest
+  Get-ChildItem -Path $parent -Filter 'roster.exe*.old' -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
   if (Test-Path $dest) {
-    Remove-Item -Force "$dest.old" -ErrorAction SilentlyContinue
     try {
       Copy-Item -Force $BuiltExe $dest -ErrorAction Stop
     } catch {
-      Move-Item -Force $dest "$dest.old"
+      Move-Item -Force $dest "$dest.$PID.old"
       Copy-Item -Force $BuiltExe $dest
     }
   } else {
