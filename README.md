@@ -238,6 +238,126 @@ See [installation and host configuration](docs/INSTALL.md),
 [OpenShell architecture](docs/OPENSHELL_DESIGN.md), and the exact
 [local-delivery contract](docs/RUST.md#native-local-delivery-checkpoint).
 
+## Installing & Onboarding in a Consumer Repository / WSL 2 Workspace
+
+When using `github-agent-roster` in a separate consumer repository (for example
+in WSL 2 `Ubuntu` under `~/repos/<your-repo>`) that already uses
+`github-agent-contracts` and the GitHub App plugin:
+
+### Step 1: Install WSL 2 Prerequisites (Rust 1.85+, Node 20, Git, OpenShell)
+
+Inside your WSL 2 terminal (`wsl -d Ubuntu`), ensure Rust, Git, and a physical
+(non-symlink) Node 20 binary (for JS consumer tests and `agent-pr.mjs`) are
+installed on the native Linux filesystem (`~`, not `/mnt/c` or `/mnt/d`, so
+POSIX `0700`/`0600` permissions are enforced):
+
+```bash
+# 1. Install Rust toolchain (1.85+) if not yet installed in WSL
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+source "$HOME/.cargo/env"
+
+# 2. Install Node 20 via nvm (Roster requires a physical v20.x binary for ROSTER_NODE20)
+source "$HOME/.nvm/nvm.sh"
+nvm install 20
+
+# 3. (Optional) Install NVIDIA OpenShell CLI + local gateway in WSL 2
+curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh | sh
+```
+
+### Step 2: Clone & Build `github-agent-roster` in WSL 2
+
+Clone `github-agent-roster` into `~/repos/github-agent-roster`, build the
+release binary, and expose `roster` and `ROSTER_INSTALLATION_ROOT`:
+
+```bash
+mkdir -p ~/repos ~/.local/bin
+git clone --recurse-submodules https://github.com/R4yHarris/github-agent-roster.git ~/repos/github-agent-roster
+cd ~/repos/github-agent-roster
+cargo build --release --locked
+cp target/release/roster ~/.local/bin/roster
+
+# Add to ~/.bashrc (or export in your current shell):
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+export ROSTER_INSTALLATION_ROOT="$HOME/repos/github-agent-roster"
+export ROSTER_GIT="$(readlink -f "$(which git)")"
+export ROSTER_NODE20="$(readlink -f "$HOME/.nvm/versions/node/$(ls "$HOME/.nvm/versions/node" | grep '^v20\.' | tail -n 1)/bin/node")"
+export ROSTER_CARGO="$(readlink -f "$HOME/.cargo/bin/cargo")"
+```
+
+- **`ROSTER_INSTALLATION_ROOT`**: tells `roster` where to load its built-in seat
+  principals (`principals/*.md`) and skills (`skills/*/SKILL.md`) when invoked
+  from inside another repository.
+- **Library usage (`Cargo.toml`)**: if your consumer workspace is also a Rust
+  crate and wants to call `github_agent_roster::openshell` or orchestration APIs
+  directly as a library, add to the consumer's `Cargo.toml`:
+  ```toml
+  [dependencies]
+  github-agent-roster = { path = "../github-agent-roster" }
+  ```
+
+### Step 3: Prepare & Onboard Your Consumer Repository (`~/repos/<your-repo>`)
+
+Change into your consumer repository (which already has
+`vendor/github-agent-contracts` or `GITHUB_AGENT_CONTRACTS` and
+`agent-policy.yml`):
+
+```bash
+cd ~/repos/<your-repo>
+
+# 1. Ensure your consumer .gitignore excludes Roster private state and untracked task artifacts:
+cat << 'EOF' >> .gitignore
+.roster/
+.roster-state/
+.worktrees/
+TASK.md
+RECIPE.yml
+ESTIMATE.md
+RESULT.md
+REVIEW.md
+PLAN.md
+ASSIGNMENT.md
+CONTEXT.md
+RESEARCH.md
+EOF
+
+# 2. Initialize example templates (never overwrites agent-policy.yml)
+roster init
+
+# 3. Run the interactive onboarding wizard (discovers local, LAN, and Windows-host endpoints)
+roster onboard --discover
+```
+
+> **Note on WSL 2 $\leftrightarrow$ Windows / LAN Endpoints:**
+> - Remote/LAN endpoints (`https://aperture.xen.blackmesaresearch.ai/v1`, `http://192.168.1.48:8000/v1`) work identically from WSL 2.
+> - For a vLLM/Ollama server running on the Windows host (port `11435`), if WSL 2 is not in `networkingMode=mirrored`, use the Windows host IP (`ip route show | awk '/default/ {print $3}'`, e.g. `http://172.x.x.1:11435/v1`) or copy your existing `.roster/config.yml` and `.roster/fleet.yml` into `~/repos/<your-repo>/.roster/` and set `chmod 700 .roster && chmod 600 .roster/*.yml`.
+
+### Step 4: Verify & Test the Installation in Your Consumer Repo
+
+Run this 5-step verification checklist from inside `~/repos/<your-repo>`:
+
+```bash
+# 1. Verify offline prerequisites, approved tool images, and contracts submodule resolution
+roster doctor
+
+# 2. Verify your fleet catalog and permissions (0700 / 0600)
+roster fleet list
+
+# 3. Verify NVIDIA OpenShell readiness (offline or with --approve-live)
+roster doctor --openshell --opt-in --gateway http://127.0.0.1:8080 --provider aperture-qwen
+
+# 4. Run a read-only scoped repository question against a file in your consumer repo
+roster question --files README.md -- "Summarize the repository purpose in one sentence."
+
+# 5. Open the interactive Roster shell and test a live slice or issue run
+roster
+# Inside roster>:
+#   /status
+#   /fleet list
+#   /issues
+#   /plan <your bounded task description>
+#   (Press Enter to run planner -> coder -> reviewer in an isolated .worktrees/ worktree)
+```
+
 ## NVIDIA OpenShell Integration & Onboarding (`rust/openshell.rs`)
 
 Roster integrates **NVIDIA OpenShell (`v0.1.x`)** as an opt-in, deny-by-default
