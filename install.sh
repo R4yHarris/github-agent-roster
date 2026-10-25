@@ -110,11 +110,13 @@ main() {
 
   if [ -n "${ROSTER_PREBUILT_BIN:-}" ] && [ -f "$ROSTER_PREBUILT_BIN" ]; then
     echo "-> Installing prebuilt binary from $ROSTER_PREBUILT_BIN..."
+    rm -f "$ROSTER_BIN_DIR/roster" "$BIN_DIR/roster"
     cp "$ROSTER_PREBUILT_BIN" "$ROSTER_BIN_DIR/roster"
     cp "$ROSTER_PREBUILT_BIN" "$BIN_DIR/roster"
   else
     echo "-> Building native Rust release binary (roster)..."
     (cd "$INSTALL_DIR" && cargo build --release --locked </dev/null)
+    rm -f "$ROSTER_BIN_DIR/roster" "$BIN_DIR/roster"
     cp "$INSTALL_DIR/target/release/roster" "$ROSTER_BIN_DIR/roster"
     cp "$INSTALL_DIR/target/release/roster" "$BIN_DIR/roster"
   fi

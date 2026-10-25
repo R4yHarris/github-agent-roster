@@ -77,8 +77,19 @@ if ($env:ROSTER_PREBUILT_EXE -and (Test-Path $env:ROSTER_PREBUILT_EXE)) {
   $BuiltExe = Join-Path $InstallDir 'target\release\roster.exe'
 }
 
-Copy-Item -Force $BuiltExe (Join-Path $BinDir 'roster.exe')
-Copy-Item -Force $BuiltExe (Join-Path $DotnetTools 'roster.exe')
+foreach ($dest in @((Join-Path $BinDir 'roster.exe'), (Join-Path $DotnetTools 'roster.exe'))) {
+  if (Test-Path $dest) {
+    Remove-Item -Force "$dest.old" -ErrorAction SilentlyContinue
+    try {
+      Copy-Item -Force $BuiltExe $dest -ErrorAction Stop
+    } catch {
+      Move-Item -Force $dest "$dest.old"
+      Copy-Item -Force $BuiltExe $dest
+    }
+  } else {
+    Copy-Item -Force $BuiltExe $dest
+  }
+}
 
 $SeedDir = if ($env:ROSTER_SEED_DIR -and (Test-Path $env:ROSTER_SEED_DIR)) {
   $env:ROSTER_SEED_DIR
