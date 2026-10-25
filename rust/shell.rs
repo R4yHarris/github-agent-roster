@@ -5855,8 +5855,33 @@ fn inspect_git_repo(path: &Path, is_worktree: bool) -> RepoEntry {
         "Repository"
     }
     .to_owned();
+
+    let mut latest_mtime = 0_u64;
+    if let Ok(meta) = fs::metadata(path) {
+        if let Ok(modified) = meta.modified() {
+            if let Ok(dur) = modified.duration_since(std::time::UNIX_EPOCH) {
+                latest_mtime = latest_mtime.max(dur.as_secs());
+            }
+        }
+    }
+    if let Ok(rd) = fs::read_dir(path) {
+        for entry in rd.flatten().take(48) {
+            if entry.file_name() == ".git" {
+                continue;
+            }
+            if let Ok(meta) = entry.metadata() {
+                if let Ok(modified) = meta.modified() {
+                    if let Ok(dur) = modified.duration_since(std::time::UNIX_EPOCH) {
+                        latest_mtime = latest_mtime.max(dur.as_secs());
+                    }
+                }
+            }
+        }
+    }
+
     let run_git = |args: &[&str]| -> Option<String> {
         let out = StdCommand::new("git")
+            .arg("--no-optional-locks")
             .arg("-c")
             .arg("core.autocrlf=false")
             .arg("-C")
@@ -5905,33 +5930,7 @@ fn inspect_git_repo(path: &Path, is_worktree: bool) -> RepoEntry {
     let commit_epoch = run_git(&["log", "-1", "--format=%ct"])
         .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(0);
-
-    let mut latest_mtime = commit_epoch;
-    for candidate in [
-        path.to_path_buf(),
-        path.join(".git"),
-        path.join(".git").join("index"),
-        path.join(".git").join("HEAD"),
-    ] {
-        if let Ok(meta) = fs::metadata(&candidate) {
-            if let Ok(modified) = meta.modified() {
-                if let Ok(dur) = modified.duration_since(std::time::UNIX_EPOCH) {
-                    latest_mtime = latest_mtime.max(dur.as_secs());
-                }
-            }
-        }
-    }
-    if let Ok(rd) = fs::read_dir(path) {
-        for entry in rd.flatten().take(32) {
-            if let Ok(meta) = entry.metadata() {
-                if let Ok(modified) = meta.modified() {
-                    if let Ok(dur) = modified.duration_since(std::time::UNIX_EPOCH) {
-                        latest_mtime = latest_mtime.max(dur.as_secs());
-                    }
-                }
-            }
-        }
-    }
+    latest_mtime = latest_mtime.max(commit_epoch);
     let modified_utc = time::OffsetDateTime::from_unix_timestamp(latest_mtime as i64)
         .map(|dt| {
             format!(
