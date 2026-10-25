@@ -2498,6 +2498,14 @@ pub enum ShellAction {
     Exit,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationTurn {
+    pub user: String,
+    pub tool_summary: String,
+    pub assistant: String,
+    pub target_repo: Option<String>,
+}
+
 pub struct ShellSession {
     pub cwd: PathBuf,
     pub installation: PathBuf,
@@ -2525,6 +2533,7 @@ pub struct ShellSession {
     pub last_ask_file: Option<PathBuf>,
     pub last_ask_text: Option<String>,
     pub pending_confirm: bool,
+    pub conversation_turns: Vec<ConversationTurn>,
 }
 
 impl ShellSession {
@@ -2634,6 +2643,7 @@ impl ShellSession {
             last_ask_file: None,
             last_ask_text: None,
             pending_confirm: false,
+            conversation_turns: Vec::new(),
         })
     }
 
@@ -2750,6 +2760,12 @@ impl ShellSession {
                     ))),
                     other => Ok(other),
                 };
+            }
+            let reqs = crate::planning::intake::requirements(&Value::string(text), true)?;
+            if !reqs.explicit && self.has_configured_endpoint() {
+                if let Some(agent_out) = self.run_agentic_nlp_turn(text).await? {
+                    return Ok(ShellAction::Continue(agent_out));
+                }
             }
             if is_workspace_inventory_ask(text)? {
                 let out = self.execute_workspace_inventory(text).await?;
@@ -4624,6 +4640,869 @@ impl ShellSession {
         };
         llm.get("base_url").is_some_and(domain::truthy)
             && llm.get("model").is_some_and(domain::truthy)
+    }
+
+    async fn run_agentic_nlp_turn(&mut self, user_text: &str) -> Result<Option<String>, Error> {
+        let Some(llm) = self.config.get("llm").cloned() else {
+            return Ok(None);
+        };
+        if !llm.get("base_url").is_some_and(domain::truthy)
+            || !llm.get("model").is_some_and(domain::truthy)
+        {
+            return Ok(None);
+        }
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+        let _ = domain::put(&mut self.display, "state", Value::string("drafting"));
+        let _ = domain::put(&mut self.display, "startedAt", Value::Number(now_ms));
+        self.last_ask_text = Some(user_text.to_owned());
+
+        let drives = discover_drives(&self.cwd, &self.environment);
+        let mut repos = discover_repositories(&self.cwd, &self.environment);
+        repos.sort_by_key(|r| std::cmp::Reverse(r.modified_epoch));
+        let matched_repos = match_target_repositories(user_text, &repos, &self.cwd);
+        let active_target_repo = matched_repos.first().map(|r| r.name.clone());
+
+        let deep_initial_evidence = if !matched_repos.is_empty() {
+            deep_inspect_repositories(
+                &matched_repos,
+                &self.environment,
+                self.api_key_env().as_deref(),
+            )
+        } else {
+            String::new()
+        };
+
+        let mut chat_cfg = self.config.clone();
+        let mut chat_llm = llm;
+        let _ = domain::put(&mut chat_llm, "max_tokens", Value::Number(8192.0));
+        let _ = domain::put(&mut chat_llm, "effort", Value::string("none"));
+        let _ = domain::put(&mut chat_llm, "thinking", Value::Boolean(false));
+        let _ = domain::put(&mut chat_cfg, "llm", chat_llm);
+        let admission = crate::llm::admission::Admission::default();
+        let Ok(Some(mut chat)) = crate::llm::builtin::BuiltinChat::new(
+            &chat_cfg,
+            &admission,
+            crate::llm::builtin::Options {
+                retry_length: true,
+                stream: false,
+            },
+        ) else {
+            return Ok(None);
+        };
+        let Ok(mut transport) = crate::llm::http::HttpTransport::new() else {
+            return Ok(None);
+        };
+
+        let drive_summary = drives
+            .iter()
+            .map(|d| {
+                format!(
+                    "- {} ({}) | total={} | free={} | used={} | dev_roots=[{}]",
+                    d.mount,
+                    d.kind,
+                    d.total_gib,
+                    d.free_gib,
+                    d.used_pct,
+                    d.dev_roots.join(", ")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let repo_summary = repos
+            .iter()
+            .take(28)
+            .enumerate()
+            .map(|(idx, r)| {
+                let wts = if r.linked_worktrees.is_empty() {
+                    "none".to_owned()
+                } else {
+                    r.linked_worktrees.join(", ")
+                };
+                format!(
+                    "{}. {} | kind={} | path={} | branch={} | state={} | modified_utc={} | last_commit={} | linked_worktrees=[{}] | remote={}",
+                    idx + 1,
+                    r.name,
+                    r.kind,
+                    r.path,
+                    r.branch,
+                    r.state,
+                    r.modified_utc,
+                    r.last_commit,
+                    wts,
+                    r.remote
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let sys_prompt = "You are Roster, an autonomous, high-assurance software engineering and repository orchestrator.\n\
+You have direct access to native workspace and repository tools:\n\
+- `list_dir`: list files and subdirectories in any workspace path or repository name.\n\
+- `read_file`: read line-numbered source/config/doc excerpts from any file.\n\
+- `search_text`: search across files in a repository or directory for a pattern.\n\
+- `git_inspect`: run read-only Git inspections (`status`, `log`, `branches`, `worktrees`, `ls_files`, `deep_audit`) on any repository.\n\
+- `write_report`: write a Markdown report or file to disk when the user asks to generate, save, or place a report/file.\n\
+- `run_roster_command`: run an internal Roster slash command (`/fleet list`, `/fleet use <id>`, `/doctor`, `/doctor openshell`, `/status`, `/usage`, `/issues`, `/stats`, `/update --check`).\n\
+- `start_sdlc_delivery`: trigger Roster's 3-seat isolated worktree SDLC pipeline (`planner -> coder -> reviewer`) when the user wants code modifications and test verification inside a Git repository.\n\n\
+Guidelines:\n\
+1. Ground every answer and report in real discovered repository files, manifests, workflows, and git state. Never invent placeholder templates.\n\
+2. Use `read_file`, `list_dir`, `search_text`, or `git_inspect` whenever you need deeper file-level evidence before answering or writing a report.\n\
+3. When the user asks to generate, make, write, or place a report/markdown file, call `write_report` with the complete, deeply detailed Markdown report AND also present the report clearly in your response.";
+
+        let mut messages = vec![Value::object(vec![
+            ("role", Value::string("system")),
+            ("content", Value::string(sys_prompt)),
+        ])];
+
+        let history_start = self.conversation_turns.len().saturating_sub(6);
+        for turn in &self.conversation_turns[history_start..] {
+            messages.push(Value::object(vec![
+                ("role", Value::string("user")),
+                ("content", Value::string(&turn.user)),
+            ]));
+            let assistant_with_trace = if turn.tool_summary.is_empty() {
+                turn.assistant.clone()
+            } else {
+                format!("[Tools used: {}]\n{}", turn.tool_summary, turn.assistant)
+            };
+            messages.push(Value::object(vec![
+                ("role", Value::string("assistant")),
+                ("content", Value::string(&assistant_with_trace)),
+            ]));
+        }
+
+        let user_context = format!(
+            "Current working directory: `{}`\n\nDiscovered Drives / Mounts:\n{}\n\nDiscovered Git Repositories & Worktrees (sorted newest modified first):\n{}\n\n{}\nUser Request:\n{}",
+            self.cwd.display(),
+            drive_summary,
+            repo_summary,
+            if deep_initial_evidence.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "Pre-Collected Target Repository Deep Inspection Evidence:\n{deep_initial_evidence}\n"
+                )
+            },
+            user_text
+        );
+        messages.push(Value::object(vec![
+            ("role", Value::string("user")),
+            ("content", Value::string(&user_context)),
+        ]));
+
+        let tools_def = nlp_agent_tool_definitions();
+        let creds = self.llm_credentials();
+        let mut total_prompt_tokens = 0_u64;
+        let mut total_completion_tokens = 0_u64;
+        let mut tool_trace: Vec<String> = Vec::new();
+        let mut wrote_files: Vec<PathBuf> = Vec::new();
+        let mut command_outputs: Vec<String> = Vec::new();
+        let mut final_text = None;
+
+        for _turn_idx in 0..8_usize {
+            let req = Value::object(vec![
+                ("messages", Value::Array(messages.clone())),
+                ("tools", tools_def.clone()),
+            ]);
+            let mut obs = crate::llm::control::NoObserver;
+            let Ok(Ok(res)) = tokio::time::timeout(
+                std::time::Duration::from_secs(60),
+                chat.complete(
+                    &req,
+                    &mut transport,
+                    &mut obs,
+                    &creds,
+                    crate::llm::openai::CallOptions {
+                        signal: None,
+                        parent: None,
+                        retry_command: None,
+                    },
+                ),
+            )
+            .await
+            else {
+                break;
+            };
+
+            if let Some(usage) = &res.usage {
+                if let Some(pt) = domain::safe_integer(usage.get("prompt_tokens")) {
+                    total_prompt_tokens = pt;
+                    let _ = domain::put(&mut self.display, "contextUsed", Value::Number(pt as f64));
+                }
+                if let Some(ct) = domain::safe_integer(usage.get("completion_tokens")) {
+                    total_completion_tokens = total_completion_tokens.saturating_add(ct);
+                    let _ = domain::put(
+                        &mut self.display,
+                        "outputTokens",
+                        Value::Number(total_completion_tokens as f64),
+                    );
+                }
+            }
+
+            let tool_calls = res
+                .message
+                .get("tool_calls")
+                .and_then(domain::items)
+                .filter(|items| !items.is_empty())
+                .map(|items| items.to_vec());
+
+            if let Some(calls) = tool_calls {
+                messages.push(res.message.clone());
+                for call in calls.iter().take(6) {
+                    let call_id = call
+                        .get("id")
+                        .and_then(Value::as_string)
+                        .and_then(|t| t.to_utf8().ok())
+                        .unwrap_or_else(|| "call_1".to_owned());
+                    let func = call.get("function");
+                    let call_name = func
+                        .and_then(|f| f.get("name"))
+                        .and_then(Value::as_string)
+                        .and_then(|t| t.to_utf8().ok())
+                        .unwrap_or_default();
+                    let raw_args = func
+                        .and_then(|f| f.get("arguments"))
+                        .and_then(Value::as_string)
+                        .and_then(|t| t.to_utf8().ok())
+                        .unwrap_or_else(|| "{}".to_owned());
+                    let args_val = crate::json::parse(&Text::from(raw_args.as_str()))
+                        .unwrap_or_else(|_| Value::object(Vec::new()));
+
+                    let label_arg = args_val
+                        .get("path")
+                        .or_else(|| args_val.get("repo"))
+                        .or_else(|| args_val.get("command"))
+                        .or_else(|| args_val.get("outcome"))
+                        .and_then(Value::as_string)
+                        .and_then(|t| t.to_utf8().ok())
+                        .unwrap_or_default();
+                    let status_label = if label_arg.is_empty() {
+                        call_name.clone()
+                    } else {
+                        format!("{call_name} {label_arg}")
+                    };
+                    let _ = domain::put(
+                        &mut self.display,
+                        "lastTestName",
+                        Value::string(&status_label),
+                    );
+                    tool_trace.push(status_label);
+
+                    let tool_out = self
+                        .execute_nlp_agent_tool(
+                            &call_name,
+                            &args_val,
+                            user_text,
+                            &repos,
+                            &matched_repos,
+                            &mut wrote_files,
+                            &mut command_outputs,
+                        )
+                        .await;
+                    messages.push(Value::object(vec![
+                        ("role", Value::string("tool")),
+                        ("tool_call_id", Value::string(&call_id)),
+                        ("name", Value::string(&call_name)),
+                        ("content", Value::string(&tool_out)),
+                    ]));
+                }
+                continue;
+            }
+
+            if domain::is_text(res.finish_reason.as_ref(), "length") {
+                break;
+            }
+            if let Some(content) = res
+                .message
+                .get("content")
+                .and_then(Value::as_string)
+                .and_then(|t| t.to_utf8().ok())
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty())
+            {
+                final_text = Some(content);
+            }
+            break;
+        }
+
+        let _ = domain::put(&mut self.display, "lastTestName", Value::Null);
+        let Some(mut reply) = final_text else {
+            if !command_outputs.is_empty() {
+                let joined = command_outputs.join("\n");
+                let _ = domain::put(&mut self.display, "state", Value::string("passed"));
+                return Ok(Some(joined));
+            }
+            return Ok(None);
+        };
+
+        let wants_report_file = regex_lite::Regex::new(
+            r"(?i)\b(?:generating\s+a\s+report|place\s+it\s+into\s+a\s+.*report|make\s+me\s+a\s+.*(?:markdown|file|report)|write\s+a\s+.*(?:markdown|file|report)|save\s+.*(?:report|markdown|file))\b",
+        )
+        .is_ok_and(|re| re.is_match(user_text));
+
+        if wants_report_file && wrote_files.is_empty() {
+            let default_name = if let Some(first) = matched_repos.first() {
+                let stem = first
+                    .name
+                    .split('-')
+                    .next()
+                    .unwrap_or(&first.name)
+                    .to_ascii_uppercase();
+                format!("{stem}_COMPLIANCE_REPORT.md")
+            } else {
+                "COMPLIANCE_REPORT.md".to_owned()
+            };
+            let mut target_path =
+                resolve_inventory_target_path(user_text, &self.cwd, &self.environment);
+            if target_path.file_name().and_then(|n| n.to_str())
+                == Some("DEV_DRIVES_AND_REPOSITORIES.md")
+                && !user_text
+                    .to_lowercase()
+                    .contains("dev_drives_and_repositories.md")
+            {
+                if let Some(parent) = target_path.parent() {
+                    target_path = parent.join(&default_name);
+                }
+            }
+            if user_text.to_lowercase().contains("repos directory") {
+                if let Some(first_repo) = matched_repos.first() {
+                    if let Some(repo_parent) = Path::new(&first_repo.path).parent() {
+                        if repo_parent
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .is_some_and(|n| n.eq_ignore_ascii_case("repos"))
+                        {
+                            let fname = target_path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or(&default_name);
+                            target_path = repo_parent.join(fname);
+                        }
+                    }
+                }
+            }
+            let full_doc = if !deep_initial_evidence.is_empty() && !reply.contains("## Appendix:") {
+                format!(
+                    "{reply}\n\n---\n\n## Appendix: Automated Repository Inspection Evidence\n\n{deep_initial_evidence}"
+                )
+            } else {
+                reply.clone()
+            };
+            let redacted_doc = self.redact_text(&full_doc)?;
+            if let Some(parent) = target_path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            if fs::write(
+                &target_path,
+                format!("{}\n", redacted_doc.trim_end()).as_bytes(),
+            )
+            .is_ok()
+            {
+                wrote_files.push(target_path);
+                reply = full_doc;
+            }
+        }
+
+        let mut header = String::new();
+        if !tool_trace.is_empty() {
+            header.push_str(&format!(
+                "Agent tools executed ({}): {}\n",
+                tool_trace.len(),
+                tool_trace.join(" -> ")
+            ));
+        }
+        for wf in &wrote_files {
+            header.push_str(&format!("Wrote file: {}\n", wf.display()));
+        }
+        for cmd_out in &command_outputs {
+            header.push_str(cmd_out);
+            if !header.ends_with('\n') {
+                header.push('\n');
+            }
+        }
+        if !header.is_empty() {
+            header.push('\n');
+        }
+
+        let summary_snip: String = reply.chars().take(600).collect();
+        self.conversation_turns.push(ConversationTurn {
+            user: user_text.to_owned(),
+            tool_summary: tool_trace.join(", "),
+            assistant: summary_snip,
+            target_repo: active_target_repo,
+        });
+        if self.conversation_turns.len() > 8 {
+            let drain_count = self.conversation_turns.len() - 8;
+            self.conversation_turns.drain(0..drain_count);
+        }
+
+        let _ = domain::put(&mut self.display, "state", Value::string("passed"));
+        let _ = domain::put(&mut self.display, "review", Value::string("pass"));
+        let combined = format!("{header}{reply}\n");
+        let _ = total_prompt_tokens;
+        Ok(Some(self.redact_text(&combined)?))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn execute_nlp_agent_tool(
+        &mut self,
+        call_name: &str,
+        args: &Value,
+        user_text: &str,
+        repos: &[RepoEntry],
+        matched_repos: &[RepoEntry],
+        wrote_files: &mut Vec<PathBuf>,
+        command_outputs: &mut Vec<String>,
+    ) -> String {
+        let str_arg = |key: &str| -> String {
+            args.get(key)
+                .and_then(Value::as_string)
+                .and_then(|t| t.to_utf8().ok())
+                .unwrap_or_default()
+                .trim()
+                .to_owned()
+        };
+        match call_name {
+            "list_dir" => {
+                let raw_path = str_arg("path");
+                let target = resolve_agent_path(
+                    if raw_path.is_empty() { "." } else { &raw_path },
+                    &self.cwd,
+                    repos,
+                    &self.environment,
+                );
+                let Ok(rd) = fs::read_dir(&target) else {
+                    return Value::object(vec![(
+                        "error",
+                        Value::string(&format!("Directory not found: {}", target.display())),
+                    )])
+                    .json();
+                };
+                let mut dirs = Vec::new();
+                let mut files = Vec::new();
+                for entry in rd.flatten().take(100) {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if name == ".git" || name == "node_modules" || name == "target" {
+                        continue;
+                    }
+                    if let Ok(meta) = entry.metadata() {
+                        if meta.is_dir() {
+                            dirs.push(format!("[dir]  {name}/"));
+                        } else {
+                            files.push(format!("[file] {name} ({} B)", meta.len()));
+                        }
+                    }
+                }
+                dirs.sort();
+                files.sort();
+                dirs.extend(files);
+                Value::object(vec![
+                    ("path", Value::string(&target.display().to_string())),
+                    ("entries", Value::string(&dirs.join("\n"))),
+                ])
+                .json()
+            }
+            "read_file" => {
+                let raw_path = str_arg("path");
+                if raw_path.is_empty() {
+                    return Value::object(vec![("error", Value::string("Missing path"))]).json();
+                }
+                let target = resolve_agent_path(&raw_path, &self.cwd, repos, &self.environment);
+                let fname = target
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                if (fname == ".env" || (fname.starts_with(".env.") && fname != ".env.example"))
+                    || fname.ends_with(".pem")
+                    || fname.ends_with(".key")
+                    || fname.ends_with(".pfx")
+                    || fname.contains("firebase-adminsdk")
+                {
+                    return Value::object(vec![(
+                        "error",
+                        Value::string("Refusing to read secret/credential file contents; inspect filename only"),
+                    )])
+                    .json();
+                }
+                let start_line = domain::safe_integer(args.get("start_line"))
+                    .unwrap_or(1)
+                    .max(1) as usize;
+                let max_lines = domain::safe_integer(args.get("max_lines"))
+                    .unwrap_or(100)
+                    .clamp(1, 160) as usize;
+                let Ok(raw_text) = fs::read_to_string(&target) else {
+                    return Value::object(vec![(
+                        "error",
+                        Value::string(&format!("Cannot read file: {}", target.display())),
+                    )])
+                    .json();
+                };
+                let redacted = self.redact_text(&raw_text).unwrap_or(raw_text);
+                let lines = redacted
+                    .lines()
+                    .enumerate()
+                    .skip(start_line - 1)
+                    .take(max_lines)
+                    .map(|(i, l)| format!("{}: {l}", i + 1))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let clipped: String = lines.chars().take(12_000).collect();
+                Value::object(vec![
+                    ("path", Value::string(&target.display().to_string())),
+                    ("excerpt", Value::string(&clipped)),
+                ])
+                .json()
+            }
+            "search_text" => {
+                let raw_path = str_arg("path");
+                let pattern = str_arg("pattern");
+                if pattern.is_empty() {
+                    return Value::object(vec![("error", Value::string("Missing pattern"))]).json();
+                }
+                let target = resolve_agent_path(
+                    if raw_path.is_empty() { "." } else { &raw_path },
+                    &self.cwd,
+                    repos,
+                    &self.environment,
+                );
+                let re = regex_lite::Regex::new(&format!("(?i){}", regex_lite::escape(&pattern)))
+                    .or_else(|_| regex_lite::Regex::new(&pattern));
+                let Ok(re) = re else {
+                    return Value::object(vec![("error", Value::string("Invalid search pattern"))])
+                        .json();
+                };
+                let mut matches = Vec::new();
+                let mut files_scanned = 0_usize;
+                fn search_walk(
+                    base: &Path,
+                    dir: &Path,
+                    depth: usize,
+                    re: &regex_lite::Regex,
+                    files_scanned: &mut usize,
+                    matches: &mut Vec<String>,
+                ) {
+                    if *files_scanned >= 150 || matches.len() >= 40 || depth > 4 {
+                        return;
+                    }
+                    let Ok(rd) = fs::read_dir(dir) else {
+                        return;
+                    };
+                    for entry in rd.flatten() {
+                        if *files_scanned >= 150 || matches.len() >= 40 {
+                            break;
+                        }
+                        let p = entry.path();
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        if name.starts_with('.')
+                            || matches!(
+                                name.as_str(),
+                                "node_modules" | "target" | "vendor" | "bin" | "obj" | "dist"
+                            )
+                        {
+                            continue;
+                        }
+                        let Ok(meta) = fs::symlink_metadata(&p) else {
+                            continue;
+                        };
+                        if secure::linked(&meta) {
+                            continue;
+                        }
+                        if meta.is_dir() {
+                            search_walk(base, &p, depth + 1, re, files_scanned, matches);
+                        } else if meta.is_file() && meta.len() <= 262_144 {
+                            *files_scanned += 1;
+                            if let Ok(content) = fs::read_to_string(&p) {
+                                let rel = p.strip_prefix(base).unwrap_or(&p).display().to_string();
+                                for (idx, line) in content.lines().enumerate() {
+                                    if re.is_match(line) {
+                                        let snip: String = line.trim().chars().take(160).collect();
+                                        matches.push(format!("{rel}:{}: {snip}", idx + 1));
+                                        if matches.len() >= 40 {
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                search_walk(&target, &target, 0, &re, &mut files_scanned, &mut matches);
+                let redacted = self
+                    .redact_text(&matches.join("\n"))
+                    .unwrap_or_else(|_| matches.join("\n"));
+                Value::object(vec![
+                    ("root", Value::string(&target.display().to_string())),
+                    ("matches", Value::string(&redacted)),
+                ])
+                .json()
+            }
+            "git_inspect" => {
+                let raw_repo = str_arg("repo");
+                let op = str_arg("operation");
+                let target_dir = resolve_agent_path(
+                    if raw_repo.is_empty() { "." } else { &raw_repo },
+                    &self.cwd,
+                    repos,
+                    &self.environment,
+                );
+                if op == "deep_audit" || op.is_empty() {
+                    let targets = if let Some(found) = repos.iter().find(|r| {
+                        Path::new(&r.path) == target_dir || r.name.eq_ignore_ascii_case(&raw_repo)
+                    }) {
+                        vec![found.clone()]
+                    } else if !matched_repos.is_empty() {
+                        matched_repos.to_vec()
+                    } else {
+                        vec![inspect_git_repo(&target_dir, false)]
+                    };
+                    let audit = deep_inspect_repositories(
+                        &targets,
+                        &self.environment,
+                        self.api_key_env().as_deref(),
+                    );
+                    return Value::object(vec![("audit", Value::string(&audit))]).json();
+                }
+                let git_args: Vec<&str> = match op.as_str() {
+                    "status" => vec!["status", "-sb"],
+                    "log" => vec!["log", "-n", "15", "--oneline", "--decorate"],
+                    "branches" => vec!["branch", "-a"],
+                    "worktrees" => vec!["worktree", "list"],
+                    "ls_files" | "ls-files" => vec!["ls-files"],
+                    _ => vec!["status", "-sb"],
+                };
+                let out_str = if let Some(rest) = target_dir
+                    .display()
+                    .to_string()
+                    .strip_prefix(r"\\wsl.localhost\Ubuntu\")
+                {
+                    let linux_p = format!("/{}", rest.replace('\\', "/"));
+                    let mut wsl_args = vec![
+                        "-d".to_owned(),
+                        "Ubuntu".to_owned(),
+                        "--".to_owned(),
+                        "git".to_owned(),
+                        "--no-optional-locks".to_owned(),
+                        "-C".to_owned(),
+                        linux_p,
+                    ];
+                    wsl_args.extend(git_args.iter().map(|s| (*s).to_owned()));
+                    StdCommand::new("wsl.exe")
+                        .args(&wsl_args)
+                        .output()
+                        .ok()
+                        .and_then(|o| String::from_utf8(o.stdout).ok())
+                        .unwrap_or_default()
+                } else {
+                    StdCommand::new("git")
+                        .arg("--no-optional-locks")
+                        .arg("-c")
+                        .arg("safe.directory=*")
+                        .arg("-C")
+                        .arg(&target_dir)
+                        .args(&git_args)
+                        .output()
+                        .ok()
+                        .and_then(|o| String::from_utf8(o.stdout).ok())
+                        .unwrap_or_default()
+                };
+                let clipped: String = out_str
+                    .lines()
+                    .take(180)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    .chars()
+                    .take(10_000)
+                    .collect();
+                Value::object(vec![
+                    ("repo", Value::string(&target_dir.display().to_string())),
+                    ("operation", Value::string(&op)),
+                    ("output", Value::string(&clipped)),
+                ])
+                .json()
+            }
+            "write_report" => {
+                let raw_path = str_arg("path");
+                let content = str_arg("content");
+                if content.is_empty() {
+                    return Value::object(vec![("error", Value::string("Empty content"))]).json();
+                }
+                let mut target_path = if raw_path.is_empty() {
+                    resolve_inventory_target_path(user_text, &self.cwd, &self.environment)
+                } else {
+                    resolve_agent_path(&raw_path, &self.cwd, repos, &self.environment)
+                };
+                if user_text.to_lowercase().contains("repos directory") {
+                    if let Some(first_repo) = matched_repos.first() {
+                        if let Some(repo_parent) = Path::new(&first_repo.path).parent() {
+                            if repo_parent
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .is_some_and(|n| n.eq_ignore_ascii_case("repos"))
+                            {
+                                let fname = target_path
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("REPORT.md");
+                                target_path = repo_parent.join(fname);
+                            }
+                        }
+                    }
+                }
+                let fname_lower = target_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                if fname_lower == "agent-policy.yml"
+                    || fname_lower == ".env"
+                    || fname_lower.starts_with(".env.")
+                {
+                    return Value::object(vec![(
+                        "error",
+                        Value::string("Refusing to overwrite protected policy or environment file"),
+                    )])
+                    .json();
+                }
+                let redacted_body = self.redact_text(&content).unwrap_or(content);
+                let final_body = if redacted_body.ends_with('\n') {
+                    redacted_body
+                } else {
+                    format!("{redacted_body}\n")
+                };
+                if let Some(parent) = target_path.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                match fs::write(&target_path, final_body.as_bytes()) {
+                    Ok(()) => {
+                        if !wrote_files.contains(&target_path) {
+                            wrote_files.push(target_path.clone());
+                        }
+                        Value::object(vec![
+                            ("written", Value::string(&target_path.display().to_string())),
+                            ("bytes", Value::Number(final_body.len() as f64)),
+                        ])
+                        .json()
+                    }
+                    Err(e) => Value::object(vec![("error", Value::string(&e.to_string()))]).json(),
+                }
+            }
+            "run_roster_command" => {
+                let cmd = str_arg("command");
+                if !cmd.starts_with('/') {
+                    return Value::object(vec![(
+                        "error",
+                        Value::string("Roster command must start with /"),
+                    )])
+                    .json();
+                }
+                match Box::pin(self.dispatch_line(&cmd)).await {
+                    Ok(ShellAction::Continue(out)) => {
+                        command_outputs.push(out.clone());
+                        Value::object(vec![
+                            ("command", Value::string(&cmd)),
+                            ("output", Value::string(&out)),
+                        ])
+                        .json()
+                    }
+                    Ok(_) => Value::object(vec![("status", Value::string("ok"))]).json(),
+                    Err(e) => Value::object(vec![("error", Value::string(&e.message))]).json(),
+                }
+            }
+            "start_sdlc_delivery" => {
+                let raw_repo = str_arg("repo");
+                let outcome = str_arg("outcome");
+                let target_repo = if raw_repo.is_empty() {
+                    matched_repos
+                        .first()
+                        .map(|r| PathBuf::from(&r.path))
+                        .unwrap_or_else(|| self.current_root())
+                } else {
+                    resolve_agent_path(&raw_repo, &self.cwd, repos, &self.environment)
+                };
+                let raw_files = args
+                    .get("files_allowed")
+                    .and_then(domain::items)
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_string()?.to_utf8().ok())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let valid_files = normalize_and_validate_allowed_files(&target_repo, &raw_files);
+                if valid_files.is_empty() {
+                    return Value::object(vec![(
+                        "error",
+                        Value::string(
+                            "No valid worktree-relative files_allowed could be resolved for this repository; use list_dir or git_inspect(ls_files) first.",
+                        ),
+                    )])
+                    .json();
+                }
+                let raw_checks = args
+                    .get("acceptance_checks")
+                    .and_then(domain::items)
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_string()?.to_utf8().ok())
+                            .filter(|c| !c.trim().is_empty())
+                            .take(4)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let checks = if raw_checks.is_empty() {
+                    vec![format!(
+                        "{} is updated to satisfy: {}",
+                        valid_files[0], outcome
+                    )]
+                } else {
+                    raw_checks
+                };
+                let file_bullets = valid_files
+                    .iter()
+                    .map(|f| format!("- `{f}`"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let check_bullets = checks
+                    .iter()
+                    .map(|c| format!("- {c}"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let structured_ask = format!(
+                    "{}\n\nOriginal request: {}\n\n## Allowed Files\n{}\n\n## Acceptance checks\n{}",
+                    if outcome.is_empty() {
+                        user_text
+                    } else {
+                        &outcome
+                    },
+                    user_text,
+                    file_bullets,
+                    check_bullets
+                );
+                let prev_cwd = self.cwd.clone();
+                if target_repo.join(".git").exists() {
+                    self.cwd = target_repo.clone();
+                }
+                let res = self.run_ask_text_mode(&structured_ask, false).await;
+                self.cwd = prev_cwd;
+                match res {
+                    Ok(out) => {
+                        command_outputs.push(out.clone());
+                        Value::object(vec![
+                            ("status", Value::string("delivered")),
+                            ("output", Value::string(&out)),
+                        ])
+                        .json()
+                    }
+                    Err(e) => Value::object(vec![("error", Value::string(&e.message))]).json(),
+                }
+            }
+            _ => Value::object(vec![("error", Value::string("Unknown tool"))]).json(),
+        }
     }
 
     async fn translate_natural_language_with_llm(
@@ -7761,6 +8640,312 @@ pub fn deep_inspect_repositories(
     report
 }
 
+pub fn nlp_agent_tool_definitions() -> Value {
+    let make_tool = |name: &str, desc: &str, props: Vec<(&str, Value)>, req: &[&str]| -> Value {
+        Value::object(vec![
+            ("type", Value::string("function")),
+            (
+                "function",
+                Value::object(vec![
+                    ("name", Value::string(name)),
+                    ("description", Value::string(desc)),
+                    (
+                        "parameters",
+                        Value::object(vec![
+                            ("type", Value::string("object")),
+                            ("properties", Value::object(props)),
+                            (
+                                "required",
+                                Value::Array(req.iter().map(|s| Value::string(s)).collect()),
+                            ),
+                        ]),
+                    ),
+                ]),
+            ),
+        ])
+    };
+    let str_prop = |desc: &str| -> Value {
+        Value::object(vec![
+            ("type", Value::string("string")),
+            ("description", Value::string(desc)),
+        ])
+    };
+    let int_prop = |desc: &str| -> Value {
+        Value::object(vec![
+            ("type", Value::string("integer")),
+            ("description", Value::string(desc)),
+        ])
+    };
+    let str_arr_prop = |desc: &str| -> Value {
+        Value::object(vec![
+            ("type", Value::string("array")),
+            ("description", Value::string(desc)),
+            (
+                "items",
+                Value::object(vec![("type", Value::string("string"))]),
+            ),
+        ])
+    };
+
+    Value::Array(vec![
+        make_tool(
+            "list_dir",
+            "List files and subdirectories in a workspace path or repository name.",
+            vec![(
+                "path",
+                str_prop(
+                    "Directory path or repository name (e.g. '.', 'Riddle', 'barberlytics/src')",
+                ),
+            )],
+            &["path"],
+        ),
+        make_tool(
+            "read_file",
+            "Read line-numbered UTF-8 excerpts from a file in the workspace or a repository.",
+            vec![
+                (
+                    "path",
+                    str_prop("File path (e.g. 'README.md', 'Riddle/Directory.Build.props')"),
+                ),
+                ("start_line", int_prop("1-based start line (default 1)")),
+                (
+                    "max_lines",
+                    int_prop("Maximum lines to read (1..=160, default 100)"),
+                ),
+            ],
+            &["path"],
+        ),
+        make_tool(
+            "search_text",
+            "Search for a substring or regex pattern across files in a directory or repository.",
+            vec![
+                (
+                    "path",
+                    str_prop("Directory path or repository name to search"),
+                ),
+                ("pattern", str_prop("Pattern or keyword to search for")),
+            ],
+            &["path", "pattern"],
+        ),
+        make_tool(
+            "git_inspect",
+            "Run read-only Git inspections on a repository.",
+            vec![
+                (
+                    "repo",
+                    str_prop("Repository name or path (e.g. 'Riddle', 'barberlytics', '.')"),
+                ),
+                (
+                    "operation",
+                    str_prop(
+                        "One of: 'deep_audit', 'status', 'log', 'branches', 'worktrees', 'ls_files'",
+                    ),
+                ),
+            ],
+            &["repo", "operation"],
+        ),
+        make_tool(
+            "write_report",
+            "Write a Markdown report or file to disk.",
+            vec![
+                (
+                    "path",
+                    str_prop("Output file path (e.g. 'RIDDLE_COMPLIANCE_REPORT.md')"),
+                ),
+                (
+                    "content",
+                    str_prop("Complete Markdown or file content to write"),
+                ),
+            ],
+            &["path", "content"],
+        ),
+        make_tool(
+            "run_roster_command",
+            "Execute an internal Roster slash command (/fleet list, /fleet use <id>, /doctor, /doctor openshell, /status, /usage, /issues, /stats, /update --check).",
+            vec![("command", str_prop("Slash command starting with /"))],
+            &["command"],
+        ),
+        make_tool(
+            "start_sdlc_delivery",
+            "Start Roster's 3-seat isolated worktree SDLC pipeline (planner -> coder -> reviewer) for code changes in a Git repository.",
+            vec![
+                ("repo", str_prop("Target repository name or path")),
+                ("outcome", str_prop("Single-sentence imperative outcome")),
+                (
+                    "files_allowed",
+                    str_arr_prop("Relative file paths in the repository to modify"),
+                ),
+                (
+                    "acceptance_checks",
+                    str_arr_prop("Concrete observable acceptance checks"),
+                ),
+            ],
+            &["repo", "outcome", "files_allowed"],
+        ),
+    ])
+}
+
+pub fn resolve_agent_path(raw_path: &str, cwd: &Path, repos: &[RepoEntry], env: &Value) -> PathBuf {
+    let trimmed = raw_path.trim().trim_matches(['"', '\'', '`']);
+    if trimmed.is_empty() || trimmed == "." {
+        return cwd.to_path_buf();
+    }
+    let home = config::environment_value(env, if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .ok()
+        .flatten()
+        .and_then(|t| t.to_utf8().ok())
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from)
+        });
+    if trimmed == "~" {
+        if let Some(h) = home {
+            return h;
+        }
+    }
+    if let Some(sub) = trimmed.strip_prefix("~/") {
+        if let Some(ref h) = home {
+            let candidate = h.join(sub);
+            if candidate.exists() || candidate.parent().is_some_and(Path::exists) {
+                return candidate;
+            }
+        }
+        if cfg!(windows) {
+            let wsl_home = Path::new(r"\\wsl.localhost\Ubuntu\home");
+            if let Ok(rd) = fs::read_dir(wsl_home) {
+                for entry in rd.flatten() {
+                    let cand = entry.path().join(sub.replace('/', "\\"));
+                    if cand.exists() || cand.parent().is_some_and(Path::exists) {
+                        return cand;
+                    }
+                }
+            }
+        }
+    }
+    let direct = Path::new(trimmed);
+    if direct.is_absolute() && (direct.exists() || direct.parent().is_some_and(Path::exists)) {
+        return direct.to_path_buf();
+    }
+    let norm = trimmed.replace('\\', "/");
+    let (first_seg, rest_opt) = match norm.split_once('/') {
+        Some((a, b)) => (a, Some(b)),
+        None => (norm.as_str(), None),
+    };
+    if let Some(repo) = repos
+        .iter()
+        .find(|r| r.name.eq_ignore_ascii_case(first_seg))
+        .or_else(|| {
+            repos.iter().find(|r| {
+                first_seg.len() >= 5
+                    && damerau_levenshtein(&first_seg.to_lowercase(), &r.name.to_lowercase()) <= 2
+            })
+        })
+    {
+        let repo_root = PathBuf::from(&repo.path);
+        return match rest_opt {
+            Some(rest) if !rest.is_empty() => repo_root.join(rest),
+            _ => repo_root,
+        };
+    }
+    cwd.join(trimmed)
+}
+
+pub fn normalize_and_validate_allowed_files(repo_root: &Path, proposed: &[String]) -> Vec<String> {
+    let tracked = if let Some(rest) = repo_root
+        .display()
+        .to_string()
+        .strip_prefix(r"\\wsl.localhost\Ubuntu\")
+    {
+        let linux_p = format!("/{}", rest.replace('\\', "/"));
+        StdCommand::new("wsl.exe")
+            .args([
+                "-d",
+                "Ubuntu",
+                "--",
+                "git",
+                "--no-optional-locks",
+                "-C",
+                &linux_p,
+                "ls-files",
+            ])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| {
+                s.lines()
+                    .map(|l| l.trim().to_owned())
+                    .filter(|l| !l.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    } else {
+        StdCommand::new("git")
+            .arg("--no-optional-locks")
+            .arg("-c")
+            .arg("safe.directory=*")
+            .arg("-C")
+            .arg(repo_root)
+            .arg("ls-files")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| {
+                s.lines()
+                    .map(|l| l.trim().to_owned())
+                    .filter(|l| !l.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
+
+    let repo_name = repo_root.file_name().and_then(|s| s.to_str()).unwrap_or("");
+
+    let mut out = Vec::new();
+    for raw in proposed {
+        let mut cleaned = raw.trim().trim_matches(['"', '\'', '`']).replace('\\', "/");
+        if let Some(stripped) = cleaned.strip_prefix("./") {
+            cleaned = stripped.to_owned();
+        }
+        if !repo_name.is_empty() {
+            let prefix = format!("{repo_name}/");
+            if cleaned.len() > prefix.len() && cleaned[..prefix.len()].eq_ignore_ascii_case(&prefix)
+            {
+                cleaned = cleaned[prefix.len()..].to_owned();
+            }
+        }
+        if let Ok(valid) = crate::planning::task::allowed_file(&Value::string(&cleaned)) {
+            if !crate::planning::forbidden_read(&valid)
+                && !crate::execution::policy::managed(&valid)
+                && !out.contains(&valid)
+                && (tracked.is_empty() || tracked.contains(&valid) || !cleaned.contains('/'))
+            {
+                out.push(valid);
+                continue;
+            }
+        }
+        let base_lower = Path::new(&cleaned)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&cleaned)
+            .to_lowercase();
+        if let Some(found) = tracked.iter().find(|t| {
+            Path::new(t)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .is_some_and(|n| n.eq_ignore_ascii_case(&base_lower))
+        }) {
+            if let Ok(valid) = crate::planning::task::allowed_file(&Value::string(found)) {
+                if !out.contains(&valid) {
+                    out.push(valid);
+                }
+            }
+        }
+    }
+    out.into_iter().take(8).collect()
+}
+
 fn auto_discover_question_files(root: &Path, question: &str) -> Vec<String> {
     let mut selected = Vec::new();
     let lower_q = question.to_lowercase();
@@ -9677,6 +10862,35 @@ mod tests {
         assert_eq!(matched.len(), 2);
         assert_eq!(matched[0].name, "barberlytics");
         assert_eq!(matched[1].name, "barberlytics-api");
+
+        let tools_arr = nlp_agent_tool_definitions();
+        let Some(items) = domain::items(&tools_arr) else {
+            return Err(Error::new("TestError", "expected tools array"));
+        };
+        assert_eq!(items.len(), 7);
+
+        let resolved_riddle = resolve_agent_path(
+            "Riddle/Directory.Build.props",
+            Path::new("/home/user"),
+            &sample_repos,
+            &Value::object(Vec::new()),
+        );
+        assert_eq!(
+            resolved_riddle,
+            PathBuf::from("/home/user/repos/Riddle").join("Directory.Build.props")
+        );
+
+        let normalized = normalize_and_validate_allowed_files(
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            &[
+                "README.md".to_owned(),
+                "3D Objects/bad path.txt".to_owned(),
+                "shell.rs".to_owned(),
+            ],
+        );
+        assert!(normalized.contains(&"README.md".to_owned()));
+        assert!(normalized.contains(&"rust/shell.rs".to_owned()));
+        assert!(!normalized.iter().any(|p| p.contains(' ')));
         Ok(())
     }
 }
