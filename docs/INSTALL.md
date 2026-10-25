@@ -19,11 +19,44 @@ compiler, formal boundary prover, fleet inference provider bridge and sandbox
 attempt lifecycle (`rust/openshell.rs`). Top-level CLI GitHub publication,
 resume and automatic fleet recovery/routing remain unavailable.
 
-## Prerequisites
+## Single-Command Installation (Recommended)
+
+Install `github-agent-roster` and initialize your machine-scoped `~/.roster/`
+configuration (`config.yml`, `fleet.yml`, `capabilities.yml`, `vault/`, and
+`installation/`) with a single command:
+
+**Linux, WSL 2, and macOS:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/R4yHarris/github-agent-roster/main/install.sh | bash
+```
+
+**Windows PowerShell:**
+
+```powershell
+irm https://raw.githubusercontent.com/R4yHarris/github-agent-roster/main/install.ps1 | iex
+```
+
+The installer sets up `~/.roster/installation` (with `core.autocrlf=false` and
+the pinned `vendor/github-agent-contracts` submodule), builds and installs the
+native `roster` binary (`~/.local/bin/roster` on Unix/WSL;
+`%USERPROFILE%\.roster\bin\roster.exe` and `%USERPROFILE%\.dotnet\tools\roster.exe`
+on Windows), initializes machine-scoped `~/.roster/{config.yml,fleet.yml,capabilities.yml,vault}`,
+and configures `ROSTER_MACHINE_HOME`, `ROSTER_INSTALLATION_ROOT`, `ROSTER_GIT`,
+`ROSTER_NODE20`, and `ROSTER_CARGO`.
+
+After installing, run `roster onboard --discover` once on your machine to
+populate `~/.roster/config.yml` and `~/.roster/fleet.yml`. All workspaces on
+the machine inherit `~/.roster/` automatically unless a workspace explicitly
+defines its own `<repo>/.roster/` override.
+
+## Manual Source Build
+
+### Prerequisites
 
 - Rust 1.85 or later with Cargo, rustfmt and Clippy.
+- On Debian/Ubuntu Linux or WSL 2: `build-essential`, `pkg-config`, and `libssl-dev`.
 - Git and the reviewed contracts submodule.
-- The selected Rust target's normal compiler/linker prerequisites.
 - Node 20 only for JavaScript consumer checks and the independent contracts
   identity/publishing SDK adapter, not as a Roster runtime or fallback.
 

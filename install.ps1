@@ -7,6 +7,8 @@ $BinDir = Join-Path $RosterHome 'bin'
 $DotnetTools = Join-Path $UserHome '.dotnet\tools'
 $RepoUrl = 'https://github.com/R4yHarris/github-agent-roster.git'
 
+Write-Host '=== github-agent-roster installer (Windows PowerShell) ===' -ForegroundColor Cyan
+
 $CargoBin = Join-Path $UserHome '.cargo\bin'
 if (Test-Path (Join-Path $CargoBin 'cargo.exe')) {
   $env:PATH = "$CargoBin;$env:PATH"
@@ -21,6 +23,12 @@ if (Test-Path (Join-Path $CargoBin 'cargo.exe')) {
     if (Test-Path $dlltool) {
       $env:RUSTFLAGS = "-C dlltool=$dlltool"
     }
+  } elseif (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
+    Write-Host '-> Installing Rust toolchain via rustup-init.exe...'
+    $RustupInit = Join-Path $env:TEMP 'rustup-init.exe'
+    Invoke-WebRequest -Uri 'https://win.rustup.rs/x86_64' -OutFile $RustupInit -UseBasicParsing
+    & $RustupInit -y
+    $env:PATH = "$CargoBin;$env:PATH"
   }
 }
 
@@ -30,11 +38,9 @@ foreach ($dir in @($RosterHome, (Join-Path $RosterHome 'vault'), $BinDir, $Dotne
 icacls $RosterHome /inheritance:r /grant:r "$($env:USERNAME):F" | Out-Null
 icacls (Join-Path $RosterHome 'vault') /inheritance:r /grant:r "$($env:USERNAME):(OI)(CI)F" | Out-Null
 
-$ScriptSourceDir = $null
-if ($PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot 'Cargo.toml'))) {
+$ScriptSourceDir = if ($env:ROSTER_INSTALL_SOURCE) { $env:ROSTER_INSTALL_SOURCE } else { $null }
+if (-not $ScriptSourceDir -and $PSScriptRoot -and (Test-Path (Join-Path $PSScriptRoot 'Cargo.toml'))) {
   $ScriptSourceDir = $PSScriptRoot
-} elseif (Test-Path 'D:\oss\github-agent-roster\Cargo.toml') {
-  $ScriptSourceDir = 'D:\oss\github-agent-roster'
 }
 
 if ($ScriptSourceDir -and ((Resolve-Path $ScriptSourceDir).Path -eq $InstallDir)) {
@@ -72,12 +78,12 @@ if ($env:ROSTER_PREBUILT_EXE -and (Test-Path $env:ROSTER_PREBUILT_EXE)) {
 Copy-Item -Force $BuiltExe (Join-Path $BinDir 'roster.exe')
 Copy-Item -Force $BuiltExe (Join-Path $DotnetTools 'roster.exe')
 
-$SeedDir = $null
-foreach ($cand in @($ScriptSourceDir, 'D:\oss\github-agent-roster')) {
-  if ($cand -and (Test-Path (Join-Path $cand '.roster'))) {
-    $SeedDir = Join-Path $cand '.roster'
-    break
-  }
+$SeedDir = if ($env:ROSTER_SEED_DIR -and (Test-Path $env:ROSTER_SEED_DIR)) {
+  $env:ROSTER_SEED_DIR
+} elseif ($ScriptSourceDir -and (Test-Path (Join-Path $ScriptSourceDir '.roster'))) {
+  Join-Path $ScriptSourceDir '.roster'
+} else {
+  $null
 }
 
 $ConfigPath = Join-Path $RosterHome 'config.yml'
@@ -116,16 +122,24 @@ if (-not $Node20Path) {
   $NvmNode20 = Get-ChildItem "$env:LOCALAPPDATA\nvm\v20.*\node.exe" -ErrorAction SilentlyContinue | Select-Object -Last 1
   if ($NvmNode20) { $Node20Path = $NvmNode20.FullName }
 }
+$CargoExe = (Get-Command cargo -ErrorAction SilentlyContinue).Source
 
+$env:PATH = "$BinDir;$env:PATH"
 $env:ROSTER_MACHINE_HOME = $UserHome
 $env:ROSTER_INSTALLATION_ROOT = $InstallDir
 if ($GitPath) { $env:ROSTER_GIT = $GitPath }
 if ($Node20Path) { $env:ROSTER_NODE20 = $Node20Path }
+if ($CargoExe) { $env:ROSTER_CARGO = $CargoExe }
 
+$CurrentUserPath = (Get-ItemProperty -Path 'HKCU:\Environment' -Name 'Path' -ErrorAction SilentlyContinue).Path
+if ($CurrentUserPath -and ($CurrentUserPath -split ';' -notcontains $BinDir)) {
+  Set-ItemProperty -Path 'HKCU:\Environment' -Name 'Path' -Value "$BinDir;$CurrentUserPath"
+}
 Set-ItemProperty -Path 'HKCU:\Environment' -Name 'ROSTER_MACHINE_HOME' -Value $UserHome
 Set-ItemProperty -Path 'HKCU:\Environment' -Name 'ROSTER_INSTALLATION_ROOT' -Value $InstallDir
 if ($GitPath) { Set-ItemProperty -Path 'HKCU:\Environment' -Name 'ROSTER_GIT' -Value $GitPath }
 if ($Node20Path) { Set-ItemProperty -Path 'HKCU:\Environment' -Name 'ROSTER_NODE20' -Value $Node20Path }
+if ($CargoExe) { Set-ItemProperty -Path 'HKCU:\Environment' -Name 'ROSTER_CARGO' -Value $CargoExe }
 
 Write-Host ''
 Write-Host "=== Machine-scoped configuration initialized in $RosterHome ===" -ForegroundColor Green
@@ -139,3 +153,5 @@ Write-Host ''
 & (Join-Path $BinDir 'roster.exe') doctor
 Write-Host ''
 & (Join-Path $BinDir 'roster.exe') fleet list
+Write-Host ''
+Write-Host "Next: run 'roster onboard --discover' to configure your machine fleet." -ForegroundColor Cyan
