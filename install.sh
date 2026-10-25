@@ -22,16 +22,25 @@ main() {
     fi
     if [ "$NEED_APT" -eq 1 ]; then
       echo "-> Installing Linux build prerequisites (build-essential, pkg-config, libssl-dev, git, curl)..."
-      SUDO=""
-      if [ "$(id -u)" -ne 0 ] && command -v sudo >/dev/null 2>&1; then
-        SUDO="sudo"
-      fi
-      if ! $SUDO apt-get update -qq </dev/null 2>/dev/null; then
+      run_root() {
+        if [ "$(id -u)" -eq 0 ]; then
+          "$@" </dev/null
+        elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+          sudo "$@" </dev/null
+        elif [ -x /mnt/c/Windows/System32/wsl.exe ]; then
+          /mnt/c/Windows/System32/wsl.exe -d "${WSL_DISTRO_NAME:-Ubuntu}" -u root -- "$@" </dev/null
+        elif command -v sudo >/dev/null 2>&1 && [ -r /dev/tty ]; then
+          sudo "$@" </dev/tty
+        else
+          sudo "$@"
+        fi
+      }
+      if ! run_root apt-get update -qq 2>/dev/null; then
         if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
-          $SUDO apt-get update -o Dir::Etc::sourcelist="sources.list.d/ubuntu.sources" -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0" -qq </dev/null
+          run_root apt-get update -o Dir::Etc::sourcelist="sources.list.d/ubuntu.sources" -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0" -qq
         fi
       fi
-      $SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y -qq build-essential pkg-config libssl-dev git curl ca-certificates </dev/null
+      run_root env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq build-essential pkg-config libssl-dev git curl ca-certificates
     fi
   fi
 
