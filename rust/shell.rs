@@ -7649,43 +7649,61 @@ impl Drop for RawTerminalGuard {
     }
 }
 
+fn format_multiline_editor_repaint(
+    prompt_str: &str,
+    editor: &LineEditor,
+    prev_cursor_row: &mut usize,
+    cols: usize,
+) -> String {
+    let wrap_width = cols.saturating_sub(1).max(40);
+    let prompt_len = strip_vt_only(prompt_str).chars().count();
+    let mut seq = String::new();
+    if *prev_cursor_row > 0 {
+        seq.push_str(&format!("\x1b[{}A", *prev_cursor_row));
+    }
+    seq.push_str("\r\x1b[J");
+    seq.push_str(prompt_str);
+    let mut pos = prompt_len;
+    for &ch in &editor.chars {
+        let row_idx = pos / wrap_width;
+        let col_idx = pos - (row_idx * wrap_width);
+        if pos > 0 && col_idx == 0 {
+            seq.push_str("\r\n");
+        }
+        seq.push(ch);
+        pos += 1;
+    }
+    let final_row_idx = pos / wrap_width;
+    let final_col_idx = pos - (final_row_idx * wrap_width);
+    if pos > 0 && final_col_idx == 0 {
+        seq.push_str("\r\n");
+    }
+    let end_row = pos / wrap_width;
+    let target_pos = prompt_len + editor.cursor();
+    let target_row = target_pos / wrap_width;
+    let target_col = target_pos - (target_row * wrap_width);
+    if end_row > target_row {
+        seq.push_str(&format!("\x1b[{}A", end_row - target_row));
+    }
+    seq.push('\r');
+    if target_col > 0 {
+        seq.push_str(&format!("\x1b[{target_col}C"));
+    }
+    *prev_cursor_row = target_row;
+    seq
+}
+
 fn repaint_editor_line(
     stdout: &mut std::io::Stdout,
     prompt_str: &str,
     editor: &LineEditor,
+    prev_cursor_row: &mut usize,
     cols: usize,
 ) -> Result<(), Error> {
     if editor.secret_mode {
         return Ok(());
     }
-    let width = cols.max(40);
-    let prompt_len = strip_vt_only(prompt_str).chars().count();
-    let max_visible = width.saturating_sub(prompt_len + 2).max(16);
-    let total_chars = editor.chars.len();
-    let cursor = editor.cursor();
-    let (visible_text, cursor_in_visible) = if total_chars <= max_visible {
-        (editor.text(), cursor)
-    } else {
-        let half = max_visible / 2;
-        let start = if cursor <= half {
-            0
-        } else if cursor + half >= total_chars {
-            total_chars.saturating_sub(max_visible)
-        } else {
-            cursor - half
-        };
-        let end = (start + max_visible).min(total_chars);
-        let slice_str: String = editor.chars[start..end].iter().collect();
-        (slice_str, cursor.saturating_sub(start))
-    };
-    let target_col = prompt_len + cursor_in_visible;
-    let mut seq = String::from("\r\x1b[K");
-    seq.push_str(prompt_str);
-    seq.push_str(&visible_text);
-    seq.push('\r');
-    if target_col > 0 {
-        seq.push_str(&format!("\x1b[{target_col}C"));
-    }
+    let seq = format_multiline_editor_repaint(prompt_str, editor, prev_cursor_row, cols);
     stdout
         .write_all(seq.as_bytes())
         .and_then(|()| stdout.flush())
@@ -7704,6 +7722,7 @@ fn read_interactive_line(
     if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
         if let Some(guard) = RawTerminalGuard::enter() {
             let mut editor = LineEditor::new(history_lines.to_vec(), secret_mode);
+            let mut prev_cursor_row = 0_usize;
             let mut pending = Vec::new();
             loop {
                 let chunk = guard.read_chunk()?;
@@ -7715,35 +7734,53 @@ fn read_interactive_line(
                 match editor.feed_bytes(&mut pending, &chunk) {
                     EditorStep::Continue { changed } => {
                         if changed {
-                            repaint_editor_line(stdout, prompt_str, &editor, cols)?;
+                            repaint_editor_line(
+                                stdout,
+                                prompt_str,
+                                &editor,
+                                &mut prev_cursor_row,
+                                cols,
+                            )?;
                         }
                     }
                     EditorStep::CancelLine => {
-                        repaint_editor_line(stdout, prompt_str, &editor, cols)?;
+                        repaint_editor_line(
+                            stdout,
+                            prompt_str,
+                            &editor,
+                            &mut prev_cursor_row,
+                            cols,
+                        )?;
                     }
                     EditorStep::ClearScreen => {
                         stdout
                             .write_all(b"\x1b[2J\x1b[H")
                             .and_then(|()| stdout.flush())
                             .map_err(|e| Error::new("Error", e.to_string()))?;
-                        repaint_editor_line(stdout, prompt_str, &editor, cols)?;
+                        prev_cursor_row = 0;
+                        repaint_editor_line(
+                            stdout,
+                            prompt_str,
+                            &editor,
+                            &mut prev_cursor_row,
+                            cols,
+                        )?;
                     }
                     EditorStep::Submit(line) => {
                         if !secret_mode {
-                            let mut seq = String::from("\r\x1b[K");
-                            seq.push_str(prompt_str);
-                            seq.push_str(&line);
-                            seq.push_str("\r\n");
-                            stdout
-                                .write_all(seq.as_bytes())
-                                .and_then(|()| stdout.flush())
-                                .map_err(|e| Error::new("Error", e.to_string()))?;
-                        } else {
-                            stdout
-                                .write_all(b"\r\n")
-                                .and_then(|()| stdout.flush())
-                                .map_err(|e| Error::new("Error", e.to_string()))?;
+                            let _ = editor.move_end();
+                            let _ = repaint_editor_line(
+                                stdout,
+                                prompt_str,
+                                &editor,
+                                &mut prev_cursor_row,
+                                cols,
+                            );
                         }
+                        stdout
+                            .write_all(b"\r\n")
+                            .and_then(|()| stdout.flush())
+                            .map_err(|e| Error::new("Error", e.to_string()))?;
                         return Ok(Some(line));
                     }
                     EditorStep::Eof => {
@@ -8724,6 +8761,21 @@ mod tests {
 
         let submit = editor.feed_bytes(&mut pending, b"\r");
         assert_eq!(submit, EditorStep::Submit("/checkpoints ".to_owned()));
+
+        let long_cmd = "What dev drives and repositories are on this windows PC, make me a nice markdown file with the list and state of them and place it in the current C:\\Users\\harrr directory.";
+        let mut ml_editor = LineEditor::new(vec![long_cmd.to_owned()], false);
+        let mut prev_row = 0_usize;
+        let _ = ml_editor.feed_bytes(&mut pending, b"\x1b[A");
+        assert_eq!(ml_editor.text(), long_cmd);
+        let painted_up = format_multiline_editor_repaint("roster> ", &ml_editor, &mut prev_row, 80);
+        assert!(painted_up.contains("\r\n"));
+        assert_eq!(prev_row, 2);
+        let _ = ml_editor.feed_bytes(&mut pending, b"\x1b[B");
+        assert_eq!(ml_editor.text(), "");
+        let painted_down =
+            format_multiline_editor_repaint("roster> ", &ml_editor, &mut prev_row, 80);
+        assert!(painted_down.starts_with("\x1b[2A\r\x1b[J"));
+        assert_eq!(prev_row, 0);
         Ok(())
     }
 
