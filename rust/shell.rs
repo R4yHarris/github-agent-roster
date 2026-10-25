@@ -2733,6 +2733,15 @@ impl ShellSession {
             return Ok(ShellAction::Continue(help));
         }
         if !text.starts_with('/') {
+            if let Some(cmd) = translate_natural_language_command(text) {
+                let act = Box::pin(self.dispatch_line(&cmd)).await?;
+                return match act {
+                    ShellAction::Continue(out) => Ok(ShellAction::Continue(format!(
+                        "Translated natural language -> {cmd}\n{out}"
+                    ))),
+                    other => Ok(other),
+                };
+            }
             if is_workspace_inventory_ask(text)? {
                 let out = self.execute_workspace_inventory(text).await?;
                 return Ok(ShellAction::Continue(out));
@@ -4370,6 +4379,276 @@ impl ShellSession {
             .filter(|s| !s.is_empty())
     }
 
+    fn has_configured_endpoint(&self) -> bool {
+        let Some(llm) = self.config.get("llm") else {
+            return false;
+        };
+        llm.get("base_url").is_some_and(domain::truthy)
+            && llm.get("model").is_some_and(domain::truthy)
+    }
+
+    async fn translate_natural_language_with_llm(
+        &mut self,
+        text: &str,
+        root: &Path,
+    ) -> Option<NaturalLanguageTranslation> {
+        let llm = self.config.get("llm")?;
+        if !llm.get("base_url").is_some_and(domain::truthy)
+            || !llm.get("model").is_some_and(domain::truthy)
+        {
+            return None;
+        }
+        let mut chat_cfg = self.config.clone();
+        let mut chat_llm = llm.clone();
+        let _ = domain::put(&mut chat_llm, "max_tokens", Value::Number(384.0));
+        let _ = domain::put(&mut chat_llm, "thinking", Value::Boolean(false));
+        let _ = domain::put(&mut chat_cfg, "llm", chat_llm);
+        let admission = crate::llm::admission::Admission::default();
+        let mut chat = crate::llm::builtin::BuiltinChat::new(
+            &chat_cfg,
+            &admission,
+            crate::llm::builtin::Options {
+                retry_length: false,
+                stream: false,
+            },
+        )
+        .ok()??;
+        let mut transport = crate::llm::http::HttpTransport::new().ok()?;
+        let has_git = root.join(".git").exists();
+        let repo_files = collect_workspace_file_map(root);
+        let prompt = Value::object(vec![
+            ("user_input", Value::string(text)),
+            ("cwd", Value::string(&root.display().to_string())),
+            ("is_git_repo", Value::Boolean(has_git)),
+            (
+                "workspace_files",
+                Value::Array(repo_files.iter().map(|f| Value::string(f)).collect()),
+            ),
+        ])
+        .json();
+        let req = Value::object(vec![(
+            "messages",
+            Value::Array(vec![
+                Value::object(vec![
+                    ("role", Value::string("system")),
+                    (
+                        "content",
+                        Value::string(
+                            "Translate the user's natural-language request into a single JSON object (no markdown fences) with keys:\n- \"intent\": one of \"command\", \"workspace_inventory\", \"direct_file_task\", \"question\", or \"delivery_task\"\n- \"command\": slash command string if intent==\"command\" (e.g. \"/fleet list\", \"/doctor\", \"/doctor openshell\", \"/status\", \"/usage\", \"/issues\", \"/map\", \"/stats\")\n- \"outcome\": concise single-sentence imperative software delivery outcome\n- \"target_file\": relative filename (e.g. \"SUMMARY.md\") if creating/writing a file\n- \"files\": array of 1 to 6 relative file paths in scope\n- \"checks\": array of 1 to 3 concrete observable acceptance checks",
+                        ),
+                    ),
+                ]),
+                Value::object(vec![
+                    ("role", Value::string("user")),
+                    ("content", Value::string(&prompt)),
+                ]),
+            ]),
+        )]);
+        let creds = crate::llm::openai::Credentials {
+            environment: Some(self.environment.clone()),
+            vault_entries: None,
+        };
+        let mut obs = crate::llm::control::NoObserver;
+        let res = tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            chat.complete(
+                &req,
+                &mut transport,
+                &mut obs,
+                &creds,
+                crate::llm::openai::CallOptions {
+                    signal: None,
+                    parent: None,
+                    retry_command: None,
+                },
+            ),
+        )
+        .await
+        .ok()?
+        .ok()?;
+        if let Some(usage) = &res.usage {
+            if let Some(pt) = domain::safe_integer(usage.get("prompt_tokens")) {
+                let _ = domain::put(&mut self.display, "contextUsed", Value::Number(pt as f64));
+            }
+            if let Some(ct) = domain::safe_integer(usage.get("completion_tokens")) {
+                let _ = domain::put(&mut self.display, "outputTokens", Value::Number(ct as f64));
+            }
+        }
+        let raw_content = res
+            .message
+            .get("content")
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())?;
+        parse_natural_language_translation_json(&raw_content, text, has_git, &repo_files)
+    }
+
+    async fn execute_direct_workspace_file_task(
+        &mut self,
+        text: &str,
+        suggested_file: Option<&str>,
+        summary_hint: Option<&str>,
+    ) -> Result<String, Error> {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+        let _ = domain::put(&mut self.display, "state", Value::string("drafting"));
+        let _ = domain::put(&mut self.display, "startedAt", Value::Number(now_ms));
+
+        let mut target_path = resolve_inventory_target_path(text, &self.cwd, &self.environment);
+        if let Some(sf) = suggested_file.filter(|s| !s.is_empty() && !s.contains("..")) {
+            if target_path.file_name().and_then(|n| n.to_str())
+                == Some("DEV_DRIVES_AND_REPOSITORIES.md")
+                && !text
+                    .to_lowercase()
+                    .contains("DEV_DRIVES_AND_REPOSITORIES.md")
+            {
+                let clean_name = Path::new(sf)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("OUTPUT.md");
+                if let Some(parent) = target_path.parent() {
+                    target_path = parent.join(clean_name);
+                }
+            }
+        }
+
+        let drives = discover_drives(&self.cwd, &self.environment);
+        let repos = discover_repositories(&self.cwd, &self.environment);
+        let local_files = collect_workspace_file_map(&self.cwd);
+
+        let mut generated_body = None;
+        if let Some(llm) = self.config.get("llm") {
+            if llm.get("base_url").is_some_and(domain::truthy)
+                && llm.get("model").is_some_and(domain::truthy)
+            {
+                let mut chat_cfg = self.config.clone();
+                let mut chat_llm = llm.clone();
+                let _ = domain::put(&mut chat_llm, "max_tokens", Value::Number(1536.0));
+                let _ = domain::put(&mut chat_llm, "thinking", Value::Boolean(false));
+                let _ = domain::put(&mut chat_cfg, "llm", chat_llm);
+                let admission = crate::llm::admission::Admission::default();
+                if let Ok(Some(mut chat)) = crate::llm::builtin::BuiltinChat::new(
+                    &chat_cfg,
+                    &admission,
+                    crate::llm::builtin::Options {
+                        retry_length: false,
+                        stream: false,
+                    },
+                ) {
+                    if let Ok(mut transport) = crate::llm::http::HttpTransport::new() {
+                        let ctx_prompt = format!(
+                            "User request: {text}\nWorking directory: {}\nTarget file: {}\nFiles in directory: {}\nDiscovered drives: {}\nDiscovered Git repositories: {}\n\nWrite the complete, well-structured content for `{}` fulfilling the user's request.",
+                            self.cwd.display(),
+                            target_path.display(),
+                            local_files.join(", "),
+                            drives.len(),
+                            repos.len(),
+                            target_path
+                                .file_name()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("OUTPUT.md")
+                        );
+                        let req = Value::object(vec![(
+                            "messages",
+                            Value::Array(vec![
+                                Value::object(vec![
+                                    ("role", Value::string("system")),
+                                    (
+                                        "content",
+                                        Value::string(
+                                            "Generate the exact file content requested by the user. Output only the file content without wrapping the entire document in outer markdown code fences.",
+                                        ),
+                                    ),
+                                ]),
+                                Value::object(vec![
+                                    ("role", Value::string("user")),
+                                    ("content", Value::string(&ctx_prompt)),
+                                ]),
+                            ]),
+                        )]);
+                        let creds = crate::llm::openai::Credentials {
+                            environment: Some(self.environment.clone()),
+                            vault_entries: None,
+                        };
+                        let mut obs = crate::llm::control::NoObserver;
+                        if let Ok(Ok(res)) = tokio::time::timeout(
+                            std::time::Duration::from_secs(20),
+                            chat.complete(
+                                &req,
+                                &mut transport,
+                                &mut obs,
+                                &creds,
+                                crate::llm::openai::CallOptions {
+                                    signal: None,
+                                    parent: None,
+                                    retry_command: None,
+                                },
+                            ),
+                        )
+                        .await
+                        {
+                            if let Some(usage) = &res.usage {
+                                if let Some(pt) = domain::safe_integer(usage.get("prompt_tokens")) {
+                                    let _ = domain::put(
+                                        &mut self.display,
+                                        "contextUsed",
+                                        Value::Number(pt as f64),
+                                    );
+                                }
+                                if let Some(ct) =
+                                    domain::safe_integer(usage.get("completion_tokens"))
+                                {
+                                    let _ = domain::put(
+                                        &mut self.display,
+                                        "outputTokens",
+                                        Value::Number(ct as f64),
+                                    );
+                                }
+                            }
+                            generated_body = res
+                                .message
+                                .get("content")
+                                .and_then(Value::as_string)
+                                .and_then(|t| t.to_utf8().ok())
+                                .map(|s| s.trim().to_owned())
+                                .filter(|s| !s.is_empty());
+                        }
+                    }
+                }
+            }
+        }
+
+        let content = generated_body.unwrap_or_else(|| {
+            let title = summary_hint.unwrap_or(text);
+            let mut fallback = format!("# {title}\n\n");
+            fallback.push_str(&format!("- **Directory**: `{}`\n", self.cwd.display()));
+            if !local_files.is_empty() {
+                fallback.push_str("\n## Workspace Files\n\n");
+                for f in &local_files {
+                    fallback.push_str(&format!("- `{f}`\n"));
+                }
+            }
+            fallback
+        });
+        let final_content = if content.ends_with('\n') {
+            content
+        } else {
+            format!("{content}\n")
+        };
+        if let Some(parent) = target_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        fs::write(&target_path, final_content.as_bytes())
+            .map_err(|e| Error::new("Error", format!("{}: {e}", target_path.display())))?;
+        let _ = domain::put(&mut self.display, "state", Value::string("passed"));
+        let _ = domain::put(&mut self.display, "review", Value::string("pass"));
+        self.redact_text(&format!(
+            "Translated natural language -> Direct workspace file delivery\nWrote file: {}\n\n{}",
+            target_path.display(),
+            final_content
+        ))
+    }
+
     async fn run_ask_text(&mut self, text: &str) -> Result<String, Error> {
         self.run_ask_text_mode(text, false).await
     }
@@ -4379,7 +4658,7 @@ impl ShellSession {
         text: &str,
         confirm_after_plan: bool,
     ) -> Result<String, Error> {
-        let cleaned = crate::planning::intake::clean_ask(&Value::string(text))?;
+        let mut cleaned = crate::planning::intake::clean_ask(&Value::string(text))?;
         if is_workspace_inventory_ask(&cleaned)? {
             return self.execute_workspace_inventory(&cleaned).await;
         }
@@ -4387,14 +4666,83 @@ impl ShellSession {
             return self.run_question_text(&cleaned).await;
         }
         self.last_ask_text = Some(cleaned.clone());
-        let classified = crate::planning::intake::classify(&Value::string(&cleaned), None, &[])?;
-        let ask_kind = classified
+        let root = self.current_root();
+        let has_git = root.join(".git").exists();
+        let mut classified =
+            crate::planning::intake::classify(&Value::string(&cleaned), None, &[])?;
+        let mut ask_kind = classified
             .get("kind")
             .and_then(Value::as_string)
             .map(Text::to_utf8)
             .transpose()?
             .unwrap_or_else(|| "slice".to_owned());
-        let root = self.current_root();
+
+        let mut translation_banner = String::new();
+        if ask_kind == "clarify" || !has_git {
+            if let Some(translated) = self
+                .translate_natural_language_with_llm(&cleaned, &root)
+                .await
+            {
+                match translated {
+                    NaturalLanguageTranslation::ShellCommand { command, .. } => {
+                        if let ShellAction::Continue(out) =
+                            Box::pin(self.dispatch_line(&command)).await?
+                        {
+                            return Ok(format!("Translated natural language -> {command}\n{out}"));
+                        }
+                    }
+                    NaturalLanguageTranslation::WorkspaceInventory => {
+                        return self.execute_workspace_inventory(&cleaned).await;
+                    }
+                    NaturalLanguageTranslation::DirectFileTask {
+                        target_file,
+                        summary,
+                    } => {
+                        return self
+                            .execute_direct_workspace_file_task(
+                                &cleaned,
+                                Some(&target_file),
+                                Some(&summary),
+                            )
+                            .await;
+                    }
+                    NaturalLanguageTranslation::Question { question, files } => {
+                        let bullets = files
+                            .iter()
+                            .map(|f| format!("- {f}"))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        let scoped = format!("{question}\n\n## Files allowed\n{bullets}");
+                        return self.run_question_text(&scoped).await;
+                    }
+                    NaturalLanguageTranslation::DeliveryTask {
+                        structured_ask,
+                        outcome,
+                        files,
+                        ..
+                    } => {
+                        translation_banner = format!(
+                            "Translated natural language -> Task: {outcome} [files: {}]\n",
+                            files.join(", ")
+                        );
+                        cleaned = structured_ask;
+                        classified =
+                            crate::planning::intake::classify(&Value::string(&cleaned), None, &[])?;
+                        ask_kind = classified
+                            .get("kind")
+                            .and_then(Value::as_string)
+                            .map(Text::to_utf8)
+                            .transpose()?
+                            .unwrap_or_else(|| "slice".to_owned());
+                    }
+                }
+            } else if !has_git && is_direct_file_creation_request(&cleaned) {
+                return self
+                    .execute_direct_workspace_file_task(&cleaned, None, None)
+                    .await;
+            }
+        }
+
         let api_key_env = self.api_key_env();
         if ask_kind == "clarify" {
             let cp = crate::ask::save_clarification(
@@ -4583,15 +4931,30 @@ impl ShellSession {
             self.pending_confirm = true;
             let _ = domain::put(&mut self.display, "state", Value::string("planning"));
             return Ok(format!(
-                "{extra_summary}{}Plan ready. Press Enter to accept and continue, or /stop to keep the plan without coding.\n",
+                "{translation_banner}{extra_summary}{}Plan ready. Press Enter to accept and continue, or /stop to keep the plan without coding.\n",
                 crate::ask::format_ask(&outcome)
             ));
         }
-        let _ = domain::put(&mut self.display, "state", Value::string("passed"));
-        Ok(format!(
-            "{extra_summary}{}",
+        let plan_summary = format!(
+            "{translation_banner}{extra_summary}{}",
             crate::ask::format_ask(&outcome)
-        ))
+        );
+        if self.live_output && self.has_configured_endpoint() && self.last_ask_file.is_some() {
+            match self.execute_local_ask_delivery().await {
+                Ok(delivery_out) => {
+                    return Ok(format!("{plan_summary}\n{delivery_out}"));
+                }
+                Err(err) => {
+                    let _ = domain::put(&mut self.display, "state", Value::string("passed"));
+                    return Ok(format!(
+                        "{plan_summary}Local worktree execution skipped ({}); use /run after resolving or press Enter after /plan.\n",
+                        err.message
+                    ));
+                }
+            }
+        }
+        let _ = domain::put(&mut self.display, "state", Value::string("passed"));
+        Ok(plan_summary)
     }
 
     async fn execute_local_ask_delivery(&mut self) -> Result<String, Error> {
@@ -5628,6 +5991,367 @@ pub fn render_workspace_inventory_markdown(
         }
     }
     md
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NaturalLanguageTranslation {
+    ShellCommand {
+        command: String,
+        reason: String,
+    },
+    WorkspaceInventory,
+    DirectFileTask {
+        target_file: String,
+        summary: String,
+    },
+    Question {
+        question: String,
+        files: Vec<String>,
+    },
+    DeliveryTask {
+        structured_ask: String,
+        outcome: String,
+        files: Vec<String>,
+        checks: Vec<String>,
+    },
+}
+
+pub fn translate_natural_language_command(text: &str) -> Option<String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.starts_with('/') || trimmed.contains('\n') {
+        return None;
+    }
+    let has_file_creation = regex_lite::Regex::new(
+        r"(?i)\b(?:make|write|create|generate|save|place|put|update|edit|modify|refactor|fix|implement)\b.*\b(?:file|markdown|\.md\b|\.rs\b|\.mjs\b|\.js\b|\.ts\b|code|readme)\b",
+    )
+    .ok()?
+    .is_match(trimmed);
+    if has_file_creation {
+        return None;
+    }
+
+    let patterns: &[(&str, &str)] = &[
+        (
+            r"(?i)^(?:please\s+|can\s+you\s+|could\s+you\s+)*(?:show|list|display|view|what\s+are|what\s+models\s+are\s+in)\s+(?:me\s+)?(?:my\s+|the\s+|current\s+|configured\s+|available\s+)*fleet(?:\s+(?:models|profiles|list|setup|catalog))?[?.!]*$",
+            "/fleet list",
+        ),
+        (
+            r"(?i)^(?:please\s+|can\s+you\s+)*(?:discover|scan\s+for)\s+(?:local\s+|lan\s+|wsl\s+)*(?:fleet|model|llm)\s+endpoints?[?.!]*$",
+            "/fleet discover",
+        ),
+        (
+            r"(?i)^(?:please\s+|can\s+you\s+)*(?:run\s+)?(?:a\s+|an\s+)?(?:openshell\s+(?:doctor|health\s*check|readiness|check)|check\s+openshell(?:\s+status|\s+readiness)?)[?.!]*$",
+            "/doctor openshell",
+        ),
+        (
+            r"(?i)^(?:please\s+|can\s+you\s+)*(?:run\s+)?(?:a\s+|an\s+)?(?:copilot\s+(?:doctor|health\s*check|readiness|check)|check\s+copilot(?:\s+status|\s+readiness)?)[?.!]*$",
+            "/doctor copilot",
+        ),
+        (
+            r"(?i)^(?:please\s+|can\s+you\s+)*(?:run\s+)?(?:a\s+|an\s+)?(?:doctor|health\s*check|prerequisite\s+check|system\s+check|check\s+prerequisites)[?.!]*$",
+            "/doctor",
+        ),
+        (
+            r"(?i)^(?:please\s+|can\s+you\s+)*(?:show|check|what\s+is)\s+(?:me\s+)?(?:the\s+|my\s+|current\s+|session\s+|run\s+)*status[?.!]*$",
+            "/status",
+        ),
+        (
+            r"(?i)^(?:please\s+|can\s+you\s+)*(?:show|check|what\s+is)\s+(?:me\s+)?(?:the\s+|my\s+|current\s+)*(?:token\s+usage|context\s+usage|usage)[?.!]*$",
+            "/usage",
+        ),
+        (
+            r"(?i)^(?:please\s+|can\s+you\s+)*(?:show|list|check|what\s+are)\s+(?:me\s+)?(?:the\s+|open\s+|github\s+)*issues[?.!]*$",
+            "/issues",
+        ),
+        (
+            r"(?i)^(?:please\s+|can\s+you\s+)*(?:show|generate|write|print)\s+(?:me\s+)?(?:the\s+|a\s+)*(?:repo|repository)\s+map[?.!]*$",
+            "/map",
+        ),
+        (
+            r"(?i)^(?:please\s+|can\s+you\s+)*(?:show|list|view)\s+(?:me\s+)?(?:the\s+|my\s+|command\s+)*history[?.!]*$",
+            "/history",
+        ),
+        (
+            r"(?i)^(?:please\s+|can\s+you\s+)*(?:show|view|check)\s+(?:me\s+)?(?:the\s+|my\s+|delivery\s+)*(?:stats|statistics|metrics)[?.!]*$",
+            "/stats",
+        ),
+    ];
+    for (pat, cmd) in patterns {
+        if regex_lite::Regex::new(pat).ok()?.is_match(trimmed) {
+            return Some((*cmd).to_owned());
+        }
+    }
+    if let Some(caps) = regex_lite::Regex::new(
+        r"(?i)^(?:please\s+)?(?:switch\s+to|use|select)\s+(?:fleet\s+|profile\s+|model\s+)?([a-z0-9][a-z0-9._-]{1,63})[?.!]*$",
+    )
+    .ok()?
+    .captures(trimmed)
+    {
+        if let Some(id) = caps.get(1).map(|m| m.as_str()) {
+            if !matches!(
+                id.to_lowercase().as_str(),
+                "it" | "this" | "that" | "them" | "default"
+            ) || id.eq_ignore_ascii_case("default")
+            {
+                return Some(format!("/fleet use {id}"));
+            }
+        }
+    }
+    None
+}
+
+fn is_direct_file_creation_request(text: &str) -> bool {
+    let has_verb = regex_lite::Regex::new(
+        r"(?i)\b(?:make|write|create|generate|save|place|put|produce|export|draft)\b",
+    )
+    .is_ok_and(|re| re.is_match(text));
+    let has_noun = regex_lite::Regex::new(
+        r"(?i)\b(?:markdown|\.md\b|file|report|document|checklist|guide|summary|notes?|txt|json|yaml|yml)\b",
+    )
+    .is_ok_and(|re| re.is_match(text));
+    has_verb && has_noun
+}
+
+fn collect_workspace_file_map(root: &Path) -> Vec<String> {
+    let mut files = Vec::new();
+    let skip_dirs = [
+        ".git",
+        ".roster",
+        ".roster-state",
+        ".worktrees",
+        "target",
+        "node_modules",
+        "vendor",
+        "AppData",
+        ".cargo",
+        ".rustup",
+        ".nvm",
+    ];
+    fn walk_rel(base: &Path, dir: &Path, depth: usize, skip_dirs: &[&str], out: &mut Vec<String>) {
+        if out.len() >= 48 || depth > 2 {
+            return;
+        }
+        let Ok(rd) = fs::read_dir(dir) else {
+            return;
+        };
+        let mut entries = rd.flatten().map(|e| e.path()).collect::<Vec<_>>();
+        entries.sort();
+        for p in entries {
+            if out.len() >= 48 {
+                break;
+            }
+            let Some(name) = p.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if name.starts_with('.') || skip_dirs.iter().any(|s| s.eq_ignore_ascii_case(name)) {
+                continue;
+            }
+            let Ok(meta) = fs::symlink_metadata(&p) else {
+                continue;
+            };
+            if secure::linked(&meta) {
+                continue;
+            }
+            if meta.is_file() {
+                if let Ok(rel) = p.strip_prefix(base) {
+                    let norm = rel.to_string_lossy().replace('\\', "/");
+                    if !crate::planning::forbidden_read(&norm)
+                        && !crate::execution::policy::managed(&norm)
+                        && crate::execution::policy::scope_expansion_file(&norm)
+                    {
+                        out.push(norm);
+                    }
+                }
+            } else if meta.is_dir() {
+                walk_rel(base, &p, depth + 1, skip_dirs, out);
+            }
+        }
+    }
+    walk_rel(root, root, 0, &skip_dirs, &mut files);
+    files
+}
+
+pub fn parse_natural_language_translation_json(
+    raw: &str,
+    original_ask: &str,
+    has_git: bool,
+    workspace_files: &[String],
+) -> Option<NaturalLanguageTranslation> {
+    let trimmed = raw.trim();
+    let json_slice = if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
+        if start < end {
+            &trimmed[start..=end]
+        } else {
+            return None;
+        }
+    } else {
+        return None;
+    };
+    let parsed = crate::json::parse(&Text::from(json_slice)).ok()?;
+    let intent = parsed
+        .get("intent")
+        .and_then(Value::as_string)
+        .and_then(|t| t.to_utf8().ok())
+        .unwrap_or_default();
+    match intent.as_str() {
+        "command" => {
+            let cmd = parsed
+                .get("command")
+                .and_then(Value::as_string)
+                .and_then(|t| t.to_utf8().ok())?
+                .trim()
+                .to_owned();
+            if !cmd.starts_with('/') {
+                return None;
+            }
+            let cmd_name = cmd[1..].split_whitespace().next().unwrap_or("");
+            let known = commands()
+                .iter()
+                .any(|c| c.name == cmd_name || c.aliases.contains(&cmd_name));
+            if !known {
+                return None;
+            }
+            Some(NaturalLanguageTranslation::ShellCommand {
+                command: cmd,
+                reason: "LLM command translation".to_owned(),
+            })
+        }
+        "workspace_inventory" => Some(NaturalLanguageTranslation::WorkspaceInventory),
+        "direct_file_task" => {
+            let target_file = parsed
+                .get("target_file")
+                .and_then(Value::as_string)
+                .and_then(|t| t.to_utf8().ok())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "OUTPUT.md".to_owned());
+            let summary = parsed
+                .get("outcome")
+                .and_then(Value::as_string)
+                .and_then(|t| t.to_utf8().ok())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| original_ask.to_owned());
+            Some(NaturalLanguageTranslation::DirectFileTask {
+                target_file,
+                summary,
+            })
+        }
+        "question" => {
+            let mut files = parsed
+                .get("files")
+                .and_then(domain::items)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_string()?.to_utf8().ok())
+                        .filter(|f| {
+                            crate::planning::task::allowed_file(&Value::string(f)).is_ok()
+                                && !crate::planning::forbidden_read(f)
+                                && !crate::execution::policy::managed(f)
+                        })
+                        .take(6)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if files.is_empty() {
+                files = workspace_files.iter().take(4).cloned().collect();
+            }
+            if files.is_empty() {
+                return None;
+            }
+            Some(NaturalLanguageTranslation::Question {
+                question: original_ask.to_owned(),
+                files,
+            })
+        }
+        "delivery_task" | "task" => {
+            let outcome = parsed
+                .get("outcome")
+                .and_then(Value::as_string)
+                .and_then(|t| t.to_utf8().ok())
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| {
+                    original_ask
+                        .lines()
+                        .next()
+                        .unwrap_or(original_ask)
+                        .to_owned()
+                });
+            let target_file = parsed
+                .get("target_file")
+                .and_then(Value::as_string)
+                .and_then(|t| t.to_utf8().ok())
+                .filter(|s| !s.trim().is_empty());
+            if !has_git {
+                return Some(NaturalLanguageTranslation::DirectFileTask {
+                    target_file: target_file.unwrap_or_else(|| "OUTPUT.md".to_owned()),
+                    summary: outcome,
+                });
+            }
+            let mut files = parsed
+                .get("files")
+                .and_then(domain::items)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_string()?.to_utf8().ok())
+                        .filter_map(|f| {
+                            crate::planning::task::allowed_file(&Value::string(&f)).ok()
+                        })
+                        .take(8)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if files.is_empty() {
+                if let Some(ref tf) = target_file {
+                    if let Ok(valid) = crate::planning::task::allowed_file(&Value::string(tf)) {
+                        files.push(valid);
+                    }
+                }
+            }
+            if files.is_empty() {
+                if workspace_files.iter().any(|f| f == "README.md") {
+                    files.push("README.md".to_owned());
+                } else if let Some(first) = workspace_files.first() {
+                    files.push(first.clone());
+                }
+            }
+            if files.is_empty() {
+                return None;
+            }
+            let mut checks = parsed
+                .get("checks")
+                .and_then(domain::items)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_string()?.to_utf8().ok())
+                        .filter(|c| !c.trim().is_empty())
+                        .take(4)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if checks.is_empty() {
+                checks.push(format!("{} is updated to satisfy: {}", files[0], outcome));
+            }
+            let file_bullets = files
+                .iter()
+                .map(|f| format!("- `{f}`"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let check_bullets = checks
+                .iter()
+                .map(|c| format!("- {c}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let structured_ask = format!(
+                "{outcome}\n\nOriginal request: {original_ask}\n\n## Allowed Files\n{file_bullets}\n\n## Acceptance checks\n{check_bullets}"
+            );
+            Some(NaturalLanguageTranslation::DeliveryTask {
+                structured_ask,
+                outcome,
+                files,
+                checks,
+            })
+        }
+        _ => None,
+    }
 }
 
 fn auto_discover_question_files(root: &Path, question: &str) -> Vec<String> {
@@ -7379,7 +8103,80 @@ mod tests {
         let repos_report = repos_dir.join("DEV_DRIVES_AND_REPOSITORIES.md");
         assert!(repos_report.is_file());
 
+        let nl_status = session
+            .dispatch_line("Please show me the current status")
+            .await?;
+        assert!(
+            matches!(nl_status, ShellAction::Continue(ref s) if s.contains("Translated natural language -> /status") && s.contains("State:"))
+        );
+
+        let nl_file_act = session
+            .dispatch_line("Make me a markdown file called DEPLOY_CHECKLIST.md in this directory")
+            .await?;
+        assert!(
+            matches!(nl_file_act, ShellAction::Continue(ref s) if s.contains("Wrote file:") && s.contains("DEPLOY_CHECKLIST.md"))
+        );
+        assert!(root.join("DEPLOY_CHECKLIST.md").is_file());
+
         let _ = fs::remove_dir_all(&root);
+        Ok(())
+    }
+
+    #[test]
+    fn natural_language_translation_maps_commands_questions_and_delivery_tasks() -> Result<(), Error>
+    {
+        assert_eq!(
+            translate_natural_language_command("Show me my fleet models"),
+            Some("/fleet list".to_owned())
+        );
+        assert_eq!(
+            translate_natural_language_command("Can you check openshell readiness?"),
+            Some("/doctor openshell".to_owned())
+        );
+        assert_eq!(
+            translate_natural_language_command("switch to aperture-dsv4"),
+            Some("/fleet use aperture-dsv4".to_owned())
+        );
+        assert_eq!(
+            translate_natural_language_command("list open github issues"),
+            Some("/issues".to_owned())
+        );
+
+        let ws_files = vec!["README.md".to_owned(), "rust/shell.rs".to_owned()];
+        let parsed_task = parse_natural_language_translation_json(
+            r#"{"intent":"delivery_task","outcome":"Document natural language translation in README.md","files":["README.md"],"checks":["README.md documents natural language translation"]}"#,
+            "Add documentation on natural language translation",
+            true,
+            &ws_files,
+        );
+        let Some(NaturalLanguageTranslation::DeliveryTask {
+            structured_ask,
+            files,
+            ..
+        }) = parsed_task
+        else {
+            return Err(Error::new("TestError", "expected DeliveryTask"));
+        };
+        assert_eq!(files, vec!["README.md".to_owned()]);
+        assert!(structured_ask.contains("## Allowed Files\n- `README.md`"));
+        assert!(structured_ask.contains("## Acceptance checks\n- README.md documents"));
+        let classified =
+            crate::planning::intake::classify(&Value::string(&structured_ask), None, &[])?;
+        assert_eq!(classified.get("kind"), Some(&Value::string("slice")));
+
+        let parsed_cmd = parse_natural_language_translation_json(
+            r#"{"intent":"command","command":"/fleet list"}"#,
+            "what models do I have",
+            true,
+            &ws_files,
+        );
+        assert_eq!(
+            parsed_cmd,
+            Some(NaturalLanguageTranslation::ShellCommand {
+                command: "/fleet list".to_owned(),
+                reason: "LLM command translation".to_owned(),
+            })
+        );
         Ok(())
     }
 }
