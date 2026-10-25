@@ -5420,13 +5420,23 @@ pub async fn run_onboard(
             seeded_profiles.push(p.as_value().clone());
         }
     }
-    let seeded_fleet = crate::fleet::format(&Value::object(vec![(
-        "profiles",
-        Value::Array(seeded_profiles),
-    )]))?;
+    let discovered_endpoints = found
+        .iter()
+        .map(|(url_str, models)| {
+            Value::object(vec![
+                ("baseUrl", Value::string(url_str)),
+                ("models", Value::Array(models.clone())),
+            ])
+        })
+        .collect::<Vec<_>>();
+    let merged_fleet = crate::fleet::merge_discovered_profiles(
+        &Value::object(vec![("profiles", Value::Array(seeded_profiles))]),
+        &discovered_endpoints,
+    )?;
+    let seeded_fleet = crate::fleet::format(&merged_fleet.as_value())?;
 
     if publish {
-        let app_status = check_app_identity(&project_root, Some(environment))?;
+        let app_status = check_app_identity(cwd, Some(environment))?;
         let app_text = format_app_identity(&app_status)?;
         write_out(
             &mut stdout,
@@ -5491,8 +5501,7 @@ pub async fn run_onboard(
             fleet_path.display()
         ),
     )?;
-    let checked =
-        crate::local_cli::doctor(installation, &project_root, environment, &source.token()).await?;
+    let checked = crate::local_cli::doctor(installation, cwd, environment, &source.token()).await?;
     write_out(&mut stdout, &checked.output)?;
     if !checked.ok {
         write_out(
