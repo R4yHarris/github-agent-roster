@@ -6910,14 +6910,6 @@ pub fn run_self_update(
                 let candidate = tc_root.join("cargo").join("bin").join("cargo.exe");
                 if candidate.is_file() {
                     cargo_bin = Some(candidate);
-                    extra_cargo_home = Some(tc_root.join("cargo"));
-                    extra_rustup_home = Some(tc_root.join("rustup"));
-                    let dlltool = tc_root
-                        .join("llvm-dlltool-20261006")
-                        .join("llvm-dlltool.exe");
-                    if dlltool.is_file() {
-                        extra_rustflags = Some(format!("-C dlltool={}", dlltool.display()));
-                    }
                     break;
                 }
             }
@@ -6925,6 +6917,21 @@ pub fn run_self_update(
     }
     let cargo_exe = cargo_bin
         .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "cargo.exe" } else { "cargo" }));
+
+    if let Some(cargo_dir) = cargo_exe.parent().and_then(Path::parent) {
+        if let Some(tc_root) = cargo_dir.parent() {
+            if tc_root.join("cargo").is_dir() && tc_root.join("rustup").is_dir() {
+                extra_cargo_home = Some(tc_root.join("cargo"));
+                extra_rustup_home = Some(tc_root.join("rustup"));
+                let dlltool = tc_root
+                    .join("llvm-dlltool-20261006")
+                    .join("llvm-dlltool.exe");
+                if dlltool.is_file() {
+                    extra_rustflags = Some(format!("-C dlltool={}", dlltool.display()));
+                }
+            }
+        }
+    }
 
     let mut build_cmd = StdCommand::new(&cargo_exe);
     build_cmd
