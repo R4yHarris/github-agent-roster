@@ -2456,6 +2456,45 @@ mod tests {
             Some(&Value::string("qwen3.8-27b"))
         );
 
+        let machine_home = temp.join("machine-home");
+        let empty_workspace = temp.join("empty-workspace");
+        files::create_private_directories(&machine_home.join(".roster"))?;
+        files::create_private_directories(&empty_workspace)?;
+        files::atomic_write_bytes(
+            &machine_home.join(".roster").join("fleet.yml"),
+            b"profiles:\n  - id: machine-gpu\n    base_url: \"http://127.0.0.1:11435/v1\"\n    model: \"qwen3.8:27b-smtek\"\n    provider: \"vllm\"\n    context_max: 65536\n    concurrency: 1\n    hardware: \"rtx-3090-24gb\"\n    notes: \"machine-wide\"\n",
+            MAX_CANDIDATE_FILE_BYTES,
+        )?;
+        files::atomic_write_bytes(
+            &machine_home.join(".roster").join("capabilities.yml"),
+            b"capabilities:\n  - profile_id: \"machine-gpu\"\n    task_class: \"feat\"\n    suggested_difficulty: 4\n    context_max: 65536\n    concurrency: 1\n    notes: \"machine-prior\"\n",
+            MAX_CANDIDATE_FILE_BYTES,
+        )?;
+        let machine_env = Value::object(vec![(
+            "ROSTER_MACHINE_HOME",
+            Value::string(&machine_home.to_string_lossy()),
+        )]);
+        let loaded_machine_fleet =
+            crate::fleet::load_with_env(&empty_workspace, None, Some(&machine_env))?;
+        assert_eq!(loaded_machine_fleet.profiles().len(), 1);
+        assert_eq!(
+            loaded_machine_fleet.profiles()[0].as_value().get("id"),
+            Some(&Value::string("machine-gpu"))
+        );
+        let fleet_table = crate::local_cli::list_fleet(&empty_workspace, &machine_env)?;
+        assert!(fleet_table.contains("machine-gpu\tqwen3.8:27b-smtek"));
+        let loaded_caps = crate::capabilities::load_with_env(
+            &empty_workspace,
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            Some(&machine_env),
+        )?;
+        assert!(
+            loaded_caps
+                .records()
+                .iter()
+                .any(|r| r.get("profile_id") == Some(&Value::string("machine-gpu")))
+        );
+
         let _ = fs::remove_dir_all(&temp);
         Ok(())
     }

@@ -295,11 +295,14 @@ impl FileVault {
     }
 
     pub fn from_environment(environment: &Value) -> Result<Self, Error> {
-        let home = config::environment_value(
-            environment,
-            if cfg!(windows) { "USERPROFILE" } else { "HOME" },
-        )?
-        .ok_or_else(|| Error::from(VaultError::Directory))?
+        let home = match config::environment_value(environment, "ROSTER_MACHINE_HOME")? {
+            Some(v) => v,
+            None => config::environment_value(
+                environment,
+                if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+            )?
+            .ok_or_else(|| Error::from(VaultError::Directory))?,
+        }
         .to_utf8()
         .map_err(|_| Error::from(VaultError::Directory))?;
         Self::new(Path::new(&home).join(".roster").join("vault")).map_err(Error::from)

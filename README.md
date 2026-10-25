@@ -12,14 +12,43 @@ database, external worker swarm, or Node application runtime fallback.
 
 ---
 
-## Quickstart & Interactive Shell
+## Quickstart & Single-Command Installation
 
-Build the native Rust binary (Rust 1.85+ and initialized submodules):
+Install `github-agent-roster` and initialize your machine-scoped `~/.roster/`
+configuration (`config.yml`, `fleet.yml`, `capabilities.yml`, `vault/`, and
+`installation/`) with a single command:
+
+**Linux, WSL 2, and macOS:**
+
+```bash
+curl -LsSf https://raw.githubusercontent.com/R4yHarris/github-agent-roster/main/install.sh | sh
+```
+
+**Windows PowerShell:**
 
 ```powershell
-git submodule update --init --recursive
-cargo build --release --locked --offline
+irm https://raw.githubusercontent.com/R4yHarris/github-agent-roster/main/install.ps1 | iex
 ```
+
+*(Or run `./install.sh` / `.\install.ps1` directly from a local checkout.)*
+
+### Machine-Scoped `~/.roster/` Configuration
+
+Your LLM fleet, default model configuration, capability priors, and API keys
+belong to your **machine**, not to individual repositories:
+
+- **`~/.roster/config.yml`** — Machine-wide default LLM endpoint, model, and seat preferences.
+- **`~/.roster/fleet.yml`** — Machine-wide GPU/endpoint fleet catalog (`default`, `rtx-3090-qwen`, `aperture-qwen`, `aperture-glm`, `aperture-dsv4`, `spark-dsv41`, etc.).
+- **`~/.roster/capabilities.yml`** — Machine-wide model capability priors overlay.
+- **`~/.roster/vault/`** — Machine-wide AES-256-GCM encrypted API keys (`0700`/`0600`).
+- **`~/.roster/installation/`** — Machine-wide Roster runtime assets (`principals/`, `skills/`, `examples/`, and `vendor/github-agent-contracts`).
+
+Because these live in `~/.roster/`, you can `cd` into **any** repository or
+workspace on your machine and immediately run `roster`, `roster fleet list`,
+`roster doctor`, or `roster run` without copying `.roster/fleet.yml` or
+re-running `roster onboard` in each workspace. (If a workspace explicitly
+creates its own `<repo>/.roster/config.yml` or `<repo>/.roster/fleet.yml`,
+that workspace file overrides the machine default for that repository only.)
 
 Run `roster` with no arguments in an interactive terminal to open the
 **Interactive Roster Shell**:

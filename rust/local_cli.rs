@@ -424,8 +424,7 @@ pub fn list_fleet(cwd: &Path, environment: &Value) -> Result<String, Error> {
                 "Fleet environment must be a typed mapping",
             ));
         }
-        let root = config::shared_config_root(cwd)?;
-        let catalog = fleet::load(&root)?;
+        let catalog = fleet::load_with_env(cwd, None, Some(environment))?;
         let mut redaction = redaction::Config {
             environment: environment.clone(),
             ..Default::default()

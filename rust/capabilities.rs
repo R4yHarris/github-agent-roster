@@ -298,15 +298,51 @@ pub fn model_prior(
 }
 
 pub fn load(repo_root: &Path, installation_root: &Path) -> Result<Capabilities, Error> {
+    load_with_env(repo_root, installation_root, None)
+}
+
+pub fn load_with_env(
+    repo_root: &Path,
+    installation_root: &Path,
+    environment: Option<&Value>,
+) -> Result<Capabilities, Error> {
     let file = installation_root.join("examples").join("capabilities.yml");
-    paths::ensure_local_path(&file, installation_root)?;
-    let baseline = parse(&config::read_source(&file)?, Completeness::Full)?;
+    let mut current = if file.exists() {
+        paths::ensure_local_path(&file, installation_root)?;
+        parse(&config::read_source(&file)?, Completeness::Full)?
+    } else {
+        builtin()?
+    };
+    if let Ok(inst_root) = config::installation_config_root(installation_root) {
+        if inst_root != repo_root {
+            if let Some(source) =
+                config::read_private_source(&inst_root, settings::Name::Capabilities)?
+            {
+                current = merge(
+                    &current.as_value(),
+                    &parse(&source, Completeness::Partial)?.as_value(),
+                )?;
+            }
+        }
+    }
+    if let Some(machine_root) = config::machine_config_root(environment)? {
+        if machine_root != repo_root {
+            if let Some(source) =
+                config::read_private_source(&machine_root, settings::Name::Capabilities)?
+            {
+                current = merge(
+                    &current.as_value(),
+                    &parse(&source, Completeness::Partial)?.as_value(),
+                )?;
+            }
+        }
+    }
     match config::read_private_source(repo_root, settings::Name::Capabilities)? {
         Some(source) => merge(
-            &baseline.as_value(),
+            &current.as_value(),
             &parse(&source, Completeness::Partial)?.as_value(),
         ),
-        None => Ok(baseline),
+        None => Ok(current),
     }
 }
 

@@ -467,8 +467,7 @@ fn run(args: &[String]) -> Result<Output, Error> {
     let is_tty = io::stdin().is_terminal() && io::stdout().is_terminal();
     if (is_tty && effective_args.is_empty()) || effective_args == ["shell"] {
         let environment = environment()?;
-        let installation = host::selected_path(&environment, "ROSTER_INSTALLATION_ROOT")?
-            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf());
+        let installation = config::default_installation_root(&environment)?;
         let cwd = env::current_dir()
             .map_err(|_| Error::new("Error", "Cannot resolve the invocation directory"))?;
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -494,8 +493,7 @@ fn run(args: &[String]) -> Result<Output, Error> {
     }
     if is_tty && (effective_args == ["onboard"] || effective_args == ["onboard", "--discover"]) {
         let environment = environment()?;
-        let installation = host::selected_path(&environment, "ROSTER_INSTALLATION_ROOT")?
-            .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf());
+        let installation = config::default_installation_root(&environment)?;
         let cwd = env::current_dir()
             .map_err(|_| Error::new("Error", "Cannot resolve the invocation directory"))?;
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -578,8 +576,7 @@ fn run(args: &[String]) -> Result<Output, Error> {
         }
         local_cli::Command::LearnRecurring => {
             let environment = environment()?;
-            let installation = host::selected_path(&environment, "ROSTER_INSTALLATION_ROOT")?
-                .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf());
+            let installation = config::default_installation_root(&environment)?;
             let cwd = env::current_dir()
                 .map_err(|_| Error::new("Error", "Cannot resolve the invocation directory"))?;
             return metrics::propose_recurring_failures(&installation, &cwd, &environment).map(
@@ -595,8 +592,7 @@ fn run(args: &[String]) -> Result<Output, Error> {
         local_cli::Command::Bench => {
             let dispatch_ms = started.elapsed().as_secs_f64() * 1000.0;
             let environment = environment()?;
-            let installation = host::selected_path(&environment, "ROSTER_INSTALLATION_ROOT")?
-                .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf());
+            let installation = config::default_installation_root(&environment)?;
             let cwd = env::current_dir()
                 .map_err(|_| Error::new("Error", "Cannot resolve the invocation directory"))?;
             let report = diagnostics::run_bench(&cwd, &installation, &environment, dispatch_ms)?;
@@ -664,8 +660,7 @@ fn run(args: &[String]) -> Result<Output, Error> {
         | local_cli::Command::Recommend(_)
         | local_cli::Command::Eval(_) => {
             let environment = environment()?;
-            let installation = host::selected_path(&environment, "ROSTER_INSTALLATION_ROOT")?
-                .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).to_path_buf());
+            let installation = config::default_installation_root(&environment)?;
             let cwd = env::current_dir()
                 .map_err(|_| Error::new("Error", "Cannot resolve the invocation directory"))?;
             let runtime = tokio::runtime::Builder::new_current_thread()
