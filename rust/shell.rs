@@ -4282,12 +4282,35 @@ impl ShellSession {
 
         let drives = discover_drives(&self.cwd, &self.environment);
         let repos = discover_repositories(&self.cwd, &self.environment);
+        let matched = match_target_repositories(text, &repos, &self.cwd);
+        let is_deep_audit = regex_lite::Regex::new(
+            r"(?i)\b(?:complian\w*|audit|security|sdlc|quality|analysis|analy[sz]e|gaps?|assess\w*|dig\s+into)\b",
+        )
+        .map_err(|e| Error::new("Error", e.to_string()))?
+        .is_match(text);
 
         let wants_file = regex_lite::Regex::new(
             r"(?i)\b(?:markdown|\.md\b|file|report|place\s+it|save\s+it|write\s+it|make\s+me\s+a)\b",
         )
         .map_err(|e| Error::new("Error", e.to_string()))?
         .is_match(text);
+
+        if (!matched.is_empty() || is_deep_audit) && wants_file {
+            let default_report_name = if let Some(first) = matched.first() {
+                let stem = first
+                    .name
+                    .split('-')
+                    .next()
+                    .unwrap_or(&first.name)
+                    .to_ascii_uppercase();
+                format!("{stem}_COMPLIANCE_REPORT.md")
+            } else {
+                "COMPLIANCE_REPORT.md".to_owned()
+            };
+            return self
+                .execute_direct_workspace_file_task(text, Some(&default_report_name), None)
+                .await;
+        }
 
         if wants_file {
             let llm_summary = self
@@ -4417,11 +4440,23 @@ impl ShellSession {
             .collect::<Vec<_>>()
             .join("\n");
 
+        let matched = match_target_repositories(ask_text, repos, &self.cwd);
+        let deep_evidence = if !matched.is_empty() {
+            deep_inspect_repositories(&matched, &self.environment, self.api_key_env().as_deref())
+        } else {
+            String::new()
+        };
+
         let user_payload = format!(
-            "Current working directory: {}\n\nDiscovered Drives / Mounts:\n{}\n\nDiscovered Git Repositories & Worktrees (pre-sorted in descending order from most recently modified #1 to oldest):\n{}\n\nUser question / request:\n{}",
+            "Current working directory: {}\n\nDiscovered Drives / Mounts:\n{}\n\nDiscovered Git Repositories & Worktrees (pre-sorted in descending order from most recently modified #1 to oldest):\n{}\n\n{}\nUser question / request:\n{}",
             self.cwd.display(),
             drive_lines,
             repo_lines,
+            if deep_evidence.is_empty() {
+                String::new()
+            } else {
+                format!("Deep Target Repository Inspection Evidence:\n{deep_evidence}\n")
+            },
             ask_text
         );
 
@@ -4717,6 +4752,16 @@ impl ShellSession {
         let drives = discover_drives(&self.cwd, &self.environment);
         let repos = discover_repositories(&self.cwd, &self.environment);
         let local_files = collect_workspace_file_map(&self.cwd);
+        let matched_repos = match_target_repositories(text, &repos, &self.cwd);
+        let deep_evidence = if !matched_repos.is_empty() {
+            deep_inspect_repositories(
+                &matched_repos,
+                &self.environment,
+                self.api_key_env().as_deref(),
+            )
+        } else {
+            String::new()
+        };
 
         let mut generated_body = None;
         if let Some(llm) = self.config.get("llm") {
@@ -4725,7 +4770,7 @@ impl ShellSession {
             {
                 let mut chat_cfg = self.config.clone();
                 let mut chat_llm = llm.clone();
-                let _ = domain::put(&mut chat_llm, "max_tokens", Value::Number(4096.0));
+                let _ = domain::put(&mut chat_llm, "max_tokens", Value::Number(8192.0));
                 let _ = domain::put(&mut chat_llm, "effort", Value::string("none"));
                 let _ = domain::put(&mut chat_llm, "thinking", Value::Boolean(false));
                 let _ = domain::put(&mut chat_cfg, "llm", chat_llm);
@@ -4734,18 +4779,44 @@ impl ShellSession {
                     &chat_cfg,
                     &admission,
                     crate::llm::builtin::Options {
-                        retry_length: false,
+                        retry_length: true,
                         stream: false,
                     },
                 ) {
                     if let Ok(mut transport) = crate::llm::http::HttpTransport::new() {
+                        let repo_list_summary = repos
+                            .iter()
+                            .take(24)
+                            .map(|r| {
+                                format!(
+                                    "- {} ({}) at `{}` [branch `{}`, {}, modified {}]",
+                                    r.name, r.kind, r.path, r.branch, r.state, r.modified_utc
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
                         let ctx_prompt = format!(
-                            "User request: {text}\nWorking directory: {}\nTarget file: {}\nFiles in directory: {}\nDiscovered drives: {}\nDiscovered Git repositories: {}\n\nWrite the complete, well-structured content for `{}` fulfilling the user's request.",
+                            "User request:\n{text}\n\nWorking directory: {}\nTarget output file: {}\nFiles in working directory: {}\nDiscovered drives ({}): {}\nDiscovered Git repositories ({}):\n{}\n\nDeep Repository Inspection & Compliance/Security/SDLC Audit Evidence:\n{}\n\nWrite a comprehensive, deeply technical, evidence-grounded Markdown document for `{}` that directly fulfills the user's request. Cite concrete file paths, manifests, workflows, tests, architecture docs, and security/SDLC findings from the evidence above. Include:\n1. Executive Summary & Overall Compliance Scorecard Table\n2. Critical & High-Severity Security and Secret-Hygiene Findings (with exact file paths)\n3. Repository-by-Repository Architecture, Code Quality & Testing Assessment\n4. CI/CD, SDLC Governance & Branch Hygiene Gaps\n5. Prioritized Remediation Roadmap (P0 Immediate, P1 Short-Term, P2 Medium-Term)",
                             self.cwd.display(),
                             target_path.display(),
-                            local_files.join(", "),
+                            if local_files.is_empty() {
+                                "-".to_owned()
+                            } else {
+                                local_files.join(", ")
+                            },
                             drives.len(),
+                            drives
+                                .iter()
+                                .map(|d| format!("{} ({})", d.mount, d.free_gib))
+                                .collect::<Vec<_>>()
+                                .join(", "),
                             repos.len(),
+                            repo_list_summary,
+                            if deep_evidence.is_empty() {
+                                "(No specific target repository matched; use workspace overview)"
+                            } else {
+                                deep_evidence.as_str()
+                            },
                             target_path
                                 .file_name()
                                 .and_then(|s| s.to_str())
@@ -4759,7 +4830,7 @@ impl ShellSession {
                                     (
                                         "content",
                                         Value::string(
-                                            "Generate the exact file content requested by the user. Output only the file content without wrapping the entire document in outer markdown code fences.",
+                                            "You are a Principal Software Architect, Application Security Auditor, and SDLC Compliance Engineer. Author a thorough, board-ready, evidence-grounded Markdown report based strictly on the supplied repository inspection evidence. Cite real file paths, configurations, workflows, and defects found in the inspected repositories; never output generic placeholder templates or invent unsupported version tables. Output only the Markdown document without outer code fences.",
                                         ),
                                     ),
                                 ]),
@@ -4772,7 +4843,7 @@ impl ShellSession {
                         let creds = self.llm_credentials();
                         let mut obs = crate::llm::control::NoObserver;
                         if let Ok(Ok(res)) = tokio::time::timeout(
-                            std::time::Duration::from_secs(20),
+                            std::time::Duration::from_secs(60),
                             chat.complete(
                                 &req,
                                 &mut transport,
@@ -4818,18 +4889,30 @@ impl ShellSession {
             }
         }
 
-        let content = generated_body.unwrap_or_else(|| {
-            let title = summary_hint.unwrap_or(text);
-            let mut fallback = format!("# {title}\n\n");
-            fallback.push_str(&format!("- **Directory**: `{}`\n", self.cwd.display()));
-            if !local_files.is_empty() {
-                fallback.push_str("\n## Workspace Files\n\n");
-                for f in &local_files {
-                    fallback.push_str(&format!("- `{f}`\n"));
-                }
+        let content = match generated_body {
+            Some(llm_doc) if !deep_evidence.is_empty() => {
+                format!(
+                    "{llm_doc}\n\n---\n\n## Appendix: Automated Repository Inspection Evidence\n\n{deep_evidence}"
+                )
             }
-            fallback
-        });
+            Some(llm_doc) => llm_doc,
+            None if !deep_evidence.is_empty() => {
+                let title = summary_hint.unwrap_or(text);
+                format!("# {title}\n\n{deep_evidence}")
+            }
+            None => {
+                let title = summary_hint.unwrap_or(text);
+                let mut fallback = format!("# {title}\n\n");
+                fallback.push_str(&format!("- **Directory**: `{}`\n", self.cwd.display()));
+                if !local_files.is_empty() {
+                    fallback.push_str("\n## Workspace Files\n\n");
+                    for f in &local_files {
+                        fallback.push_str(&format!("- `{f}`\n"));
+                    }
+                }
+                fallback
+            }
+        };
         let final_content = if content.ends_with('\n') {
             content
         } else {
@@ -7045,6 +7128,481 @@ pub fn run_self_update(
     }
 }
 
+fn damerau_levenshtein(a: &str, b: &str) -> usize {
+    let ac: Vec<char> = a.chars().collect();
+    let bc: Vec<char> = b.chars().collect();
+    let m = ac.len();
+    let n = bc.len();
+    if m == 0 {
+        return n;
+    }
+    if n == 0 {
+        return m;
+    }
+    let mut dp = vec![vec![0_usize; n + 1]; m + 1];
+    for (i, row) in dp.iter_mut().enumerate().take(m + 1) {
+        row[0] = i;
+    }
+    for (j, cell) in dp[0].iter_mut().enumerate().take(n + 1) {
+        *cell = j;
+    }
+    for i in 1..=m {
+        for j in 1..=n {
+            let cost = usize::from(ac[i - 1] != bc[j - 1]);
+            let mut best = (dp[i - 1][j] + 1)
+                .min(dp[i][j - 1] + 1)
+                .min(dp[i - 1][j - 1] + cost);
+            if i > 1 && j > 1 && ac[i - 1] == bc[j - 2] && ac[i - 2] == bc[j - 1] {
+                best = best.min(dp[i - 2][j - 2] + 1);
+            }
+            dp[i][j] = best;
+        }
+    }
+    dp[m][n]
+}
+
+pub fn match_target_repositories(text: &str, repos: &[RepoEntry], cwd: &Path) -> Vec<RepoEntry> {
+    let stop_words = [
+        "what",
+        "which",
+        "where",
+        "when",
+        "can",
+        "could",
+        "please",
+        "into",
+        "from",
+        "with",
+        "that",
+        "this",
+        "these",
+        "those",
+        "have",
+        "make",
+        "write",
+        "create",
+        "generate",
+        "place",
+        "save",
+        "nice",
+        "markdown",
+        "file",
+        "report",
+        "list",
+        "state",
+        "them",
+        "directory",
+        "folder",
+        "repos",
+        "repository",
+        "repositories",
+        "worktree",
+        "worktrees",
+        "windows",
+        "linux",
+        "drive",
+        "drives",
+        "high",
+        "quality",
+        "security",
+        "sdlc",
+        "standards",
+        "compliant",
+        "compliance",
+        "analysis",
+        "analyze",
+        "areas",
+        "improvement",
+        "identified",
+        "gaps",
+        "across",
+        "level",
+        "current",
+        "most",
+        "recently",
+        "modified",
+        "descending",
+        "order",
+        "working",
+        "trees",
+    ];
+    let tokens = text
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_')
+        .map(|w| w.trim_matches(['-', '_']).to_lowercase())
+        .filter(|w| w.len() >= 4 && !stop_words.contains(&w.as_str()))
+        .collect::<Vec<_>>();
+
+    let mut matched = Vec::new();
+    for r in repos {
+        let repo_lower = r.name.to_lowercase();
+        let repo_stem = repo_lower.split('-').next().unwrap_or(&repo_lower);
+        let is_hit = tokens.iter().any(|tok| {
+            if tok == &repo_lower || tok == repo_stem {
+                return true;
+            }
+            if tok.len() >= 5 && (repo_lower.starts_with(tok) || repo_stem.starts_with(tok)) {
+                return true;
+            }
+            if tok.len() >= 6 && repo_stem.len() >= 6 {
+                let dist = damerau_levenshtein(tok, repo_stem);
+                if dist <= 2 {
+                    return true;
+                }
+            }
+            if tok.len() >= 6 && repo_lower.len() >= 6 {
+                let dist = damerau_levenshtein(tok, &repo_lower);
+                if dist <= 2 {
+                    return true;
+                }
+            }
+            false
+        });
+        if is_hit {
+            matched.push(r.clone());
+        }
+    }
+
+    if matched.is_empty() && cwd.join(".git").exists() {
+        let cwd_str = cwd.display().to_string();
+        if let Some(current_repo) = repos.iter().find(|r| r.path == cwd_str) {
+            matched.push(current_repo.clone());
+        }
+    }
+    matched
+}
+
+pub fn deep_inspect_repositories(
+    targets: &[RepoEntry],
+    env: &Value,
+    api_key_env: Option<&str>,
+) -> String {
+    let mut redaction_cfg = redaction::Config {
+        environment: env.clone(),
+        ..redaction::Config::default()
+    };
+    if let Some(k) = api_key_env {
+        redaction_cfg.api_key_env = Text::from(k);
+    }
+    let _ = redaction_cfg.validate();
+
+    let redact_str = |s: &str| -> String {
+        redaction::evidence(&Text::from(s), &redaction_cfg)
+            .to_utf8()
+            .unwrap_or_else(|_| String::new())
+    };
+
+    let read_safe_excerpt =
+        |file_path: &Path, max_lines: usize, max_chars: usize| -> Option<String> {
+            let meta = fs::symlink_metadata(file_path).ok()?;
+            if !meta.is_file() || secure::linked(&meta) || meta.len() > 262_144 {
+                return None;
+            }
+            let raw = fs::read_to_string(file_path).ok()?;
+            let redacted = redact_str(&raw);
+            let lines = redacted
+                .lines()
+                .take(max_lines)
+                .collect::<Vec<_>>()
+                .join("\n");
+            let clipped: String = lines.chars().take(max_chars).collect();
+            Some(clipped)
+        };
+
+    let mut report = String::new();
+    for repo in targets.iter().take(8) {
+        let repo_path = Path::new(&repo.path);
+        if !repo_path.is_dir() {
+            continue;
+        }
+        report.push_str(&format!(
+            "### Repository: `{}` (`{}`)\n",
+            repo.name, repo.path
+        ));
+        report.push_str(&format!(
+            "- **Kind**: {} | **Branch**: `{}` | **Working Tree State**: {} | **Last Modified**: `{}`\n",
+            repo.kind, repo.branch, repo.state, repo.modified_utc
+        ));
+        report.push_str(&format!(
+            "- **Remote**: `{}` | **Latest Commit**: {}\n",
+            repo.remote, repo.last_commit
+        ));
+
+        let tracked_files = StdCommand::new("git")
+            .arg("--no-optional-locks")
+            .arg("-c")
+            .arg("core.autocrlf=false")
+            .arg("-C")
+            .arg(repo_path)
+            .arg("ls-files")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| {
+                s.lines()
+                    .map(|l| l.trim().to_owned())
+                    .filter(|l| !l.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        let total_tracked = tracked_files.len();
+        let mut src_count = 0_usize;
+        let mut test_count = 0_usize;
+        let mut workflow_files = Vec::new();
+        let mut security_findings = Vec::new();
+        let mut sdlc_findings = Vec::new();
+        let mut manifests = Vec::new();
+        let mut doc_files = Vec::new();
+
+        for f in &tracked_files {
+            let lower = f.to_lowercase();
+            let file_name = Path::new(f)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(f)
+                .to_lowercase();
+
+            if lower.starts_with(".github/workflows/")
+                && (lower.ends_with(".yml") || lower.ends_with(".yaml"))
+            {
+                workflow_files.push(f.clone());
+            }
+            if lower.contains("test")
+                || lower.starts_with("tests/")
+                || lower.starts_with("__tests__/")
+                || lower.ends_with(".spec.ts")
+                || lower.ends_with(".spec.js")
+                || lower.ends_with(".test.ts")
+                || lower.ends_with(".test.js")
+                || lower.ends_with("tests.cs")
+            {
+                test_count += 1;
+            } else if lower.ends_with(".cs")
+                || lower.ends_with(".rs")
+                || lower.ends_with(".php")
+                || lower.ends_with(".ts")
+                || lower.ends_with(".tsx")
+                || lower.ends_with(".js")
+                || lower.ends_with(".jsx")
+                || lower.ends_with(".py")
+            {
+                src_count += 1;
+            }
+
+            if (file_name == ".env" || file_name.starts_with(".env."))
+                && !matches!(
+                    file_name.as_str(),
+                    ".env.example" | ".env.sample" | ".env.template"
+                )
+            {
+                security_findings.push(format!(
+                    "CRITICAL: Tracked environment configuration file `{f}` committed to Git repository"
+                ));
+            }
+            if (file_name.contains("firebase-adminsdk")
+                || (file_name.ends_with(".json")
+                    && (file_name.contains("-dev-")
+                        || file_name.contains("service-account")
+                        || file_name.contains("credentials"))))
+                && !lower.starts_with("vendor/")
+            {
+                security_findings.push(format!(
+                    "CRITICAL: Tracked cloud/service-account credential JSON `{f}` committed to Git repository"
+                ));
+            }
+            if matches!(
+                Path::new(&file_name).extension().and_then(|e| e.to_str()),
+                Some("pem" | "key" | "pfx" | "p12")
+            ) {
+                security_findings.push(format!(
+                    "CRITICAL: Tracked private key or certificate `{f}` committed to Git repository"
+                ));
+            }
+            if file_name.ends_with(".sql")
+                && !lower.contains("migrations")
+                && !lower.contains("schema")
+            {
+                security_findings.push(format!(
+                    "HIGH: Tracked SQL database dump `{f}` in repository (risk of PII/credential exposure)"
+                ));
+            }
+            if file_name == "composer.phar" || file_name.ends_with(".phar") {
+                sdlc_findings.push(format!(
+                    "MEDIUM: Tracked binary executable archive `{f}` committed to source control"
+                ));
+            }
+            if file_name.contains(".backup")
+                || file_name.ends_with(".bak")
+                || file_name.contains("_backup.")
+            {
+                sdlc_findings.push(format!(
+                    "LOW/SDLC: Tracked backup artifact `{f}` committed to source control"
+                ));
+            }
+
+            if matches!(
+                file_name.as_str(),
+                "barberlytics.slnx"
+                    | "directory.build.props"
+                    | "directory.build.targets"
+                    | "directory.packages.props"
+                    | "global.json"
+                    | "cargo.toml"
+                    | "composer.json"
+                    | "package.json"
+                    | "tsconfig.json"
+                    | "dockerfile"
+                    | "docker-compose.yml"
+                    | "phpunit.xml"
+                    | "jest.config.js"
+                    | ".eslintrc.js"
+                    | ".editorconfig"
+                    | "sonar-project.properties"
+                    | "agent-policy.yml"
+            ) && !lower.contains('/')
+            {
+                manifests.push(f.clone());
+            }
+
+            if (lower.starts_with("docs/") || lower.starts_with("architecture/"))
+                && lower.ends_with(".md")
+                && doc_files.len() < 16
+            {
+                doc_files.push(f.clone());
+            }
+        }
+
+        let has_yarn = tracked_files.iter().any(|f| f == "yarn.lock");
+        let has_npm = tracked_files.iter().any(|f| f == "package-lock.json");
+        if has_yarn && has_npm {
+            sdlc_findings.push(
+                "MEDIUM: Both `yarn.lock` and `package-lock.json` are tracked in Git, causing non-deterministic dependency resolution".to_owned(),
+            );
+        }
+        if workflow_files.is_empty() {
+            sdlc_findings.push(
+                "HIGH: No GitHub Actions workflows (`.github/workflows/*.yml`) found in repository"
+                    .to_owned(),
+            );
+        }
+        if !tracked_files.iter().any(|f| {
+            f.eq_ignore_ascii_case("SECURITY.md") || f.eq_ignore_ascii_case("docs/Security-Scan.md")
+        }) {
+            sdlc_findings.push(
+                "MEDIUM: No `SECURITY.md` or security scan policy document tracked".to_owned(),
+            );
+        }
+        if !tracked_files.iter().any(|f| {
+            f.eq_ignore_ascii_case(".github/dependabot.yml")
+                || f.eq_ignore_ascii_case(".github/renovate.json")
+        }) {
+            sdlc_findings.push(
+                "MEDIUM: No automated dependency vulnerability scanner (`.github/dependabot.yml` or Renovate) configured".to_owned(),
+            );
+        }
+        if !tracked_files.iter().any(|f| {
+            f.eq_ignore_ascii_case(".github/CODEOWNERS")
+                || f.eq_ignore_ascii_case("CODEOWNERS")
+                || f.eq_ignore_ascii_case("agent-policy.yml")
+        }) {
+            sdlc_findings.push(
+                "LOW/SDLC: No `CODEOWNERS` or `agent-policy.yml` review/ownership enforcement file present".to_owned(),
+            );
+        }
+        if src_count > 10 && test_count == 0 {
+            sdlc_findings.push(format!(
+                "HIGH: {src_count} source files tracked with 0 automated test files"
+            ));
+        } else if src_count > 20 && test_count * 5 < src_count {
+            sdlc_findings.push(format!(
+                "MEDIUM: Low automated test ratio ({test_count} test files vs {src_count} source files)"
+            ));
+        }
+
+        report.push_str(&format!(
+            "- **Metrics**: {} total tracked files | {} source files | {} test files | {} CI/CD workflows (`{}`)\n",
+            total_tracked,
+            src_count,
+            test_count,
+            workflow_files.len(),
+            if workflow_files.is_empty() {
+                "none".to_owned()
+            } else {
+                workflow_files.join(", ")
+            }
+        ));
+        report.push_str(&format!(
+            "- **Root Manifests & Tooling Configs**: {}\n",
+            if manifests.is_empty() {
+                "none".to_owned()
+            } else {
+                manifests.join(", ")
+            }
+        ));
+        if !doc_files.is_empty() {
+            report.push_str(&format!(
+                "- **Architecture & Engineering Docs**: {}\n",
+                doc_files.join(", ")
+            ));
+        }
+
+        if security_findings.is_empty() {
+            report.push_str("- **Automated Secret/File Hygiene Scan**: PASS (no tracked `.env.*`, credential JSONs, private keys, or SQL dumps detected)\n");
+        } else {
+            report.push_str("- **Automated Secret/File Hygiene Findings**:\n");
+            for finding in &security_findings {
+                report.push_str(&format!("  - {finding}\n"));
+            }
+        }
+        if !sdlc_findings.is_empty() {
+            report.push_str("- **Automated SDLC, Quality & Governance Findings**:\n");
+            for finding in &sdlc_findings {
+                report.push_str(&format!("  - {finding}\n"));
+            }
+        }
+
+        for key_doc in [
+            "AGENTS.md",
+            "README.md",
+            "Directory.Build.props",
+            "Directory.Build.targets",
+            "composer.json",
+            "package.json",
+            "docs/Security-Scan.md",
+            "docs/architecture.md",
+            "docs/ci-cd.md",
+            "docs/backlog-status.md",
+            "architecture/NET-Migration-Plan.md",
+        ] {
+            let p = repo_path.join(key_doc);
+            if let Some(excerpt) = read_safe_excerpt(&p, 28, 1600) {
+                if !excerpt.trim().is_empty() {
+                    report.push_str(&format!(
+                        "\n#### Excerpt: `{}/{key_doc}`\n```text\n{}\n```\n",
+                        repo.name,
+                        excerpt.trim()
+                    ));
+                }
+            }
+        }
+        for wf in workflow_files.iter().take(3) {
+            let p = repo_path.join(wf);
+            if let Some(excerpt) = read_safe_excerpt(&p, 24, 1200) {
+                if !excerpt.trim().is_empty() {
+                    report.push_str(&format!(
+                        "\n#### CI/CD Workflow Excerpt: `{}/{wf}`\n```yaml\n{}\n```\n",
+                        repo.name,
+                        excerpt.trim()
+                    ));
+                }
+            }
+        }
+        report.push('\n');
+    }
+    report
+}
+
 fn auto_discover_question_files(root: &Path, question: &str) -> Vec<String> {
     let mut selected = Vec::new();
     let lower_q = question.to_lowercase();
@@ -8914,6 +9472,53 @@ mod tests {
                 reason: "LLM command translation".to_owned(),
             })
         );
+
+        let sample_repos = vec![
+            RepoEntry {
+                name: "barberlytics".to_owned(),
+                path: "/home/user/repos/barberlytics".to_owned(),
+                kind: "Repository".to_owned(),
+                branch: "main".to_owned(),
+                state: "clean".to_owned(),
+                remote: "-".to_owned(),
+                last_commit: "-".to_owned(),
+                modified_epoch: 100,
+                modified_utc: "-".to_owned(),
+                linked_worktrees: Vec::new(),
+            },
+            RepoEntry {
+                name: "barberlytics-api".to_owned(),
+                path: "/home/user/repos/barberlytics-api".to_owned(),
+                kind: "Repository".to_owned(),
+                branch: "main".to_owned(),
+                state: "clean".to_owned(),
+                remote: "-".to_owned(),
+                last_commit: "-".to_owned(),
+                modified_epoch: 90,
+                modified_utc: "-".to_owned(),
+                linked_worktrees: Vec::new(),
+            },
+            RepoEntry {
+                name: "Riddle".to_owned(),
+                path: "/home/user/repos/Riddle".to_owned(),
+                kind: "Repository".to_owned(),
+                branch: "main".to_owned(),
+                state: "clean".to_owned(),
+                remote: "-".to_owned(),
+                last_commit: "-".to_owned(),
+                modified_epoch: 80,
+                modified_utc: "-".to_owned(),
+                linked_worktrees: Vec::new(),
+            },
+        ];
+        let matched = match_target_repositories(
+            "Can we dig into the barberylitcs repo and do an analysis of how compliant it is",
+            &sample_repos,
+            Path::new("/home/user/repos"),
+        );
+        assert_eq!(matched.len(), 2);
+        assert_eq!(matched[0].name, "barberlytics");
+        assert_eq!(matched[1].name, "barberlytics-api");
         Ok(())
     }
 }
