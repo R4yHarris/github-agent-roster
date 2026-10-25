@@ -8915,13 +8915,18 @@ pub fn normalize_and_validate_allowed_files(repo_root: &Path, proposed: &[String
                 cleaned = cleaned[prefix.len()..].to_owned();
             }
         }
-        if let Ok(valid) = crate::planning::task::allowed_file(&Value::string(&cleaned)) {
-            if !crate::planning::forbidden_read(&valid)
-                && !crate::execution::policy::managed(&valid)
-                && !out.contains(&valid)
-                && (tracked.is_empty() || tracked.contains(&valid) || !cleaned.contains('/'))
+        let valid_opt = crate::planning::task::allowed_file(&Value::string(&cleaned))
+            .ok()
+            .filter(|v| {
+                !crate::planning::forbidden_read(v) && !crate::execution::policy::managed(v)
+            });
+        if let Some(ref valid) = valid_opt {
+            if !out.contains(valid)
+                && (tracked.is_empty()
+                    || tracked.contains(valid)
+                    || repo_root.join(valid).is_file())
             {
-                out.push(valid);
+                out.push(valid.clone());
                 continue;
             }
         }
@@ -8939,7 +8944,13 @@ pub fn normalize_and_validate_allowed_files(repo_root: &Path, proposed: &[String
             if let Ok(valid) = crate::planning::task::allowed_file(&Value::string(found)) {
                 if !out.contains(&valid) {
                     out.push(valid);
+                    continue;
                 }
+            }
+        }
+        if let Some(valid) = valid_opt {
+            if !out.contains(&valid) {
+                out.push(valid);
             }
         }
     }
