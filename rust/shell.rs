@@ -4918,6 +4918,23 @@ impl ShellSession {
         } else {
             format!("{content}\n")
         };
+        if text.to_lowercase().contains("repos directory") {
+            if let Some(first_repo) = matched_repos.first() {
+                if let Some(repo_parent) = Path::new(&first_repo.path).parent() {
+                    if repo_parent
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.eq_ignore_ascii_case("repos"))
+                    {
+                        let fname = target_path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("COMPLIANCE_REPORT.md");
+                        target_path = repo_parent.join(fname);
+                    }
+                }
+            }
+        }
         if let Some(parent) = target_path.parent() {
             let _ = fs::create_dir_all(parent);
         }
@@ -5785,8 +5802,17 @@ pub fn is_workspace_inventory_ask(text: &str) -> Result<bool, Error> {
     let has_repo_plural = regex_lite::Regex::new(r"(?i)\b(?:repositories|repos|worktrees)\b")
         .map_err(|e| Error::new("Error", e.to_string()))?
         .is_match(text);
+    let has_repo_any =
+        regex_lite::Regex::new(r"(?i)\b(?:repository|repositories|repo|repos|worktrees?)\b")
+            .map_err(|e| Error::new("Error", e.to_string()))?
+            .is_match(text);
+    let has_audit_or_report = regex_lite::Regex::new(
+        r"(?i)\b(?:dig\s+into|complian\w*|audit|sdlc|analysis|analy[sz]e|generating\s+a\s+report|place\s+it\s+into\s+a\s+.*report)\b",
+    )
+    .map_err(|e| Error::new("Error", e.to_string()))?
+    .is_match(text);
     let has_machine_context = regex_lite::Regex::new(
-        r"(?i)\b(?:what|which|list|state|status|on\s+this|windows\s+pc|machine|pc|wsl|current\s+.*directory|current\s+folder)\b",
+        r"(?i)\b(?:what|which|list|state|status|on\s+this|windows\s+pc|machine|pc|wsl|current\s+.*directory|current\s+folder|top\s+level\s+repos\s+directory)\b",
     )
     .map_err(|e| Error::new("Error", e.to_string()))?
     .is_match(text);
@@ -5794,6 +5820,9 @@ pub fn is_workspace_inventory_ask(text: &str) -> Result<bool, Error> {
         return Ok(true);
     }
     if has_repo_plural && has_machine_context && reqs.files.is_empty() {
+        return Ok(true);
+    }
+    if has_repo_any && has_audit_or_report && reqs.files.is_empty() {
         return Ok(true);
     }
     Ok(false)
@@ -5962,9 +5991,67 @@ fn inspect_git_repo(path: &Path, is_worktree: bool) -> RepoEntry {
         }
     }
 
+    let path_str = path.display().to_string();
+    let is_wsl_unc = path_str.starts_with(r"\\wsl.localhost\") || path_str.starts_with(r"\\wsl$\");
+
+    if is_wsl_unc {
+        let git_dir = path.join(".git");
+        let head_file = git_dir.join("HEAD");
+        let branch = fs::read_to_string(&head_file)
+            .ok()
+            .and_then(|s| {
+                let trimmed = s.trim();
+                trimmed
+                    .strip_prefix("ref: refs/heads/")
+                    .map(str::to_owned)
+                    .or_else(|| Some(trimmed.chars().take(8).collect()))
+            })
+            .unwrap_or_else(|| {
+                if is_worktree {
+                    "linked-worktree".to_owned()
+                } else {
+                    "main".to_owned()
+                }
+            });
+        let remote = fs::read_to_string(git_dir.join("config"))
+            .ok()
+            .and_then(|cfg| {
+                cfg.lines()
+                    .find_map(|l| l.trim().strip_prefix("url = ").map(str::to_owned))
+            })
+            .unwrap_or_else(|| "-".to_owned());
+        let modified_utc = time::OffsetDateTime::from_unix_timestamp(latest_mtime as i64)
+            .map(|dt| {
+                format!(
+                    "{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
+                    dt.year(),
+                    dt.month() as u8,
+                    dt.day(),
+                    dt.hour(),
+                    dt.minute(),
+                    dt.second()
+                )
+            })
+            .unwrap_or_else(|_| "-".to_owned());
+        return RepoEntry {
+            name,
+            path: path_str,
+            kind,
+            branch,
+            state: "wsl-repo".to_owned(),
+            remote,
+            last_commit: "-".to_owned(),
+            modified_epoch: latest_mtime,
+            modified_utc,
+            linked_worktrees: Vec::new(),
+        };
+    }
+
     let run_git = |args: &[&str]| -> Option<String> {
         let out = StdCommand::new("git")
             .arg("--no-optional-locks")
+            .arg("-c")
+            .arg("safe.directory=*")
             .arg("-c")
             .arg("core.autocrlf=false")
             .arg("-C")
@@ -6090,6 +6177,17 @@ pub fn discover_repositories(cwd: &Path, env: &Value) -> Vec<RepoEntry> {
                 push_root(root.join("repos"));
                 push_root(root.join("dev"));
                 push_root(root.join("projects"));
+            }
+        }
+        let is_temp_home = home
+            .as_ref()
+            .is_some_and(|h| h.starts_with(std::env::temp_dir()));
+        if !is_temp_home {
+            let wsl_home = Path::new(r"\\wsl.localhost\Ubuntu\home");
+            if let Ok(rd) = fs::read_dir(wsl_home) {
+                for entry in rd.flatten() {
+                    push_root(entry.path().join("repos"));
+                }
             }
         }
     } else {
@@ -6618,6 +6716,21 @@ fn collect_workspace_file_map(root: &Path) -> Vec<String> {
         "node_modules",
         "vendor",
         "AppData",
+        "Application Data",
+        "Local Settings",
+        "3D Objects",
+        "Contacts",
+        "Desktop",
+        "Documents",
+        "Downloads",
+        "Favorites",
+        "Links",
+        "Music",
+        "OneDrive",
+        "Pictures",
+        "Saved Games",
+        "Searches",
+        "Videos",
         ".cargo",
         ".rustup",
         ".nvm",
@@ -6653,6 +6766,7 @@ fn collect_workspace_file_map(root: &Path) -> Vec<String> {
                     if !crate::planning::forbidden_read(&norm)
                         && !crate::execution::policy::managed(&norm)
                         && crate::execution::policy::scope_expansion_file(&norm)
+                        && crate::planning::task::allowed_file(&Value::string(&norm)).is_ok()
                     {
                         out.push(norm);
                     }
@@ -7262,6 +7376,22 @@ pub fn match_target_repositories(text: &str, repos: &[RepoEntry], cwd: &Path) ->
         }
     }
 
+    let wants_single_only =
+        regex_lite::Regex::new(r"(?i)\b(?:specific\s+to\b.*\bonly|repo\s+only\b|\bonly\b)")
+            .is_ok_and(|re| re.is_match(text));
+    if wants_single_only && matched.len() > 1 {
+        let exact = matched
+            .iter()
+            .filter(|r| {
+                r.kind == "Repository" && tokens.iter().any(|tok| r.name.eq_ignore_ascii_case(tok))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if !exact.is_empty() {
+            matched = exact;
+        }
+    }
+
     if matched.is_empty() && cwd.join(".git").exists() {
         let cwd_str = cwd.display().to_string();
         if let Some(current_repo) = repos.iter().find(|r| r.path == cwd_str) {
@@ -7327,24 +7457,52 @@ pub fn deep_inspect_repositories(
             repo.remote, repo.last_commit
         ));
 
-        let tracked_files = StdCommand::new("git")
-            .arg("--no-optional-locks")
-            .arg("-c")
-            .arg("core.autocrlf=false")
-            .arg("-C")
-            .arg(repo_path)
-            .arg("ls-files")
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| {
-                s.lines()
-                    .map(|l| l.trim().to_owned())
-                    .filter(|l| !l.is_empty())
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+        let tracked_files = if let Some(rest) = repo.path.strip_prefix(r"\\wsl.localhost\Ubuntu\") {
+            let linux_path = format!("/{}", rest.replace('\\', "/"));
+            StdCommand::new("wsl.exe")
+                .args([
+                    "-d",
+                    "Ubuntu",
+                    "--",
+                    "git",
+                    "--no-optional-locks",
+                    "-C",
+                    &linux_path,
+                    "ls-files",
+                ])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| {
+                    s.lines()
+                        .map(|l| l.trim().to_owned())
+                        .filter(|l| !l.is_empty())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        } else {
+            StdCommand::new("git")
+                .arg("--no-optional-locks")
+                .arg("-c")
+                .arg("safe.directory=*")
+                .arg("-c")
+                .arg("core.autocrlf=false")
+                .arg("-C")
+                .arg(repo_path)
+                .arg("ls-files")
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| {
+                    s.lines()
+                        .map(|l| l.trim().to_owned())
+                        .filter(|l| !l.is_empty())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
 
         let total_tracked = tracked_files.len();
         let mut src_count = 0_usize;
