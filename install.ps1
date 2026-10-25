@@ -154,6 +154,9 @@ Set-ItemProperty -Path 'HKCU:\Environment' -Name 'ROSTER_INSTALLATION_ROOT' -Val
 if ($GitPath) { Set-ItemProperty -Path 'HKCU:\Environment' -Name 'ROSTER_GIT' -Value $GitPath }
 if ($Node20Path) { Set-ItemProperty -Path 'HKCU:\Environment' -Name 'ROSTER_NODE20' -Value $Node20Path }
 if ($CargoExe) { Set-ItemProperty -Path 'HKCU:\Environment' -Name 'ROSTER_CARGO' -Value $CargoExe }
+if ($env:CARGO_HOME) { Set-ItemProperty -Path 'HKCU:\Environment' -Name 'CARGO_HOME' -Value $env:CARGO_HOME }
+if ($env:RUSTUP_HOME) { Set-ItemProperty -Path 'HKCU:\Environment' -Name 'RUSTUP_HOME' -Value $env:RUSTUP_HOME }
+if ($env:RUSTFLAGS) { Set-ItemProperty -Path 'HKCU:\Environment' -Name 'RUSTFLAGS' -Value $env:RUSTFLAGS }
 
 Write-Host ''
 Write-Host "=== Machine-scoped configuration initialized in $RosterHome ===" -ForegroundColor Green
