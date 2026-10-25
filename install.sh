@@ -155,7 +155,11 @@ main() {
   chmod 600 "$ROSTER_HOME/capabilities.yml"
 
   GIT_REAL="$(readlink -f "$(command -v git)")"
-  CARGO_REAL="$(readlink -f "$(command -v cargo)")"
+  if command -v rustup >/dev/null 2>&1 && rustup which cargo >/dev/null 2>&1; then
+    CARGO_REAL="$(readlink -f "$(rustup which cargo)")"
+  else
+    CARGO_REAL="$(readlink -f "$(command -v cargo)")"
+  fi
   NODE20_REAL=""
   if [ -d "$NVM_DIR/versions/node" ]; then
     V20_DIR="$(ls "$NVM_DIR/versions/node" 2>/dev/null | grep '^v20\.' | tail -n 1 || true)"

@@ -6496,7 +6496,12 @@ pub fn run_self_update(
         .ok()
         .flatten()
         .and_then(|t| t.to_utf8().ok())
-        .filter(|s| !s.is_empty() && Path::new(s).is_file())
+        .filter(|s| {
+            !s.is_empty()
+                && Path::new(s).is_file()
+                && !s.ends_with("rustup")
+                && !s.ends_with("rustup.exe")
+        })
         .map(PathBuf::from);
     if cargo_bin.is_none() {
         let user_cargo =
