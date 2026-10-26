@@ -4800,6 +4800,11 @@ impl ShellSession {
             .and_then(Value::as_string)
             .and_then(|t| t.to_utf8().ok())
             .unwrap_or_default();
+        let current_base_url = base_llm
+            .get("base_url")
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .unwrap_or_default();
 
         if self.auto_route_mode == "off" {
             self.last_route_summary = Some(format!(
@@ -4832,11 +4837,30 @@ impl ShellSession {
 
         if should_auto_pick {
             if complexity != NlpComplexity::Deep {
-                if let Some(fast_prof) = loaded.profiles().iter().find(|p| {
-                    let pv = p.as_value();
-                    let m = clean_display(pv.get("model"), "").to_lowercase();
-                    m.contains("qwen") || m.contains("flash") || m.contains("coder")
-                }) {
+                let fast_prof = loaded
+                    .profiles()
+                    .iter()
+                    .find(|p| {
+                        let pv = p.as_value();
+                        let b = clean_display(pv.get("base_url"), "");
+                        let m = clean_display(pv.get("model"), "").to_lowercase();
+                        !current_base_url.is_empty()
+                            && b.eq_ignore_ascii_case(&current_base_url)
+                            && (m.contains("qwen") || m.contains("flash") || m.contains("coder"))
+                    })
+                    .or_else(|| {
+                        loaded.profiles().iter().find(|p| {
+                            let pv = p.as_value();
+                            let b = clean_display(pv.get("base_url"), "");
+                            let m = clean_display(pv.get("model"), "").to_lowercase();
+                            !b.contains("127.0.0.1")
+                                && !b.contains("localhost")
+                                && (m.contains("qwen")
+                                    || m.contains("flash")
+                                    || m.contains("coder"))
+                        })
+                    });
+                if let Some(fast_prof) = fast_prof {
                     if let Ok(routed_cfg) =
                         crate::fleet::with_profile(&self.config, fast_prof.as_value())
                     {
