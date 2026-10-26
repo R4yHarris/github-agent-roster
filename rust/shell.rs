@@ -348,6 +348,15 @@ pub fn commands() -> &'static [CommandPage] {
             aliases: &[],
         },
         CommandPage {
+            name: "compact",
+            group: "Session",
+            usage: "/compact [--aggressive]",
+            description: "Compact multi-turn NLP conversation history and prune bulky tool outputs while preserving byte-stable system prompt caching.",
+            example: "/compact --aggressive",
+            flags: &["--aggressive: condense all prior turns into a single rolling digest"],
+            aliases: &[],
+        },
+        CommandPage {
             name: "clear",
             group: "Session",
             usage: "/clear",
@@ -520,6 +529,15 @@ pub fn commands() -> &'static [CommandPage] {
                 "--id, --base-url, --model, --context, --concurrency, --hardware, --task-class: existing fleet add flags",
                 "--wsl: include running WSL addresses; --save: add discovered profiles without changing the default",
             ],
+            aliases: &[],
+        },
+        CommandPage {
+            name: "route",
+            group: "Model",
+            usage: "/route [on|off|auto|status]",
+            description: "Inspect or configure hardware-aware NLP complexity classification and automatic fleet routing.",
+            example: "/route auto",
+            flags: &[],
             aliases: &[],
         },
         CommandPage {
@@ -2534,6 +2552,9 @@ pub struct ShellSession {
     pub last_ask_text: Option<String>,
     pub pending_confirm: bool,
     pub conversation_turns: Vec<ConversationTurn>,
+    pub loaded_context_hint_dirs: std::collections::BTreeSet<PathBuf>,
+    pub auto_route_mode: String,
+    pub last_route_summary: Option<String>,
 }
 
 impl ShellSession {
@@ -2644,6 +2665,9 @@ impl ShellSession {
             last_ask_text: None,
             pending_confirm: false,
             conversation_turns: Vec::new(),
+            loaded_context_hint_dirs: std::collections::BTreeSet::new(),
+            auto_route_mode: "auto".to_owned(),
+            last_route_summary: None,
         })
     }
 
@@ -2807,7 +2831,33 @@ impl ShellSession {
                 if !raw_args.is_empty() {
                     return Err(Error::type_error("Use /clear."));
                 }
+                self.loaded_context_hint_dirs.clear();
                 Ok(ShellAction::ClearScreen)
+            }
+            "compact" => {
+                if !raw_args.is_empty() && raw_args != "--aggressive" {
+                    return Err(Error::type_error("Use /compact [--aggressive]."));
+                }
+                let aggressive = raw_args == "--aggressive";
+                let (before, after, freed_chars) = self.compact_conversation_history(aggressive);
+                if aggressive {
+                    self.loaded_context_hint_dirs.clear();
+                }
+                let out = format!(
+                    "Compacted conversation history: {before} -> {after} turn(s) (~{freed_chars} chars freed). System prompt prefix cache remains byte-stable.\n"
+                );
+                Ok(ShellAction::Continue(out))
+            }
+            "route" => {
+                if !matches!(raw_args, "" | "status" | "on" | "off" | "auto") {
+                    return Err(Error::type_error("Use /route [on|off|auto|status]."));
+                }
+                if matches!(raw_args, "on" | "off" | "auto") {
+                    self.auto_route_mode = raw_args.to_owned();
+                    self.route_next = raw_args != "off";
+                }
+                let out = self.format_route_status()?;
+                Ok(ShellAction::Continue(self.redact_text(&out)?))
             }
             "update" => {
                 if !raw_args.is_empty() && raw_args != "--check" {
@@ -4642,12 +4692,283 @@ impl ShellSession {
             && llm.get("model").is_some_and(domain::truthy)
     }
 
+    pub fn compact_conversation_history(&mut self, aggressive: bool) -> (usize, usize, usize) {
+        let before_count = self.conversation_turns.len();
+        let before_chars: usize = self
+            .conversation_turns
+            .iter()
+            .map(|t| t.user.len() + t.tool_summary.len() + t.assistant.len())
+            .sum();
+        if before_count <= 1 && !aggressive {
+            return (before_count, before_count, 0);
+        }
+        if before_count == 0 {
+            return (0, 0, 0);
+        }
+        let keep_recent = if aggressive {
+            0
+        } else {
+            2.min(before_count - 1)
+        };
+        let split_at = before_count.saturating_sub(keep_recent);
+        let older = &self.conversation_turns[..split_at];
+        if older.is_empty() {
+            return (before_count, before_count, 0);
+        }
+        let last_repo = older
+            .iter()
+            .rev()
+            .find_map(|t| t.target_repo.clone())
+            .or_else(|| {
+                self.conversation_turns
+                    .iter()
+                    .rev()
+                    .find_map(|t| t.target_repo.clone())
+            });
+        let mut digest_lines = Vec::new();
+        for (idx, turn) in older.iter().enumerate() {
+            let u_snip: String = turn
+                .user
+                .lines()
+                .next()
+                .unwrap_or(&turn.user)
+                .chars()
+                .take(120)
+                .collect();
+            let a_snip: String = turn
+                .assistant
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .take(2)
+                .collect::<Vec<_>>()
+                .join(" ")
+                .chars()
+                .take(180)
+                .collect();
+            digest_lines.push(format!("{}. Ask: {} -> {}", idx + 1, u_snip, a_snip));
+        }
+        let digest_turn = ConversationTurn {
+            user: format!("[Compacted prior {} turn(s)]", older.len()),
+            tool_summary: "context_compacted".to_owned(),
+            assistant: digest_lines.join("\n"),
+            target_repo: last_repo,
+        };
+        let mut next_turns = vec![digest_turn];
+        next_turns.extend_from_slice(&self.conversation_turns[split_at..]);
+        let after_chars: usize = next_turns
+            .iter()
+            .map(|t| t.user.len() + t.tool_summary.len() + t.assistant.len())
+            .sum();
+        self.conversation_turns = next_turns;
+        let after_count = self.conversation_turns.len();
+        (
+            before_count,
+            after_count,
+            before_chars.saturating_sub(after_chars),
+        )
+    }
+
+    pub fn format_route_status(&self) -> Result<String, Error> {
+        let model = self
+            .config
+            .get("llm")
+            .and_then(|l| l.get("model"))
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "(unset)".to_owned());
+        let profile = self
+            .fleet_profile_id
+            .clone()
+            .unwrap_or_else(|| "(default)".to_owned());
+        let last_route = self.last_route_summary.as_deref().unwrap_or("-");
+        Ok(format!(
+            "Auto-route mode: {}\nActive profile: {profile}\nActive model: {model}\nLast NLP route: {last_route}\n",
+            self.auto_route_mode
+        ))
+    }
+
+    fn select_nlp_fleet_llm(&mut self, user_text: &str, base_llm: &Value) -> Value {
+        let complexity = classify_nlp_complexity(user_text);
+        let (task_class, difficulty, tier_name) = match complexity {
+            NlpComplexity::Fast => ("docs", 1_u8, "fast"),
+            NlpComplexity::Standard => ("feat", 2_u8, "standard"),
+            NlpComplexity::Deep => ("feat", 4_u8, "deep"),
+        };
+        let current_model = base_llm
+            .get("model")
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .unwrap_or_default();
+
+        if self.auto_route_mode == "off" {
+            self.last_route_summary = Some(format!(
+                "tier={tier_name} (difficulty {difficulty}, task_class={task_class}) -> pinned model={current_model}"
+            ));
+            return base_llm.clone();
+        }
+
+        let root = self.current_root();
+        let Ok(loaded) =
+            crate::fleet::load_with_env(&root, Some(&self.installation), Some(&self.environment))
+        else {
+            self.last_route_summary = Some(format!(
+                "tier={tier_name} (difficulty {difficulty}, task_class={task_class}) -> model={current_model}"
+            ));
+            return base_llm.clone();
+        };
+        if loaded.profiles().is_empty() {
+            self.last_route_summary = Some(format!(
+                "tier={tier_name} (difficulty {difficulty}, task_class={task_class}) -> model={current_model}"
+            ));
+            return base_llm.clone();
+        }
+
+        let should_auto_pick = self.auto_route_mode == "on"
+            || self.route_next
+            || (self.auto_route_mode == "auto"
+                && complexity != NlpComplexity::Deep
+                && current_model.to_lowercase().contains("deepseek-v4"));
+
+        if should_auto_pick {
+            if complexity != NlpComplexity::Deep {
+                if let Some(fast_prof) = loaded.profiles().iter().find(|p| {
+                    let pv = p.as_value();
+                    let m = clean_display(pv.get("model"), "").to_lowercase();
+                    m.contains("qwen") || m.contains("flash") || m.contains("coder")
+                }) {
+                    if let Ok(routed_cfg) =
+                        crate::fleet::with_profile(&self.config, fast_prof.as_value())
+                    {
+                        if let Some(routed_llm) = routed_cfg.get("llm").cloned() {
+                            let pid = clean_display(fast_prof.as_value().get("id"), "auto");
+                            let pmodel =
+                                clean_display(fast_prof.as_value().get("model"), &current_model);
+                            self.last_route_summary = Some(format!(
+                                "tier={tier_name} (difficulty {difficulty}, task_class={task_class}) -> profile={pid} model={pmodel}"
+                            ));
+                            return routed_llm;
+                        }
+                    }
+                }
+            }
+            let empty_caps = Value::object(Vec::new());
+            let fleet_val = loaded.as_value();
+            if let Ok(Some(rv)) = crate::fleet::choose_route(&crate::fleet::RouteOptions {
+                fleet: &fleet_val,
+                capabilities: &empty_caps,
+                records: &[],
+                task_class,
+                difficulty,
+                context_required: 16_384,
+                profile_id: None,
+                seat: "coder",
+                excluded_profile_ids: &[],
+                queue_depth: None,
+                now: 0,
+            }) {
+                if let Some(best_id) = rv
+                    .get("profileId")
+                    .or_else(|| rv.get("id"))
+                    .and_then(Value::as_string)
+                    .and_then(|t| t.to_utf8().ok())
+                {
+                    if let Ok(prof) = crate::fleet::get_profile(&loaded, &Value::string(&best_id)) {
+                        let pmodel = clean_display(prof.as_value().get("model"), &current_model);
+                        if complexity == NlpComplexity::Deep
+                            || !pmodel.to_lowercase().contains("deepseek-v4")
+                        {
+                            if let Ok(routed_cfg) =
+                                crate::fleet::with_profile(&self.config, prof.as_value())
+                            {
+                                if let Some(routed_llm) = routed_cfg.get("llm").cloned() {
+                                    self.last_route_summary = Some(format!(
+                                        "tier={tier_name} (difficulty {difficulty}, task_class={task_class}) -> profile={best_id} model={pmodel}"
+                                    ));
+                                    return routed_llm;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let active_prof = self.fleet_profile_id.as_deref().unwrap_or("active");
+        self.last_route_summary = Some(format!(
+            "tier={tier_name} (difficulty {difficulty}, task_class={task_class}) -> profile={active_prof} model={current_model}"
+        ));
+        base_llm.clone()
+    }
+
+    fn collect_subdirectory_context_hint(
+        &mut self,
+        accessed_path: &Path,
+        repos: &[RepoEntry],
+    ) -> Option<String> {
+        let base_dir = if accessed_path.is_dir() {
+            accessed_path.to_path_buf()
+        } else {
+            accessed_path.parent()?.to_path_buf()
+        };
+        let mut candidate_dirs = vec![base_dir.clone()];
+        if let Some(repo) = repos
+            .iter()
+            .find(|r| base_dir.starts_with(Path::new(&r.path)))
+        {
+            let repo_root = PathBuf::from(&repo.path);
+            if repo_root != base_dir {
+                candidate_dirs.insert(0, repo_root);
+            }
+        }
+        let mut collected = Vec::new();
+        for dir in candidate_dirs {
+            if self.loaded_context_hint_dirs.contains(&dir) {
+                continue;
+            }
+            for hint_file in ["AGENTS.md", "CLAUDE.md", ".cursorrules"] {
+                let p = dir.join(hint_file);
+                let Ok(meta) = fs::symlink_metadata(&p) else {
+                    continue;
+                };
+                if !meta.is_file() || secure::linked(&meta) || meta.len() > 262_144 {
+                    continue;
+                }
+                if let Ok(raw) = fs::read_to_string(&p) {
+                    let redacted = self.redact_text(&raw).unwrap_or(raw);
+                    let snippet: String = redacted
+                        .lines()
+                        .take(24)
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                        .chars()
+                        .take(1400)
+                        .collect();
+                    if !snippet.trim().is_empty() {
+                        collected.push(format!(
+                            "[Context Hint from {}]\n{}",
+                            p.display(),
+                            snippet.trim()
+                        ));
+                        self.loaded_context_hint_dirs.insert(dir.clone());
+                        break;
+                    }
+                }
+            }
+        }
+        if collected.is_empty() {
+            None
+        } else {
+            Some(collected.join("\n\n"))
+        }
+    }
+
     async fn run_agentic_nlp_turn(&mut self, user_text: &str) -> Result<Option<String>, Error> {
-        let Some(llm) = self.config.get("llm").cloned() else {
+        let Some(base_llm) = self.config.get("llm").cloned() else {
             return Ok(None);
         };
-        if !llm.get("base_url").is_some_and(domain::truthy)
-            || !llm.get("model").is_some_and(domain::truthy)
+        if !base_llm.get("base_url").is_some_and(domain::truthy)
+            || !base_llm.get("model").is_some_and(domain::truthy)
         {
             return Ok(None);
         }
@@ -4658,6 +4979,18 @@ impl ShellSession {
         let _ = domain::put(&mut self.display, "state", Value::string("drafting"));
         let _ = domain::put(&mut self.display, "startedAt", Value::Number(now_ms));
         self.last_ask_text = Some(user_text.to_owned());
+
+        let llm = self.select_nlp_fleet_llm(user_text, &base_llm);
+        let context_max = domain::safe_integer(llm.get("context_max")).unwrap_or(131_072);
+
+        let history_chars: usize = self
+            .conversation_turns
+            .iter()
+            .map(|t| t.user.len() + t.tool_summary.len() + t.assistant.len())
+            .sum();
+        if self.conversation_turns.len() > 6 || (history_chars as u64 / 4) > (context_max / 2) {
+            let _ = self.compact_conversation_history(false);
+        }
 
         let drives = discover_drives(&self.cwd, &self.environment);
         let mut repos = discover_repositories(&self.cwd, &self.environment);
@@ -4754,23 +5087,9 @@ impl ShellSession {
             .collect::<Vec<_>>()
             .join("\n");
 
-        let sys_prompt = "You are Roster, an autonomous, high-assurance software engineering and repository orchestrator.\n\
-You have direct access to native workspace and repository tools:\n\
-- `list_dir`: list files and subdirectories in any workspace path or repository name.\n\
-- `read_file`: read line-numbered source/config/doc excerpts from any file.\n\
-- `search_text`: search across files in a repository or directory for a pattern.\n\
-- `git_inspect`: run read-only Git inspections (`status`, `log`, `branches`, `worktrees`, `ls_files`, `deep_audit`) on any repository.\n\
-- `write_report`: write a Markdown report or file to disk when the user asks to generate, save, or place a report/file.\n\
-- `run_roster_command`: run an internal Roster slash command (`/fleet list`, `/fleet use <id>`, `/doctor`, `/doctor openshell`, `/status`, `/usage`, `/issues`, `/stats`, `/update --check`).\n\
-- `start_sdlc_delivery`: trigger Roster's 3-seat isolated worktree SDLC pipeline (`planner -> coder -> reviewer`) when the user wants code modifications and test verification inside a Git repository.\n\n\
-Guidelines:\n\
-1. Ground every answer and report in real discovered repository files, manifests, workflows, and git state. Never invent placeholder templates.\n\
-2. Use `read_file`, `list_dir`, `search_text`, or `git_inspect` whenever you need deeper file-level evidence before answering or writing a report.\n\
-3. When the user asks to generate, make, write, or place a report/markdown file, call `write_report` with the complete, deeply detailed Markdown report AND also present the report clearly in your response.";
-
         let mut messages = vec![Value::object(vec![
             ("role", Value::string("system")),
-            ("content", Value::string(sys_prompt)),
+            ("content", Value::string(NLP_ORCHESTRATOR_SYSTEM_PROMPT)),
         ])];
 
         let history_start = self.conversation_turns.len().saturating_sub(6);
@@ -4816,16 +5135,20 @@ Guidelines:\n\
         let mut tool_trace: Vec<String> = Vec::new();
         let mut wrote_files: Vec<PathBuf> = Vec::new();
         let mut command_outputs: Vec<String> = Vec::new();
+        let mut seen_tool_calls: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        let mut repeated_guard_hits = 0_usize;
         let mut final_text = None;
 
-        for _turn_idx in 0..8_usize {
+        for _turn_idx in 0..6_usize {
+            let _ = compact_nlp_messages(&mut messages, context_max);
             let req = Value::object(vec![
                 ("messages", Value::Array(messages.clone())),
                 ("tools", tools_def.clone()),
             ]);
             let mut obs = crate::llm::control::NoObserver;
             let Ok(Ok(res)) = tokio::time::timeout(
-                std::time::Duration::from_secs(60),
+                std::time::Duration::from_secs(45),
                 chat.complete(
                     &req,
                     &mut transport,
@@ -4863,16 +5186,17 @@ Guidelines:\n\
                 .get("tool_calls")
                 .and_then(domain::items)
                 .filter(|items| !items.is_empty())
-                .map(|items| items.to_vec());
+                .map(|items| items.iter().take(6).cloned().collect::<Vec<_>>());
 
             if let Some(calls) = tool_calls {
-                messages.push(res.message.clone());
-                for call in calls.iter().take(6) {
+                let mut normalized_calls = Vec::new();
+                for (call_idx, call) in calls.iter().enumerate() {
                     let call_id = call
                         .get("id")
                         .and_then(Value::as_string)
                         .and_then(|t| t.to_utf8().ok())
-                        .unwrap_or_else(|| "call_1".to_owned());
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| format!("call_{}_{}", _turn_idx + 1, call_idx + 1));
                     let func = call.get("function");
                     let call_name = func
                         .and_then(|f| f.get("name"))
@@ -4884,8 +5208,56 @@ Guidelines:\n\
                         .and_then(Value::as_string)
                         .and_then(|t| t.to_utf8().ok())
                         .unwrap_or_else(|| "{}".to_owned());
+                    normalized_calls.push((call_id, call_name, raw_args));
+                }
+                let assistant_tool_calls = normalized_calls
+                    .iter()
+                    .map(|(cid, cname, cargs)| {
+                        Value::object(vec![
+                            ("id", Value::string(cid)),
+                            ("type", Value::string("function")),
+                            (
+                                "function",
+                                Value::object(vec![
+                                    ("name", Value::string(cname)),
+                                    ("arguments", Value::string(cargs)),
+                                ]),
+                            ),
+                        ])
+                    })
+                    .collect::<Vec<_>>();
+                messages.push(Value::object(vec![
+                    ("role", Value::string("assistant")),
+                    (
+                        "content",
+                        res.message.get("content").cloned().unwrap_or(Value::Null),
+                    ),
+                    ("tool_calls", Value::Array(assistant_tool_calls)),
+                ]));
+
+                for (call_id, call_name, raw_args) in normalized_calls {
                     let args_val = crate::json::parse(&Text::from(raw_args.as_str()))
                         .unwrap_or_else(|_| Value::object(Vec::new()));
+                    let sig = canonical_tool_call_signature(&call_name, &args_val);
+                    let seen_count = seen_tool_calls.entry(sig).or_insert(0);
+                    *seen_count += 1;
+                    if *seen_count > 1 {
+                        repeated_guard_hits += 1;
+                        let guard_msg = Value::object(vec![(
+                            "repetition_guard",
+                            Value::string(&format!(
+                                "Identical tool call '{call_name}' with the same arguments was already executed in this turn. Do not repeat identical tool calls; inspect a different path/range or synthesize your final response now."
+                            )),
+                        )])
+                        .json();
+                        messages.push(Value::object(vec![
+                            ("role", Value::string("tool")),
+                            ("tool_call_id", Value::string(&call_id)),
+                            ("name", Value::string(&call_name)),
+                            ("content", Value::string(&guard_msg)),
+                        ]));
+                        continue;
+                    }
 
                     let label_arg = args_val
                         .get("path")
@@ -4925,6 +5297,9 @@ Guidelines:\n\
                         ("content", Value::string(&tool_out)),
                     ]));
                 }
+                if repeated_guard_hits >= 2 {
+                    break;
+                }
                 continue;
             }
 
@@ -4944,6 +5319,68 @@ Guidelines:\n\
             break;
         }
 
+        if final_text.is_none() && (!tool_trace.is_empty() || !wrote_files.is_empty()) {
+            let _ = compact_nlp_messages(&mut messages, context_max);
+            let mut grace_messages = messages.clone();
+            grace_messages.push(Value::object(vec![
+                ("role", Value::string("user")),
+                (
+                    "content",
+                    Value::string(
+                        "Tool budget reached. Using all tool outputs and evidence gathered above, write the complete, detailed response or Markdown document fulfilling the user's request now without calling any tools.",
+                    ),
+                ),
+            ]));
+            let grace_req = Value::object(vec![("messages", Value::Array(grace_messages))]);
+            let mut obs = crate::llm::control::NoObserver;
+            if let Ok(Ok(res)) = tokio::time::timeout(
+                std::time::Duration::from_secs(45),
+                chat.complete(
+                    &grace_req,
+                    &mut transport,
+                    &mut obs,
+                    &creds,
+                    crate::llm::openai::CallOptions {
+                        signal: None,
+                        parent: None,
+                        retry_command: None,
+                    },
+                ),
+            )
+            .await
+            {
+                if let Some(usage) = &res.usage {
+                    if let Some(pt) = domain::safe_integer(usage.get("prompt_tokens")) {
+                        total_prompt_tokens = pt;
+                        let _ =
+                            domain::put(&mut self.display, "contextUsed", Value::Number(pt as f64));
+                    }
+                    if let Some(ct) = domain::safe_integer(usage.get("completion_tokens")) {
+                        total_completion_tokens = total_completion_tokens.saturating_add(ct);
+                        let _ = domain::put(
+                            &mut self.display,
+                            "outputTokens",
+                            Value::Number(total_completion_tokens as f64),
+                        );
+                    }
+                }
+                final_text = res
+                    .message
+                    .get("content")
+                    .and_then(Value::as_string)
+                    .and_then(|t| t.to_utf8().ok())
+                    .map(|s| s.trim().to_owned())
+                    .filter(|s| !s.is_empty());
+            }
+        }
+
+        if final_text.is_none() && !wrote_files.is_empty() {
+            let first_written = &wrote_files[0];
+            if let Ok(written_body) = fs::read_to_string(first_written) {
+                final_text = Some(written_body.trim().to_owned());
+            }
+        }
+
         let _ = domain::put(&mut self.display, "lastTestName", Value::Null);
         let Some(mut reply) = final_text else {
             if !command_outputs.is_empty() {
@@ -4955,7 +5392,7 @@ Guidelines:\n\
         };
 
         let wants_report_file = regex_lite::Regex::new(
-            r"(?i)\b(?:generating\s+a\s+report|place\s+it\s+into\s+a\s+.*report|make\s+me\s+a\s+.*(?:markdown|file|report)|write\s+a\s+.*(?:markdown|file|report)|save\s+.*(?:report|markdown|file))\b",
+            r"(?i)\b(?:generating\s+a\s+report|place\s+it\s+into\s+a\s+.*report|make\s+me\s+a\s+.*(?:markdown|file|report)|write\s+a\s+.*(?:markdown|file|report|specification|summary|design)|save\s+.*(?:report|markdown|file)|[A-Za-z0-9_.-]+\.md\b)\b",
         )
         .is_ok_and(|re| re.is_match(user_text));
 
@@ -5115,11 +5552,14 @@ Guidelines:\n\
                 dirs.sort();
                 files.sort();
                 dirs.extend(files);
-                Value::object(vec![
+                let mut fields = vec![
                     ("path", Value::string(&target.display().to_string())),
                     ("entries", Value::string(&dirs.join("\n"))),
-                ])
-                .json()
+                ];
+                if let Some(hint) = self.collect_subdirectory_context_hint(&target, repos) {
+                    fields.push(("context_hint", Value::string(&hint)));
+                }
+                Value::object(fields).json()
             }
             "read_file" => {
                 let raw_path = str_arg("path");
@@ -5167,11 +5607,52 @@ Guidelines:\n\
                     .collect::<Vec<_>>()
                     .join("\n");
                 let clipped: String = lines.chars().take(12_000).collect();
-                Value::object(vec![
+                let mut fields = vec![
                     ("path", Value::string(&target.display().to_string())),
                     ("excerpt", Value::string(&clipped)),
-                ])
-                .json()
+                ];
+                if let Some(hint) = self.collect_subdirectory_context_hint(&target, repos) {
+                    fields.push(("context_hint", Value::string(&hint)));
+                }
+                Value::object(fields).json()
+            }
+            "edit_file" => {
+                let raw_path = str_arg("path");
+                let old_str = args
+                    .get("old_str")
+                    .and_then(Value::as_string)
+                    .and_then(|t| t.to_utf8().ok())
+                    .unwrap_or_default();
+                let new_str = args
+                    .get("new_str")
+                    .and_then(Value::as_string)
+                    .and_then(|t| t.to_utf8().ok())
+                    .unwrap_or_default();
+                if raw_path.is_empty() || old_str.is_empty() {
+                    return Value::object(vec![(
+                        "error",
+                        Value::string("edit_file requires non-empty path and old_str"),
+                    )])
+                    .json();
+                }
+                let target = resolve_agent_path(&raw_path, &self.cwd, repos, &self.environment);
+                match apply_surgical_file_edit(&target, &old_str, &new_str, self) {
+                    Ok((old_lines, new_lines)) => {
+                        if !wrote_files.contains(&target) {
+                            wrote_files.push(target.clone());
+                        }
+                        let mut fields = vec![
+                            ("edited", Value::string(&target.display().to_string())),
+                            ("replaced_lines", Value::Number(old_lines as f64)),
+                            ("inserted_lines", Value::Number(new_lines as f64)),
+                        ];
+                        if let Some(hint) = self.collect_subdirectory_context_hint(&target, repos) {
+                            fields.push(("context_hint", Value::string(&hint)));
+                        }
+                        Value::object(fields).json()
+                    }
+                    Err(err_msg) => Value::object(vec![("error", Value::string(&err_msg))]).json(),
+                }
             }
             "search_text" => {
                 let raw_path = str_arg("path");
@@ -5689,8 +6170,17 @@ Guidelines:\n\
                             })
                             .collect::<Vec<_>>()
                             .join("\n");
+                        let is_compliance_audit = regex_lite::Regex::new(
+                            r"(?i)\b(?:compli(?:ant|ance)|security\s+and\s+sdlc|sdlc\s+standards|vulnerability\s+audit|security\s+audit)\b",
+                        )
+                        .is_ok_and(|re| re.is_match(text));
+                        let structure_instructions = if is_compliance_audit {
+                            "Include:\n1. Executive Summary & Overall Compliance Scorecard Table\n2. Critical & High-Severity Security and Secret-Hygiene Findings (with exact file paths)\n3. Repository-by-Repository Architecture, Code Quality & Testing Assessment\n4. CI/CD, SDLC Governance & Branch Hygiene Gaps\n5. Prioritized Remediation Roadmap (P0 Immediate, P1 Short-Term, P2 Medium-Term)"
+                        } else {
+                            "Structure the document with clear headings, concrete technical details, exact file paths/signatures, and actionable specifications tailored directly to the user's request. Do not add unrelated compliance scorecards unless requested."
+                        };
                         let ctx_prompt = format!(
-                            "User request:\n{text}\n\nWorking directory: {}\nTarget output file: {}\nFiles in working directory: {}\nDiscovered drives ({}): {}\nDiscovered Git repositories ({}):\n{}\n\nDeep Repository Inspection & Compliance/Security/SDLC Audit Evidence:\n{}\n\nWrite a comprehensive, deeply technical, evidence-grounded Markdown document for `{}` that directly fulfills the user's request. Cite concrete file paths, manifests, workflows, tests, architecture docs, and security/SDLC findings from the evidence above. Include:\n1. Executive Summary & Overall Compliance Scorecard Table\n2. Critical & High-Severity Security and Secret-Hygiene Findings (with exact file paths)\n3. Repository-by-Repository Architecture, Code Quality & Testing Assessment\n4. CI/CD, SDLC Governance & Branch Hygiene Gaps\n5. Prioritized Remediation Roadmap (P0 Immediate, P1 Short-Term, P2 Medium-Term)",
+                            "User request:\n{text}\n\nWorking directory: {}\nTarget output file: {}\nFiles in working directory: {}\nDiscovered drives ({}): {}\nDiscovered Git repositories ({}):\n{}\n\nDeep Repository Inspection Evidence:\n{}\n\nWrite a comprehensive, deeply technical, evidence-grounded Markdown document for `{}` that directly fulfills the user's request.\n{structure_instructions}",
                             self.cwd.display(),
                             target_path.display(),
                             if local_files.is_empty() {
@@ -7562,6 +8052,14 @@ pub fn translate_natural_language_command(text: &str) -> Option<String> {
             r"(?i)^(?:please\s+|can\s+you\s+)*(?:update|upgrade)\s+roster[?.!]*$",
             "/update",
         ),
+        (
+            r"(?i)^(?:please\s+|can\s+you\s+)*(?:compact|compress)\s+(?:the\s+|my\s+)?(?:context|history|conversation)(?:\s+aggressively)?[?.!]*$",
+            "/compact",
+        ),
+        (
+            r"(?i)^(?:please\s+|can\s+you\s+)*(?:show|check|what\s+is)\s+(?:me\s+)?(?:the\s+|my\s+|current\s+)*(?:fleet\s+)?(?:routing|route|auto-route)(?:\s+status)?[?.!]*$",
+            "/route status",
+        ),
     ];
     for (pat, cmd) in patterns {
         if regex_lite::Regex::new(pat).ok()?.is_match(trimmed) {
@@ -8233,6 +8731,28 @@ pub fn match_target_repositories(text: &str, repos: &[RepoEntry], cwd: &Path) ->
         "order",
         "working",
         "trees",
+        "rust",
+        "cargo",
+        "shell",
+        "fleet",
+        "design",
+        "specification",
+        "summary",
+        "compact",
+        "compaction",
+        "repetition",
+        "router",
+        "routing",
+        "slice",
+        "issue",
+        "inspect",
+        "tool",
+        "tools",
+        "concise",
+        "technical",
+        "current",
+        "model",
+        "models",
     ];
     let tokens = text
         .split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_')
@@ -8243,12 +8763,33 @@ pub fn match_target_repositories(text: &str, repos: &[RepoEntry], cwd: &Path) ->
     let mut matched = Vec::new();
     for r in repos {
         let repo_lower = r.name.to_lowercase();
-        let repo_stem = repo_lower.split('-').next().unwrap_or(&repo_lower);
+        let raw_stem = repo_lower.split('-').next().unwrap_or(&repo_lower);
+        let generic_stem = matches!(
+            raw_stem,
+            "rust"
+                | "github"
+                | "node"
+                | "python"
+                | "agent"
+                | "project"
+                | "test"
+                | "worktree"
+                | "installation"
+                | "source"
+                | "repos"
+        );
+        let repo_stem = if generic_stem {
+            repo_lower.as_str()
+        } else {
+            raw_stem
+        };
         let is_hit = tokens.iter().any(|tok| {
             if tok == &repo_lower || tok == repo_stem {
                 return true;
             }
-            if tok.len() >= 5 && (repo_lower.starts_with(tok) || repo_stem.starts_with(tok)) {
+            if tok.len() >= 5
+                && ((!generic_stem && repo_lower.starts_with(tok)) || repo_stem.starts_with(tok))
+            {
                 return true;
             }
             if tok.len() >= 6 && repo_stem.len() >= 6 {
@@ -8655,6 +9196,184 @@ pub fn deep_inspect_repositories(
     report
 }
 
+const NLP_ORCHESTRATOR_SYSTEM_PROMPT: &str = "You are Roster, an autonomous, high-assurance software engineering and repository orchestrator.\n\
+You have direct access to native workspace and repository tools:\n\
+- `list_dir`: list files and subdirectories in any workspace path or repository name.\n\
+- `read_file`: read line-numbered source/config/doc excerpts from any file.\n\
+- `edit_file`: surgically replace an exact unique `old_str` with `new_str` in an existing non-protected file.\n\
+- `search_text`: search across files in a repository or directory for a pattern.\n\
+- `git_inspect`: run read-only Git inspections (`status`, `log`, `branches`, `worktrees`, `ls_files`, `deep_audit`) on any repository.\n\
+- `write_report`: write a Markdown report or file to disk when the user asks to generate, save, or place a report/file.\n\
+- `run_roster_command`: run an internal Roster slash command (`/fleet list`, `/fleet use <id>`, `/route status`, `/compact`, `/doctor`, `/doctor openshell`, `/status`, `/usage`, `/issues`, `/stats`, `/update --check`).\n\
+- `start_sdlc_delivery`: trigger Roster's 3-seat isolated worktree SDLC pipeline (`planner -> coder -> reviewer`) when the user wants full worktree-isolated code delivery and test verification inside a Git repository.\n\n\
+Guidelines:\n\
+1. Ground every answer and report in real discovered repository files, manifests, workflows, and git state. Never invent placeholder templates.\n\
+2. Use `read_file`, `list_dir`, `search_text`, or `git_inspect` whenever you need file-level evidence before answering, editing, or writing a report. Do not repeat identical tool calls.\n\
+3. Use `edit_file` for targeted surgical edits to existing files (`old_str` must match exactly once).\n\
+4. When the user asks to generate, make, write, or place a report/markdown/specification file, call `write_report` with the complete Markdown document AND present the summary clearly in your response.";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NlpComplexity {
+    Fast,
+    Standard,
+    Deep,
+}
+
+pub fn classify_nlp_complexity(text: &str) -> NlpComplexity {
+    let lower = text.trim().to_lowercase();
+    let is_deep = regex_lite::Regex::new(
+        r"(?i)\b(?:deep\s+architecture\s+review|cryptographic\s+audit|multi-repository\s+security\s+audit|formal\s+verification|--deep\b)\b",
+    )
+    .is_ok_and(|re| re.is_match(&lower));
+    if is_deep {
+        return NlpComplexity::Deep;
+    }
+    let is_standard = lower.len() > 140
+        || regex_lite::Regex::new(
+            r"(?i)\b(?:edit_file|refactor|implement|compliance|security|sdlc|specification|analyze|analysis|audit|report|design)\b",
+        )
+        .is_ok_and(|re| re.is_match(&lower));
+    if is_standard {
+        NlpComplexity::Standard
+    } else {
+        NlpComplexity::Fast
+    }
+}
+
+pub fn canonical_tool_call_signature(call_name: &str, args: &Value) -> String {
+    let mut pairs = Vec::new();
+    if let Some(entries) = domain::members(args) {
+        for (k, v) in entries {
+            if let Ok(ks) = k.to_utf8() {
+                pairs.push((ks, v.json()));
+            }
+        }
+    }
+    pairs.sort_by(|a, b| a.0.cmp(&b.0));
+    let joined = pairs
+        .into_iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("&");
+    format!("{}({joined})", call_name.trim().to_lowercase())
+}
+
+pub fn estimate_messages_tokens(messages: &[Value]) -> u64 {
+    let total_chars: usize = messages.iter().map(|m| m.json().len()).sum();
+    (total_chars as u64).div_ceil(4)
+}
+
+pub fn compact_nlp_messages(messages: &mut [Value], context_max: u64) -> usize {
+    let est_tokens = estimate_messages_tokens(messages);
+    let tool_indices = messages
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, m)| domain::is_text(m.get("role"), "tool").then_some(idx))
+        .collect::<Vec<_>>();
+    let threshold = (context_max / 2).clamp(4096, 20_000);
+    if est_tokens <= threshold && tool_indices.len() <= 4 {
+        return 0;
+    }
+    let keep_recent = 2.min(tool_indices.len());
+    let prune_slice = &tool_indices[..tool_indices.len().saturating_sub(keep_recent)];
+    let mut pruned_count = 0_usize;
+    for &idx in prune_slice {
+        if let Some(msg) = messages.get_mut(idx) {
+            if let Some(content) = msg
+                .get("content")
+                .and_then(Value::as_string)
+                .and_then(|t| t.to_utf8().ok())
+            {
+                if content.len() > 600 && !content.starts_with("[Pruned tool output") {
+                    let head: String = content.chars().take(240).collect();
+                    let summary = format!(
+                        "[Pruned tool output ({} chars): {} ...]",
+                        content.len(),
+                        head.replace('\n', " ")
+                    );
+                    let _ = domain::put(msg, "content", Value::string(&summary));
+                    pruned_count += 1;
+                }
+            }
+        }
+    }
+    pruned_count
+}
+
+pub fn is_protected_agent_edit_path(target: &Path) -> bool {
+    let norm = target.display().to_string().replace('\\', "/");
+    let lower = norm.to_lowercase();
+    let fname = target
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    fname == "agent-policy.yml"
+        || fname == ".env"
+        || (fname.starts_with(".env.") && fname != ".env.example")
+        || fname.ends_with(".pem")
+        || fname.ends_with(".key")
+        || fname.ends_with(".pfx")
+        || lower.contains("/.github/workflows/")
+        || lower.contains("/vendor/github-agent-contracts/")
+}
+
+pub fn apply_surgical_file_edit(
+    target: &Path,
+    old_str: &str,
+    new_str: &str,
+    session: &ShellSession,
+) -> Result<(usize, usize), String> {
+    if old_str.is_empty() {
+        return Err("old_str must not be empty".to_owned());
+    }
+    if is_protected_agent_edit_path(target) {
+        return Err(format!(
+            "Refusing to edit protected policy, workflow, vendor, or secret file: {}",
+            target.display()
+        ));
+    }
+    let meta = fs::symlink_metadata(target)
+        .map_err(|e| format!("File not found ({}): {e}", target.display()))?;
+    if secure::linked(&meta) {
+        return Err("Refusing to edit symbolic link or reparse point".to_owned());
+    }
+    if !meta.is_file() || meta.len() > 524_288 {
+        return Err("Target file must be a regular file under 512 KiB".to_owned());
+    }
+    let content = fs::read_to_string(target)
+        .map_err(|e| format!("Unable to read {}: {e}", target.display()))?;
+    let uses_crlf = content.contains("\r\n");
+    let (effective_old, effective_new) = if uses_crlf && !old_str.contains("\r\n") {
+        (
+            old_str.replace('\n', "\r\n"),
+            new_str.replace("\r\n", "\n").replace('\n', "\r\n"),
+        )
+    } else {
+        (old_str.to_owned(), new_str.to_owned())
+    };
+    let match_count = content.matches(&effective_old).count();
+    if match_count == 0 {
+        return Err(format!(
+            "old_str not found in {}; use read_file first to verify exact text",
+            target.display()
+        ));
+    }
+    if match_count > 1 {
+        return Err(format!(
+            "old_str matched {match_count} locations in {}; include more surrounding lines so old_str is unique",
+            target.display()
+        ));
+    }
+    let updated = content.replacen(&effective_old, &effective_new, 1);
+    let redacted = session.redact_text(&updated).unwrap_or(updated);
+    fs::write(target, redacted.as_bytes())
+        .map_err(|e| format!("Failed to write {}: {e}", target.display()))?;
+    let old_lines = effective_old.lines().count().max(1);
+    let new_lines = effective_new.lines().count().max(1);
+    Ok((old_lines, new_lines))
+}
+
 pub fn nlp_agent_tool_definitions() -> Value {
     let make_tool = |name: &str, desc: &str, props: Vec<(&str, Value)>, req: &[&str]| -> Value {
         Value::object(vec![
@@ -8729,6 +9448,19 @@ pub fn nlp_agent_tool_definitions() -> Value {
                 ),
             ],
             &["path"],
+        ),
+        make_tool(
+            "edit_file",
+            "Surgically replace an exact unique substring old_str with new_str in an existing non-protected file.",
+            vec![
+                ("path", str_prop("Target file path to edit")),
+                (
+                    "old_str",
+                    str_prop("Exact unique existing text to replace (must occur once)"),
+                ),
+                ("new_str", str_prop("Replacement text")),
+            ],
+            &["path", "old_str", "new_str"],
         ),
         make_tool(
             "search_text",
@@ -8862,7 +9594,19 @@ pub fn resolve_agent_path(raw_path: &str, cwd: &Path, repos: &[RepoEntry], env: 
             _ => repo_root,
         };
     }
-    cwd.join(trimmed)
+    let cwd_candidate = cwd.join(trimmed);
+    if cwd_candidate.exists() {
+        return cwd_candidate;
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') {
+        for repo in repos.iter().filter(|r| r.name != "installation") {
+            let repo_candidate = Path::new(&repo.path).join(trimmed);
+            if repo_candidate.exists() {
+                return repo_candidate;
+            }
+        }
+    }
+    cwd_candidate
 }
 
 pub fn normalize_and_validate_allowed_files(repo_root: &Path, proposed: &[String]) -> Vec<String> {
@@ -10893,7 +11637,7 @@ mod tests {
         let Some(items) = domain::items(&tools_arr) else {
             return Err(Error::new("TestError", "expected tools array"));
         };
-        assert_eq!(items.len(), 7);
+        assert_eq!(items.len(), 8);
 
         let resolved_riddle = resolve_agent_path(
             "Riddle/Directory.Build.props",
@@ -10917,6 +11661,153 @@ mod tests {
         assert!(normalized.contains(&"README.md".to_owned()));
         assert!(normalized.contains(&"rust/shell.rs".to_owned()));
         assert!(!normalized.iter().any(|p| p.contains(' ')));
+
+        assert_eq!(
+            classify_nlp_complexity("What repos are on the D drive?"),
+            NlpComplexity::Fast
+        );
+        assert_eq!(
+            classify_nlp_complexity(
+                "Analyze the compliance and security of the Riddle repo and write a report"
+            ),
+            NlpComplexity::Standard
+        );
+        assert_eq!(
+            classify_nlp_complexity("Perform a deep architecture review of the runtime --deep"),
+            NlpComplexity::Deep
+        );
+
+        let sig1 = canonical_tool_call_signature(
+            "read_file",
+            &Value::object(vec![
+                ("path", Value::string("rust/shell.rs")),
+                ("start_line", Value::Number(1.0)),
+            ]),
+        );
+        let sig2 = canonical_tool_call_signature(
+            "read_file",
+            &Value::object(vec![
+                ("start_line", Value::Number(1.0)),
+                ("path", Value::string("rust/shell.rs")),
+            ]),
+        );
+        assert_eq!(sig1, sig2);
+
+        let mut msgs = vec![
+            Value::object(vec![
+                ("role", Value::string("system")),
+                ("content", Value::string(NLP_ORCHESTRATOR_SYSTEM_PROMPT)),
+            ]),
+            Value::object(vec![
+                ("role", Value::string("tool")),
+                ("tool_call_id", Value::string("c1")),
+                ("name", Value::string("read_file")),
+                ("content", Value::string(&"x".repeat(900))),
+            ]),
+            Value::object(vec![
+                ("role", Value::string("tool")),
+                ("tool_call_id", Value::string("c2")),
+                ("name", Value::string("read_file")),
+                ("content", Value::string(&"y".repeat(900))),
+            ]),
+            Value::object(vec![
+                ("role", Value::string("tool")),
+                ("tool_call_id", Value::string("c3")),
+                ("name", Value::string("read_file")),
+                ("content", Value::string(&"z".repeat(900))),
+            ]),
+            Value::object(vec![
+                ("role", Value::string("tool")),
+                ("tool_call_id", Value::string("c4")),
+                ("name", Value::string("read_file")),
+                ("content", Value::string("short1")),
+            ]),
+            Value::object(vec![
+                ("role", Value::string("tool")),
+                ("tool_call_id", Value::string("c5")),
+                ("name", Value::string("read_file")),
+                ("content", Value::string("short2")),
+            ]),
+        ];
+        let pruned = compact_nlp_messages(&mut msgs, 16_384);
+        assert_eq!(pruned, 3);
+        assert_eq!(
+            msgs[0]
+                .get("content")
+                .and_then(Value::as_string)
+                .and_then(|t| t.to_utf8().ok())
+                .as_deref(),
+            Some(NLP_ORCHESTRATOR_SYSTEM_PROMPT)
+        );
+
+        let edit_dir = std::env::temp_dir().join(format!(
+            "roster-edit-test-{}-{}",
+            std::process::id(),
+            files::nonce()?
+        ));
+        files::create_private_directories(&edit_dir)?;
+        let agents_file = edit_dir.join("AGENTS.md");
+        fs::write(
+            &agents_file,
+            "# Local Agents Guide\nAlways run unit tests.\n",
+        )
+        .map_err(|e| Error::new("TestError", e.to_string()))?;
+        let target_file = edit_dir.join("sample.txt");
+        fs::write(&target_file, "line one\nline two\nline three\n")
+            .map_err(|e| Error::new("TestError", e.to_string()))?;
+
+        let install = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let env = Value::object(vec![
+            ("HOME", Value::string(&edit_dir.display().to_string())),
+            (
+                "USERPROFILE",
+                Value::string(&edit_dir.display().to_string()),
+            ),
+        ]);
+        let mut edit_session = ShellSession::new(&edit_dir, install, &env, false)?;
+        let (old_l, new_l) =
+            apply_surgical_file_edit(&target_file, "line two", "line 2 updated", &edit_session)
+                .map_err(|e| Error::new("TestError", e))?;
+        assert_eq!((old_l, new_l), (1, 1));
+        let edited_body =
+            fs::read_to_string(&target_file).map_err(|e| Error::new("TestError", e.to_string()))?;
+        assert_eq!(edited_body, "line one\nline 2 updated\nline three\n");
+        assert!(
+            apply_surgical_file_edit(&target_file, "missing text", "x", &edit_session).is_err()
+        );
+        assert!(
+            apply_surgical_file_edit(&edit_dir.join("agent-policy.yml"), "a", "b", &edit_session)
+                .is_err()
+        );
+
+        let hint1 = edit_session.collect_subdirectory_context_hint(&target_file, &[]);
+        assert!(hint1.is_some_and(|h| h.contains("Always run unit tests.")));
+        let hint2 = edit_session.collect_subdirectory_context_hint(&target_file, &[]);
+        assert!(hint2.is_none());
+
+        edit_session.conversation_turns.push(ConversationTurn {
+            user: "Turn 1".to_owned(),
+            tool_summary: "read_file".to_owned(),
+            assistant: "Result 1".to_owned(),
+            target_repo: Some("Riddle".to_owned()),
+        });
+        edit_session.conversation_turns.push(ConversationTurn {
+            user: "Turn 2".to_owned(),
+            tool_summary: "search_text".to_owned(),
+            assistant: "Result 2".to_owned(),
+            target_repo: Some("Riddle".to_owned()),
+        });
+        edit_session.conversation_turns.push(ConversationTurn {
+            user: "Turn 3".to_owned(),
+            tool_summary: "edit_file".to_owned(),
+            assistant: "Result 3".to_owned(),
+            target_repo: Some("Riddle".to_owned()),
+        });
+        let (before_c, after_c, _) = edit_session.compact_conversation_history(true);
+        assert_eq!(before_c, 3);
+        assert_eq!(after_c, 1);
+
+        let _ = fs::remove_dir_all(&edit_dir);
         Ok(())
     }
 }
