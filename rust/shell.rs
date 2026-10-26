@@ -4662,7 +4662,22 @@ impl ShellSession {
         let drives = discover_drives(&self.cwd, &self.environment);
         let mut repos = discover_repositories(&self.cwd, &self.environment);
         repos.sort_by_key(|r| std::cmp::Reverse(r.modified_epoch));
-        let matched_repos = match_target_repositories(user_text, &repos, &self.cwd);
+        let mut matched_repos = match_target_repositories(user_text, &repos, &self.cwd);
+        if matched_repos.is_empty() {
+            if let Some(prev_repo_name) = self
+                .conversation_turns
+                .iter()
+                .rev()
+                .find_map(|t| t.target_repo.as_deref())
+            {
+                if let Some(found) = repos
+                    .iter()
+                    .find(|r| r.name.eq_ignore_ascii_case(prev_repo_name))
+                {
+                    matched_repos.push(found.clone());
+                }
+            }
+        }
         let active_target_repo = matched_repos.first().map(|r| r.name.clone());
 
         let deep_initial_evidence = if !matched_repos.is_empty() {
@@ -5028,7 +5043,7 @@ Guidelines:\n\
             header.push('\n');
         }
 
-        let summary_snip: String = reply.chars().take(600).collect();
+        let summary_snip: String = reply.chars().take(4000).collect();
         self.conversation_turns.push(ConversationTurn {
             user: user_text.to_owned(),
             tool_summary: tool_trace.join(", "),
