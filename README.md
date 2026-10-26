@@ -141,7 +141,8 @@ available ([`rust/shell.rs`](rust/shell.rs)):
 | `/history` | — | **Working** | Display the last 20 secret-scrubbed commands from `.roster/history`. |
 | `/context` | — | **Working** | Show last seat context readout (`Seat`, `Provider`, `Model`, `Effort`, `Input`, `Output`, `Context max`, `Finish reason`, `Pack budget`). |
 | `/usage` | — | **Working** | Show token usage, cached tokens, tool calls, elapsed time, and thinking state. |
-| `/clear` | — | **Working** | Clear the terminal screen and redraw the pinned status rail. |
+| `/compact [--aggressive]` | — | **Working** | Two-stage context compaction: prunes bulky older tool outputs and condenses multi-turn conversation history into a rolling digest while preserving byte-stable system prompt caching. |
+| `/clear` | — | **Working** | Clear the terminal screen, reset loaded subdirectory context-hint tracking, and redraw the pinned status rail. |
 | `/redraw` | — | **Working** | Repaint the status rail and prompt at the current terminal width. |
 | `/quit` | `/q`, `exit` | **Working** | Exit the interactive shell cleanly. |
 
@@ -176,6 +177,7 @@ available ([`rust/shell.rs`](rust/shell.rs)):
 | `/effort [l\|m\|h\|x\|none\|status]` | — | **Working** | Show or change the session reasoning effort level (`l`, `m`, `h`, `x`, `none`) and update the rail. |
 | `/provider` | — | **Working** | Show the active session profile ID and endpoint host without exposing credentials. |
 | `/fleet [list\|use ID\|probe\|add\|discover\|hardware\|default\|remove]` | — | **Working** | List fleet profiles, switch the session profile (`/fleet use ID`), probe `/v1/models`, discover local endpoints, or add/update/remove profiles in `.roster/fleet.yml`. |
+| `/route [on\|off\|auto\|status]` | — | **Working** | Inspect or configure hardware-aware NLP complexity classification (`fast`, `standard`, `deep`) and automatic fleet routing across `~/.roster/fleet.yml`. |
 | `/stats [REF] \| /stats --delivery [--json]` | — | **Working** | Display model/seat aggregates, failure proposals, or `--delivery` metrics. |
 
 ### 4. Board Commands
