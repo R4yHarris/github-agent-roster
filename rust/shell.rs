@@ -4670,7 +4670,11 @@ impl ShellSession {
             ));
         }
         let title = clean_display(val.get("title"), "");
-        let body = clean_display(val.get("body"), "");
+        let body = val
+            .get("body")
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .unwrap_or_default();
         let asks_dir = root.join(".roster").join("asks");
         let _ = fs::create_dir_all(&asks_dir);
         let ask_file = asks_dir.join(format!("issue-{issue_num}.md"));

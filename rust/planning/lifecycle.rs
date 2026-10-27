@@ -2171,7 +2171,17 @@ fn slice_instructions(
     text.push_str(if tools {
         "You may use write_file only for root RECIPE.yml, TASK.md, and ESTIMATE.md. Prefer one complete JSON plan in your final answer; the harness writes the artifacts. Alternatively write one complete TASK.md with a # title, ## Original Ask, ## Acceptance Checks, and ## Allowed Files. After a valid TASK.md, stop. Do not explore the repository or request app-code tools. A docs-only ask must not include node --test. If a check asserts secrets do not leak, require an obvious non-credential sentinel such as test-only-private-api-key passed through the app code under test; never sk-, ghp_, or github_pat_ shaped values, which the secret gate rejects. "
     } else { "You have no tools in this draft-only planning context. " });
-    text.push_str("Plan one software task. JSON shape: {\"title\":\"Task title\",\"acceptance_checks\":[\"check\"],\"files_allowed\":[\"path\"]}. Keep each text response within 16384 UTF-8 bytes. Return the plan without narration or repeated drafts. Use 1-8 acceptance checks in JSON or TASK.md; group related checks without dropping requirements. Each acceptance check must be at most 240 characters; for a long requirement write several shorter checks (up to 8) instead of one long one, without dropping requirements. A code task needs acceptance_checks including node --test exits 0 and files_allowed. Optional fields: difficulty (1-5), estimate_min, task_class (feat|fix|docs|test), model, steps, notes. Do not include new_files in JSON; the harness generates New files from the validated files_allowed. ");
+    let rust_only = !scope.files.is_empty()
+        && scope
+            .files
+            .iter()
+            .all(|f| f.ends_with(".rs") || f.ends_with(".toml"));
+    let test_check_rule = if rust_only {
+        "A Rust code task must not include node --test; use observable Rust behavior acceptance_checks and files_allowed."
+    } else {
+        "A code task needs acceptance_checks including node --test exits 0 and files_allowed."
+    };
+    text.push_str(&format!("Plan one software task. JSON shape: {{\"title\":\"Task title\",\"acceptance_checks\":[\"check\"],\"files_allowed\":[\"path\"]}}. Keep each text response within 16384 UTF-8 bytes. Return the plan without narration or repeated drafts. Use 1-8 acceptance checks in JSON or TASK.md; group related checks without dropping requirements. Each acceptance check must be at most 240 characters; for a long requirement write several shorter checks (up to 8) instead of one long one, without dropping requirements. {test_check_rule} Optional fields: difficulty (1-5), estimate_min, task_class (feat|fix|docs|test), model, steps, notes. Do not include new_files in JSON; the harness generates New files from the validated files_allowed. "));
     if let Some(locked) = locked {
         text.push_str(&format!(
             "Keep model {locked}; do not choose another model. "

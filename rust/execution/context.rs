@@ -745,7 +745,9 @@ pub(crate) async fn load_as(
             ));
         }
         for file in options.prior_wave_files {
-            if crate::execution::evidence::read_product(boundary.root(), file, 262_144)?.is_none() {
+            if crate::execution::evidence::read_product(boundary.root(), file, MAX_FILE_BYTES)?
+                .is_none()
+            {
                 return Err(Error::new(
                     "Error",
                     format!("Required prior-wave module is missing: {file}"),

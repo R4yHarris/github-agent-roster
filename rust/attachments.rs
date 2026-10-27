@@ -371,6 +371,20 @@ pub fn format_attachment_list(attachments: &[SessionAttachment]) -> String {
     out
 }
 
+pub fn summarize_attachment_inventory(attachments: &[SessionAttachment]) -> String {
+    if attachments.is_empty() {
+        return "0 attachments (0 B)".to_owned();
+    }
+    let total = attachments.len();
+    let images = attachments
+        .iter()
+        .filter(|att| att.kind == AttachmentKind::Image)
+        .count();
+    let files = total - images;
+    let bytes: u64 = attachments.iter().map(|att| att.size_bytes).sum();
+    format!("{total} attachments ({images} images, {files} files, {bytes} B)")
+}
+
 pub fn match_referenced_attachments<'a>(
     user_text: &str,
     attachments: &'a [SessionAttachment],
@@ -802,6 +816,7 @@ mod tests {
                 .as_deref()
                 .is_some_and(|t| t.contains("# Architecture"))
         );
+        let expected_bytes = att1.size_bytes + att2.size_bytes;
 
         let all_atts = vec![att1, att2];
         let matched_by_id = match_referenced_attachments("Look at #1 and tell me", &all_atts);
@@ -812,6 +827,24 @@ mod tests {
             match_referenced_attachments("What is in the pasted file?", &all_atts);
         assert_eq!(matched_generic.len(), 1);
         assert_eq!(matched_generic[0].id, 2);
+
+        assert_eq!(summarize_attachment_inventory(&[]), "0 attachments (0 B)");
+        assert_eq!(
+            summarize_attachment_inventory(&all_atts),
+            format!("2 attachments (1 images, 1 files, {expected_bytes} B)")
+        );
+        let image_only = vec![all_atts[0].clone()];
+        let expected_image_bytes = all_atts[0].size_bytes;
+        assert_eq!(
+            summarize_attachment_inventory(&image_only),
+            format!("1 attachments (1 images, 0 files, {expected_image_bytes} B)")
+        );
+        let file_only = vec![all_atts[1].clone()];
+        let expected_file_bytes = all_atts[1].size_bytes;
+        assert_eq!(
+            summarize_attachment_inventory(&file_only),
+            format!("1 attachments (0 images, 1 files, {expected_file_bytes} B)")
+        );
 
         let pastes_dir = root.join("pastes");
         let multi_line = "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\n";

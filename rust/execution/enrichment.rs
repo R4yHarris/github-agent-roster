@@ -45,7 +45,7 @@ pub fn module_exports(root: &Path, modules: &[String], limit: usize) -> Result<T
         if planning::forbidden_read(module) {
             continue;
         }
-        let Some(text) = evidence::read_product(root, module, 262_144)? else {
+        let Some(text) = evidence::read_product(root, module, MAX_FILE_BYTES)? else {
             continue;
         };
         let source = text.to_utf8()?.replace("\r\n", "\n");
@@ -101,7 +101,7 @@ pub fn public_seams(root: &Path, files: &[String], limit: usize) -> Result<Text,
         if file.contains('*') || !extension.is_match(file) {
             continue;
         }
-        let Some(source) = evidence::read_product(root, file, 262_144)? else {
+        let Some(source) = evidence::read_product(root, file, MAX_FILE_BYTES)? else {
             continue;
         };
         for capture in pattern.captures_iter(&source.to_utf8()?) {
@@ -412,7 +412,7 @@ pub fn conventions(root: &Path) -> Result<Value, Error> {
         .map(|(name, _)| name.clone());
     let mut texts = Vec::new();
     for file in sources.iter().take(600) {
-        if let Some(source) = evidence::read_product(root, file, 262_144)? {
+        if let Some(source) = evidence::read_product(root, file, MAX_FILE_BYTES)? {
             texts.push((file.clone(), source.to_utf8()?.replace("\r\n", "\n")));
         }
     }
@@ -826,7 +826,7 @@ pub fn field_contracts(
         .collect::<Vec<_>>();
     let mut texts = Vec::new();
     for file in sources {
-        if let Some(source) = evidence::read_product(root, &file, 262_144)? {
+        if let Some(source) = evidence::read_product(root, &file, MAX_FILE_BYTES)? {
             texts.push((file, source.to_utf8()?));
         }
     }
@@ -842,7 +842,7 @@ pub fn field_contracts(
         let source = if let Some((_, source)) = texts.iter().find(|(name, _)| name == file) {
             Some(source.clone())
         } else {
-            evidence::read_product(root, file, 262_144)?
+            evidence::read_product(root, file, MAX_FILE_BYTES)?
                 .map(|source| source.to_utf8())
                 .transpose()?
         };
