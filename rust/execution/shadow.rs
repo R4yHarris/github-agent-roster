@@ -169,7 +169,7 @@ pub async fn check(
         if !product(file)? || sources.contains_key(file) {
             continue;
         }
-        let source = evidence::read_product(boundary.root(), file, 262_144)?;
+        let source = evidence::read_product(boundary.root(), file, MAX_FILE_BYTES)?;
         sources.insert(file.clone(), source);
         if changed.contains(file) {
             bases.insert(file.clone(), changes.head_product(boundary, file).await?);

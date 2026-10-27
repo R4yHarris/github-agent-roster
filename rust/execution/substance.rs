@@ -303,7 +303,7 @@ fn mask_inner(source: &str, depth: usize) -> Result<String, Error> {
 }
 
 pub fn mask(source: &Text) -> Result<String, Error> {
-    if source.0.len() > 262_144 {
+    if source.0.len() as u64 > MAX_FILE_BYTES {
         return Err(Error::type_error(
             "Test substance input exceeds 256 Ki UTF-16 units",
         ));

@@ -112,13 +112,18 @@ pub fn build(ask: &Value, options: BuildOptions<'_>) -> Result<Plan, Error> {
         .map(task::allowed_file)
         .collect::<Result<Vec<_>, _>>()?;
     let docs_only = files.iter().all(|file| file.ends_with(".md"));
+    let rust_only = !files.is_empty()
+        && files
+            .iter()
+            .all(|file| file.ends_with(".rs") || file.ends_with(".toml"))
+        && !ask.contains("node --test");
     let checks = task::checked_list(options.checks, "Acceptance checks", 8)?
         .iter()
         .enumerate()
         .map(|(index, entry)| task::acceptance_check(entry, index).map(|entry| encode(&entry)))
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
-        .filter(|check| !(docs_only && check.contains("node --test")))
+        .filter(|check| !((docs_only || rust_only) && check.contains("node --test")))
         .collect::<Vec<_>>();
     let requirements = match options.scope {
         Some(scope) => scope.clone(),

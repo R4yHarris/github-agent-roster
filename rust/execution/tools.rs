@@ -3055,6 +3055,7 @@ impl Boundary {
                 .collect::<BTreeMap<_, _>>();
             environment.insert("CARGO_NET_OFFLINE".to_owned(), "true".to_owned());
             environment.insert("RUSTUP_AUTO_INSTALL".to_owned(), "0".to_owned());
+            environment.insert("CARGO_INCREMENTAL".to_owned(), "0".to_owned());
             let is_roster_self = self.root.join("rust").join("shell.rs").is_file();
             if is_roster_self && !environment.contains_key("CARGO_TARGET_DIR") {
                 let manifest_target = Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
