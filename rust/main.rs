@@ -205,13 +205,14 @@ async fn native(
             local_cli::Command::Question(words) => {
                 let text = ask::repository_question_text(&words)?;
                 let loaded = config::load(installation, cwd, environment)?;
+                let credentials = delivery::native_invocation_credentials(environment, &loaded)?;
                 let mut transport =
                     llm::http::HttpTransport::new().map_err(|failure| *failure.error)?;
                 let mut options = ask::QuestionOptions {
                     cwd,
                     config: loaded.config.as_value(),
                     env: Some(environment),
-                    vault: None,
+                    vault: credentials.vault_entries.as_ref(),
                     transport: &mut transport,
                     signal: Some(&token),
                 };
@@ -220,6 +221,7 @@ async fn native(
             }
             local_cli::Command::Ask(action) => {
                 let loaded = config::load(installation, cwd, environment)?;
+                let credentials = delivery::native_invocation_credentials(environment, &loaded)?;
                 let project_root = paths::resolve_project_root(cwd)?;
                 let api_key_env = loaded
                     .config
@@ -264,7 +266,7 @@ async fn native(
                             config: loaded.config.as_value(),
                             env: Some(environment),
                             id: None,
-                            vault: None,
+                            vault: credentials.vault_entries.as_ref(),
                             transport: &mut transport,
                             signal: Some(&token),
                             run_command: None,
@@ -287,7 +289,7 @@ async fn native(
                             config: loaded.config.as_value(),
                             env: Some(environment),
                             id: None,
-                            vault: None,
+                            vault: credentials.vault_entries.as_ref(),
                             transport: &mut transport,
                             signal: Some(&token),
                             run_command: None,

@@ -1,5 +1,6 @@
 pub mod arguments;
 pub mod ask;
+pub mod attachments;
 pub mod cancel;
 pub mod capabilities;
 pub mod catalog;

@@ -594,14 +594,16 @@ fn validate_llm(config: &Value, roots: &HashSet<String>) -> Result<(Value, Value
                 .ok_or_else(|| invalid("missing selected profile base_url"))?;
             put(&mut llm, "base_url", Value::String(url.clone()))?;
         }
-        put(
-            &mut llm,
-            "api_key_env",
-            selected
-                .get("api_key_env")
-                .cloned()
-                .ok_or_else(|| invalid("missing selected profile api_key_env"))?,
-        )?;
+        if url.0.is_empty() || ascii(&key.0, "ROSTER_API_KEY") {
+            put(
+                &mut llm,
+                "api_key_env",
+                selected
+                    .get("api_key_env")
+                    .cloned()
+                    .ok_or_else(|| invalid("missing selected profile api_key_env"))?,
+            )?;
+        }
         if llm.get("api_key_optional").is_none() {
             if let Some(value) = selected.get("api_key_optional") {
                 put(&mut llm, "api_key_optional", value.clone())?;

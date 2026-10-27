@@ -357,6 +357,33 @@ pub fn commands() -> &'static [CommandPage] {
             aliases: &[],
         },
         CommandPage {
+            name: "paste",
+            group: "Session",
+            usage: "/paste [list|clear|drop N|PATH]",
+            description: "Attach a clipboard image/text or local file path to the session, or list/clear active attachments.",
+            example: "/paste",
+            flags: &[],
+            aliases: &[],
+        },
+        CommandPage {
+            name: "copy",
+            group: "Session",
+            usage: "/copy [code|N]",
+            description: "Copy the last assistant response, last fenced code block (/copy code), or Nth turn (/copy N) to the clipboard.",
+            example: "/copy code",
+            flags: &[],
+            aliases: &[],
+        },
+        CommandPage {
+            name: "export",
+            group: "Session",
+            usage: "/export [PATH]",
+            description: "Export the current multi-turn session conversation, attachments, and route telemetry to a Markdown file.",
+            example: "/export SESSION_TRANSCRIPT.md",
+            flags: &[],
+            aliases: &[],
+        },
+        CommandPage {
             name: "clear",
             group: "Session",
             usage: "/clear",
@@ -2555,6 +2582,8 @@ pub struct ShellSession {
     pub loaded_context_hint_dirs: std::collections::BTreeSet<PathBuf>,
     pub auto_route_mode: String,
     pub last_route_summary: Option<String>,
+    pub attachments: Vec<crate::attachments::SessionAttachment>,
+    pub paste_counter: usize,
 }
 
 impl ShellSession {
@@ -2668,6 +2697,8 @@ impl ShellSession {
             loaded_context_hint_dirs: std::collections::BTreeSet::new(),
             auto_route_mode: "auto".to_owned(),
             last_route_summary: None,
+            attachments: Vec::new(),
+            paste_counter: 0,
         })
     }
 
@@ -2751,7 +2782,8 @@ impl ShellSession {
                 "Stored secret {secret_name}.\n"
             )));
         }
-        let text = line.trim();
+        let expanded_line = crate::attachments::expand_paste_references(line);
+        let text = expanded_line.trim();
         if text.is_empty() {
             if self.pending_confirm {
                 self.pending_confirm = false;
@@ -2774,6 +2806,39 @@ impl ShellSession {
         if text == "/" {
             let help = format_help("").unwrap_or_default();
             return Ok(ShellAction::Continue(help));
+        }
+        if let Some(shell_cmd) = text.strip_prefix('!') {
+            let cmd_trimmed = shell_cmd.trim();
+            if cmd_trimmed.is_empty() {
+                return Err(Error::type_error("Use !<command> to run a shell command."));
+            }
+            let out = self.execute_bang_shell_command(cmd_trimmed)?;
+            return Ok(ShellAction::Continue(out));
+        }
+        if let Some(drop_match) =
+            crate::attachments::detect_file_drop(text, &self.cwd, &self.environment)
+        {
+            let next_id = self.attachments.len() + 1;
+            let mut att = crate::attachments::build_session_attachment(next_id, &drop_match.path)?;
+            if let Some(ref excerpt) = att.text_excerpt {
+                if let Ok(redacted) = self.redact_text(excerpt) {
+                    att.text_excerpt = Some(redacted);
+                }
+            }
+            let badge = crate::attachments::format_attachment_badge(&att);
+            let name = att.name.clone();
+            let path_str = att.path.display().to_string();
+            self.attachments.push(att);
+            if drop_match.remainder.is_empty() {
+                return Ok(ShellAction::Continue(format!(
+                    "{badge}\nAttached #{next_id}: {name} ({path_str}). Reference it as #{next_id} or by filename in any subsequent prompt.\n"
+                )));
+            }
+            let follow = Box::pin(self.dispatch_line(&drop_match.remainder)).await?;
+            return match follow {
+                ShellAction::Continue(out) => Ok(ShellAction::Continue(format!("{badge}\n{out}"))),
+                other => Ok(other),
+            };
         }
         if !text.starts_with('/') {
             if let Some(cmd) = translate_natural_language_command(text) {
@@ -2857,6 +2922,18 @@ impl ShellSession {
                     self.route_next = raw_args != "off";
                 }
                 let out = self.format_route_status()?;
+                Ok(ShellAction::Continue(self.redact_text(&out)?))
+            }
+            "paste" => {
+                let out = self.handle_paste_command(raw_args)?;
+                Ok(ShellAction::Continue(self.redact_text(&out)?))
+            }
+            "copy" => {
+                let out = self.handle_copy_command(raw_args)?;
+                Ok(ShellAction::Continue(self.redact_text(&out)?))
+            }
+            "export" => {
+                let out = self.handle_export_command(raw_args)?;
                 Ok(ShellAction::Continue(self.redact_text(&out)?))
             }
             "update" => {
@@ -4258,6 +4335,13 @@ impl ShellSession {
                     let out = self.execute_local_ask_delivery().await?;
                     return Ok(ShellAction::Continue(out));
                 }
+                if command == "run" && !raw_args.is_empty() {
+                    let first_tok = raw_args.split_whitespace().next().unwrap_or("");
+                    if let Ok(issue_num) = crate::start::parse_issue_number(first_tok) {
+                        let out = self.execute_issue_delivery(issue_num).await?;
+                        return Ok(ShellAction::Continue(out));
+                    }
+                }
                 Err(Error::new(
                     "Error",
                     format!(
@@ -4267,6 +4351,340 @@ impl ShellSession {
             }
             _ => Err(Error::new("Error", unknown.trim())),
         }
+    }
+
+    fn session_storage_root(&self) -> PathBuf {
+        config::machine_config_root(Some(&self.environment))
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| self.current_root())
+            .join(".roster")
+    }
+
+    pub fn handle_paste_command(&mut self, raw_args: &str) -> Result<String, Error> {
+        let trimmed = raw_args.trim();
+        if trimmed == "list" {
+            return Ok(crate::attachments::format_attachment_list(
+                &self.attachments,
+            ));
+        }
+        if trimmed == "clear" {
+            let count = self.attachments.len();
+            self.attachments.clear();
+            return Ok(format!("Cleared {count} session attachment(s).\n"));
+        }
+        if let Some(rest) = trimmed.strip_prefix("drop") {
+            let idx_str = rest.trim().trim_start_matches('#');
+            let idx = idx_str
+                .parse::<usize>()
+                .ok()
+                .filter(|&n| n >= 1)
+                .ok_or_else(|| Error::type_error("Use /paste drop N."))?;
+            let before = self.attachments.len();
+            self.attachments.retain(|a| a.id != idx);
+            if self.attachments.len() == before {
+                return Err(Error::new(
+                    "Error",
+                    format!("No session attachment #{idx}."),
+                ));
+            }
+            return Ok(format!("Dropped attachment #{idx}.\n"));
+        }
+        if !trimmed.is_empty() {
+            let resolved = crate::attachments::resolve_attachment_candidate(
+                trimmed,
+                &self.cwd,
+                &self.environment,
+            )
+            .ok_or_else(|| Error::new("Error", format!("Attachment file not found: {trimmed}")))?;
+            let next_id = self.attachments.len() + 1;
+            let mut att = crate::attachments::build_session_attachment(next_id, &resolved)?;
+            if let Some(ref excerpt) = att.text_excerpt {
+                if let Ok(redacted) = self.redact_text(excerpt) {
+                    att.text_excerpt = Some(redacted);
+                }
+            }
+            let badge = crate::attachments::format_attachment_badge(&att);
+            let name = att.name.clone();
+            let p_str = att.path.display().to_string();
+            self.attachments.push(att);
+            return Ok(format!(
+                "{badge}\nAttached #{next_id}: {name} ({p_str}). Reference it as #{next_id} or by filename in any subsequent prompt.\n"
+            ));
+        }
+        let storage_root = self.session_storage_root();
+        let att_dir = storage_root.join("attachments");
+        let pastes_dir = storage_root.join("pastes");
+        let next_id = self.attachments.len() + 1;
+        match crate::attachments::capture_clipboard(&att_dir, &pastes_dir, next_id)? {
+            crate::attachments::ClipboardCapture::Image(path)
+            | crate::attachments::ClipboardCapture::File(path) => {
+                let mut att = crate::attachments::build_session_attachment(next_id, &path)?;
+                if let Some(ref excerpt) = att.text_excerpt {
+                    if let Ok(redacted) = self.redact_text(excerpt) {
+                        att.text_excerpt = Some(redacted);
+                    }
+                }
+                let badge = crate::attachments::format_attachment_badge(&att);
+                let name = att.name.clone();
+                let p_str = att.path.display().to_string();
+                self.attachments.push(att);
+                Ok(format!(
+                    "{badge}\nAttached #{next_id} from clipboard: {name} ({p_str}). Reference it as #{next_id} or by filename in any subsequent prompt.\n"
+                ))
+            }
+            crate::attachments::ClipboardCapture::Text {
+                path,
+                content,
+                lines,
+            } => {
+                if let Some(cand) = crate::attachments::resolve_attachment_candidate(
+                    content.trim(),
+                    &self.cwd,
+                    &self.environment,
+                ) {
+                    let mut att = crate::attachments::build_session_attachment(next_id, &cand)?;
+                    if let Some(ref excerpt) = att.text_excerpt {
+                        if let Ok(redacted) = self.redact_text(excerpt) {
+                            att.text_excerpt = Some(redacted);
+                        }
+                    }
+                    let badge = crate::attachments::format_attachment_badge(&att);
+                    let name = att.name.clone();
+                    let p_str = att.path.display().to_string();
+                    self.attachments.push(att);
+                    return Ok(format!(
+                        "{badge}\nAttached #{next_id} from clipboard path: {name} ({p_str}).\n"
+                    ));
+                }
+                let mut att = crate::attachments::build_session_attachment(next_id, &path)?;
+                if let Some(ref excerpt) = att.text_excerpt {
+                    if let Ok(redacted) = self.redact_text(excerpt) {
+                        att.text_excerpt = Some(redacted);
+                    }
+                }
+                self.paste_counter += 1;
+                let token = format!(
+                    "[Pasted text #{}: {lines} lines -> {}]",
+                    self.paste_counter,
+                    path.display()
+                );
+                self.attachments.push(att);
+                Ok(format!(
+                    "{token}\nAttached clipboard text as #{next_id} ({lines} lines).\n"
+                ))
+            }
+            crate::attachments::ClipboardCapture::Empty => {
+                Ok("Clipboard is empty or contains no supported image/text.\n".to_owned())
+            }
+        }
+    }
+
+    pub fn handle_copy_command(&self, raw_args: &str) -> Result<String, Error> {
+        let trimmed = raw_args.trim();
+        if self.conversation_turns.is_empty() {
+            return Err(Error::new(
+                "Error",
+                "No assistant responses in this session to copy.",
+            ));
+        }
+        let payload = if trimmed.is_empty() {
+            self.conversation_turns
+                .last()
+                .map(|t| t.assistant.clone())
+                .unwrap_or_default()
+        } else if trimmed == "code" {
+            self.conversation_turns
+                .iter()
+                .rev()
+                .find_map(|t| crate::attachments::extract_last_fenced_code_block(&t.assistant))
+                .ok_or_else(|| {
+                    Error::new("Error", "No fenced code block found in session history.")
+                })?
+        } else if let Ok(idx) = trimmed.parse::<usize>() {
+            if idx == 0 || idx > self.conversation_turns.len() {
+                return Err(Error::new(
+                    "Error",
+                    format!(
+                        "Turn index {idx} out of range (1..={}).",
+                        self.conversation_turns.len()
+                    ),
+                ));
+            }
+            self.conversation_turns[idx - 1].assistant.clone()
+        } else {
+            return Err(Error::type_error("Use /copy [code|N]."));
+        };
+        let redacted = self.redact_text(&payload)?;
+        let copied_native = crate::attachments::write_clipboard_text(&redacted);
+        let bytes = redacted.len();
+        if copied_native {
+            Ok(format!("Copied {bytes} bytes to clipboard.\n"))
+        } else {
+            let osc = crate::attachments::format_osc52_sequence(
+                &redacted,
+                std::env::var_os("TMUX").is_some(),
+            );
+            Ok(format!(
+                "{osc}Copied {bytes} bytes via OSC 52 clipboard sequence.\n"
+            ))
+        }
+    }
+
+    pub fn handle_export_command(&self, raw_args: &str) -> Result<String, Error> {
+        let trimmed = raw_args.trim();
+        let target_path = if trimmed.is_empty() {
+            self.cwd.join("ROSTER_SESSION_EXPORT.md")
+        } else {
+            let p = Path::new(trimmed);
+            if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                self.cwd.join(p)
+            }
+        };
+        if crate::attachments::resolve_attachment_candidate(trimmed, &self.cwd, &self.environment)
+            .is_some_and(|p| is_protected_agent_edit_path(&p))
+            || is_protected_agent_edit_path(&target_path)
+        {
+            return Err(Error::type_error(
+                "Refusing to export session transcript over a protected file.",
+            ));
+        }
+        let mut md = String::from("# Roster Session Transcript\n\n");
+        md.push_str(&format!(
+            "- **Working Directory**: `{}`\n",
+            self.cwd.display()
+        ));
+        md.push_str(&format!(
+            "- **Auto-Route Mode**: `{}`\n",
+            self.auto_route_mode
+        ));
+        if let Some(ref route) = self.last_route_summary {
+            md.push_str(&format!("- **Last Route**: `{route}`\n"));
+        }
+        if !self.attachments.is_empty() {
+            md.push_str("\n## Session Attachments\n\n");
+            for att in &self.attachments {
+                md.push_str(&format!(
+                    "- **#{}** (`{}`): `{}` ({} B)\n",
+                    att.id,
+                    att.kind.as_str(),
+                    att.path.display(),
+                    att.size_bytes
+                ));
+            }
+        }
+        md.push_str("\n## Conversation Turns\n\n");
+        for (idx, turn) in self.conversation_turns.iter().enumerate() {
+            md.push_str(&format!(
+                "### Turn {}\n\n**User**:\n{}\n\n",
+                idx + 1,
+                turn.user
+            ));
+            if !turn.tool_summary.is_empty() {
+                md.push_str(&format!("**Tools**: `{}`\n\n", turn.tool_summary));
+            }
+            md.push_str(&format!("**Assistant**:\n{}\n\n---\n\n", turn.assistant));
+        }
+        let redacted = self.redact_text(&md)?;
+        if let Some(parent) = target_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        fs::write(&target_path, redacted.as_bytes())
+            .map_err(|e| Error::new("Error", format!("{}: {e}", target_path.display())))?;
+        Ok(format!(
+            "Exported session transcript ({} turn(s), {} attachment(s)) to {}.\n",
+            self.conversation_turns.len(),
+            self.attachments.len(),
+            target_path.display()
+        ))
+    }
+
+    fn execute_bang_shell_command(&mut self, cmd_str: &str) -> Result<String, Error> {
+        let output = if cfg!(windows) {
+            StdCommand::new("powershell")
+                .args(["-NoProfile", "-NonInteractive", "-Command", cmd_str])
+                .current_dir(&self.cwd)
+                .output()
+        } else {
+            StdCommand::new("sh")
+                .args(["-c", cmd_str])
+                .current_dir(&self.cwd)
+                .output()
+        }
+        .map_err(|e| Error::new("Error", format!("Failed to execute !{cmd_str}: {e}")))?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let mut combined = String::new();
+        if !stdout.trim().is_empty() {
+            combined.push_str(stdout.trim_end());
+            combined.push('\n');
+        }
+        if !stderr.trim().is_empty() {
+            combined.push_str(stderr.trim_end());
+            combined.push('\n');
+        }
+        let code = output.status.code().unwrap_or(-1);
+        if combined.is_empty() {
+            combined = format!("(exit {code})\n");
+        }
+        let clipped: String = combined.chars().take(12_000).collect();
+        let redacted = self.redact_text(&clipped)?;
+        self.conversation_turns.push(ConversationTurn {
+            user: format!("!{cmd_str}"),
+            tool_summary: format!("shell_escape (exit {code})"),
+            assistant: redacted.trim().to_owned(),
+            target_repo: None,
+        });
+        Ok(redacted)
+    }
+
+    async fn execute_issue_delivery(&mut self, issue_num: u64) -> Result<String, Error> {
+        let root = self.current_root();
+        let out = StdCommand::new("gh")
+            .args([
+                "issue",
+                "view",
+                &issue_num.to_string(),
+                "--json",
+                "title,body,state,url",
+            ])
+            .current_dir(&root)
+            .output()
+            .map_err(|e| Error::new("Error", format!("gh issue view #{issue_num} failed: {e}")))?;
+        if !out.status.success() {
+            let err_s = String::from_utf8_lossy(&out.stderr);
+            return Err(Error::new(
+                "Error",
+                format!("gh issue view #{issue_num} failed: {}", err_s.trim()),
+            ));
+        }
+        let val = crate::json::parse(&Text::from(String::from_utf8_lossy(&out.stdout).as_ref()))?;
+        let state = clean_display(val.get("state"), "");
+        if !state.eq_ignore_ascii_case("OPEN") {
+            return Err(Error::new(
+                "IssueClosed",
+                format!("GitHub issue #{issue_num} is not open ({state})."),
+            ));
+        }
+        let title = clean_display(val.get("title"), "");
+        let body = clean_display(val.get("body"), "");
+        let asks_dir = root.join(".roster").join("asks");
+        let _ = fs::create_dir_all(&asks_dir);
+        let ask_file = asks_dir.join(format!("issue-{issue_num}.md"));
+        let combined = if body.trim().is_empty() {
+            title
+        } else {
+            format!("{title}\n\n{body}")
+        };
+        fs::write(&ask_file, combined.as_bytes())
+            .map_err(|e| Error::new("Error", format!("{}: {e}", ask_file.display())))?;
+        self.last_ask_file = Some(ask_file);
+        self.last_issue = Some(issue_num);
+        let _ = domain::put(&mut self.display, "issue", Value::Number(issue_num as f64));
+        self.execute_local_ask_delivery().await
     }
 
     fn llm_credentials(&self) -> crate::llm::openai::Credentials {
@@ -5133,8 +5551,35 @@ impl ShellSession {
             ]));
         }
 
+        let referenced_atts =
+            crate::attachments::match_referenced_attachments(user_text, &self.attachments);
+        let mut attachment_evidence = String::new();
+        if !referenced_atts.is_empty() {
+            attachment_evidence.push_str("\nSession Attachments Referenced:\n");
+            for att in &referenced_atts {
+                attachment_evidence.push_str(&format!(
+                    "- Attachment #{} ({}): `{}` ({} bytes, {})\n",
+                    att.id,
+                    att.kind.as_str(),
+                    att.path.display(),
+                    att.size_bytes,
+                    att.mime_type
+                ));
+                if let Some(ref excerpt) = att.text_excerpt {
+                    let snip: String = excerpt.chars().take(6000).collect();
+                    attachment_evidence.push_str(&format!("```text\n{}\n```\n", snip.trim()));
+                }
+            }
+        } else if !self.attachments.is_empty() {
+            attachment_evidence
+                .push_str("\nActive Session Attachments (available via #N or filename):\n");
+            attachment_evidence.push_str(&crate::attachments::format_attachment_list(
+                &self.attachments,
+            ));
+        }
+
         let user_context = format!(
-            "Current working directory: `{}`\n\nDiscovered Drives / Mounts:\n{}\n\nDiscovered Git Repositories & Worktrees (sorted newest modified first):\n{}\n\n{}\nUser Request:\n{}",
+            "Current working directory: `{}`\n\nDiscovered Drives / Mounts:\n{}\n\nDiscovered Git Repositories & Worktrees (sorted newest modified first):\n{}\n\n{}{}\nUser Request:\n{}",
             self.cwd.display(),
             drive_summary,
             repo_summary,
@@ -5145,6 +5590,7 @@ impl ShellSession {
                     "Pre-Collected Target Repository Deep Inspection Evidence:\n{deep_initial_evidence}\n"
                 )
             },
+            attachment_evidence,
             user_text
         );
         messages.push(Value::object(vec![
@@ -6512,12 +6958,13 @@ impl ShellSession {
             crate::llm::http::HttpTransport::new().map_err(|failure| *failure.error)?;
         let source = crate::cancel::CancellationSource::default();
         let token = source.token();
+        let creds = self.llm_credentials();
         let mut write_opts = crate::ask::WriteAskOptions {
             repo_root: &root,
             config: &self.config,
             id: None,
             env: Some(&self.environment),
-            vault: None,
+            vault: creds.vault_entries.as_ref(),
             transport: &mut transport,
             signal: Some(&token),
         };
@@ -9831,6 +10278,7 @@ pub struct LineEditor {
     history_index: Option<usize>,
     saved_draft: String,
     secret_mode: bool,
+    in_bracketed_paste: bool,
 }
 
 impl LineEditor {
@@ -9842,6 +10290,7 @@ impl LineEditor {
             history_index: None,
             saved_draft: String::new(),
             secret_mode,
+            in_bracketed_paste: false,
         }
     }
 
@@ -10068,6 +10517,12 @@ impl LineEditor {
                     } else {
                         pending.drain(0..1);
                     }
+                    if self.in_bracketed_paste || !pending.is_empty() {
+                        if !pending.starts_with(b"\x1b[201~") {
+                            changed |= self.insert_char('\n');
+                        }
+                        continue;
+                    }
                     return EditorStep::Submit(self.text());
                 }
                 0x03 => {
@@ -10154,6 +10609,12 @@ impl LineEditor {
                         let seq = pending[2..=end_idx].to_vec();
                         pending.drain(0..=end_idx);
                         match seq.as_slice() {
+                            b"200~" => {
+                                self.in_bracketed_paste = true;
+                            }
+                            b"201~" => {
+                                self.in_bracketed_paste = false;
+                            }
                             b"A" => changed |= self.history_up(),
                             b"B" => changed |= self.history_down(),
                             b"C" => changed |= self.move_right(),

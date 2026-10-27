@@ -184,6 +184,53 @@ pub fn invocation_host(
             cargo_environment.insert(name.to_owned(), value.to_utf8()?);
         }
     }
+    let mut host_environment = minimal_environment(environment)?;
+    if let Some(ref cargo_img) = cargo {
+        if let Some(bin_dir) = cargo_img.path().parent() {
+            let sep = if cfg!(windows) { ";" } else { ":" };
+            let bin_str = bin_dir.display().to_string();
+            let path_key = "PATH";
+            let next_path = match host_environment.get(path_key) {
+                Some(existing) if !existing.is_empty() => format!("{bin_str}{sep}{existing}"),
+                _ => bin_str,
+            };
+            host_environment.insert(path_key.to_owned(), next_path);
+            if let Some(cargo_home) = bin_dir.parent() {
+                if !cargo_environment.contains_key("CARGO_HOME")
+                    && cargo_home
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.eq_ignore_ascii_case("cargo") || n == ".cargo")
+                {
+                    cargo_environment
+                        .insert("CARGO_HOME".to_owned(), cargo_home.display().to_string());
+                    if let Some(tc_root) = cargo_home.parent() {
+                        let rustup_candidate = tc_root.join("rustup");
+                        if !cargo_environment.contains_key("RUSTUP_HOME")
+                            && rustup_candidate.is_dir()
+                        {
+                            cargo_environment.insert(
+                                "RUSTUP_HOME".to_owned(),
+                                rustup_candidate.display().to_string(),
+                            );
+                        }
+                        let dlltool = tc_root
+                            .join("llvm-dlltool-20261006")
+                            .join("llvm-dlltool.exe");
+                        if cfg!(windows)
+                            && !cargo_environment.contains_key("RUSTFLAGS")
+                            && dlltool.is_file()
+                        {
+                            cargo_environment.insert(
+                                "RUSTFLAGS".to_owned(),
+                                format!("-C dlltool={}", dlltool.display()),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
     let host = tools::Host {
         git: git.path().to_path_buf(),
         node20: node.as_ref().map(|image| image.path().to_path_buf()),
@@ -192,7 +239,7 @@ pub fn invocation_host(
             environment: cargo_environment,
         }),
         contracts: contracts_override(environment)?,
-        environment: minimal_environment(environment)?,
+        environment: host_environment,
     };
     let approval = backend::Approval {
         counterfactual: true,
