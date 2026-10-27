@@ -24,9 +24,14 @@ pub(crate) fn tool_free_assistant(
 }
 
 pub fn file_digest(worktree: &Path, name: &str, optional: bool) -> Result<Value, Error> {
+    let maximum = if matches!(name, "TASK.md" | "RESULT.md" | "REVIEW.md") {
+        65_536
+    } else {
+        MAX_FILE_BYTES
+    };
     let file = worktree.join(name);
     crate::paths::ensure_local_path(&file, worktree)?;
-    let snapshot = secure::read(&file, 65_536)?;
+    let snapshot = secure::read(&file, maximum)?;
     let Some(snapshot) = snapshot else {
         return if optional {
             Ok(Value::Null)
@@ -45,7 +50,7 @@ pub fn file_digest(worktree: &Path, name: &str, optional: bool) -> Result<Value,
             ),
         ));
     }
-    if !secure::unchanged(&file, &snapshot, 65_536)? {
+    if !secure::unchanged(&file, &snapshot, maximum)? {
         return Err(Error::new(
             "Error",
             "Independent verification subject changed during capture",

@@ -679,7 +679,9 @@ impl Evidence {
                     "Review source selection is protected or ambiguous",
                 ));
             }
-            if let Some(source) = evidence::read_product(boundary.root(), file, 65_536)? {
+            if let Some(source) =
+                evidence::read_product(boundary.root(), file, execution::MAX_FILE_BYTES)?
+            {
                 let source_utf8 = source.to_utf8()?;
                 let parent = boundary
                     .root()
@@ -699,13 +701,19 @@ impl Evidence {
                             .replace('\\', "/");
                         if policy::exact_path(&path)
                             && !planning::forbidden_read(&path)
-                            && evidence::read_product(boundary.root(), &path, 65_536)?.is_some()
+                            && evidence::read_product(boundary.root(), &path, 65_536)
+                                .ok()
+                                .flatten()
+                                .is_some()
                         {
                             additional.push(path);
                         }
                     }
                 }
                 let mut try_add_resolved = |resolved: PathBuf| -> Result<(), Error> {
+                    if additional.len() >= 12 {
+                        return Ok(());
+                    }
                     if crate::paths::ensure_local_path(&resolved, boundary.root()).is_err() {
                         return Ok(());
                     }
@@ -716,9 +724,15 @@ impl Evidence {
                         return Ok(());
                     };
                     let path = rel_str.replace('\\', "/");
+                    if path.ends_with("/lib.rs") || path.ends_with("/main.rs") {
+                        return Ok(());
+                    }
                     if policy::exact_path(&path)
                         && !planning::forbidden_read(&path)
-                        && evidence::read_product(boundary.root(), &path, 65_536)?.is_some()
+                        && evidence::read_product(boundary.root(), &path, 65_536)
+                            .ok()
+                            .flatten()
+                            .is_some()
                     {
                         additional.push(path);
                     }
@@ -793,11 +807,19 @@ impl Evidence {
         let mut sources_text = Text::from("## Exact delivered sources\n\n");
         let mut unchanged = Vec::new();
         for file in selected {
-            let source = evidence::read_product(boundary.root(), &file, 65_536)?
+            let source = evidence::read_product(boundary.root(), &file, execution::MAX_FILE_BYTES)?
                 .map(|source| planning::memory::redact(&source, boundary.redaction()));
             sources_text.push_str(&format!("### {file}\n\n"));
             if let Some(source) = &source {
-                sources_text.0.extend(&source.0);
+                if source.0.len() > 24_000 {
+                    sources_text.0.extend(source.0.iter().take(12_000));
+                    sources_text.push_str("\n\n... [Large file middle omitted; full unified diff is provided in ## Diff] ...\n\n");
+                    sources_text
+                        .0
+                        .extend(source.0.iter().skip(source.0.len().saturating_sub(12_000)));
+                } else {
+                    sources_text.0.extend(&source.0);
+                }
                 if !files.contains(&file) {
                     if let Some(base) = changes.head_product(boundary, &file).await? {
                         if planning::memory::redact(&base, boundary.redaction()) == *source {

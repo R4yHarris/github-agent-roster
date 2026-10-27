@@ -306,8 +306,27 @@ fn selected_key_name(config: &config::Config) -> Option<&Text> {
 
 pub fn credentials(environment: &Value, config: &config::Config) -> Result<Credentials, Error> {
     let mut selected = Value::object(Vec::new());
+    let mut names = Vec::new();
     if let Some(name) = selected_key_name(config) {
-        let name = name.to_utf8()?;
+        names.push(name.to_utf8()?);
+    }
+    if config
+        .as_value()
+        .get("llm")
+        .and_then(|value| value.get("base_url"))
+        .and_then(Value::as_string)
+        .is_some_and(|u| {
+            u.to_utf8()
+                .is_ok_and(|s| s.to_ascii_lowercase().contains("aperture"))
+        })
+    {
+        for extra in ["APERTURE_API_KEY", "ROSTER_API_KEY"] {
+            if !names.iter().any(|n| n == extra) {
+                names.push(extra.to_owned());
+            }
+        }
+    }
+    for name in names {
         if let Some(value) = config::environment_entry(environment, &name)? {
             let value = value
                 .as_string()
@@ -358,6 +377,23 @@ pub fn invocation_credentials_with_vault(
         if let Some(name) = selected_key_name(configuration) {
             if !names.contains(name) {
                 names.push(name.clone());
+            }
+        }
+        if configuration
+            .as_value()
+            .get("llm")
+            .and_then(|value| value.get("base_url"))
+            .and_then(Value::as_string)
+            .is_some_and(|u| {
+                u.to_utf8()
+                    .is_ok_and(|s| s.to_ascii_lowercase().contains("aperture"))
+            })
+        {
+            for extra in ["APERTURE_API_KEY", "ROSTER_API_KEY"] {
+                let t = Text::from(extra);
+                if !names.contains(&t) {
+                    names.push(t);
+                }
             }
         }
     }
@@ -947,7 +983,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
 
     async fn run_local_owned(
         &mut self,
-        options: Options<'_>,
+        mut options: Options<'_>,
         token: CancellationToken,
         ownership: &mut Ownership,
         budget: &continuation::Budget,
@@ -975,7 +1011,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
         }
         crate::config::validate_start_base(&Text::from(options.start.base.as_str()), "--base")?;
         let redaction = invocation_redaction(options.loaded, self.credentials)?;
-        let contracts = paths::resolve_contracts_path(
+        let contracts_path = paths::resolve_contracts_path(
             options.installation,
             options.cwd,
             options.host.contracts.as_deref(),
@@ -993,7 +1029,19 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
             .as_ref()
             .ok_or_else(|| Error::type_error("Invocation has no owned Git host"))?;
         let contracts =
-            start::Contracts::open(options.installation, &contracts, git, &token).await?;
+            start::Contracts::open(options.installation, &contracts_path, git, &token).await?;
+        if contracts_path.is_absolute()
+            && !options
+                .approval
+                .submodules
+                .iter()
+                .any(|m| m.path == "vendor/github-agent-contracts")
+        {
+            options.approval.submodules.push(backend::LocalSubmodule {
+                path: "vendor/github-agent-contracts".to_owned(),
+                source: contracts_path,
+            });
+        }
         let repository = if let Input::FetchedIssue(intake) = &options.input {
             if paths::file_information(&paths.worktree)?.identity
                 != paths::file_information(&intake.original.paths.worktree)?.identity
@@ -1026,13 +1074,24 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                 let path = paths::resolve(options.cwd, path)?;
                 paths::ensure_local_path(&path, &paths.worktree)?;
                 let source = read_text(&path, planning::MAX_ASK_BYTES as u64, "Ask file")?;
-                let ask = intake::clean_ask(&Value::String(source))?;
+                let (ask, metadata) = match intake::parse_issue_body(&Value::String(source.clone()))
+                {
+                    Ok(parsed) => (parsed.ask.to_utf8()?, parsed.metadata),
+                    Err(_) => {
+                        let cleaned = intake::clean_ask(&Value::String(source))?;
+                        let stripped = cleaned
+                            .strip_prefix("# Ask\n\n")
+                            .unwrap_or(&cleaned)
+                            .to_owned();
+                        (stripped, None)
+                    }
+                };
                 if ask.contains("{{ASK}}") {
                     return Err(Error::type_error(
                         "Ask file contains an unresolved {{ASK}} placeholder",
                     ));
                 }
-                (Text::from(ask.as_str()), None, None, None, None)
+                (Text::from(ask.as_str()), None, None, None, metadata)
             }
             Input::FetchedIssue(intake) => {
                 intake.issue.require_current_with_git(git, &token).await?;

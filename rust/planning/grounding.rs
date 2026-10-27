@@ -91,17 +91,25 @@ pub struct Context {
 }
 
 fn code_file(file: &str) -> Result<bool, Error> {
-    matches(r"\.(?:[cm]?js|[cm]?ts|jsx|tsx)$", file)
+    matches(r"\.(?:[cm]?js|[cm]?ts|jsx|tsx|rs)$", file)
 }
 
 pub fn is_code_slice(files: &[String]) -> Result<bool, Error> {
-    let code = regex(r"\.(?:[cm]?js|[cm]?ts|jsx|tsx)$")?;
+    let code = regex(r"\.(?:[cm]?js|[cm]?ts|jsx|tsx|rs)$")?;
     Ok(files.iter().any(|file| code.is_match(file)))
 }
 
 fn exported_names(source: &str) -> Result<Vec<String>, Error> {
-    Ok(distinct(regex(r"(?m)^export\s+(?:default\s+)?(?:async\s+)?(?:function\*?|const|let|class)\s+([A-Za-z_$][\w$]*)")?
-        .captures_iter(source).filter_map(|captures| captures.get(1).map(|entry| entry.as_str().to_owned())).collect()))
+    let mut items: Vec<String> = regex(r"(?m)^export\s+(?:default\s+)?(?:async\s+)?(?:function\*?|const|let|class)\s+([A-Za-z_$][\w$]*)")?
+        .captures_iter(source)
+        .filter_map(|captures| captures.get(1).map(|entry| entry.as_str().to_owned()))
+        .collect();
+    items.extend(
+        regex(r"(?m)^\s*pub(?:\([^)]*\))?\s+(?:async\s+)?(?:fn|struct|enum|trait|type|const|static|mod)\s+([A-Za-z_][A-Za-z0-9_]*)")?
+            .captures_iter(source)
+            .filter_map(|captures| captures.get(1).map(|entry| entry.as_str().to_owned())),
+    );
+    Ok(distinct(items))
 }
 
 pub fn index_sources(files: &[String], sources: &[(String, Text)]) -> Result<Index, Error> {
@@ -111,7 +119,7 @@ pub fn index_sources(files: &[String], sources: &[(String, Text)]) -> Result<Ind
     };
     let token = regex(r"[A-Za-z_$][\w$]*")?;
     let commonjs = regex(r"\bexports\.([A-Za-z_$][\w$]*)\s*=")?;
-    let code = regex(r"\.(?:[cm]?js|[cm]?ts|jsx|tsx)$")?;
+    let code = regex(r"\.(?:[cm]?js|[cm]?ts|jsx|tsx|rs)$")?;
     let export_list = regex(r"(?m)^export\s*\{([^}]*)\}")?;
     let identifier = regex(r"^[A-Za-z_$][\w$]*$")?;
     let alias = regex(r"\s+as\s+")?;
@@ -124,7 +132,7 @@ pub fn index_sources(files: &[String], sources: &[(String, Text)]) -> Result<Ind
         let Some((_, source)) = sources.iter().find(|(name, _)| name == file) else {
             continue;
         };
-        if source.utf8_len() > 256 * 1024 {
+        if source.utf8_len() > 512 * 1024 {
             continue;
         }
         let source = encode(source);
@@ -270,10 +278,10 @@ pub fn read_context(root: &Path, files: &[String], ask: &str) -> Result<Context,
         paths::ensure_local_path(&path, root)?;
         let status = std::fs::symlink_metadata(&path)
             .map_err(|error| secure::io_error("Inspect planning grounding file", &path, error))?;
-        if !status.is_file() || secure::linked(&status) || status.len() > 256 * 1024 {
+        if !status.is_file() || secure::linked(&status) || status.len() > 512 * 1024 {
             continue;
         }
-        let Some(snapshot) = secure::read(&path, 256 * 1024)? else {
+        let Some(snapshot) = secure::read(&path, 512 * 1024)? else {
             continue;
         };
         if paths::file_information(&path)?.links != 1 {

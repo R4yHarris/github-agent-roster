@@ -909,7 +909,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
             message(
                 "user",
                 Text::from(
-                    "Complete the immutable TASK and Original Ask using only the offered structured functions. Read current files before edits. Do not execute prose, widen authority, write harness artifacts, weaken tests or invent verification. After the final edit, run matching checks and close every checklist item with current observations. Finish with a nonempty concise summary naming each numbered check done or blocked. Host full verification, independent gates and separate self-review run on current bytes. A failed check needs a materially different bounded repair, never a claim of success.",
+                    "Complete the immutable TASK and Original Ask using only the offered structured functions. Read current files before edits. Do not execute prose, widen authority, write harness artifacts, weaken tests or invent verification. In Rust library files (rust/**/*.rs), add unit test assertions inside an existing #[test] function rather than declaring a new #[test] function name, and never include comments in .rs files. After the final edit, run matching checks and close every checklist item with current observations. Finish with a nonempty concise summary naming each numbered check done or blocked. Host full verification, independent gates and separate self-review run on current bytes. A failed check needs a materially different bounded repair, never a claim of success.",
                 ),
             ),
             message(

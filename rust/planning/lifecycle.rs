@@ -797,16 +797,54 @@ fn validated_written(
     options: &DraftOptions<'_>,
     scope: &intake::Requirements,
 ) -> Result<artifacts::Plan, Error> {
-    preserve_full_ask(task, assignment)?;
-    let complete = artifacts::from_task(
-        &Value::String(task.clone()),
-        &assignment.ask,
-        assignment.title.as_ref(),
-        None,
+    let strict = (|| {
+        preserve_full_ask(task, assignment)?;
+        let complete = artifacts::from_task(
+            &Value::String(task.clone()),
+            &assignment.ask,
+            assignment.title.as_ref(),
+            None,
+        )?;
+        let mut plan = build_description(assignment, &complete, options, scope)?;
+        plan.task = task.clone();
+        Ok(plan)
+    })();
+    if strict.is_ok() {
+        return strict;
+    }
+    let raw_str = encode(task);
+    if raw_str.trim_start().starts_with("---")
+        || matches(r"(?im)^#{1,6}\s+task[ _-]+metadata\s*:?$", &raw_str)?
+    {
+        return strict;
+    }
+    let with_fm = format!(
+        "---\nskills: [implement-task]\n---\n{}",
+        raw_str.replace("\r\n", "\n")
+    );
+    let Ok(parts) = task::sections(&value(&with_fm)) else {
+        return strict;
+    };
+    let checks = task::section_list(
+        parts.section("acceptance checks"),
+        "an Acceptance Checks list",
+        false,
     )?;
-    let mut plan = build_description(assignment, &complete, options, scope)?;
-    plan.task = task.clone();
-    Ok(plan)
+    let files = task::section_list(
+        parts.section("files allowed"),
+        "an Allowed Files list (or Files allowed)",
+        false,
+    )?;
+    let mut fields = vec![
+        ("title", value(&parts.title)),
+        ("acceptance_checks", strings(&checks)),
+        ("files_allowed", strings(&files)),
+    ];
+    if let Ok(Some(design)) = grounding::parse_design(&value(&with_fm)) {
+        fields.push(("design", design));
+    }
+    let description = artifacts::normalize_description(&Value::object(fields))?;
+    build_description(assignment, &description, options, scope)
 }
 
 impl<T: Transport, O: Observer> Driver<'_, T, O> {
@@ -1920,12 +1958,20 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                         task_draft = Some(stamped.clone());
                         match validated_written(&stamped, assignment, &options, &scope) {
                             Ok(plan) => {
-                                bound.writer.write("TASK.md", &stamped)?;
+                                bound.writer.write("TASK.md", &plan.task)?;
                                 return self.finish(plan, turn, &samples, scope.requires_run);
                             }
                             Err(error) => {
                                 result = Value::object(vec![("error", Value::String(self.safe(&decode(&format!("{}. Return a complete JSON plan with title, acceptance_checks, and files_allowed.", error_text(&error))))))]);
                             }
+                        }
+                    } else if path == "RECIPE.yml" || path == "ESTIMATE.md" {
+                        if !written.contains(&path) {
+                            result = Value::object(vec![
+                                ("path", Value::string(&path)),
+                                ("written", Value::Boolean(true)),
+                            ]);
+                            written.push(path);
                         }
                     } else if !written.contains(&path) {
                         result = bound.execute("write_file", &call.args)?;

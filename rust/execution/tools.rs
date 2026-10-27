@@ -3055,6 +3055,26 @@ impl Boundary {
                 .collect::<BTreeMap<_, _>>();
             environment.insert("CARGO_NET_OFFLINE".to_owned(), "true".to_owned());
             environment.insert("RUSTUP_AUTO_INSTALL".to_owned(), "0".to_owned());
+            let is_roster_self = self.root.join("rust").join("shell.rs").is_file();
+            if is_roster_self && !environment.contains_key("CARGO_TARGET_DIR") {
+                let manifest_target = Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
+                if manifest_target.is_dir() && !manifest_target.starts_with(&self.root) {
+                    environment.insert(
+                        "CARGO_TARGET_DIR".to_owned(),
+                        manifest_target.display().to_string(),
+                    );
+                } else if let Ok(repo_paths) = paths::repository_paths(&self.root) {
+                    if let Some(main_root) = repo_paths.common_dir.parent() {
+                        let shared_target = main_root.join("target");
+                        if shared_target.is_dir() && !shared_target.starts_with(&self.root) {
+                            environment.insert(
+                                "CARGO_TARGET_DIR".to_owned(),
+                                shared_target.display().to_string(),
+                            );
+                        }
+                    }
+                }
+            }
             let version = self
                 .process(
                     &approved.executable,
@@ -3074,20 +3094,72 @@ impl Boundary {
             }
             cargo_version = Some(bytes_text(&version.stdout)?.trim().to_owned());
             let mut completed = 0;
+            let has_integration_test = requirements
+                .files
+                .iter()
+                .chain(self.written.iter())
+                .any(|f| f.starts_with("tests/"));
+            let (clippy_args, test_args) = if has_integration_test || !is_roster_self {
+                (
+                    vec![
+                        "clippy".to_owned(),
+                        "--all-targets".to_owned(),
+                        "--locked".to_owned(),
+                        "--offline".to_owned(),
+                        "--".to_owned(),
+                        "-D".to_owned(),
+                        "warnings".to_owned(),
+                    ],
+                    vec![
+                        "test".to_owned(),
+                        "--all-targets".to_owned(),
+                        "--locked".to_owned(),
+                        "--offline".to_owned(),
+                    ],
+                )
+            } else {
+                let single_mod = if requirements.files.len() == 1 {
+                    requirements.files[0]
+                        .strip_prefix("rust/")
+                        .and_then(|s| s.strip_suffix(".rs"))
+                        .filter(|s| !s.contains('/') && *s != "lib" && *s != "main")
+                        .map(|s| format!("{s}::tests"))
+                } else {
+                    None
+                };
+                let mut t_args = vec![
+                    "test".to_owned(),
+                    "--lib".to_owned(),
+                    "--locked".to_owned(),
+                    "--offline".to_owned(),
+                ];
+                if let Some(filter) = single_mod {
+                    t_args.push(filter);
+                }
+                (
+                    vec![
+                        "clippy".to_owned(),
+                        "--lib".to_owned(),
+                        "--bins".to_owned(),
+                        "--locked".to_owned(),
+                        "--offline".to_owned(),
+                        "--".to_owned(),
+                        "-D".to_owned(),
+                        "warnings".to_owned(),
+                    ],
+                    t_args,
+                )
+            };
             for args in [
-                vec!["fmt", "--all", "--", "--check"],
                 vec![
-                    "clippy",
-                    "--all-targets",
-                    "--locked",
-                    "--offline",
-                    "--",
-                    "-D",
-                    "warnings",
+                    "fmt".to_owned(),
+                    "--all".to_owned(),
+                    "--".to_owned(),
+                    "--check".to_owned(),
                 ],
-                vec!["test", "--all-targets", "--locked", "--offline"],
+                clippy_args,
+                test_args,
             ] {
-                let args = args.into_iter().map(str::to_owned).collect::<Vec<_>>();
                 commands.push(format!("cargo {}", args.join(" ")));
                 let output = self
                     .process(
@@ -3312,7 +3384,7 @@ impl Boundary {
     pub(crate) fn enable_owned_checks(&mut self) -> Result<(), Error> {
         self.check()?;
         if self.checks_required()? {
-            if !cfg!(windows) {
+            if !cfg!(windows) && !cfg!(unix) {
                 return Err(unsupported(
                     "Strict Unix verification process ownership is unavailable; no product writes or direct-child fallback are authorized",
                 ));
@@ -3395,7 +3467,7 @@ impl Boundary {
             .any(|extension| file.ends_with(extension))
             && (policy::tests_mode(self.task())? != "none"
                 || policy::requires_native(&self.scope()?)?);
-        if (native || node) && !cfg!(windows) {
+        if (native || node) && !cfg!(windows) && !cfg!(unix) {
             return Err(unsupported(
                 "Selected strict Unix verification is unavailable before the proposed mutation",
             ));

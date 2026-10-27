@@ -759,7 +759,7 @@ pub fn named_files(ask: &str) -> Result<Vec<String>, Error> {
         windows.join("\n")
     };
     Ok(distinct(
-        regex(r"(?:[\w.@-]+/)+[\w.@-]+|[\w.@-]+\.(?:md|mjs|js|cjs|json|yml|yaml|txt)")?
+        regex(r"(?:[\w.@-]+/)+[\w.@-]+|[\w.@-]+\.(?:rs|toml|md|mjs|js|cjs|ts|tsx|json|yml|yaml|txt|sh|ps1|py)")?
             .find_iter(&source)
             .map(|entry| entry.as_str().to_owned())
             .collect(),
