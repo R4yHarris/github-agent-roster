@@ -384,6 +384,15 @@ pub fn commands() -> &'static [CommandPage] {
             aliases: &[],
         },
         CommandPage {
+            name: "voice",
+            group: "Session",
+            usage: "/voice [SECONDS|file PATH|ask [SECONDS|file PATH]|status]",
+            description: "Capture microphone speech-to-text or transcribe an audio file into a prompt or Ask.",
+            example: "/voice file prompt.wav",
+            flags: &[],
+            aliases: &[],
+        },
+        CommandPage {
             name: "clear",
             group: "Session",
             usage: "/clear",
@@ -2782,7 +2791,8 @@ impl ShellSession {
                 "Stored secret {secret_name}.\n"
             )));
         }
-        let expanded_line = crate::attachments::expand_paste_references(line);
+        let sanitized_line = crate::attachments::strip_leaked_terminal_sequences(line);
+        let expanded_line = crate::attachments::expand_paste_references(&sanitized_line);
         let text = expanded_line.trim();
         if text.is_empty() {
             if self.pending_confirm {
@@ -2841,6 +2851,26 @@ impl ShellSession {
             };
         }
         if !text.starts_with('/') {
+            let inline_mentions =
+                crate::attachments::extract_inline_at_mentions(text, &self.cwd, &self.environment);
+            for mention in inline_mentions {
+                let already_attached = self.attachments.iter().any(|a| a.path == mention.path);
+                if !already_attached {
+                    let next_id = self.attachments.len() + 1;
+                    if let Ok(mut att) = crate::attachments::build_session_attachment_with_range(
+                        next_id,
+                        &mention.path,
+                        mention.line_range,
+                    ) {
+                        if let Some(ref excerpt) = att.text_excerpt {
+                            if let Ok(redacted) = self.redact_text(excerpt) {
+                                att.text_excerpt = Some(redacted);
+                            }
+                        }
+                        self.attachments.push(att);
+                    }
+                }
+            }
             if let Some(cmd) = translate_natural_language_command(text) {
                 let act = Box::pin(self.dispatch_line(&cmd)).await?;
                 return match act {
@@ -2934,6 +2964,10 @@ impl ShellSession {
             }
             "export" => {
                 let out = self.handle_export_command(raw_args)?;
+                Ok(ShellAction::Continue(self.redact_text(&out)?))
+            }
+            "voice" => {
+                let out = Box::pin(self.handle_voice_command(raw_args)).await?;
                 Ok(ShellAction::Continue(self.redact_text(&out)?))
             }
             "update" => {
@@ -4599,6 +4633,60 @@ impl ShellSession {
             self.attachments.len(),
             target_path.display()
         ))
+    }
+
+    pub async fn handle_voice_command(&mut self, raw_args: &str) -> Result<String, Error> {
+        let trimmed = raw_args.trim();
+        if trimmed == "status" {
+            return Ok(
+                "Voice-to-text status: ready (supports live microphone capture `/voice [SECONDS]`, WAV/audio file transcription `/voice file <PATH>`, and direct dispatch `/voice ask ...`).\n"
+                    .to_owned(),
+            );
+        }
+        let (dispatch_ask, inner_args) = if let Some(rest) = trimmed.strip_prefix("ask") {
+            (true, rest.trim())
+        } else {
+            (false, trimmed)
+        };
+        let transcript = if let Some(file_arg) = inner_args.strip_prefix("file") {
+            let f_trimmed = file_arg.trim();
+            if f_trimmed.is_empty() {
+                return Err(Error::type_error("Use /voice file <PATH>."));
+            }
+            let resolved = crate::attachments::resolve_attachment_candidate(
+                f_trimmed,
+                &self.cwd,
+                &self.environment,
+            )
+            .ok_or_else(|| Error::new("Error", format!("Audio file not found: {f_trimmed}")))?;
+            crate::attachments::transcribe_audio_file(&resolved)?
+        } else {
+            let secs = if inner_args.is_empty() {
+                6_u64
+            } else {
+                inner_args
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|&s| (1..=60).contains(&s))
+                    .ok_or_else(|| {
+                        Error::type_error(
+                            "Use /voice [SECONDS|file PATH|ask [SECONDS|file PATH]|status].",
+                        )
+                    })?
+            };
+            let voice_dir = self.session_storage_root().join("voice");
+            crate::attachments::capture_and_transcribe_voice(&voice_dir, secs)?
+        };
+        if dispatch_ask {
+            let act = Box::pin(self.dispatch_line(&transcript)).await?;
+            return match act {
+                ShellAction::Continue(out) => {
+                    Ok(format!("Voice transcript -> {transcript}\n{out}"))
+                }
+                _ => Ok(format!("Voice transcript -> {transcript}\n")),
+            };
+        }
+        Ok(format!("Voice transcript: {transcript}\n"))
     }
 
     fn execute_bang_shell_command(&mut self, cmd_str: &str) -> Result<String, Error> {
@@ -10283,6 +10371,8 @@ pub struct LineEditor {
     saved_draft: String,
     secret_mode: bool,
     in_bracketed_paste: bool,
+    kill_buffer: String,
+    cwd: PathBuf,
 }
 
 impl LineEditor {
@@ -10295,7 +10385,14 @@ impl LineEditor {
             saved_draft: String::new(),
             secret_mode,
             in_bracketed_paste: false,
+            kill_buffer: String::new(),
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         }
+    }
+
+    pub fn with_cwd(mut self, cwd: &Path) -> Self {
+        self.cwd = cwd.to_path_buf();
+        self
     }
 
     pub fn text(&self) -> String {
@@ -10407,6 +10504,7 @@ impl LineEditor {
         let end = self.cursor;
         self.move_word_left();
         let start = self.cursor;
+        self.kill_buffer = self.chars[start..end].iter().collect();
         self.chars.drain(start..end);
         self.history_index = None;
         true
@@ -10414,6 +10512,7 @@ impl LineEditor {
 
     pub fn kill_to_end(&mut self) -> bool {
         if self.cursor < self.chars.len() {
+            self.kill_buffer = self.chars[self.cursor..].iter().collect();
             self.chars.truncate(self.cursor);
             self.history_index = None;
             true
@@ -10424,6 +10523,7 @@ impl LineEditor {
 
     pub fn kill_to_start(&mut self) -> bool {
         if self.cursor > 0 {
+            self.kill_buffer = self.chars[0..self.cursor].iter().collect();
             self.chars.drain(0..self.cursor);
             self.cursor = 0;
             self.history_index = None;
@@ -10431,6 +10531,19 @@ impl LineEditor {
         } else {
             false
         }
+    }
+
+    pub fn yank(&mut self) -> bool {
+        if self.kill_buffer.is_empty() {
+            return false;
+        }
+        let killed: Vec<char> = self.kill_buffer.chars().collect();
+        for ch in killed {
+            self.chars.insert(self.cursor, ch);
+            self.cursor += 1;
+        }
+        self.history_index = None;
+        true
     }
 
     pub fn history_up(&mut self) -> bool {
@@ -10476,37 +10589,69 @@ impl LineEditor {
             return false;
         }
         let current = self.text();
-        if !current.starts_with('/') || current.contains(' ') {
-            return false;
-        }
-        let (matches, _) = complete_command(&current);
-        match matches.as_slice() {
-            [only] => {
-                let completed = format!("{only} ");
-                self.chars = completed.chars().collect();
-                self.cursor = self.chars.len();
-                true
-            }
-            [first, rest @ ..] => {
-                let mut prefix_len = first.len();
-                for m in rest {
-                    prefix_len = first
-                        .bytes()
-                        .zip(m.bytes())
-                        .take(prefix_len)
-                        .take_while(|(a, b)| a == b)
-                        .count();
-                }
-                if prefix_len > current.len() {
-                    self.chars = first[..prefix_len].chars().collect();
+        if current.starts_with('/') && !current.contains(' ') {
+            let (matches, _) = complete_command(&current);
+            return match matches.as_slice() {
+                [only] => {
+                    let completed = format!("{only} ");
+                    self.chars = completed.chars().collect();
                     self.cursor = self.chars.len();
                     true
-                } else {
-                    false
+                }
+                [first, rest @ ..] => {
+                    let mut prefix_len = first.len();
+                    for m in rest {
+                        prefix_len = first
+                            .bytes()
+                            .zip(m.bytes())
+                            .take(prefix_len)
+                            .take_while(|(a, b)| a == b)
+                            .count();
+                    }
+                    if prefix_len > current.len() {
+                        self.chars = first[..prefix_len].chars().collect();
+                        self.cursor = self.chars.len();
+                        true
+                    } else {
+                        false
+                    }
+                }
+                [] => false,
+            };
+        }
+        if let Some(at_pos) = current.rfind('@') {
+            if at_pos == 0
+                || current
+                    .as_bytes()
+                    .get(at_pos - 1)
+                    .is_some_and(u8::is_ascii_whitespace)
+            {
+                let partial = &current[at_pos + 1..];
+                if !partial.contains(char::is_whitespace) {
+                    let matches = crate::attachments::complete_workspace_path(partial, &self.cwd);
+                    if let [only] = matches.as_slice() {
+                        let suffix = if only.ends_with('/') { "" } else { " " };
+                        let next_text = format!("{}@{only}{suffix}", &current[..at_pos]);
+                        self.chars = next_text.chars().collect();
+                        self.cursor = self.chars.len();
+                        return true;
+                    }
                 }
             }
-            [] => false,
         }
+        if let Some(rest) = current.strip_prefix("/paste ") {
+            if !rest.contains(char::is_whitespace) {
+                let matches = crate::attachments::complete_workspace_path(rest, &self.cwd);
+                if let [only] = matches.as_slice() {
+                    let suffix = if only.ends_with('/') { "" } else { " " };
+                    let next_text = format!("/paste {only}{suffix}");
+                    self.chars = next_text.chars().collect();
+                    self.cursor = self.chars.len();
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     pub fn feed_bytes(&mut self, pending: &mut Vec<u8>, chunk: &[u8]) -> EditorStep {
@@ -10525,6 +10670,12 @@ impl LineEditor {
                         if !pending.starts_with(b"\x1b[201~") {
                             changed |= self.insert_char('\n');
                         }
+                        continue;
+                    }
+                    if self.cursor == self.chars.len() && self.chars.last() == Some(&'\\') {
+                        self.chars.pop();
+                        self.cursor = self.chars.len();
+                        changed |= self.insert_char('\n');
                         continue;
                     }
                     return EditorStep::Submit(self.text());
@@ -10586,6 +10737,10 @@ impl LineEditor {
                     pending.drain(0..1);
                     changed |= self.delete_word_left();
                 }
+                0x19 => {
+                    pending.drain(0..1);
+                    changed |= self.yank();
+                }
                 0x0c => {
                     pending.drain(0..1);
                     return EditorStep::ClearScreen;
@@ -10619,6 +10774,10 @@ impl LineEditor {
                             b"201~" => {
                                 self.in_bracketed_paste = false;
                             }
+                            b"13;2u" | b"13;3u" | b"13;5u" | b"27;2;13~" | b"27;3;13~"
+                            | b"27;5;13~" => {
+                                changed |= self.insert_char('\n');
+                            }
                             b"A" => changed |= self.history_up(),
                             b"B" => changed |= self.history_down(),
                             b"C" => changed |= self.move_right(),
@@ -10650,6 +10809,7 @@ impl LineEditor {
                         let code = pending[1];
                         pending.drain(0..2);
                         match code {
+                            b'\r' | b'\n' => changed |= self.insert_char('\n'),
                             b'b' | b'B' => changed |= self.move_word_left(),
                             b'f' | b'F' => changed |= self.move_word_right(),
                             0x7f | 0x08 => changed |= self.delete_word_left(),
