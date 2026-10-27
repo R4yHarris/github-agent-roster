@@ -19,6 +19,7 @@ pub const PASTE_COLLAPSE_CHAR_THRESHOLD: usize = 1500;
 pub enum AttachmentKind {
     Image,
     File,
+    Directory,
 }
 
 impl AttachmentKind {
@@ -26,8 +27,16 @@ impl AttachmentKind {
         match self {
             Self::Image => "image",
             Self::File => "file",
+            Self::Directory => "directory",
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlineMention {
+    pub raw_token: String,
+    pub path: PathBuf,
+    pub line_range: Option<(usize, usize)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,7 +164,15 @@ pub fn resolve_attachment_candidate(raw: &str, cwd: &Path, env: &Value) -> Optio
 
     for cand in candidates {
         if let Ok(meta) = fs::symlink_metadata(&cand) {
-            if meta.is_file() && !secure::linked(&meta) {
+            if !secure::linked(&meta) && (meta.is_file() || meta.is_dir()) {
+                let fname = cand
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                if meta.is_dir() && matches!(fname.as_str(), ".git" | "node_modules" | "target") {
+                    continue;
+                }
                 return Some(fs::canonicalize(&cand).unwrap_or(cand));
             }
         }
@@ -261,18 +278,25 @@ pub fn detect_file_drop(user_input: &str, cwd: &Path, env: &Value) -> Option<Fil
 }
 
 pub fn build_session_attachment(id: usize, path: &Path) -> Result<SessionAttachment, Error> {
+    build_session_attachment_with_range(id, path, None)
+}
+
+pub fn build_session_attachment_with_range(
+    id: usize,
+    path: &Path,
+    line_range: Option<(usize, usize)>,
+) -> Result<SessionAttachment, Error> {
     let meta = fs::symlink_metadata(path).map_err(|e| {
         Error::new(
             "Error",
             format!("Cannot inspect attachment {}: {e}", path.display()),
         )
     })?;
-    if !meta.is_file() || secure::linked(&meta) {
+    if (!meta.is_file() && !meta.is_dir()) || secure::linked(&meta) {
         return Err(Error::type_error(
-            "Attachment must be a regular unlinked file",
+            "Attachment must be a regular unlinked file or directory",
         ));
     }
-    let size_bytes = meta.len();
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
@@ -290,6 +314,95 @@ pub fn build_session_attachment(id: usize, path: &Path) -> Result<SessionAttachm
         ));
     }
 
+    if meta.is_dir() {
+        let mut entries_list = Vec::new();
+        let mut total_bytes = 0_u64;
+        let mut file_count = 0_usize;
+        let mut dir_count = 0_usize;
+        if let Ok(rd) = fs::read_dir(path) {
+            let mut top_entries: Vec<_> = rd.flatten().take(120).collect();
+            top_entries.sort_by_key(|e| e.file_name());
+            for entry in top_entries {
+                let ename = entry.file_name().to_string_lossy().to_string();
+                if matches!(
+                    ename.as_str(),
+                    ".git" | "node_modules" | "target" | ".worktrees"
+                ) {
+                    continue;
+                }
+                let Ok(emeta) = fs::symlink_metadata(entry.path()) else {
+                    continue;
+                };
+                if secure::linked(&emeta) {
+                    continue;
+                }
+                if emeta.is_dir() {
+                    dir_count += 1;
+                    entries_list.push(format!("[dir]  {ename}/"));
+                    if let Ok(sub_rd) = fs::read_dir(entry.path()) {
+                        let mut sub_entries: Vec<_> = sub_rd.flatten().take(20).collect();
+                        sub_entries.sort_by_key(|e| e.file_name());
+                        for sub in sub_entries {
+                            let sname = sub.file_name().to_string_lossy().to_string();
+                            if let Ok(smeta) = fs::symlink_metadata(sub.path()) {
+                                if !secure::linked(&smeta) {
+                                    if smeta.is_dir() {
+                                        entries_list.push(format!("  [dir]  {ename}/{sname}/"));
+                                    } else if smeta.is_file() {
+                                        file_count += 1;
+                                        total_bytes = total_bytes.saturating_add(smeta.len());
+                                        entries_list.push(format!(
+                                            "  [file] {ename}/{sname} ({} B)",
+                                            smeta.len()
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if emeta.is_file() {
+                    file_count += 1;
+                    total_bytes = total_bytes.saturating_add(emeta.len());
+                    entries_list.push(format!("[file] {ename} ({} B)", emeta.len()));
+                }
+            }
+        }
+        let mut summary = format!(
+            "[Directory Attachment #{id}: `{name}/` ({file_count} files, {dir_count} subdirs, {total_bytes} B) at `{}`]\n{}",
+            path.display(),
+            entries_list.join("\n")
+        );
+        for key_doc in ["README.md", "Cargo.toml", "package.json", "AGENTS.md"] {
+            let doc_p = path.join(key_doc);
+            if let Ok(dmeta) = fs::symlink_metadata(&doc_p) {
+                if dmeta.is_file() && !secure::linked(&dmeta) && dmeta.len() <= 65_536 {
+                    if let Ok(raw) = fs::read_to_string(&doc_p) {
+                        let snip: String = raw
+                            .lines()
+                            .take(20)
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                            .chars()
+                            .take(1200)
+                            .collect();
+                        summary.push_str(&format!("\n\n--- {key_doc} ---\n{snip}"));
+                    }
+                }
+            }
+        }
+        return Ok(SessionAttachment {
+            id,
+            name: format!("{name}/"),
+            path: path.to_path_buf(),
+            kind: AttachmentKind::Directory,
+            size_bytes: total_bytes,
+            mime_type: "inode/directory".to_owned(),
+            data_uri: None,
+            text_excerpt: Some(summary),
+        });
+    }
+
+    let size_bytes = meta.len();
     if is_image_path(path) {
         if size_bytes > MAX_IMAGE_ATTACHMENT_BYTES {
             return Err(Error::type_error("Image attachment exceeds 10 MiB limit"));
@@ -327,10 +440,29 @@ pub fn build_session_attachment(id: usize, path: &Path) -> Result<SessionAttachm
             Error::new("Error", format!("Cannot read file {}: {e}", path.display()))
         })?;
         let text = String::from_utf8_lossy(&bytes);
-        let excerpt: String = text.chars().take(16_000).collect();
+        let excerpt: String = if let Some((start, end)) = line_range {
+            let s = start.max(1);
+            let e = end.max(s);
+            text.lines()
+                .enumerate()
+                .skip(s - 1)
+                .take(e - s + 1)
+                .map(|(i, l)| format!("{}: {l}", i + 1))
+                .collect::<Vec<_>>()
+                .join("\n")
+                .chars()
+                .take(16_000)
+                .collect()
+        } else {
+            text.chars().take(16_000).collect()
+        };
+        let display_name = match line_range {
+            Some((s, e)) => format!("{name}:{s}-{e}"),
+            None => name,
+        };
         Ok(SessionAttachment {
             id,
-            name,
+            name: display_name,
             path: path.to_path_buf(),
             kind: AttachmentKind::File,
             size_bytes,
@@ -748,6 +880,258 @@ pub fn extract_last_fenced_code_block(text: &str) -> Option<String> {
     blocks.into_iter().rev().find(|b| !b.trim().is_empty())
 }
 
+pub fn extract_inline_at_mentions(text: &str, cwd: &Path, env: &Value) -> Vec<InlineMention> {
+    let Ok(re) = regex_lite::Regex::new(r"(?:^|\s)@([A-Za-z0-9_./\\~:-]+)") else {
+        return Vec::new();
+    };
+    let mut mentions = Vec::new();
+    for caps in re.captures_iter(text) {
+        let Some(m) = caps.get(1) else {
+            continue;
+        };
+        let raw_tok = m
+            .as_str()
+            .trim_end_matches(['.', ',', ';', ')', ']', '?', '!']);
+        if raw_tok.is_empty() {
+            continue;
+        }
+        let (path_part, line_range) = if let Some((base_p, range_str)) = raw_tok.rsplit_once(':') {
+            if !(base_p.is_empty()
+                || base_p.len() == 1 && base_p.as_bytes()[0].is_ascii_alphabetic())
+            {
+                if let Some((start_s, end_s)) = range_str.split_once('-') {
+                    if let (Ok(s), Ok(e)) = (start_s.parse::<usize>(), end_s.parse::<usize>()) {
+                        (base_p, Some((s.max(1), e.max(s.max(1)))))
+                    } else {
+                        (raw_tok, None)
+                    }
+                } else if let Ok(single) = range_str.parse::<usize>() {
+                    (base_p, Some((single.max(1), single.max(1) + 40)))
+                } else {
+                    (raw_tok, None)
+                }
+            } else {
+                (raw_tok, None)
+            }
+        } else {
+            (raw_tok, None)
+        };
+        if let Some(resolved) = resolve_attachment_candidate(path_part, cwd, env) {
+            if !mentions.iter().any(|existing: &InlineMention| {
+                existing.path == resolved && existing.line_range == line_range
+            }) {
+                mentions.push(InlineMention {
+                    raw_token: format!("@{raw_tok}"),
+                    path: resolved,
+                    line_range,
+                });
+            }
+        }
+    }
+    mentions
+}
+
+pub fn complete_workspace_path(partial: &str, cwd: &Path) -> Vec<String> {
+    let norm = partial.replace('\\', "/");
+    let (dir_rel, file_prefix) = match norm.rsplit_once('/') {
+        Some((d, f)) => (format!("{d}/"), f),
+        None => (String::new(), norm.as_str()),
+    };
+    let search_dir = if dir_rel.is_empty() {
+        cwd.to_path_buf()
+    } else {
+        cwd.join(&dir_rel)
+    };
+    let Ok(rd) = fs::read_dir(&search_dir) else {
+        return Vec::new();
+    };
+    let prefix_lower = file_prefix.to_lowercase();
+    let mut matches = Vec::new();
+    for entry in rd.flatten().take(200) {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if matches!(
+            name.as_str(),
+            ".git" | "node_modules" | "target" | ".worktrees"
+        ) || (name.starts_with('.') && !prefix_lower.starts_with('.'))
+        {
+            continue;
+        }
+        if name.to_lowercase().starts_with(&prefix_lower) {
+            let is_dir = entry.metadata().is_ok_and(|m| m.is_dir());
+            let suffix = if is_dir { "/" } else { "" };
+            matches.push(format!("{dir_rel}{name}{suffix}"));
+        }
+    }
+    matches.sort();
+    matches
+}
+
+pub fn strip_leaked_terminal_sequences(text: &str) -> String {
+    let mut cleaned = strip_bracketed_paste_wrappers(text);
+    if let Ok(cpr_re) = regex_lite::Regex::new(r"(?:\x1b\[|\^\[)\d+;\d+R") {
+        cleaned = cpr_re.replace_all(&cleaned, "").into_owned();
+    }
+    if let Ok(mouse_re) = regex_lite::Regex::new(r"(?:\x1b\[|\^\[)?<\d+;\d+;\d+[Mm]") {
+        cleaned = mouse_re.replace_all(&cleaned, "").into_owned();
+    }
+    cleaned
+}
+
+pub fn is_whisper_hallucination(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let lower = trimmed
+        .trim_matches(['.', '!', '?', ',', ' ', '"', '\''])
+        .to_lowercase();
+    matches!(
+        lower.as_str(),
+        "thank you"
+            | "thanks for watching"
+            | "thank you for watching"
+            | "you"
+            | "bye"
+            | "[blank_audio]"
+            | "(blank audio)"
+            | "subtitles by the amara.org community"
+    )
+}
+
+pub fn transcribe_audio_file(audio_path: &Path) -> Result<String, Error> {
+    let meta = fs::symlink_metadata(audio_path).map_err(|e| {
+        Error::new(
+            "Error",
+            format!("Audio file not found ({}): {e}", audio_path.display()),
+        )
+    })?;
+    if !meta.is_file() || secure::linked(&meta) {
+        return Err(Error::type_error("Audio input must be a regular file"));
+    }
+
+    if cfg!(windows) || is_wsl_env() {
+        let ps_exe = if cfg!(windows) {
+            "powershell"
+        } else {
+            "powershell.exe"
+        };
+        let win_path = audio_path.display().to_string().replace('\'', "''");
+        let script = format!(
+            r#"
+try {{
+    Add-Type -AssemblyName System.Speech
+    $rec = New-Object System.Speech.Recognition.SpeechRecognitionEngine
+    $rec.LoadGrammar((New-Object System.Speech.Recognition.DictationGrammar))
+    $rec.SetInputToWaveFile('{win_path}')
+    $sb = New-Object System.Text.StringBuilder
+    while ($true) {{
+        $res = $rec.Recognize()
+        if ($null -eq $res) {{ break }}
+        if ($res.Text) {{ [void]$sb.Append($res.Text + ' ') }}
+    }}
+    Write-Output ($sb.ToString().Trim())
+}} catch {{
+    Write-Output ''
+}}
+"#
+        );
+        if let Ok(out) = StdCommand::new(ps_exe)
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .stdin(Stdio::null())
+            .output()
+        {
+            if out.status.success() {
+                let transcript = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+                if !transcript.is_empty() && !is_whisper_hallucination(&transcript) {
+                    return Ok(transcript);
+                }
+            }
+        }
+    }
+
+    for whisper_bin in ["whisper", "faster-whisper"] {
+        if let Ok(out) = StdCommand::new(whisper_bin)
+            .args([
+                audio_path.to_str().unwrap_or(""),
+                "--model",
+                "base",
+                "--output_format",
+                "txt",
+            ])
+            .stdin(Stdio::null())
+            .output()
+        {
+            if out.status.success() {
+                let transcript = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+                if !transcript.is_empty() && !is_whisper_hallucination(&transcript) {
+                    return Ok(transcript);
+                }
+            }
+        }
+    }
+
+    Ok(format!(
+        "[Audio clip attached: {} ({} bytes)]",
+        audio_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("audio.wav"),
+        meta.len()
+    ))
+}
+
+pub fn capture_and_transcribe_voice(voice_dir: &Path, seconds: u64) -> Result<String, Error> {
+    let dur = seconds.clamp(1, 60);
+    let _ = fs::create_dir_all(voice_dir);
+    if cfg!(windows) || is_wsl_env() {
+        let ps_exe = if cfg!(windows) {
+            "powershell"
+        } else {
+            "powershell.exe"
+        };
+        let script = format!(
+            r#"
+try {{
+    Add-Type -AssemblyName System.Speech
+    $rec = New-Object System.Speech.Recognition.SpeechRecognitionEngine
+    $rec.LoadGrammar((New-Object System.Speech.Recognition.DictationGrammar))
+    $rec.SetInputToDefaultAudioDevice()
+    $res = $rec.Recognize([System.TimeSpan]::FromSeconds({dur}))
+    if ($null -ne $res -and $res.Text) {{
+        Write-Output ("TRANSCRIPT:" + $res.Text)
+        exit 0
+    }}
+    Write-Output "NO_SPEECH"
+}} catch {{
+    Write-Output ("ERR:" + $_.Exception.Message)
+}}
+"#
+        );
+        if let Ok(out) = StdCommand::new(ps_exe)
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .stdin(Stdio::null())
+            .output()
+        {
+            let text = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+            if let Some(tr) = text.strip_prefix("TRANSCRIPT:") {
+                let clean = tr.trim().to_owned();
+                if !is_whisper_hallucination(&clean) {
+                    return Ok(clean);
+                }
+            } else if let Some(err) = text.strip_prefix("ERR:") {
+                return Err(Error::new(
+                    "Error",
+                    format!("Microphone capture unavailable: {}", err.trim()),
+                ));
+            }
+        }
+    }
+    Err(Error::new(
+        "Error",
+        "No speech detected or no microphone input device available. You can also transcribe a recorded WAV file with `/voice file <PATH>`.",
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -862,6 +1246,39 @@ mod tests {
         );
         let osc = format_osc52_sequence("hello", false);
         assert_eq!(osc, "\x1b]52;c;aGVsbG8=\x07");
+
+        let sub_dir = root.join("submod");
+        files::create_private_directories(&sub_dir)?;
+        fs::write(sub_dir.join("README.md"), "# Submodule Readme\n")
+            .map_err(|e| Error::new("TestError", e.to_string()))?;
+        let dir_att = build_session_attachment(3, &sub_dir)?;
+        assert_eq!(dir_att.kind, AttachmentKind::Directory);
+        assert!(
+            dir_att
+                .text_excerpt
+                .as_deref()
+                .is_some_and(|t| t.contains("# Submodule Readme"))
+        );
+
+        let mentions = extract_inline_at_mentions(
+            "Please compare @diagram.png and @submod/README.md:1-1",
+            &root,
+            &env,
+        );
+        assert_eq!(mentions.len(), 2);
+        assert_eq!(mentions[1].line_range, Some((1, 1)));
+
+        let completions = complete_workspace_path("dia", &root);
+        assert_eq!(completions, vec!["diagram.png".to_owned()]);
+        let dir_completions = complete_workspace_path("sub", &root);
+        assert_eq!(dir_completions, vec!["submod/".to_owned()]);
+
+        let leaked = "hello\x1b[39;1R\x1b[<0;42;12M world";
+        assert_eq!(strip_leaked_terminal_sequences(leaked), "hello world");
+        assert!(is_whisper_hallucination("Thank you."));
+        assert!(!is_whisper_hallucination(
+            "Add a unit test to rust/shell.rs"
+        ));
 
         let _ = fs::remove_dir_all(&root);
         Ok(())
