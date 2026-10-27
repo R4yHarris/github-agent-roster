@@ -282,6 +282,37 @@ fn require_locked(description: &Value, locked: Option<&str>, plan_mode: bool) ->
     Ok(())
 }
 
+fn inject_explicit_new_files(
+    task: &Text,
+    options: &DraftOptions<'_>,
+    scope: &intake::Requirements,
+) -> Text {
+    if !scope.explicit || scope.files.is_empty() {
+        return task.clone();
+    }
+    let Some(grounding) = options.grounding else {
+        return task.clone();
+    };
+    let task_str = encode(task);
+    if task_str.contains("\n## New files\n") {
+        return task.clone();
+    }
+    let new_files = scope
+        .files
+        .iter()
+        .filter(|file| !file.contains('*') && !grounding.index.files.contains(file))
+        .map(|file| format!("- `{file}`"))
+        .collect::<Vec<_>>();
+    if new_files.is_empty() {
+        return task.clone();
+    }
+    decode(&task_str.replacen(
+        "## Ask\n",
+        &format!("## New files\n\n{}\n\n## Ask\n", new_files.join("\n")),
+        1,
+    ))
+}
+
 fn build_description(
     assignment: &Assignment,
     description: &Value,
@@ -291,7 +322,7 @@ fn build_description(
     strict_scope_files(required(description, "files_allowed")?, false)?;
     require_locked(description, options.locked_model, false)?;
     let title = assignment.title.as_ref().cloned().map(Value::String);
-    artifacts::build(
+    let mut plan = artifacts::build(
         &Value::String(assignment.ask.clone()),
         artifacts::BuildOptions {
             reference: Some(&assignment.reference),
@@ -307,7 +338,9 @@ fn build_description(
             grounding: options.grounding,
             design: description.get("design"),
         },
-    )
+    )?;
+    plan.task = inject_explicit_new_files(&plan.task, options, scope);
+    Ok(plan)
 }
 
 fn strict_scope_files(input: &Value, omit_managed: bool) -> Result<(), Error> {
@@ -806,7 +839,7 @@ fn validated_written(
             None,
         )?;
         let mut plan = build_description(assignment, &complete, options, scope)?;
-        plan.task = task.clone();
+        plan.task = inject_explicit_new_files(task, options, scope);
         Ok(plan)
     })();
     if strict.is_ok() {

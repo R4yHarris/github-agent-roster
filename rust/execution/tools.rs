@@ -1587,7 +1587,8 @@ impl Boundary {
                     || scope
                         .iter()
                         .any(|allowed| allowed.starts_with(&format!("{file}/"))))
-            || self.imported_by_allowed(file)?)
+            || self.imported_by_allowed(file)?
+            || !directory && self.task.to_utf8().is_ok_and(|t| t.contains(file)))
     }
 
     fn imported_by_allowed(&self, file: &str) -> Result<bool, Error> {

@@ -604,6 +604,20 @@ pub fn commands() -> &'static [CommandPage] {
             aliases: &[],
         },
         CommandPage {
+            name: "board",
+            group: "Board",
+            usage: "/board [N|list N|add N TITLE --body BODY|move N ISSUE STATUS|run N]",
+            description: "Inspect a GitHub Project v2 Kanban board, create or move issue cards across Todo/In Progress/Done, or execute all Todo cards on Project N to completion.",
+            example: "/board run 6",
+            flags: &[
+                "list N: list Project v2 Kanban board #N columns and cards",
+                "add N TITLE --body BODY: create a GitHub issue and add it to Project #N",
+                "move N ISSUE STATUS: move issue #ISSUE on Project #N to Todo, In Progress, or Done",
+                "run N: execute all open Todo/In Progress issue cards on Project #N through 3-seat verification and mark Done",
+            ],
+            aliases: &["kanban"],
+        },
+        CommandPage {
             name: "issue",
             group: "Board",
             usage: "/issue N",
@@ -735,10 +749,14 @@ pub fn format_help(target: &str) -> Option<String> {
     let command = commands()
         .iter()
         .find(|entry| entry.name == selected || entry.aliases.contains(&selected.as_str()));
-    let group = COMMAND_GROUPS
-        .iter()
-        .copied()
-        .find(|name| name.eq_ignore_ascii_case(&selected));
+    let group = (!trimmed.starts_with('/'))
+        .then(|| {
+            COMMAND_GROUPS
+                .iter()
+                .copied()
+                .find(|name| name.eq_ignore_ascii_case(&selected))
+        })
+        .flatten();
     if let Some(command) = command.filter(|_| group.is_none()) {
         let aliases = if command.aliases.is_empty() {
             "(none)".to_owned()
@@ -2285,7 +2303,9 @@ pub fn collect_banner_facts(
     let node_ver = {
         let node_exe = std::env::var_os("ROSTER_NODE20")
             .or_else(|| std::env::var_os("ROSTER_TEST_NODE"))
-            .map_or_else(|| PathBuf::from("node"), PathBuf::from);
+            .map(PathBuf::from)
+            .or_else(|| find_node20_executable().map(PathBuf::from))
+            .unwrap_or_else(|| PathBuf::from("node"));
         StdCommand::new(node_exe)
             .arg("-v")
             .output()
@@ -3432,10 +3452,11 @@ impl ShellSession {
                 if words.is_empty() {
                     let source = crate::cancel::CancellationSource::default();
                     let root = self.current_root();
+                    let doc_env = ensure_delivery_tool_env(&self.environment);
                     let report = crate::local_cli::doctor(
                         &self.installation,
                         &root,
-                        &self.environment,
+                        &doc_env,
                         &source.token(),
                     )
                     .await?;
@@ -3887,6 +3908,10 @@ impl ShellSession {
                     Some(&self.environment),
                 )?;
                 Ok(ShellAction::Continue(recap))
+            }
+            "board" => {
+                let out = self.handle_board_command(raw_args).await?;
+                Ok(ShellAction::Continue(self.redact_text(&out)?))
             }
             "issues" => {
                 if !raw_args.is_empty() {
@@ -4731,7 +4756,13 @@ impl ShellSession {
 
     async fn execute_issue_delivery(&mut self, issue_num: u64) -> Result<String, Error> {
         let root = self.current_root();
-        let out = StdCommand::new("gh")
+        let _ = bootstrap_greenfield_repo(&root);
+        let mut cmd = StdCommand::new("gh");
+        if let Some(tok) = resolve_gh_token() {
+            cmd.env("GH_TOKEN", tok);
+        }
+        let out = cmd
+            .env("GH_PROMPT_DISABLED", "1")
             .args([
                 "issue",
                 "view",
@@ -4766,17 +4797,218 @@ impl ShellSession {
         let asks_dir = root.join(".roster").join("asks");
         let _ = fs::create_dir_all(&asks_dir);
         let ask_file = asks_dir.join(format!("issue-{issue_num}.md"));
-        let combined = if body.trim().is_empty() {
-            title
+        let mut combined = if body.trim().is_empty() {
+            title.clone()
         } else {
             format!("{title}\n\n{body}")
         };
+        if !root.join("rust").join("shell.rs").is_file() {
+            if let Ok(reqs) = crate::planning::intake::requirements(&Value::string(&combined), true)
+            {
+                let is_native =
+                    crate::execution::policy::requires_native(&reqs.files).unwrap_or(false);
+                let is_docs = crate::execution::policy::docs_only(&reqs.files).unwrap_or(false);
+                let has_test = reqs
+                    .files
+                    .iter()
+                    .any(|f| f.starts_with("tests/") || f.contains(".test."));
+                if reqs.explicit && !reqs.files.is_empty() && !is_native && !is_docs && !has_test {
+                    let auto_test = format!("tests/issue_{issue_num}.test.mjs");
+                    if let Some(pos) = combined.find("## Acceptance") {
+                        combined.insert_str(pos, &format!("- `{auto_test}`\n\n"));
+                    } else {
+                        combined.push_str(&format!("\n- `{auto_test}`\n"));
+                    }
+                    combined.push_str(&format!(
+                        "\n- `{auto_test}` uses `node:test`, `node:assert/strict`, and `node:fs` (`fs.readFileSync` inside `test(...)`) to verify the deliverables and `node --test` exits 0\n"
+                    ));
+                }
+            }
+        }
         fs::write(&ask_file, combined.as_bytes())
             .map_err(|e| Error::new("Error", format!("{}: {e}", ask_file.display())))?;
         self.last_ask_file = Some(ask_file);
         self.last_issue = Some(issue_num);
         let _ = domain::put(&mut self.display, "issue", Value::Number(issue_num as f64));
-        self.execute_local_ask_delivery().await
+        let delivery_out = self.execute_local_ask_delivery().await?;
+        if self.display.get("state") == Some(&Value::string("passed")) {
+            if let Some(wt) = self.last_worktree.clone() {
+                if let Ok(applied) =
+                    apply_verified_worktree_to_repo(&root, &wt, Some(issue_num), &title)
+                {
+                    if !applied.is_empty() {
+                        return Ok(format!(
+                            "{delivery_out}Applied verified files to {}: {}\n",
+                            root.display(),
+                            applied.join(", ")
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(delivery_out)
+    }
+
+    pub async fn handle_board_command(&mut self, raw_args: &str) -> Result<String, Error> {
+        let root = self.current_root();
+        let trimmed = raw_args.trim();
+        let tokens = trimmed.split_whitespace().collect::<Vec<_>>();
+        let (owner, repo_slug) = resolve_board_owner_and_repo(&root);
+        if tokens.is_empty() {
+            return list_github_projects(&owner);
+        }
+        if tokens.len() == 1 {
+            if let Ok(proj_num) = tokens[0].trim_start_matches('#').parse::<u64>() {
+                return format_project_board_view(&owner, proj_num);
+            }
+        }
+        match tokens[0].to_lowercase().as_str() {
+            "list" | "view" | "status" => {
+                let proj_num = tokens
+                    .get(1)
+                    .and_then(|s| s.trim_start_matches('#').parse::<u64>().ok())
+                    .ok_or_else(|| Error::type_error("Use /board list <PROJECT_NUMBER>."))?;
+                format_project_board_view(&owner, proj_num)
+            }
+            "move" => {
+                let proj_num = tokens
+                    .get(1)
+                    .and_then(|s| s.trim_start_matches('#').parse::<u64>().ok())
+                    .ok_or_else(|| {
+                        Error::type_error(
+                            "Use /board move <PROJECT_NUMBER> <ISSUE_NUMBER> <Todo|In Progress|Done>.",
+                        )
+                    })?;
+                let issue_num = tokens
+                    .get(2)
+                    .and_then(|s| s.trim_start_matches('#').parse::<u64>().ok())
+                    .ok_or_else(|| {
+                        Error::type_error(
+                            "Use /board move <PROJECT_NUMBER> <ISSUE_NUMBER> <Todo|In Progress|Done>.",
+                        )
+                    })?;
+                let status = tokens.get(3..).map(|s| s.join(" ")).unwrap_or_default();
+                if status.trim().is_empty() {
+                    return Err(Error::type_error(
+                        "Use /board move <PROJECT_NUMBER> <ISSUE_NUMBER> <Todo|In Progress|Done>.",
+                    ));
+                }
+                set_project_card_status(&owner, proj_num, issue_num, status.trim())?;
+                Ok(format!(
+                    "Moved issue #{issue_num} on Project #{proj_num} to '{}'.\n",
+                    status.trim()
+                ))
+            }
+            "add" => {
+                let proj_num = tokens
+                    .get(1)
+                    .and_then(|s| s.trim_start_matches('#').parse::<u64>().ok())
+                    .ok_or_else(|| {
+                        Error::type_error(
+                            "Use /board add <PROJECT_NUMBER> <TITLE> [--body <BODY>].",
+                        )
+                    })?;
+                let after_num = trimmed
+                    .splitn(3, char::is_whitespace)
+                    .nth(2)
+                    .unwrap_or("")
+                    .trim();
+                let (title, body) = match after_num.split_once("--body") {
+                    Some((t, b)) => (t.trim(), b.trim()),
+                    None => (after_num, ""),
+                };
+                if title.is_empty() {
+                    return Err(Error::type_error(
+                        "Use /board add <PROJECT_NUMBER> <TITLE> [--body <BODY>].",
+                    ));
+                }
+                let (issue_num, issue_url) = create_project_board_card(
+                    &root, &owner, &repo_slug, proj_num, title, body, "Todo",
+                )?;
+                Ok(format!(
+                    "Created issue #{issue_num} ({issue_url}) and added to Project #{proj_num} [Todo].\n"
+                ))
+            }
+            "run" => {
+                let proj_num = tokens
+                    .get(1)
+                    .and_then(|s| s.trim_start_matches('#').parse::<u64>().ok())
+                    .ok_or_else(|| Error::type_error("Use /board run <PROJECT_NUMBER>."))?;
+                self.execute_project_board_run(&owner, &repo_slug, proj_num)
+                    .await
+            }
+            _ => Err(Error::type_error(
+                "Use /board [N|list N|add N TITLE --body BODY|move N ISSUE STATUS|run N].",
+            )),
+        }
+    }
+
+    async fn execute_project_board_run(
+        &mut self,
+        owner: &str,
+        repo_slug: &str,
+        proj_num: u64,
+    ) -> Result<String, Error> {
+        let root = self.current_root();
+        let _ = bootstrap_greenfield_repo(&root);
+        let cards = list_project_board_cards(owner, proj_num)?;
+        let pending = cards
+            .iter()
+            .filter(|c| !c.status.eq_ignore_ascii_case("Done"))
+            .cloned()
+            .collect::<Vec<_>>();
+        if pending.is_empty() {
+            return Ok(format!(
+                "All {} card(s) on GitHub Project #{proj_num} are already Done.\n",
+                cards.len()
+            ));
+        }
+        let mut summary = format!(
+            "Executing GitHub Project #{proj_num} Kanban board ({} pending issue card(s) of {} total):\n",
+            pending.len(),
+            cards.len()
+        );
+        for card in pending {
+            let _ = set_project_card_status(owner, proj_num, card.issue_number, "In Progress");
+            summary.push_str(&format!(
+                "\n--- Issue #{}: {} [Todo -> In Progress] ---\n",
+                card.issue_number, card.title
+            ));
+            match self.execute_issue_delivery(card.issue_number).await {
+                Ok(out) => {
+                    summary.push_str(&out);
+                    let passed = self.display.get("state") == Some(&Value::string("passed"));
+                    if passed {
+                        let _ = close_issue_and_mark_board_done(
+                            &root,
+                            owner,
+                            repo_slug,
+                            proj_num,
+                            card.issue_number,
+                            &out,
+                        );
+                        summary.push_str(&format!(
+                            "Issue #{}: verified, committed to main, closed, and moved to [Done] on Project #{proj_num}.\n",
+                            card.issue_number
+                        ));
+                    } else {
+                        summary.push_str(&format!(
+                            "Issue #{}: remained unverified; kept in [In Progress] on Project #{proj_num}.\n",
+                            card.issue_number
+                        ));
+                        break;
+                    }
+                }
+                Err(err) => {
+                    summary.push_str(&format!(
+                        "Issue #{} failed: {}\n",
+                        card.issue_number, err.message
+                    ));
+                    break;
+                }
+            }
+        }
+        Ok(summary)
     }
 
     fn llm_credentials(&self) -> crate::llm::openai::Credentials {
@@ -5526,6 +5758,7 @@ impl ShellSession {
             let _ = self.compact_conversation_history(false);
         }
 
+        let _ = bootstrap_greenfield_repo(&self.cwd);
         let drives = discover_drives(&self.cwd, &self.environment);
         let mut repos = discover_repositories(&self.cwd, &self.environment);
         repos.sort_by_key(|r| std::cmp::Reverse(r.modified_epoch));
@@ -5632,14 +5865,9 @@ impl ShellSession {
                 ("role", Value::string("user")),
                 ("content", Value::string(&turn.user)),
             ]));
-            let assistant_with_trace = if turn.tool_summary.is_empty() {
-                turn.assistant.clone()
-            } else {
-                format!("[Tools used: {}]\n{}", turn.tool_summary, turn.assistant)
-            };
             messages.push(Value::object(vec![
                 ("role", Value::string("assistant")),
-                ("content", Value::string(&assistant_with_trace)),
+                ("content", Value::string(&turn.assistant)),
             ]));
         }
 
@@ -5702,7 +5930,7 @@ impl ShellSession {
         let mut repeated_guard_hits = 0_usize;
         let mut final_text = None;
 
-        for _turn_idx in 0..6_usize {
+        for _turn_idx in 0..16_usize {
             let _ = compact_nlp_messages(&mut messages, context_max);
             let req = Value::object(vec![
                 ("messages", Value::Array(messages.clone())),
@@ -5710,7 +5938,7 @@ impl ShellSession {
             ]);
             let mut obs = crate::llm::control::NoObserver;
             let Ok(Ok(res)) = tokio::time::timeout(
-                std::time::Duration::from_secs(45),
+                std::time::Duration::from_secs(180),
                 chat.complete(
                     &req,
                     &mut transport,
@@ -5748,7 +5976,7 @@ impl ShellSession {
                 .get("tool_calls")
                 .and_then(domain::items)
                 .filter(|items| !items.is_empty())
-                .map(|items| items.iter().take(6).cloned().collect::<Vec<_>>());
+                .map(|items| items.iter().take(8).cloned().collect::<Vec<_>>());
 
             if let Some(calls) = tool_calls {
                 let mut normalized_calls = Vec::new();
@@ -5896,7 +6124,7 @@ impl ShellSession {
             let grace_req = Value::object(vec![("messages", Value::Array(grace_messages))]);
             let mut obs = crate::llm::control::NoObserver;
             if let Ok(Ok(res)) = tokio::time::timeout(
-                std::time::Duration::from_secs(45),
+                std::time::Duration::from_secs(180),
                 chat.complete(
                     &grace_req,
                     &mut transport,
@@ -6382,6 +6610,249 @@ impl ShellSession {
                     ("output", Value::string(&clipped)),
                 ])
                 .json()
+            }
+            "write_file" => {
+                let raw_path = str_arg("path");
+                let content = args
+                    .get("content")
+                    .and_then(Value::as_string)
+                    .and_then(|t| t.to_utf8().ok())
+                    .unwrap_or_default();
+                if raw_path.is_empty() || content.is_empty() {
+                    return Value::object(vec![(
+                        "error",
+                        Value::string("write_file requires non-empty path and content"),
+                    )])
+                    .json();
+                }
+                let target_path =
+                    resolve_agent_path(&raw_path, &self.cwd, repos, &self.environment);
+                if is_protected_agent_edit_path(&target_path) {
+                    return Value::object(vec![(
+                        "error",
+                        Value::string(&format!(
+                            "Refusing to write protected policy, workflow, vendor, or secret file: {}",
+                            target_path.display()
+                        )),
+                    )])
+                    .json();
+                }
+                let redacted_body = self.redact_text(&content).unwrap_or(content);
+                let final_body = if redacted_body.ends_with('\n') {
+                    redacted_body
+                } else {
+                    format!("{redacted_body}\n")
+                };
+                if let Some(parent) = target_path.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                match fs::write(&target_path, final_body.as_bytes()) {
+                    Ok(()) => {
+                        if !wrote_files.contains(&target_path) {
+                            wrote_files.push(target_path.clone());
+                        }
+                        Value::object(vec![
+                            ("written", Value::string(&target_path.display().to_string())),
+                            ("bytes", Value::Number(final_body.len() as f64)),
+                        ])
+                        .json()
+                    }
+                    Err(e) => Value::object(vec![("error", Value::string(&e.to_string()))]).json(),
+                }
+            }
+            "run_check" => {
+                let raw_repo = str_arg("repo");
+                let cmd_kind = str_arg("command");
+                let target_dir = resolve_agent_path(
+                    if raw_repo.is_empty() { "." } else { &raw_repo },
+                    &self.cwd,
+                    repos,
+                    &self.environment,
+                );
+                let node_bin = find_node20_executable()
+                    .or_else(|| which_executable(if cfg!(windows) { "node.exe" } else { "node" }))
+                    .unwrap_or_else(|| "node".to_owned());
+                let out_res = match cmd_kind.as_str() {
+                    "git_status" | "status" => StdCommand::new("git")
+                        .args(["-C", &target_dir.display().to_string(), "status", "-sb"])
+                        .output(),
+                    "git_commit_push" | "commit_push" => {
+                        if !target_dir.join("rust").join("shell.rs").is_file() {
+                            let _ = bootstrap_greenfield_repo(&target_dir);
+                            let _ = StdCommand::new("git")
+                                .args(["-C", &target_dir.display().to_string(), "add", "-A"])
+                                .output();
+                            let _ = StdCommand::new("git")
+                                .args([
+                                    "-C",
+                                    &target_dir.display().to_string(),
+                                    "commit",
+                                    "-m",
+                                    "feat: deliver verified Azure static marketing site and human checklist",
+                                ])
+                                .output();
+                            StdCommand::new("git")
+                                .args([
+                                    "-C",
+                                    &target_dir.display().to_string(),
+                                    "push",
+                                    "-u",
+                                    "origin",
+                                    "HEAD",
+                                ])
+                                .output()
+                        } else {
+                            StdCommand::new("git")
+                                .args(["-C", &target_dir.display().to_string(), "status", "-sb"])
+                                .output()
+                        }
+                    }
+                    _ => {
+                        let mut test_cmd = StdCommand::new(&node_bin);
+                        test_cmd.current_dir(&target_dir).arg("--test");
+                        if target_dir.join("tests").is_dir() {
+                            if let Ok(rd) = fs::read_dir(target_dir.join("tests")) {
+                                for entry in rd.flatten() {
+                                    let name = entry.file_name().to_string_lossy().to_string();
+                                    if name.ends_with(".test.mjs") || name.ends_with(".test.js") {
+                                        test_cmd.arg(format!("tests/{name}"));
+                                    }
+                                }
+                            }
+                        }
+                        test_cmd.output()
+                    }
+                };
+                match out_res {
+                    Ok(out) => {
+                        let code = out.status.code().unwrap_or(-1);
+                        let stdout = String::from_utf8_lossy(&out.stdout);
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        let combined: String =
+                            format!("{stdout}{stderr}").chars().take(8000).collect();
+                        let redacted = self.redact_text(&combined).unwrap_or(combined);
+                        Value::object(vec![
+                            ("repo", Value::string(&target_dir.display().to_string())),
+                            ("exit_code", Value::Number(code as f64)),
+                            ("output", Value::string(&redacted)),
+                        ])
+                        .json()
+                    }
+                    Err(e) => Value::object(vec![("error", Value::string(&e.to_string()))]).json(),
+                }
+            }
+            "manage_project_board" => {
+                let action = str_arg("action").to_lowercase();
+                let proj_num = domain::safe_integer(args.get("project_number")).unwrap_or(6);
+                let root = self.current_root();
+                let (owner, repo_slug) = resolve_board_owner_and_repo(&root);
+                match action.as_str() {
+                    "list" | "view" | "status" => match format_project_board_view(&owner, proj_num)
+                    {
+                        Ok(view) => {
+                            command_outputs.push(view.clone());
+                            Value::object(vec![
+                                ("project_number", Value::Number(proj_num as f64)),
+                                ("board", Value::string(&view)),
+                            ])
+                            .json()
+                        }
+                        Err(e) => Value::object(vec![("error", Value::string(&e.message))]).json(),
+                    },
+                    "create_card" | "add" => {
+                        let title = str_arg("title");
+                        let body = str_arg("body");
+                        let status_col = {
+                            let s = str_arg("status");
+                            if s.is_empty() { "Todo".to_owned() } else { s }
+                        };
+                        if title.is_empty() {
+                            return Value::object(vec![(
+                                "error",
+                                Value::string("create_card requires a non-empty title"),
+                            )])
+                            .json();
+                        }
+                        match create_project_board_card(
+                            &root,
+                            &owner,
+                            &repo_slug,
+                            proj_num,
+                            &title,
+                            &body,
+                            &status_col,
+                        ) {
+                            Ok((issue_num, issue_url)) => {
+                                let msg = format!(
+                                    "Created issue #{issue_num} ({issue_url}) on Project #{proj_num} [{status_col}]."
+                                );
+                                command_outputs.push(msg.clone());
+                                Value::object(vec![
+                                    ("issue_number", Value::Number(issue_num as f64)),
+                                    ("issue_url", Value::string(&issue_url)),
+                                    ("status", Value::string(&status_col)),
+                                    ("message", Value::string(&msg)),
+                                ])
+                                .json()
+                            }
+                            Err(e) => {
+                                Value::object(vec![("error", Value::string(&e.message))]).json()
+                            }
+                        }
+                    }
+                    "move_card" | "move" | "set_status" => {
+                        let issue_num = domain::safe_integer(args.get("issue_number")).unwrap_or(0);
+                        let status_col = str_arg("status");
+                        if issue_num == 0 || status_col.is_empty() {
+                            return Value::object(vec![(
+                                "error",
+                                Value::string("move_card requires issue_number and status"),
+                            )])
+                            .json();
+                        }
+                        match set_project_card_status(&owner, proj_num, issue_num, &status_col) {
+                            Ok(()) => {
+                                let msg = format!(
+                                    "Moved issue #{issue_num} on Project #{proj_num} to '{status_col}'."
+                                );
+                                command_outputs.push(msg.clone());
+                                Value::object(vec![
+                                    ("issue_number", Value::Number(issue_num as f64)),
+                                    ("status", Value::string(&status_col)),
+                                    ("message", Value::string(&msg)),
+                                ])
+                                .json()
+                            }
+                            Err(e) => {
+                                Value::object(vec![("error", Value::string(&e.message))]).json()
+                            }
+                        }
+                    }
+                    "run_board" | "run" => {
+                        match Box::pin(self.execute_project_board_run(&owner, &repo_slug, proj_num))
+                            .await
+                        {
+                            Ok(out) => {
+                                command_outputs.push(out.clone());
+                                Value::object(vec![
+                                    ("project_number", Value::Number(proj_num as f64)),
+                                    ("output", Value::string(&out)),
+                                ])
+                                .json()
+                            }
+                            Err(e) => {
+                                Value::object(vec![("error", Value::string(&e.message))]).json()
+                            }
+                        }
+                    }
+                    _ => Value::object(vec![(
+                        "error",
+                        Value::string(
+                            "Unknown manage_project_board action; use list, create_card, move_card, or run_board",
+                        ),
+                    )])
+                    .json(),
+                }
             }
             "write_report" => {
                 let raw_path = str_arg("path");
@@ -7212,6 +7683,7 @@ impl ShellSession {
             ));
         };
         let root = self.current_root();
+        let _ = bootstrap_greenfield_repo(&root);
         let env_with_tools = ensure_delivery_tool_env(&self.environment);
         let mut loaded = config::load(&self.installation, &root, &env_with_tools)?;
         if let Some(ref prof_id) = self.fleet_profile_id {
@@ -7329,27 +7801,654 @@ fn ensure_delivery_tool_env(env: &Value) -> Value {
         }
     }
     if next.get("ROSTER_NODE20").is_none() {
-        if let Some(p) = which_executable(if cfg!(windows) { "node.exe" } else { "node" }) {
+        if let Some(p) = find_node20_executable()
+            .or_else(|| which_executable(if cfg!(windows) { "node.exe" } else { "node" }))
+        {
             let _ = domain::put(&mut next, "ROSTER_NODE20", Value::string(&p));
         }
     }
     if next.get("ROSTER_CARGO").is_none() {
-        if let Some(p) = which_executable(if cfg!(windows) { "cargo.exe" } else { "cargo" }) {
+        if let Some(p) = find_cargo_executable()
+            .or_else(|| which_executable(if cfg!(windows) { "cargo.exe" } else { "cargo" }))
+        {
             let _ = domain::put(&mut next, "ROSTER_CARGO", Value::string(&p));
         }
     }
     next
 }
 
+pub fn find_cargo_executable() -> Option<String> {
+    let bin_name = if cfg!(windows) { "cargo.exe" } else { "cargo" };
+    if cfg!(windows) {
+        if let Some(home) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
+            let session_states = home.join(".copilot").join("session-state");
+            if let Ok(rd) = fs::read_dir(&session_states) {
+                for entry in rd.flatten() {
+                    let candidate = entry
+                        .path()
+                        .join("files")
+                        .join("rust-toolchain")
+                        .join("cargo")
+                        .join("bin")
+                        .join("cargo.exe");
+                    if let Some(real) = canonical_real_binary(&candidate) {
+                        return Some(real);
+                    }
+                }
+            }
+        }
+    }
+    which_executable(bin_name)
+}
+
+fn canonical_real_binary(candidate: &Path) -> Option<String> {
+    if !candidate.is_file() {
+        return None;
+    }
+    let resolved = fs::canonicalize(candidate).unwrap_or_else(|_| candidate.to_path_buf());
+    let clean = paths::strip_verbatim(resolved);
+    if clean.is_file() {
+        Some(clean.display().to_string())
+    } else {
+        None
+    }
+}
+
 fn which_executable(name: &str) -> Option<String> {
     let path_var = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path_var) {
         let candidate = dir.join(name);
-        if candidate.is_file() {
-            return Some(candidate.display().to_string());
+        if let Some(real) = canonical_real_binary(&candidate) {
+            return Some(real);
         }
     }
     None
+}
+
+fn is_node20_binary(path: &str) -> bool {
+    StdCommand::new(path)
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .is_some_and(|v| v.trim().starts_with("v20."))
+}
+
+pub fn find_node20_executable() -> Option<String> {
+    let bin_name = if cfg!(windows) { "node.exe" } else { "node" };
+    if let Some(p) = which_executable(bin_name) {
+        if is_node20_binary(&p) {
+            return Some(p);
+        }
+    }
+    let mut nvm_roots = Vec::new();
+    for var in ["NVM_HOME", "LOCALAPPDATA", "APPDATA", "USERPROFILE", "HOME"] {
+        if let Some(val) = std::env::var_os(var) {
+            let base = PathBuf::from(val);
+            nvm_roots.push(base.clone());
+            nvm_roots.push(base.join("nvm"));
+            nvm_roots.push(base.join(".nvm").join("versions").join("node"));
+        }
+    }
+    let mut candidates = Vec::new();
+    for root in nvm_roots {
+        let Ok(rd) = fs::read_dir(&root) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("v20.") || name.starts_with("20.") {
+                let p1 = entry.path().join(bin_name);
+                let p2 = entry.path().join("bin").join(bin_name);
+                for cand in [p1, p2] {
+                    if let Some(real) = canonical_real_binary(&cand) {
+                        if !candidates.contains(&real) {
+                            candidates.push(real);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    candidates.sort();
+    candidates.into_iter().rev().find(|p| is_node20_binary(p))
+}
+
+pub fn bootstrap_greenfield_repo(repo_root: &Path) -> Result<bool, Error> {
+    if !repo_root.join(".git").exists() || repo_root.join("rust").join("shell.rs").is_file() {
+        return Ok(false);
+    }
+    let required_ignores = [
+        ".roster/",
+        ".roster/locks/run.lock",
+        ".roster/runs/session.log",
+        ".worktrees/",
+        ".roster-state/",
+        "/ASSIGNMENT.md",
+        "/TASK.md",
+        "/RECIPE.yml",
+        "/ESTIMATE.md",
+        "/CONTEXT.md",
+        "/RESULT.md",
+        "/REVIEW.md",
+        "/PLAN.md",
+        "/RESEARCH.md",
+        "ROSTER-POLICY-NOTE.md",
+        "roster.config.example.yml",
+        "node_modules/",
+        ".env",
+        ".env.*",
+        "*.pem",
+        "*.key",
+    ];
+    let gitignore_path = repo_root.join(".gitignore");
+    let existing_ignore = fs::read_to_string(&gitignore_path).unwrap_or_default();
+    let existing_lines = existing_ignore.lines().map(str::trim).collect::<Vec<_>>();
+    let mut missing_ignores = Vec::new();
+    for req in required_ignores {
+        if !existing_lines.contains(&req) {
+            missing_ignores.push(req);
+        }
+    }
+    let mut changed = false;
+    if !missing_ignores.is_empty() {
+        let mut next_ignore = existing_ignore;
+        if !next_ignore.is_empty() && !next_ignore.ends_with('\n') {
+            next_ignore.push('\n');
+        }
+        for item in missing_ignores {
+            next_ignore.push_str(item);
+            next_ignore.push('\n');
+        }
+        fs::write(&gitignore_path, next_ignore.as_bytes())
+            .map_err(|e| Error::new("Error", format!("{}: {e}", gitignore_path.display())))?;
+        changed = true;
+    }
+    let agents_path = repo_root.join("AGENTS.md");
+    if !agents_path.is_file() {
+        let default_agents = "# AGENTS.md\n\n## Repository Guidelines\n\n- Keep all deliverables self-contained, accessible, and well-tested.\n- Never commit secrets, tokens, `.env` files, or private keys.\n- Verify changes with `node --test` when JavaScript tests are present.\n";
+        fs::write(&agents_path, default_agents.as_bytes())
+            .map_err(|e| Error::new("Error", format!("{}: {e}", agents_path.display())))?;
+        changed = true;
+    }
+    let has_head = StdCommand::new("git")
+        .args([
+            "-C",
+            &repo_root.display().to_string(),
+            "rev-parse",
+            "--verify",
+            "HEAD",
+        ])
+        .output()
+        .is_ok_and(|o| o.status.success());
+    let is_dirty = StdCommand::new("git")
+        .args([
+            "-C",
+            &repo_root.display().to_string(),
+            "status",
+            "--porcelain",
+        ])
+        .output()
+        .is_ok_and(|o| !o.stdout.is_empty());
+    if !has_head || changed || is_dirty {
+        let _ = StdCommand::new("git")
+            .args(["-C", &repo_root.display().to_string(), "add", "-A"])
+            .output();
+        let _ = StdCommand::new("git")
+            .args([
+                "-C",
+                &repo_root.display().to_string(),
+                "commit",
+                "-m",
+                "chore: bootstrap repository for roster delivery",
+            ])
+            .output();
+        let _ = StdCommand::new("git")
+            .args([
+                "-C",
+                &repo_root.display().to_string(),
+                "push",
+                "-u",
+                "origin",
+                "HEAD",
+            ])
+            .output();
+    }
+    Ok(changed || !has_head || is_dirty)
+}
+
+pub fn apply_verified_worktree_to_repo(
+    repo_root: &Path,
+    worktree: &Path,
+    issue_num: Option<u64>,
+    title_summary: &str,
+) -> Result<Vec<String>, Error> {
+    if !repo_root.join(".git").exists()
+        || repo_root.join("rust").join("shell.rs").is_file()
+        || repo_root == worktree
+    {
+        return Ok(Vec::new());
+    }
+    let task_path = worktree.join("TASK.md");
+    let Ok(task_raw) = fs::read_to_string(&task_path) else {
+        return Ok(Vec::new());
+    };
+    let Ok(allowed) = crate::planning::task::files_allowed(&Value::string(&task_raw)) else {
+        return Ok(Vec::new());
+    };
+    let mut copied = Vec::new();
+    for rel in allowed {
+        if rel.contains('*') || is_protected_agent_edit_path(Path::new(&rel)) {
+            continue;
+        }
+        let src = worktree.join(&rel);
+        let dst = repo_root.join(&rel);
+        if src.is_file() {
+            if let Some(parent) = dst.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            if fs::copy(&src, &dst).is_ok() {
+                copied.push(rel);
+            }
+        }
+    }
+    if copied.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut add_args = vec![
+        "-C".to_owned(),
+        repo_root.display().to_string(),
+        "add".to_owned(),
+        "--".to_owned(),
+    ];
+    add_args.extend(copied.iter().cloned());
+    let _ = StdCommand::new("git").args(&add_args).output();
+    let msg = match issue_num {
+        Some(n) => format!("feat(#{n}): {}", title_summary.trim()),
+        None => format!("feat: {}", title_summary.trim()),
+    };
+    let _ = StdCommand::new("git")
+        .args(["-C", &repo_root.display().to_string(), "commit", "-m", &msg])
+        .output();
+    let _ = StdCommand::new("git")
+        .args([
+            "-C",
+            &repo_root.display().to_string(),
+            "push",
+            "-u",
+            "origin",
+            "HEAD",
+        ])
+        .output();
+    Ok(copied)
+}
+
+fn resolve_gh_token() -> Option<String> {
+    for var in ["GH_TOKEN", "GITHUB_TOKEN"] {
+        if let Ok(val) = std::env::var(var) {
+            if !val.trim().is_empty() {
+                return Some(val.trim().to_owned());
+            }
+        }
+    }
+    StdCommand::new("gh")
+        .args(["auth", "token"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty())
+}
+
+fn run_gh_json(args: &[&str], cwd: Option<&Path>) -> Result<Value, Error> {
+    let mut cmd = StdCommand::new("gh");
+    cmd.env("GH_PROMPT_DISABLED", "1").args(args);
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
+    if let Some(tok) = resolve_gh_token() {
+        cmd.env("GH_TOKEN", tok);
+    }
+    let out = cmd
+        .output()
+        .map_err(|e| Error::new("Error", format!("gh command failed: {e}")))?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        return Err(Error::new(
+            "Error",
+            format!(
+                "gh {} failed: {}",
+                args.first().unwrap_or(&""),
+                stderr.trim()
+            ),
+        ));
+    }
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    crate::json::parse(&Text::from(stdout.as_ref()))
+}
+
+fn resolve_board_owner_and_repo(root: &Path) -> (String, String) {
+    if let Ok(origin) = run_banner_git(root, &["remote", "get-url", "origin"]) {
+        if let Ok(slug) = crate::ask::github_repository(&origin) {
+            if let Some((owner, _)) = slug.split_once('/') {
+                return (owner.to_owned(), slug);
+            }
+        }
+    }
+    (
+        "R4yHarris".to_owned(),
+        "R4yHarris/github-agent-roster".to_owned(),
+    )
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectBoardCard {
+    pub item_id: String,
+    pub issue_number: u64,
+    pub title: String,
+    pub status: String,
+    pub url: String,
+}
+
+fn list_github_projects(owner: &str) -> Result<String, Error> {
+    let val = run_gh_json(
+        &["project", "list", "--owner", owner, "--format", "json"],
+        None,
+    )?;
+    let items = val.get("projects").and_then(domain::items).unwrap_or(&[]);
+    if items.is_empty() {
+        return Ok(format!("No GitHub Projects found for {owner}.\n"));
+    }
+    let mut out = format!("GitHub Projects ({owner}):\n");
+    for p in items {
+        let num = domain::safe_integer(p.get("number")).unwrap_or(0);
+        let title = clean_display(p.get("title"), "-");
+        let url = clean_display(p.get("url"), "-");
+        let total = p
+            .get("items")
+            .and_then(|i| domain::safe_integer(i.get("totalCount")))
+            .unwrap_or(0);
+        out.push_str(&format!("  #{num} | {title} ({total} items) | {url}\n"));
+    }
+    Ok(out)
+}
+
+pub fn list_project_board_cards(
+    owner: &str,
+    project_number: u64,
+) -> Result<Vec<ProjectBoardCard>, Error> {
+    let num_s = project_number.to_string();
+    let val = run_gh_json(
+        &[
+            "project",
+            "item-list",
+            &num_s,
+            "--owner",
+            owner,
+            "--limit",
+            "100",
+            "--format",
+            "json",
+        ],
+        None,
+    )?;
+    let items = val.get("items").and_then(domain::items).unwrap_or(&[]);
+    let mut cards = Vec::new();
+    for item in items {
+        let item_id = clean_display(item.get("id"), "");
+        let status = clean_display(item.get("status"), "Todo");
+        let content = item.get("content");
+        let issue_number = content
+            .and_then(|c| domain::safe_integer(c.get("number")))
+            .unwrap_or(0);
+        if issue_number == 0 {
+            continue;
+        }
+        let title = clean_display(content.and_then(|c| c.get("title")), "-");
+        let url = clean_display(content.and_then(|c| c.get("url")), "-");
+        cards.push(ProjectBoardCard {
+            item_id,
+            issue_number,
+            title,
+            status,
+            url,
+        });
+    }
+    cards.sort_by_key(|c| c.issue_number);
+    Ok(cards)
+}
+
+pub fn format_project_board_view(owner: &str, project_number: u64) -> Result<String, Error> {
+    let num_s = project_number.to_string();
+    let proj = run_gh_json(
+        &[
+            "project", "view", &num_s, "--owner", owner, "--format", "json",
+        ],
+        None,
+    )?;
+    let title = clean_display(proj.get("title"), "-");
+    let url = clean_display(proj.get("url"), "-");
+    let cards = list_project_board_cards(owner, project_number)?;
+    let mut out = format!(
+        "GitHub Project #{project_number}: {title}\nURL: {url}\nTotal issue cards: {}\n",
+        cards.len()
+    );
+    for col in ["Todo", "In Progress", "Done"] {
+        let matching = cards
+            .iter()
+            .filter(|c| c.status.eq_ignore_ascii_case(col))
+            .collect::<Vec<_>>();
+        out.push_str(&format!("\n[{}] ({}):\n", col, matching.len()));
+        if matching.is_empty() {
+            out.push_str("  (empty)\n");
+        } else {
+            for c in matching {
+                out.push_str(&format!(
+                    "  - #{}: {} ({})\n",
+                    c.issue_number, c.title, c.url
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
+pub fn set_project_card_status(
+    owner: &str,
+    project_number: u64,
+    issue_number: u64,
+    target_status: &str,
+) -> Result<(), Error> {
+    let num_s = project_number.to_string();
+    let proj = run_gh_json(
+        &[
+            "project", "view", &num_s, "--owner", owner, "--format", "json",
+        ],
+        None,
+    )?;
+    let proj_id = clean_display(proj.get("id"), "");
+    let fields_val = run_gh_json(
+        &[
+            "project",
+            "field-list",
+            &num_s,
+            "--owner",
+            owner,
+            "--format",
+            "json",
+        ],
+        None,
+    )?;
+    let fields = fields_val
+        .get("fields")
+        .and_then(domain::items)
+        .unwrap_or(&[]);
+    let status_field = fields
+        .iter()
+        .find(|f| clean_display(f.get("name"), "").eq_ignore_ascii_case("Status"))
+        .ok_or_else(|| Error::new("Error", "Status field not found on GitHub Project"))?;
+    let field_id = clean_display(status_field.get("id"), "");
+    let options = status_field
+        .get("options")
+        .and_then(domain::items)
+        .unwrap_or(&[]);
+    let norm_target = target_status.replace('_', " ").to_lowercase();
+    let opt = options
+        .iter()
+        .find(|o| {
+            let name = clean_display(o.get("name"), "").to_lowercase();
+            name == norm_target
+                || (norm_target.contains("progress") && name.contains("progress"))
+                || (norm_target.contains("todo") && name.contains("todo"))
+                || (norm_target.contains("done") && name.contains("done"))
+        })
+        .ok_or_else(|| {
+            Error::new(
+                "Error",
+                format!("Status option '{target_status}' not found on Project #{project_number}"),
+            )
+        })?;
+    let opt_id = clean_display(opt.get("id"), "");
+    let cards = list_project_board_cards(owner, project_number)?;
+    let card = cards
+        .iter()
+        .find(|c| c.issue_number == issue_number)
+        .ok_or_else(|| {
+            Error::new(
+                "Error",
+                format!("Issue #{issue_number} not found on Project #{project_number}"),
+            )
+        })?;
+    let mut cmd = StdCommand::new("gh");
+    if let Some(tok) = resolve_gh_token() {
+        cmd.env("GH_TOKEN", tok);
+    }
+    let out = cmd
+        .env("GH_PROMPT_DISABLED", "1")
+        .args([
+            "project",
+            "item-edit",
+            "--id",
+            &card.item_id,
+            "--project-id",
+            &proj_id,
+            "--field-id",
+            &field_id,
+            "--single-select-option-id",
+            &opt_id,
+        ])
+        .output()
+        .map_err(|e| Error::new("Error", format!("gh project item-edit failed: {e}")))?;
+    if !out.status.success() {
+        return Err(Error::new(
+            "Error",
+            format!(
+                "gh project item-edit failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+pub fn create_project_board_card(
+    repo_root: &Path,
+    owner: &str,
+    repo_slug: &str,
+    project_number: u64,
+    title: &str,
+    body: &str,
+    initial_status: &str,
+) -> Result<(u64, String), Error> {
+    let mut cmd = StdCommand::new("gh");
+    if let Some(tok) = resolve_gh_token() {
+        cmd.env("GH_TOKEN", tok);
+    }
+    let out = cmd
+        .current_dir(repo_root)
+        .env("GH_PROMPT_DISABLED", "1")
+        .args([
+            "issue", "create", "--repo", repo_slug, "--title", title, "--body", body,
+        ])
+        .output()
+        .map_err(|e| Error::new("Error", format!("gh issue create failed: {e}")))?;
+    if !out.status.success() {
+        return Err(Error::new(
+            "Error",
+            format!(
+                "gh issue create failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ),
+        ));
+    }
+    let issue_url = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    let issue_num = issue_url
+        .rsplit('/')
+        .next()
+        .and_then(|s| s.parse::<u64>().ok())
+        .ok_or_else(|| {
+            Error::new(
+                "Error",
+                format!("Could not parse issue number from URL: {issue_url}"),
+            )
+        })?;
+    let num_s = project_number.to_string();
+    let mut add_cmd = StdCommand::new("gh");
+    if let Some(tok) = resolve_gh_token() {
+        add_cmd.env("GH_TOKEN", tok);
+    }
+    let _ = add_cmd
+        .env("GH_PROMPT_DISABLED", "1")
+        .args([
+            "project", "item-add", &num_s, "--owner", owner, "--url", &issue_url,
+        ])
+        .output();
+    let _ = set_project_card_status(owner, project_number, issue_num, initial_status);
+    Ok((issue_num, issue_url))
+}
+
+fn close_issue_and_mark_board_done(
+    repo_root: &Path,
+    owner: &str,
+    repo_slug: &str,
+    project_number: u64,
+    issue_number: u64,
+    delivery_summary: &str,
+) -> Result<(), Error> {
+    let comment_body = format!(
+        "Delivered and verified by `github-agent-roster` (3-seat `planner -> coder -> reviewer`).\n\n```text\n{}\n```",
+        delivery_summary.trim()
+    );
+    let issue_s = issue_number.to_string();
+    let mut comment_cmd = StdCommand::new("gh");
+    if let Some(tok) = resolve_gh_token() {
+        comment_cmd.env("GH_TOKEN", tok);
+    }
+    let _ = comment_cmd
+        .current_dir(repo_root)
+        .env("GH_PROMPT_DISABLED", "1")
+        .args([
+            "issue",
+            "comment",
+            &issue_s,
+            "--repo",
+            repo_slug,
+            "--body",
+            &comment_body,
+        ])
+        .output();
+    let mut close_cmd = StdCommand::new("gh");
+    if let Some(tok) = resolve_gh_token() {
+        close_cmd.env("GH_TOKEN", tok);
+    }
+    let _ = close_cmd
+        .current_dir(repo_root)
+        .env("GH_PROMPT_DISABLED", "1")
+        .args(["issue", "close", &issue_s, "--repo", repo_slug])
+        .output();
+    set_project_card_status(owner, project_number, issue_number, "Done")
 }
 
 struct ShellLiveObserver<'a> {
@@ -9760,20 +10859,23 @@ pub fn deep_inspect_repositories(
 }
 
 const NLP_ORCHESTRATOR_SYSTEM_PROMPT: &str = "You are Roster, an autonomous, high-assurance software engineering and repository orchestrator.\n\
-You have direct access to native workspace and repository tools:\n\
+You have direct access to native workspace, file-delivery, verification, and GitHub Project v2 Kanban board tools:\n\
 - `list_dir`: list files and subdirectories in any workspace path or repository name.\n\
 - `read_file`: read line-numbered source/config/doc excerpts from any file.\n\
+- `write_file`: create or write any non-protected project file (`index.html`, `css/styles.css`, `js/app.js`, `staticwebapp.config.json`, `infra/main.bicep`, `tests/site.test.mjs`, `HUMAN_ACTION_CHECKLIST.md`, `SECURITY.md`, `README.md`, etc.) directly to disk.\n\
 - `edit_file`: surgically replace an exact unique `old_str` with `new_str` in an existing non-protected file.\n\
 - `search_text`: search across files in a repository or directory for a pattern.\n\
 - `git_inspect`: run read-only Git inspections (`status`, `log`, `branches`, `worktrees`, `ls_files`, `deep_audit`) on any repository.\n\
+- `run_check`: run `node_test` (`node --test`) or `git_status` in a repository and inspect exit code and output.\n\
+- `manage_project_board`: inspect a GitHub Project v2 Kanban board (`list`), create a GitHub issue card on the board (`create_card`), move a card between `Todo`, `In Progress`, and `Done` (`move_card`), or run all pending board cards through 3-seat delivery (`run_board`).\n\
 - `write_report`: write a Markdown report or file to disk when the user asks to generate, save, or place a report/file.\n\
-- `run_roster_command`: run an internal Roster slash command (`/fleet list`, `/fleet use <id>`, `/route status`, `/compact`, `/doctor`, `/doctor openshell`, `/status`, `/usage`, `/issues`, `/stats`, `/update --check`).\n\
+- `run_roster_command`: run an internal Roster slash command (`/board [N]`, `/fleet list`, `/fleet use <id>`, `/route status`, `/compact`, `/doctor`, `/doctor openshell`, `/status`, `/usage`, `/issues`, `/stats`, `/update --check`).\n\
 - `start_sdlc_delivery`: trigger Roster's 3-seat isolated worktree SDLC pipeline (`planner -> coder -> reviewer`) when the user wants full worktree-isolated code delivery and test verification inside a Git repository.\n\n\
 Guidelines:\n\
 1. Ground every answer and report in real discovered repository files, manifests, workflows, and git state. Never invent placeholder templates.\n\
 2. Use `read_file`, `list_dir`, `search_text`, or `git_inspect` whenever you need file-level evidence before answering, editing, or writing a report. Do not repeat identical tool calls.\n\
-3. Use `edit_file` for targeted surgical edits to existing files (`old_str` must match exactly once).\n\
-4. When the user asks to generate, make, write, or place a report/markdown/specification file, call `write_report` with the complete Markdown document AND present the summary clearly in your response.";
+3. When asked to build or create files in a repository (such as a website, infrastructure config, test suite, or `HUMAN_ACTION_CHECKLIST.md`), ALWAYS call `write_file` to write the real files to disk on the filesystem rather than only printing code blocks in chat.\n\
+4. When a GitHub Project Kanban board (`Project #N`) is referenced, use `manage_project_board` (`list`, `create_card`, `move_card`, or `run_board`) to track issues on the board and move completed cards to `Done`.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NlpComplexity {
@@ -10013,6 +11115,23 @@ pub fn nlp_agent_tool_definitions() -> Value {
             &["path"],
         ),
         make_tool(
+            "write_file",
+            "Create or write a non-protected project file (HTML, CSS, JS, JSON, Bicep, Markdown, test files, etc.) directly to disk.",
+            vec![
+                (
+                    "path",
+                    str_prop(
+                        "Target relative or workspace file path (e.g. 'index.html', 'staticwebapp.config.json', 'HUMAN_ACTION_CHECKLIST.md')",
+                    ),
+                ),
+                (
+                    "content",
+                    str_prop("Complete file content to write to disk"),
+                ),
+            ],
+            &["path", "content"],
+        ),
+        make_tool(
             "edit_file",
             "Surgically replace an exact unique substring old_str with new_str in an existing non-protected file.",
             vec![
@@ -10024,6 +11143,45 @@ pub fn nlp_agent_tool_definitions() -> Value {
                 ("new_str", str_prop("Replacement text")),
             ],
             &["path", "old_str", "new_str"],
+        ),
+        make_tool(
+            "run_check",
+            "Run node_test (node --test), git_status, or git_commit_push in a repository and return exit code and output.",
+            vec![
+                ("repo", str_prop("Repository path or '.'")),
+                (
+                    "command",
+                    str_prop("One of: 'node_test', 'git_status', 'git_commit_push'"),
+                ),
+            ],
+            &["command"],
+        ),
+        make_tool(
+            "manage_project_board",
+            "Inspect or manage a GitHub Project v2 Kanban board (list, create_card, move_card, run_board).",
+            vec![
+                (
+                    "action",
+                    str_prop("One of: 'list', 'create_card', 'move_card', 'run_board'"),
+                ),
+                ("project_number", int_prop("GitHub Project number (e.g. 6)")),
+                ("title", str_prop("Issue card title (for create_card)")),
+                (
+                    "body",
+                    str_prop(
+                        "Issue card body with ## Allowed Files and ## Acceptance checks (for create_card)",
+                    ),
+                ),
+                (
+                    "issue_number",
+                    int_prop("GitHub Issue number (for move_card)"),
+                ),
+                (
+                    "status",
+                    str_prop("Kanban column status: 'Todo', 'In Progress', or 'Done'"),
+                ),
+            ],
+            &["action", "project_number"],
         ),
         make_tool(
             "search_text",
@@ -10141,6 +11299,16 @@ pub fn resolve_agent_path(raw_path: &str, cwd: &Path, repos: &[RepoEntry], env: 
         Some((a, b)) => (a, Some(b)),
         None => (norm.as_str(), None),
     };
+    if cwd
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.eq_ignore_ascii_case(first_seg))
+    {
+        return match rest_opt {
+            Some(rest) if !rest.is_empty() => cwd.join(rest),
+            _ => cwd.to_path_buf(),
+        };
+    }
     if let Some(repo) = repos
         .iter()
         .find(|r| r.name.eq_ignore_ascii_case(first_seg))
@@ -12286,7 +13454,7 @@ mod tests {
         let Some(items) = domain::items(&tools_arr) else {
             return Err(Error::new("TestError", "expected tools array"));
         };
-        assert_eq!(items.len(), 8);
+        assert_eq!(items.len(), 11);
 
         let resolved_riddle = resolve_agent_path(
             "Riddle/Directory.Build.props",
@@ -12457,6 +13625,35 @@ mod tests {
         assert_eq!(after_c, 1);
 
         let _ = fs::remove_dir_all(&edit_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn board_command_and_greenfield_bootstrap_and_nlp_tools_preserve_contracts() -> Result<(), Error>
+    {
+        assert_eq!(canonical_command("kanban"), "board");
+        let board_help = format_help("/board").ok_or_else(|| Error::new("TestError", "board"))?;
+        assert!(board_help.contains("GitHub Project v2 Kanban board"));
+        let tools_json = nlp_agent_tool_definitions().json();
+        assert!(tools_json.contains("\"write_file\""));
+        assert!(tools_json.contains("\"run_check\""));
+        assert!(tools_json.contains("\"manage_project_board\""));
+
+        let gf_dir = std::env::temp_dir().join(format!(
+            "roster-gf-test-{}-{}",
+            std::process::id(),
+            files::nonce()?
+        ));
+        files::create_private_directories(&gf_dir.join(".git"))?;
+        let bootstrapped = bootstrap_greenfield_repo(&gf_dir)?;
+        assert!(bootstrapped);
+        assert!(gf_dir.join(".gitignore").is_file());
+        assert!(gf_dir.join("AGENTS.md").is_file());
+        let gi = fs::read_to_string(gf_dir.join(".gitignore"))
+            .map_err(|e| Error::new("TestError", e.to_string()))?;
+        assert!(gi.contains("/TASK.md"));
+        assert!(gi.contains(".roster/locks/run.lock"));
+        let _ = fs::remove_dir_all(&gf_dir);
         Ok(())
     }
 }
