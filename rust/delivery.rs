@@ -1031,6 +1031,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
         let contracts =
             start::Contracts::open(options.installation, &contracts_path, git, &token).await?;
         if contracts_path.is_absolute()
+            && paths.worktree.join(".gitmodules").is_file()
             && !options
                 .approval
                 .submodules
