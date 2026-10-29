@@ -438,17 +438,30 @@ pub async fn run(
             let at_candidate = run_one(owner, approval, &scratch, owner.root(), target, false).await?;
             runs.push(observed(&at_base, "base", owner)?);
             runs.push(observed(&at_candidate, "candidate", owner)?);
+            let mut target_red_count = 0_usize;
             for name in &target.names {
                 let base = verdict(&at_base, name, target.engine)?;
                 let candidate = verdict(&at_candidate, name, target.engine)?;
                 unavailable |= base == Verdict::Missing || candidate == Verdict::Missing;
-                failed |= base != Verdict::Fail || candidate != Verdict::Pass;
+                if base == Verdict::Fail && candidate == Verdict::Pass {
+                    target_red_count += 1;
+                }
+                let single_not_red = target.names.len() == 1 && base != Verdict::Fail;
+                failed |= candidate != Verdict::Pass || single_not_red;
                 tests.push(Value::object(vec![
                     ("file", Value::string(&target.file)), ("name", Value::String(name.clone())),
                     ("base", Value::string(base.label())), ("candidate", Value::string(candidate.label())),
                 ]));
-                if base != Verdict::Fail || candidate != Verdict::Pass {
+                if candidate != Verdict::Pass || single_not_red {
                     reasons.push(Text::from(format!("Counterfactual {} {:?}: base {}, candidate {}; compiler/setup failure or missing named output is not a red test.", target.file, name.to_utf8()?, base.label(), candidate.label()).as_str()));
+                }
+            }
+            if target_red_count == 0 && !unavailable {
+                failed = true;
+                if reasons.is_empty() {
+                    if let Some(first_name) = target.names.first() {
+                        reasons.push(Text::from(format!("Counterfactual {} {:?}: base pass, candidate pass; compiler/setup failure or missing named output is not a red test.", target.file, first_name.to_utf8()?).as_str()));
+                    }
                 }
             }
         }
