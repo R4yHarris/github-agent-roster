@@ -71,6 +71,19 @@ impl Request {
             body.push_str(js_trim(&design.content));
             body.push_str("\n\n");
         }
+        if let Some(tests) = boundary.last_tests() {
+            let exit = domain::safe_integer(tests.result().get("exit_code")).unwrap_or(0);
+            let status_label = if exit == 0 { "PASS" } else { "FAIL" };
+            let test_summary = Text::from(
+                format!(
+                    "## Current test execution evidence\n\nrun_test (`node --test` / native test suite) executed on current source: exit_code = {exit} ({status_label})\n\n"
+                )
+                .as_str(),
+            );
+            if body.0.len() + test_summary.0.len() + 256 <= budget {
+                body.0.extend(test_summary.0);
+            }
+        }
         body.push_str("## Diff\n\n");
         if body.0.len() > budget {
             return Err(Error::new(

@@ -335,8 +335,43 @@ pub fn parse_review_requests(content: &Text) -> Result<Option<Value>, Error> {
 }
 
 pub fn parse_self_review(content: &Text, check_count: u64) -> Result<Value, Error> {
-    let report = crate::json::parse(content)
+    let mut report = crate::json::parse(content)
         .map_err(|_| Error::new("Error", "Self-review did not return valid JSON"))?;
+    if matches!(report, Value::Object(_)) && report.get("findings").is_none() {
+        let _ = domain::put(&mut report, "findings", Value::Array(Vec::new()));
+    }
+    if let Some(raw_checks) = report.get("checks").and_then(domain::items) {
+        let normalized_checks = raw_checks
+            .iter()
+            .map(|c| {
+                let mut c_clone = c.clone();
+                if let Some(ev) = c.get("evidence").and_then(Value::as_string) {
+                    if !ev
+                        .0
+                        .iter()
+                        .any(|u| matches!(u, 0..=8 | 11..=12 | 14..=31 | 127))
+                    {
+                        if let Ok(utf8) = ev.to_utf8() {
+                            let cleaned = utf8
+                                .replace(['\r', '\n', '\t'], " ")
+                                .split_whitespace()
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                                .chars()
+                                .take(280)
+                                .collect::<String>();
+                            if !cleaned.is_empty() {
+                                let _ =
+                                    domain::put(&mut c_clone, "evidence", Value::string(&cleaned));
+                            }
+                        }
+                    }
+                }
+                c_clone
+            })
+            .collect::<Vec<_>>();
+        let _ = domain::put(&mut report, "checks", Value::Array(normalized_checks));
+    }
     let line = |value: &Value| {
         value.as_string().is_some_and(|value| {
             !crate::text::trim(&value.0).is_empty()
