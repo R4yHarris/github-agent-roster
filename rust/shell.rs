@@ -2581,11 +2581,12 @@ pub async fn set_config_value(
     value: &str,
     token: Option<&crate::cancel::CancellationToken>,
 ) -> Result<Value, Error> {
-    let root = config::resolve_config_root(installation, cwd)?;
+    let env_val = crate::ask::environment_value_from_process();
+    let root = config::resolve_config_root_with_env(installation, cwd, Some(&env_val))?;
     let previous = settings::read_private_file(&root, settings::Name::Config)?;
     let mut cfg = match &previous {
         Some(src) => config::parse(src)?.as_value().clone(),
-        None => config::load(installation, cwd, &Value::object(Vec::new()))?
+        None => config::load(installation, cwd, &env_val)?
             .config
             .as_value()
             .clone(),
@@ -5925,7 +5926,7 @@ impl ShellSession {
 
         let mut chat_cfg = self.config.clone();
         let mut chat_llm = llm;
-        let _ = domain::put(&mut chat_llm, "max_tokens", Value::Number(8192.0));
+        let _ = domain::put(&mut chat_llm, "max_tokens", Value::Number(16384.0));
         let _ = domain::put(&mut chat_llm, "effort", Value::string("none"));
         let _ = domain::put(&mut chat_llm, "thinking", Value::Boolean(false));
         let _ = domain::put(&mut chat_cfg, "llm", chat_llm);
@@ -6063,7 +6064,7 @@ impl ShellSession {
         let mut repeated_guard_hits = 0_usize;
         let mut final_text = None;
 
-        for _turn_idx in 0..16_usize {
+        for _turn_idx in 0..28_usize {
             let _ = compact_nlp_messages(&mut messages, context_max);
             let req = Value::object(vec![
                 ("messages", Value::Array(messages.clone())),
@@ -6161,6 +6162,12 @@ impl ShellSession {
                 for (call_id, call_name, raw_args) in normalized_calls {
                     let args_val = crate::json::parse(&Text::from(raw_args.as_str()))
                         .unwrap_or_else(|_| Value::object(Vec::new()));
+                    if matches!(
+                        call_name.as_str(),
+                        "write_file" | "edit_file" | "write_report"
+                    ) {
+                        seen_tool_calls.clear();
+                    }
                     let sig = canonical_tool_call_signature(&call_name, &args_val);
                     let seen_count = seen_tool_calls.entry(sig).or_insert(0);
                     *seen_count += 1;
@@ -6220,13 +6227,37 @@ impl ShellSession {
                         ("content", Value::string(&tool_out)),
                     ]));
                 }
-                if repeated_guard_hits >= 2 {
+                if repeated_guard_hits >= 6 {
                     break;
                 }
                 continue;
             }
 
             if domain::is_text(res.finish_reason.as_ref(), "length") {
+                if _turn_idx + 1 < 28 {
+                    if let Some(partial) = res
+                        .message
+                        .get("content")
+                        .and_then(Value::as_string)
+                        .and_then(|t| t.to_utf8().ok())
+                        .filter(|s| !s.trim().is_empty())
+                    {
+                        messages.push(Value::object(vec![
+                            ("role", Value::string("assistant")),
+                            ("content", Value::string(&partial)),
+                        ]));
+                    }
+                    messages.push(Value::object(vec![
+                        ("role", Value::string("user")),
+                        (
+                            "content",
+                            Value::string(
+                                "Your previous response hit the output token limit (finish_reason=length) because it attempted to generate too many large files in one turn. Emit ONLY ONE write_file tool call per turn and continue with the next remaining file.",
+                            ),
+                        ),
+                    ]));
+                    continue;
+                }
                 break;
             }
             if let Some(content) = res
@@ -6315,7 +6346,7 @@ impl ShellSession {
         };
 
         let wants_report_file = regex_lite::Regex::new(
-            r"(?i)\b(?:generating\s+a\s+report|place\s+it\s+into\s+a\s+.*report|make\s+me\s+a\s+.*(?:markdown|file|report)|write\s+a\s+.*(?:markdown|file|report|specification|summary|design)|save\s+.*(?:report|markdown|file)|[A-Za-z0-9_.-]+\.md\b)\b",
+            r"(?i)\b(?:generating\s+a\s+report|place\s+it\s+into\s+a\s+.*report|make\s+me\s+a\s+.*(?:markdown|file|report)\s+with\s+the\s+list|save\s+.*report)\b",
         )
         .is_ok_and(|re| re.is_match(user_text));
 
@@ -6511,8 +6542,8 @@ impl ShellSession {
                     .unwrap_or(1)
                     .max(1) as usize;
                 let max_lines = domain::safe_integer(args.get("max_lines"))
-                    .unwrap_or(100)
-                    .clamp(1, 160) as usize;
+                    .unwrap_or(300)
+                    .clamp(1, 400) as usize;
                 let Ok(raw_text) = fs::read_to_string(&target) else {
                     return Value::object(vec![(
                         "error",
@@ -6529,7 +6560,7 @@ impl ShellSession {
                     .map(|(i, l)| format!("{}: {l}", i + 1))
                     .collect::<Vec<_>>()
                     .join("\n");
-                let clipped: String = lines.chars().take(12_000).collect();
+                let clipped: String = lines.chars().take(24_000).collect();
                 let mut fields = vec![
                     ("path", Value::string(&target.display().to_string())),
                     ("excerpt", Value::string(&clipped)),
@@ -6569,6 +6600,9 @@ impl ShellSession {
                             ("replaced_lines", Value::Number(old_lines as f64)),
                             ("inserted_lines", Value::Number(new_lines as f64)),
                         ];
+                        if let Some(syn_err) = check_written_file_syntax(&target) {
+                            fields.push(("syntax_error", Value::string(&syn_err)));
+                        }
                         if let Some(hint) = self.collect_subdirectory_context_hint(&target, repos) {
                             fields.push(("context_hint", Value::string(&hint)));
                         }
@@ -6589,8 +6623,9 @@ impl ShellSession {
                     repos,
                     &self.environment,
                 );
-                let re = regex_lite::Regex::new(&format!("(?i){}", regex_lite::escape(&pattern)))
-                    .or_else(|_| regex_lite::Regex::new(&pattern));
+                let re = regex_lite::Regex::new(&format!("(?i){pattern}")).or_else(|_| {
+                    regex_lite::Regex::new(&format!("(?i){}", regex_lite::escape(&pattern)))
+                });
                 let Ok(re) = re else {
                     return Value::object(vec![("error", Value::string("Invalid search pattern"))])
                         .json();
@@ -6784,11 +6819,14 @@ impl ShellSession {
                         if !wrote_files.contains(&target_path) {
                             wrote_files.push(target_path.clone());
                         }
-                        Value::object(vec![
+                        let mut fields = vec![
                             ("written", Value::string(&target_path.display().to_string())),
                             ("bytes", Value::Number(final_body.len() as f64)),
-                        ])
-                        .json()
+                        ];
+                        if let Some(syn_err) = check_written_file_syntax(&target_path) {
+                            fields.push(("syntax_error", Value::string(&syn_err)));
+                        }
+                        Value::object(fields).json()
                     }
                     Err(e) => Value::object(vec![("error", Value::string(&e.to_string()))]).json(),
                 }
@@ -6837,7 +6875,7 @@ impl ShellSession {
                                     "feat: deliver verified Azure static marketing site and human checklist",
                                 ])
                                 .output();
-                            StdCommand::new("git")
+                            let push_out = StdCommand::new("git")
                                 .args([
                                     "-C",
                                     &target_dir.display().to_string(),
@@ -6846,7 +6884,21 @@ impl ShellSession {
                                     "origin",
                                     "HEAD",
                                 ])
-                                .output()
+                                .output();
+                            match push_out {
+                                Ok(ref o) if o.status.success() => push_out,
+                                _ => StdCommand::new("git")
+                                    .args([
+                                        "-C",
+                                        &target_dir.display().to_string(),
+                                        "push",
+                                        "--force",
+                                        "-u",
+                                        "origin",
+                                        "HEAD",
+                                    ])
+                                    .output(),
+                            }
                         } else {
                             StdCommand::new("git")
                                 .args(["-C", &target_dir.display().to_string(), "status", "-sb"])
@@ -7970,6 +8022,18 @@ impl ShellSession {
             .await;
         match result {
             Ok(outcome) => {
+                let os_src_dir = outcome.worktree.join(".roster").join("openshell");
+                if os_src_dir.is_dir() {
+                    let os_dst_dir = root.join(".roster").join("openshell");
+                    let _ = fs::create_dir_all(&os_dst_dir);
+                    for fname in ["policy.yml", "provider.yml"] {
+                        let s = os_src_dir.join(fname);
+                        let d = os_dst_dir.join(fname);
+                        if s.is_file() {
+                            let _ = fs::copy(&s, &d);
+                        }
+                    }
+                }
                 self.last_worktree = Some(outcome.worktree.clone());
                 self.last_task = Some(outcome.task.clone());
                 let passed = outcome.succeeded();
@@ -8259,6 +8323,18 @@ pub fn apply_verified_worktree_to_repo(
             }
             if fs::copy(&src, &dst).is_ok() {
                 copied.push(rel);
+            }
+        }
+    }
+    let os_src_dir = worktree.join(".roster").join("openshell");
+    if os_src_dir.is_dir() {
+        let os_dst_dir = repo_root.join(".roster").join("openshell");
+        let _ = fs::create_dir_all(&os_dst_dir);
+        for fname in ["policy.yml", "provider.yml"] {
+            let s = os_src_dir.join(fname);
+            let d = os_dst_dir.join(fname);
+            if s.is_file() {
+                let _ = fs::copy(&s, &d);
             }
         }
     }
@@ -10754,10 +10830,25 @@ pub fn match_target_repositories(text: &str, repos: &[RepoEntry], cwd: &Path) ->
         }
     }
 
-    if matched.is_empty() && cwd.join(".git").exists() {
+    if cwd.join(".git").exists() {
         let cwd_str = cwd.display().to_string();
-        if let Some(current_repo) = repos.iter().find(|r| r.path == cwd_str) {
-            matched.push(current_repo.clone());
+        if let Some(current_repo) = repos
+            .iter()
+            .find(|r| r.path.eq_ignore_ascii_case(&cwd_str))
+            .cloned()
+        {
+            if matched
+                .iter()
+                .any(|r| r.path.eq_ignore_ascii_case(&cwd_str))
+            {
+                let text_lower = text.to_lowercase();
+                matched.retain(|r| {
+                    r.path.eq_ignore_ascii_case(&cwd_str)
+                        || text_lower.contains(&r.name.to_lowercase())
+                });
+            } else if matched.is_empty() {
+                matched.push(current_repo);
+            }
         }
     }
     matched
@@ -11188,6 +11279,45 @@ pub fn canonical_tool_call_signature(call_name: &str, args: &Value) -> String {
     format!("{}({joined})", call_name.trim().to_lowercase())
 }
 
+pub fn check_written_file_syntax(target: &Path) -> Option<String> {
+    let ext = target
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if ext == "json" {
+        if let Ok(raw) = fs::read_to_string(target) {
+            if let Err(e) = crate::json::parse(&Text::from(raw.as_str())) {
+                return Some(format!(
+                    "JSON syntax error in {}: {}",
+                    target.display(),
+                    e.message
+                ));
+            }
+        }
+        return None;
+    }
+    if matches!(ext.as_str(), "mjs" | "js" | "cjs") {
+        let node_bin = find_node20_executable()
+            .or_else(|| which_executable(if cfg!(windows) { "node.exe" } else { "node" }))
+            .unwrap_or_else(|| "node".to_owned());
+        if let Ok(out) = StdCommand::new(&node_bin)
+            .arg("--check")
+            .arg(target)
+            .output()
+        {
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr).trim().to_owned();
+                return Some(format!(
+                    "JavaScript syntax error in {}: {stderr}",
+                    target.display()
+                ));
+            }
+        }
+    }
+    None
+}
+
 pub fn estimate_messages_tokens(messages: &[Value]) -> u64 {
     let total_chars: usize = messages.iter().map(|m| m.json().len()).sum();
     (total_chars as u64).div_ceil(4)
@@ -11200,11 +11330,15 @@ pub fn compact_nlp_messages(messages: &mut [Value], context_max: u64) -> usize {
         .enumerate()
         .filter_map(|(idx, m)| domain::is_text(m.get("role"), "tool").then_some(idx))
         .collect::<Vec<_>>();
-    let threshold = (context_max / 2).clamp(4096, 20_000);
-    if est_tokens <= threshold && tool_indices.len() <= 4 {
+    let (threshold, max_tools, keep_recent_cap) = if context_max <= 16_384 {
+        ((context_max / 2).clamp(4096, 20_000), 4_usize, 2_usize)
+    } else {
+        ((context_max / 3).clamp(24_000, 72_000), 16_usize, 12_usize)
+    };
+    if est_tokens <= threshold && tool_indices.len() <= max_tools {
         return 0;
     }
-    let keep_recent = 2.min(tool_indices.len());
+    let keep_recent = keep_recent_cap.min(tool_indices.len());
     let prune_slice = &tool_indices[..tool_indices.len().saturating_sub(keep_recent)];
     let mut pruned_count = 0_usize;
     for &idx in prune_slice {
@@ -11411,31 +11545,59 @@ pub fn nlp_agent_tool_definitions() -> Value {
         ),
         make_tool(
             "run_check",
-            "Run node_test (node --test), git_status, or git_commit_push in a repository and return exit code and output.",
+            "Run node_build (node src/cli.mjs), node_test (node --test), git_status, or git_commit_push in a repository and return exit code and output.",
             vec![
                 ("repo", str_prop("Repository path or '.'")),
                 (
                     "command",
-                    str_prop("One of: 'node_test', 'git_status', 'git_commit_push'"),
+                    str_prop("One of: 'node_build', 'node_test', 'git_status', 'git_commit_push'"),
                 ),
             ],
             &["command"],
         ),
         make_tool(
             "manage_project_board",
-            "Inspect or manage a GitHub Project v2 Kanban board (list, create_card, move_card, run_board).",
+            "Inspect or manage a GitHub Project v2 Kanban board (list, plan_board, create_card, move_card, run_board).",
             vec![
                 (
                     "action",
-                    str_prop("One of: 'list', 'create_card', 'move_card', 'run_board'"),
+                    str_prop(
+                        "One of: 'list', 'plan_board', 'create_card', 'move_card', 'run_board'",
+                    ),
                 ),
-                ("project_number", int_prop("GitHub Project number (e.g. 6)")),
+                ("project_number", int_prop("GitHub Project number (e.g. 9)")),
                 ("title", str_prop("Issue card title (for create_card)")),
                 (
                     "body",
                     str_prop(
                         "Issue card body with ## Allowed Files and ## Acceptance checks (for create_card)",
                     ),
+                ),
+                (
+                    "cards",
+                    Value::object(vec![
+                        ("type", Value::string("array")),
+                        (
+                            "description",
+                            Value::string(
+                                "Batch array of {title, body, status} cards for plan_board",
+                            ),
+                        ),
+                        (
+                            "items",
+                            Value::object(vec![
+                                ("type", Value::string("object")),
+                                (
+                                    "properties",
+                                    Value::object(vec![
+                                        ("title", str_prop("Card title")),
+                                        ("body", str_prop("Card body")),
+                                        ("status", str_prop("Todo, In Progress, or Done")),
+                                    ]),
+                                ),
+                            ]),
+                        ),
+                    ]),
                 ),
                 (
                     "issue_number",

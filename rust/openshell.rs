@@ -2137,6 +2137,17 @@ pub(crate) fn validate_local_path_arg(path: &str, label: &str) -> Result<(), Err
     Ok(())
 }
 
+fn resolve_openshell_host_path(raw: &str) -> std::path::PathBuf {
+    if cfg!(windows) && raw.starts_with('/') && !raw.starts_with("//") {
+        let wsl_candidate =
+            std::path::PathBuf::from(format!(r"\\wsl.localhost\Ubuntu{}", raw.replace('/', "\\")));
+        if wsl_candidate.exists() {
+            return wsl_candidate;
+        }
+    }
+    std::path::PathBuf::from(raw)
+}
+
 pub fn check_openshell_doctor(options: &OpenShellDoctorOptions) -> Result<Value, Error> {
     if !matches!(
         options.landlock_state.as_str(),
@@ -2179,7 +2190,8 @@ pub fn check_openshell_doctor(options: &OpenShellDoctorOptions) -> Result<Value,
     let runtime_reason = if !options.opt_in {
         "Runtime inspection skipped: explicitly pass --opt-in for offline OpenShell diagnostics."
     } else if let Some(runtime_path) = &options.runtime_path {
-        match fs::symlink_metadata(runtime_path) {
+        let resolved_rt = resolve_openshell_host_path(runtime_path);
+        match fs::symlink_metadata(&resolved_rt) {
             Ok(meta) if meta.is_file() && !secure::linked(&meta) => {
                 runtime_present = true;
                 "Regular nonsymlink openshell binary present; no process was launched."
@@ -2246,7 +2258,8 @@ pub fn check_openshell_doctor(options: &OpenShellDoctorOptions) -> Result<Value,
     let ok = blockers.is_empty();
     let status = if ok { "ready" } else { "blocked" };
     let prover_present = options.prover_path.as_ref().is_some_and(|p| {
-        fs::symlink_metadata(p).is_ok_and(|meta| meta.is_file() && !secure::linked(&meta))
+        let resolved_p = resolve_openshell_host_path(p);
+        fs::symlink_metadata(&resolved_p).is_ok_and(|meta| meta.is_file() && !secure::linked(&meta))
     });
     Ok(Value::object(vec![
         ("ok", Value::Boolean(ok)),
