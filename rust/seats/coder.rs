@@ -951,7 +951,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
         .unwrap_or(1000)
         .min(4096);
         let exploration = (boundary.document().files_allowed.len() * 2)
-            .max(4)
+            .max(8)
             .min(turns as usize);
         let context_budget = budget(config)?;
         boundary.require_git().await?;

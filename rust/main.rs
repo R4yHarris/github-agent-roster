@@ -324,6 +324,11 @@ async fn native(
                     github_agent_roster::github::validate_app_configuration(environment)?;
                 }
                 let loaded = config::load(installation, cwd, environment)?;
+                if flags.runtime == "openshell" {
+                    github_agent_roster::openshell::require_openshell_runtime_enabled(
+                        loaded.config.as_value(),
+                    )?;
+                }
                 if flags.skip_review && config::is_review_required(loaded.config.as_value())? {
                     return Err(Error::type_error(
                         "--skip-review requires private review.required: false; required review was not bypassed",

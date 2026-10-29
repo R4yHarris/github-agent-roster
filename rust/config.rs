@@ -64,6 +64,16 @@ const SECTIONS: &[(&str, &[&str])] = &[
     ("loop", &["turns"]),
     ("context", &["budget"]),
     ("start", &["base", "sync"]),
+    (
+        "openshell",
+        &[
+            "enabled",
+            "runtime_path",
+            "gateway_url",
+            "prover_path",
+            "sandbox_image",
+        ],
+    ),
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -184,6 +194,7 @@ fn parse_sections(source: &Text) -> Result<(Value, HashSet<String>), Error> {
         ("loop", object()),
         ("context", object()),
         ("start", object()),
+        ("openshell", object()),
     ]);
     let mut roots = HashSet::new();
     let mut section: Option<String> = None;
@@ -875,6 +886,56 @@ pub fn parse(source: &Text) -> Result<Config, Error> {
         }
         put(&mut config, "start", start)?;
     }
+    if roots.contains("openshell") {
+        let mut openshell = raw_section(&config, "openshell")?;
+        if openshell.get("enabled").is_some() {
+            parse_boolean_field(&mut openshell, "enabled", "openshell")?;
+        } else {
+            put(&mut openshell, "enabled", Value::Boolean(false))?;
+        }
+        for (field, label) in [
+            ("runtime_path", "openshell.runtime_path"),
+            ("prover_path", "openshell.prover_path"),
+        ] {
+            if openshell.get(field).is_some() {
+                let value = parse_string_field(&mut openshell, field, "openshell")?;
+                let utf8 = value
+                    .to_utf8()
+                    .map_err(|_| invalid(format!("{label} must be valid UTF-8")))?;
+                if !utf8.is_empty() {
+                    crate::openshell::validate_local_path_arg(&utf8, label)
+                        .map_err(|error| invalid(error.message))?;
+                }
+            }
+        }
+        if openshell.get("gateway_url").is_some() {
+            let value = parse_string_field(&mut openshell, "gateway_url", "openshell")?;
+            if !value.0.is_empty() {
+                let parsed = base_url(&value, "openshell.gateway_url")?;
+                if let Some(host) = parsed.host_str() {
+                    if crate::openshell::is_forbidden_metadata_host(host) {
+                        return Err(invalid(
+                            "openshell.gateway_url denies cloud metadata endpoints",
+                        ));
+                    }
+                }
+            }
+        }
+        if openshell.get("sandbox_image").is_some() {
+            let value = parse_string_field(&mut openshell, "sandbox_image", "openshell")?;
+            let utf8 = value
+                .to_utf8()
+                .map_err(|_| invalid("openshell.sandbox_image must be valid UTF-8"))?;
+            if !utf8.is_empty()
+                && (utf8.starts_with('-') || utf8.bytes().any(|b| matches!(b, 0..=32 | 127)))
+            {
+                return Err(invalid(
+                    "openshell.sandbox_image must be a valid image reference without whitespace or leading '-'",
+                ));
+            }
+        }
+        put(&mut config, "openshell", openshell)?;
+    }
     let mut result = Value::object(vec![("schema", Value::Number(1.0))]);
     put(&mut config, "planner", planner)?;
     put(&mut config, "seat", seat)?;
@@ -884,7 +945,7 @@ pub fn parse(source: &Text) -> Result<Config, Error> {
     ] {
         put(&mut result, section, raw_section(&config, section)?)?;
     }
-    for section in ["review", "loop", "context", "start"] {
+    for section in ["review", "loop", "context", "start", "openshell"] {
         if roots.contains(section) {
             put(&mut result, section, raw_section(&config, section)?)?;
         }

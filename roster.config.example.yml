@@ -51,3 +51,9 @@ reviewer:
 # start:                 # how new task branches begin (defaults shown)
 #   base: trunk          # trunk = fresh origin/<default>; current = caller HEAD; or a ref
 #   sync: fetch          # fetch origin first; offline skips it (freshness unknown)
+# openshell:             # opt-in NVIDIA OpenShell sandbox runtime (default disabled)
+#   enabled: false       # keep builtin runtime unless explicitly opted in
+#   runtime_path: "/usr/bin/openshell"
+#   gateway_url: "https://127.0.0.1:17670"
+#   prover_path: "/usr/bin/openshell-prover"
+#   sandbox_image: "nvcr.io/nvidia/base/ubuntu:24.04"

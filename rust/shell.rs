@@ -1250,9 +1250,66 @@ pub fn config_setting(
     };
     redaction_cfg.validate()?;
     let redacted = redaction::evidence(&Text::from(value), &redaction_cfg).to_utf8()?;
+    let secret_or_policy_re = regex_lite::Regex::new(r"(?i)\.pem\b|\bagent-policy\b")
+        .map_err(|error| Error::new("Error", error.to_string()))?;
+    if secret_or_policy_re.is_match(value) || redacted != value {
+        return Err(Error::type_error(
+            "Config set refuses secrets, PEM paths, endpoints, and policy.",
+        ));
+    }
+    if matches!(key, "openshell.enabled" | "openshell_enabled") {
+        if !["on", "off", "true", "false"].contains(&value) {
+            return Err(Error::type_error(
+                "Config openshell.enabled must be true or false.",
+            ));
+        }
+        return Ok(ConfigSetting {
+            field: "openshell.enabled",
+            value: ConfigSettingValue::Boolean(matches!(value, "on" | "true")),
+        });
+    }
+    if matches!(key, "openshell.runtime_path" | "openshell.prover_path") {
+        crate::openshell::validate_local_path_arg(value, key)?;
+        return Ok(ConfigSetting {
+            field: if key == "openshell.runtime_path" {
+                "openshell.runtime_path"
+            } else {
+                "openshell.prover_path"
+            },
+            value: ConfigSettingValue::Text(value.to_owned()),
+        });
+    }
+    if key == "openshell.gateway_url" {
+        let parsed = config::base_url(&Text::from(value), "openshell.gateway_url")?;
+        if let Some(host) = parsed.host_str() {
+            if crate::openshell::is_forbidden_metadata_host(host) {
+                return Err(Error::type_error(
+                    "openshell.gateway_url denies cloud metadata endpoints.",
+                ));
+            }
+        }
+        return Ok(ConfigSetting {
+            field: "openshell.gateway_url",
+            value: ConfigSettingValue::Text(value.to_owned()),
+        });
+    }
+    if key == "openshell.sandbox_image" {
+        if value.trim().is_empty()
+            || value.starts_with('-')
+            || value.bytes().any(|b| matches!(b, 0..=32 | 127))
+        {
+            return Err(Error::type_error(
+                "openshell.sandbox_image must be a valid image reference without whitespace.",
+            ));
+        }
+        return Ok(ConfigSetting {
+            field: "openshell.sandbox_image",
+            value: ConfigSettingValue::Text(value.to_owned()),
+        });
+    }
     let forbidden_re = regex_lite::Regex::new(r"(?i)\.pem\b|https?://|\bagent-policy\b")
         .map_err(|error| Error::new("Error", error.to_string()))?;
-    if forbidden_re.is_match(value) || redacted != value {
+    if forbidden_re.is_match(value) {
         return Err(Error::type_error(
             "Config set refuses secrets, PEM paths, endpoints, and policy.",
         ));
@@ -2249,12 +2306,41 @@ impl EventSink {
     }
 }
 
+fn wsl_worktree_git_dir(cwd: &Path) -> Option<PathBuf> {
+    if cfg!(windows) {
+        return None;
+    }
+    let dot_git = cwd.join(".git");
+    if !dot_git.is_file() {
+        return None;
+    }
+    let raw = fs::read_to_string(&dot_git).ok()?;
+    let target = raw.trim().strip_prefix("gitdir:")?.trim();
+    let bytes = target.as_bytes();
+    if bytes.len() >= 3
+        && bytes[0].is_ascii_alphabetic()
+        && bytes[1] == b':'
+        && matches!(bytes[2], b'/' | b'\\')
+    {
+        let drive = (bytes[0] as char).to_ascii_lowercase();
+        let rest = target[3..].replace('\\', "/");
+        let mapped = PathBuf::from(format!("/mnt/{drive}/{rest}"));
+        if mapped.is_dir() {
+            return Some(mapped);
+        }
+    }
+    None
+}
+
 fn run_banner_git(cwd: &Path, args: &[&str]) -> Result<String, Error> {
     let git_exe = std::env::var_os("ROSTER_GIT")
         .or_else(|| std::env::var_os("ROSTER_TEST_GIT"))
         .map_or_else(|| PathBuf::from("git"), PathBuf::from);
     let mut cmd = StdCommand::new(git_exe);
     cmd.current_dir(cwd).env_clear().args(args);
+    if let Some(git_dir) = wsl_worktree_git_dir(cwd) {
+        cmd.env("GIT_DIR", git_dir).env("GIT_WORK_TREE", cwd);
+    }
     for key in [
         "PATH",
         "PATHEXT",
@@ -2540,6 +2626,33 @@ pub async fn set_config_value(
                 domain::put(&mut ctx, "budget", Value::Number(budget as f64))?;
                 domain::put(&mut cfg, "context", ctx)?;
             }
+        }
+        "openshell.enabled" => {
+            let mut openshell = cfg
+                .get("openshell")
+                .cloned()
+                .unwrap_or_else(|| Value::object(Vec::new()));
+            domain::put(
+                &mut openshell,
+                "enabled",
+                Value::Boolean(matches!(value, "true" | "on")),
+            )?;
+            domain::put(&mut cfg, "openshell", openshell)?;
+        }
+        "openshell.runtime_path"
+        | "openshell.prover_path"
+        | "openshell.gateway_url"
+        | "openshell.sandbox_image" => {
+            let subkey = field.strip_prefix("openshell.").unwrap_or(field);
+            let mut openshell = cfg
+                .get("openshell")
+                .cloned()
+                .unwrap_or_else(|| Value::object(vec![("enabled", Value::Boolean(false))]));
+            if openshell.get("enabled").is_none() {
+                domain::put(&mut openshell, "enabled", Value::Boolean(false))?;
+            }
+            domain::put(&mut openshell, subkey, Value::string(value))?;
+            domain::put(&mut cfg, "openshell", openshell)?;
         }
         _ => {
             return Err(Error::type_error(
@@ -3362,7 +3475,12 @@ impl ShellSession {
                         self.debug
                             .set_enabled(setting.value == ConfigSettingValue::Boolean(true))?;
                     }
-                    "effort" | "context_budget" => {
+                    "effort"
+                    | "context_budget"
+                    | "openshell.runtime_path"
+                    | "openshell.prover_path"
+                    | "openshell.gateway_url"
+                    | "openshell.sandbox_image" => {
                         let ConfigSettingValue::Text(val_str) = setting.value else {
                             return Err(Error::type_error("Config setting must be text"));
                         };
@@ -3377,6 +3495,21 @@ impl ShellSession {
                         .await?;
                         self.config = saved;
                         self.sync_model_display();
+                    }
+                    "openshell.enabled" => {
+                        let ConfigSettingValue::Boolean(flag_val) = setting.value else {
+                            return Err(Error::type_error("Config setting must be boolean"));
+                        };
+                        let source = crate::cancel::CancellationSource::default();
+                        let saved = set_config_value(
+                            &self.installation,
+                            &self.cwd,
+                            setting.field,
+                            if flag_val { "true" } else { "false" },
+                            Some(&source.token()),
+                        )
+                        .await?;
+                        self.config = saved;
                     }
                     _ => {}
                 }
@@ -6676,6 +6809,19 @@ impl ShellSession {
                     "git_status" | "status" => StdCommand::new("git")
                         .args(["-C", &target_dir.display().to_string(), "status", "-sb"])
                         .output(),
+                    "node_build" | "build" => {
+                        let script = if target_dir.join("src").join("cli.mjs").is_file() {
+                            "src/cli.mjs"
+                        } else if target_dir.join("build.mjs").is_file() {
+                            "build.mjs"
+                        } else {
+                            "src/index.mjs"
+                        };
+                        StdCommand::new(&node_bin)
+                            .current_dir(&target_dir)
+                            .arg(script)
+                            .output()
+                    }
                     "git_commit_push" | "commit_push" => {
                         if !target_dir.join("rust").join("shell.rs").is_file() {
                             let _ = bootstrap_greenfield_repo(&target_dir);
@@ -6759,6 +6905,57 @@ impl ShellSession {
                         }
                         Err(e) => Value::object(vec![("error", Value::string(&e.message))]).json(),
                     },
+                    "plan_board" | "create_cards" | "batch_create" => {
+                        let Some(cards_arr) = args.get("cards").and_then(domain::items) else {
+                            return Value::object(vec![(
+                                "error",
+                                Value::string("plan_board requires a cards array"),
+                            )])
+                            .json();
+                        };
+                        let mut created = Vec::new();
+                        for card_item in cards_arr {
+                            let c_title = card_item
+                                .get("title")
+                                .and_then(Value::as_string)
+                                .and_then(|t| t.to_utf8().ok())
+                                .unwrap_or_default();
+                            if c_title.trim().is_empty() {
+                                continue;
+                            }
+                            let c_body = card_item
+                                .get("body")
+                                .and_then(Value::as_string)
+                                .and_then(|t| t.to_utf8().ok())
+                                .unwrap_or_default();
+                            let c_status = card_item
+                                .get("status")
+                                .and_then(Value::as_string)
+                                .and_then(|t| t.to_utf8().ok())
+                                .filter(|s| !s.trim().is_empty())
+                                .unwrap_or_else(|| "Todo".to_owned());
+                            if let Ok((inum, iurl)) = create_project_board_card(
+                                &root, &owner, &repo_slug, proj_num, &c_title, &c_body, &c_status,
+                            ) {
+                                let msg = format!(
+                                    "Created issue #{inum} ({iurl}) on Project #{proj_num} [{c_status}]."
+                                );
+                                command_outputs.push(msg);
+                                created.push(Value::object(vec![
+                                    ("issue_number", Value::Number(inum as f64)),
+                                    ("issue_url", Value::string(&iurl)),
+                                    ("title", Value::string(&c_title)),
+                                    ("status", Value::string(&c_status)),
+                                ]));
+                            }
+                        }
+                        Value::object(vec![
+                            ("project_number", Value::Number(proj_num as f64)),
+                            ("created_count", Value::Number(created.len() as f64)),
+                            ("cards", Value::Array(created)),
+                        ])
+                        .json()
+                    }
                     "create_card" | "add" => {
                         let title = str_arg("title");
                         let body = str_arg("body");
@@ -6812,6 +7009,18 @@ impl ShellSession {
                         }
                         match set_project_card_status(&owner, proj_num, issue_num, &status_col) {
                             Ok(()) => {
+                                if status_col.trim().eq_ignore_ascii_case("done") {
+                                    let issue_s = issue_num.to_string();
+                                    let mut close_cmd = StdCommand::new("gh");
+                                    if let Some(tok) = resolve_gh_token_for_owner(Some(&owner)) {
+                                        close_cmd.env("GH_TOKEN", tok);
+                                    }
+                                    let _ = close_cmd
+                                        .current_dir(&root)
+                                        .env("GH_PROMPT_DISABLED", "1")
+                                        .args(["issue", "close", &issue_s, "--repo", &repo_slug])
+                                        .output();
+                                }
                                 let msg = format!(
                                     "Moved issue #{issue_num} on Project #{proj_num} to '{status_col}'."
                                 );
@@ -8085,11 +8294,35 @@ pub fn apply_verified_worktree_to_repo(
 }
 
 fn resolve_gh_token() -> Option<String> {
+    resolve_gh_token_for_owner(None)
+}
+
+fn resolve_gh_token_for_owner(owner: Option<&str>) -> Option<String> {
     for var in ["GH_TOKEN", "GITHUB_TOKEN"] {
         if let Ok(val) = std::env::var(var) {
             if !val.trim().is_empty() {
                 return Some(val.trim().to_owned());
             }
+        }
+    }
+    let mut candidate_users = Vec::new();
+    if let Some(u) = owner.filter(|s| !s.trim().is_empty()) {
+        candidate_users.push(u.trim());
+    }
+    if !candidate_users.contains(&"R4yHarris") {
+        candidate_users.push("R4yHarris");
+    }
+    for user in candidate_users {
+        if let Some(tok) = StdCommand::new("gh")
+            .args(["auth", "token", "--user", user])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty())
+        {
+            return Some(tok);
         }
     }
     StdCommand::new("gh")
@@ -8103,12 +8336,15 @@ fn resolve_gh_token() -> Option<String> {
 }
 
 fn run_gh_json(args: &[&str], cwd: Option<&Path>) -> Result<Value, Error> {
+    let owner_hint = args
+        .windows(2)
+        .find_map(|pair| (pair[0] == "--owner").then_some(pair[1]));
     let mut cmd = StdCommand::new("gh");
     cmd.env("GH_PROMPT_DISABLED", "1").args(args);
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
-    if let Some(tok) = resolve_gh_token() {
+    if let Some(tok) = resolve_gh_token_for_owner(owner_hint) {
         cmd.env("GH_TOKEN", tok);
     }
     let out = cmd
@@ -8188,7 +8424,7 @@ pub fn list_project_board_cards(
             "--owner",
             owner,
             "--limit",
-            "100",
+            "500",
             "--format",
             "json",
         ],
@@ -8235,11 +8471,30 @@ pub fn format_project_board_view(owner: &str, project_number: u64) -> Result<Str
         "GitHub Project #{project_number}: {title}\nURL: {url}\nTotal issue cards: {}\n",
         cards.len()
     );
-    for col in ["Todo", "In Progress", "Done"] {
+    let mut columns = vec![
+        "Todo".to_owned(),
+        "Ready".to_owned(),
+        "Backlog".to_owned(),
+        "In Progress".to_owned(),
+        "In Review".to_owned(),
+        "Done".to_owned(),
+    ];
+    for c in &cards {
+        if !columns
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(&c.status))
+        {
+            columns.push(c.status.clone());
+        }
+    }
+    for col in &columns {
         let matching = cards
             .iter()
             .filter(|c| c.status.eq_ignore_ascii_case(col))
             .collect::<Vec<_>>();
+        if matching.is_empty() && !matches!(col.as_str(), "Todo" | "In Progress" | "Done") {
+            continue;
+        }
         out.push_str(&format!("\n[{}] ({}):\n", col, matching.len()));
         if matching.is_empty() {
             out.push_str("  (empty)\n");
@@ -8297,12 +8552,18 @@ pub fn set_project_card_status(
     let norm_target = target_status.replace('_', " ").to_lowercase();
     let opt = options
         .iter()
-        .find(|o| {
-            let name = clean_display(o.get("name"), "").to_lowercase();
-            name == norm_target
-                || (norm_target.contains("progress") && name.contains("progress"))
-                || (norm_target.contains("todo") && name.contains("todo"))
-                || (norm_target.contains("done") && name.contains("done"))
+        .find(|o| clean_display(o.get("name"), "").to_lowercase() == norm_target)
+        .or_else(|| {
+            options.iter().find(|o| {
+                let name = clean_display(o.get("name"), "").to_lowercase();
+                (norm_target.contains("progress") && name.contains("progress"))
+                    || (norm_target.contains("review") && name.contains("review"))
+                    || (norm_target.contains("done") && name.contains("done"))
+                    || ((norm_target.contains("todo") || norm_target.contains("ready"))
+                        && (name == "todo" || name == "ready"))
+                    || ((norm_target.contains("todo") || norm_target.contains("backlog"))
+                        && name == "backlog")
+            })
         })
         .ok_or_else(|| {
             Error::new(
@@ -8322,7 +8583,7 @@ pub fn set_project_card_status(
             )
         })?;
     let mut cmd = StdCommand::new("gh");
-    if let Some(tok) = resolve_gh_token() {
+    if let Some(tok) = resolve_gh_token_for_owner(Some(owner)) {
         cmd.env("GH_TOKEN", tok);
     }
     let out = cmd
@@ -8363,7 +8624,7 @@ pub fn create_project_board_card(
     initial_status: &str,
 ) -> Result<(u64, String), Error> {
     let mut cmd = StdCommand::new("gh");
-    if let Some(tok) = resolve_gh_token() {
+    if let Some(tok) = resolve_gh_token_for_owner(Some(owner)) {
         cmd.env("GH_TOKEN", tok);
     }
     let out = cmd
@@ -8396,7 +8657,7 @@ pub fn create_project_board_card(
         })?;
     let num_s = project_number.to_string();
     let mut add_cmd = StdCommand::new("gh");
-    if let Some(tok) = resolve_gh_token() {
+    if let Some(tok) = resolve_gh_token_for_owner(Some(owner)) {
         add_cmd.env("GH_TOKEN", tok);
     }
     let _ = add_cmd
@@ -8423,7 +8684,7 @@ fn close_issue_and_mark_board_done(
     );
     let issue_s = issue_number.to_string();
     let mut comment_cmd = StdCommand::new("gh");
-    if let Some(tok) = resolve_gh_token() {
+    if let Some(tok) = resolve_gh_token_for_owner(Some(owner)) {
         comment_cmd.env("GH_TOKEN", tok);
     }
     let _ = comment_cmd
@@ -8440,7 +8701,7 @@ fn close_issue_and_mark_board_done(
         ])
         .output();
     let mut close_cmd = StdCommand::new("gh");
-    if let Some(tok) = resolve_gh_token() {
+    if let Some(tok) = resolve_gh_token_for_owner(Some(owner)) {
         close_cmd.env("GH_TOKEN", tok);
     }
     let _ = close_cmd
@@ -10045,7 +10306,11 @@ pub fn run_self_update(
         .unwrap_or_else(|| "git".to_owned());
 
     let run_git = |dir: &Path, args: &[&str]| -> Result<String, Error> {
-        let out = StdCommand::new(&git_bin)
+        let mut cmd = StdCommand::new(&git_bin);
+        if let Some(git_dir) = wsl_worktree_git_dir(dir) {
+            cmd.env("GIT_DIR", git_dir).env("GIT_WORK_TREE", dir);
+        }
+        let out = cmd
             .arg("-c")
             .arg("core.autocrlf=false")
             .arg("-C")
@@ -10866,8 +11131,8 @@ You have direct access to native workspace, file-delivery, verification, and Git
 - `edit_file`: surgically replace an exact unique `old_str` with `new_str` in an existing non-protected file.\n\
 - `search_text`: search across files in a repository or directory for a pattern.\n\
 - `git_inspect`: run read-only Git inspections (`status`, `log`, `branches`, `worktrees`, `ls_files`, `deep_audit`) on any repository.\n\
-- `run_check`: run `node_test` (`node --test`) or `git_status` in a repository and inspect exit code and output.\n\
-- `manage_project_board`: inspect a GitHub Project v2 Kanban board (`list`), create a GitHub issue card on the board (`create_card`), move a card between `Todo`, `In Progress`, and `Done` (`move_card`), or run all pending board cards through 3-seat delivery (`run_board`).\n\
+- `run_check`: run `node_build` (`node src/cli.mjs` or `node build.mjs`), `node_test` (`node --test`), `git_status`, or `git_commit_push` in a repository and inspect exit code and output.\n\
+- `manage_project_board`: inspect a GitHub Project v2 Kanban board (`list`), batch-create issue cards (`plan_board` with `cards`), create a single GitHub issue card on the board (`create_card`), move a card between `Todo`/`Ready`, `In Progress`, and `Done` (`move_card`, which also closes the GitHub issue when moving to `Done`), or run all pending board cards through 3-seat delivery (`run_board`).\n\
 - `write_report`: write a Markdown report or file to disk when the user asks to generate, save, or place a report/file.\n\
 - `run_roster_command`: run an internal Roster slash command (`/board [N]`, `/fleet list`, `/fleet use <id>`, `/route status`, `/compact`, `/doctor`, `/doctor openshell`, `/status`, `/usage`, `/issues`, `/stats`, `/update --check`).\n\
 - `start_sdlc_delivery`: trigger Roster's 3-seat isolated worktree SDLC pipeline (`planner -> coder -> reviewer`) when the user wants full worktree-isolated code delivery and test verification inside a Git repository.\n\n\
@@ -10875,7 +11140,7 @@ Guidelines:\n\
 1. Ground every answer and report in real discovered repository files, manifests, workflows, and git state. Never invent placeholder templates.\n\
 2. Use `read_file`, `list_dir`, `search_text`, or `git_inspect` whenever you need file-level evidence before answering, editing, or writing a report. Do not repeat identical tool calls.\n\
 3. When asked to build or create files in a repository (such as a website, infrastructure config, test suite, or `HUMAN_ACTION_CHECKLIST.md`), ALWAYS call `write_file` to write the real files to disk on the filesystem rather than only printing code blocks in chat.\n\
-4. When a GitHub Project Kanban board (`Project #N`) is referenced, use `manage_project_board` (`list`, `create_card`, `move_card`, or `run_board`) to track issues on the board and move completed cards to `Done`.";
+4. When a GitHub Project Kanban board (`Project #N`) is referenced, use `manage_project_board` (`list`, `plan_board`, `create_card`, `move_card`, or `run_board`) to plan slices on the board first, keep schemas/assets/test suites self-consistent with zero undefined assertions, and move completed cards to `Done`.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NlpComplexity {
@@ -11411,10 +11676,7 @@ pub fn normalize_and_validate_allowed_files(repo_root: &Path, proposed: &[String
                 !crate::planning::forbidden_read(v) && !crate::execution::policy::managed(v)
             });
         if let Some(ref valid) = valid_opt {
-            if !out.contains(valid)
-                && (tracked.is_empty()
-                    || tracked.contains(valid)
-                    || repo_root.join(valid).is_file())
+            if !out.contains(valid) && (tracked.contains(valid) || repo_root.join(valid).is_file())
             {
                 out.push(valid.clone());
                 continue;
@@ -11432,6 +11694,26 @@ pub fn normalize_and_validate_allowed_files(repo_root: &Path, proposed: &[String
                 .is_some_and(|n| n.eq_ignore_ascii_case(&base_lower))
         }) {
             if let Ok(valid) = crate::planning::task::allowed_file(&Value::string(found)) {
+                if !out.contains(&valid) {
+                    out.push(valid);
+                    continue;
+                }
+            }
+        }
+        if tracked.is_empty() && !cleaned.contains('/') {
+            let mut matched_sub = None;
+            for sub in ["rust", "src", "docs", "tests", "scripts"] {
+                let candidate_rel = format!("{sub}/{cleaned}");
+                if repo_root.join(&candidate_rel).is_file() {
+                    if let Ok(valid) =
+                        crate::planning::task::allowed_file(&Value::string(&candidate_rel))
+                    {
+                        matched_sub = Some(valid);
+                        break;
+                    }
+                }
+            }
+            if let Some(valid) = matched_sub {
                 if !out.contains(&valid) {
                     out.push(valid);
                     continue;

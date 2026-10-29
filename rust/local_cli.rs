@@ -29,7 +29,7 @@ pub const HELP: &str = "Usage:
   roster question [--files PATH,PATH --] TEXT
   roster doctor
   roster doctor --copilot [--opt-in] [--runtime PATH] [--model ID]
-  roster doctor --openshell [--opt-in] [--runtime PATH] [--gateway URL] [--policy PATH] [--provider ID]
+  roster doctor --openshell [--opt-in] [--approve-live] [--runtime PATH] [--prover PATH] [--gateway URL] [--policy PATH] [--provider ID]
   roster fleet list
   roster history list [--format json|text|summary] [--store DIR] [--repo HASH] [--issue N] [--seat NAME] [--model MODEL] [--outcome VALUE] [--since TIME] [--until TIME]
   roster history show <session-or-run-or-record-id> [--format json|text|summary] [--store DIR]
@@ -46,6 +46,7 @@ pub const HELP: &str = "Usage:
   roster run --seat coder --runtime builtin [--skip-review]
   roster run --ask-file PATH --runtime builtin [--base trunk|current|REF] [--no-fetch|--fetch] [--skip-review]
   roster run --issue N --runtime builtin [--base trunk|current|REF] [--no-fetch|--fetch] [--skip-review]
+  roster run --seat coder|--ask-file PATH|--issue N --runtime openshell [--base trunk|current|REF] [--no-fetch|--fetch] [--skip-review]
   roster catalog parse ROOT FIELD... < catalog.yml
   roster arguments split < arguments.txt
   roster recipe validate PATH
@@ -73,6 +74,7 @@ Vault set reads a secret from stdin; vault list prints names, never values.
 #[derive(Debug, Clone)]
 pub struct Run {
     pub input: Input,
+    pub runtime: String,
     pub base: Option<String>,
     pub sync: Option<Sync>,
     pub skip_review: bool,
@@ -283,7 +285,9 @@ fn parse_run(args: &[String]) -> Result<Run, Error> {
                             start::parse_issue_number(value).map_err(|_| invalid_run())?,
                         ))
                     }
-                    "--runtime" if value == "builtin" => runtime = Some(()),
+                    "--runtime" if matches!(value.as_str(), "builtin" | "openshell") => {
+                        runtime = Some(value.clone())
+                    }
                     "--base" => {
                         config::validate_start_base(
                             &crate::text::Text::from(value.as_str()),
@@ -298,9 +302,7 @@ fn parse_run(args: &[String]) -> Result<Run, Error> {
         }
         position += 1;
     }
-    if runtime.is_none() {
-        return Err(invalid_run());
-    }
+    let runtime = runtime.ok_or_else(invalid_run)?;
     let input = input.ok_or_else(invalid_run)?;
     if matches!(input, Input::ExistingTask) && (base.is_some() || sync.is_some()) {
         return Err(Error::type_error(
@@ -309,6 +311,7 @@ fn parse_run(args: &[String]) -> Result<Run, Error> {
     }
     Ok(Run {
         input,
+        runtime,
         base,
         sync,
         skip_review,
