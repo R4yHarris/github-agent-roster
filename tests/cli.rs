@@ -311,9 +311,21 @@ fn cli_ask_clarification_checkpoint_and_question_subcommands()
         root.join("src").join("api.mjs"),
         "export const value = 42;\n",
     )?;
-    std::fs::write(root.join(".gitignore"), ".roster/asks/\n")?;
-    let git = std::env::var_os("ROSTER_TEST_GIT")
-        .map_or_else(|| std::path::PathBuf::from("git"), std::path::PathBuf::from);
+    std::fs::write(
+        root.join(".gitignore"),
+        ".roster/asks/\n.roster-git-only-bin/\n",
+    )?;
+    let git = std::env::var_os("ROSTER_TEST_GIT").map_or_else(
+        || {
+            for candidate in ["/usr/bin/git", "/usr/local/bin/git"] {
+                if std::path::Path::new(candidate).is_file() {
+                    return std::path::PathBuf::from(candidate);
+                }
+            }
+            std::path::PathBuf::from("git")
+        },
+        std::path::PathBuf::from,
+    );
     assert!(
         Command::new(&git)
             .current_dir(&root)
@@ -321,10 +333,22 @@ fn cli_ask_clarification_checkpoint_and_question_subcommands()
             .status()?
             .success()
     );
-    let git_dir = git
-        .parent()
-        .map(|parent| parent.display().to_string())
-        .unwrap_or_default();
+    let git_only_dir = root.join(".roster-git-only-bin");
+    std::fs::create_dir_all(&git_only_dir)?;
+    if git.is_file() {
+        let bin_name = git
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("git"));
+        let _ = std::fs::copy(&git, git_only_dir.join(bin_name));
+    }
+    let git_dir = if git_only_dir.join("git").is_file() || git_only_dir.join("git.exe").is_file() {
+        git_only_dir.display().to_string()
+    } else {
+        git.parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(|parent| parent.display().to_string())
+            .unwrap_or_default()
+    };
 
     let run_in_root = |args: &[&str]| -> Result<std::process::Output, Box<dyn std::error::Error>> {
         Ok(Command::new(env!("CARGO_BIN_EXE_roster"))

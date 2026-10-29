@@ -61,17 +61,25 @@ OpenShell:
    `candidateDigest`, and emits `RESULT.md` and `REVIEW.md` with `external-openshell-sandbox`
    provenance while preserving `"unknown"` for any unreported token usage.
 
-### Layer 4: Offline readiness diagnostics & formal boundary prover (`#678`, `#679`)
+### Layer 4: Offline readiness diagnostics, upstream prover & live delivery (`#678`, `#679`, `#756`–`#761`)
 
 - **CLI & interactive shell diagnostics**:
-  - `roster doctor --openshell [--opt-in] [--runtime PATH] [--gateway URL] [--policy PATH] [--provider ID]`
-  - `/doctor openshell [--opt-in] [--runtime PATH] [--gateway URL] [--policy PATH] [--provider ID]`
+  - `roster doctor --openshell [--opt-in] [--approve-live] [--runtime PATH] [--prover PATH] [--gateway URL] [--policy PATH] [--provider ID]`
+  - `/doctor openshell [--opt-in] [--approve-live] [--runtime PATH] [--prover PATH] [--gateway URL] [--policy PATH] [--provider ID]`
   - Evaluates declared readiness offline without probing networks, starting containers, or printing secret values, reporting deterministic blocker codes (`OPENSHELL_NOT_OPTED_IN`, `OPENSHELL_RUNTIME_UNPINNED`, `OPENSHELL_GATEWAY_UNCONFIGURED`, `OPENSHELL_POLICY_MISSING`, `OPENSHELL_PROVIDER_UNBOUND`).
-- **Formal policy boundary prover (`prove_openshell_policy_boundary`)**:
-  - Verifies that a candidate `OpenShellPolicy` is a strict subset of a boundary `OpenShellPolicy`:
+- **Automatic seat policy emission & network hot-reload (`compile_seat_task_policy`, `hot_reload_network_policy`)**:
+  - Compiles `TASK.md` and `RECIPE.yml` scope into an OpenShell `version: 1` policy with `enforcement: enforce` and `binaries: [{ path: ... }]` before coder execution (`prepare_delivery_openshell_attempt`).
+  - Locks `filesystem_policy`, `landlock`, and `process` rules at sandbox creation time (`ROSTER_OPENSHELL_IMMUTABLE_CREATE_POLICY`), while allowing boundary-verified `network_policies` hot-reloads via `openshell policy set --policy <PATH> <SANDBOX> --wait`.
+- **Live CLI orchestration & provider lifecycle (`OpenShellSandboxAttempt::execute_live`, `execute_live_owned`)**:
+  - Drives `openshell sandbox create`, `openshell sandbox provider attach <sandbox> <provider> --wait`, `openshell sandbox exec`, and revocation-first `openshell sandbox provider detach <sandbox> <provider> --wait` + `openshell sandbox delete <sandbox>` under Roster's owned process-tree cancellation (`crate::process::execute`: Windows Job Objects on Windows, process groups on Unix) with `OPENSHELL_TELEMETRY_ENABLED=false` and zero `GITHUB_APP_*` or Vault secret exposure.
+- **Formal policy boundary prover (`prove_openshell_policy_boundary`, `prove_openshell_policy_with_external_prover`)**:
+  - Verifies that a candidate `OpenShellPolicy` is a strict subset of a boundary `OpenShellPolicy` using the native deterministic prover and, when configured, the upstream `openshell-prover check --boundary <BOUNDARY> <CANDIDATE> -o json --timeout 10s` binary:
     - Refuses any Landlock downgrade from `hard_requirement` to `best_effort`.
     - Refuses root process identities or UID/GID drift.
     - Refuses any `read_write` or `read_only` path outside the boundary's allowed prefixes.
     - Refuses any network endpoint host/port/method expansion or cloud metadata IP (`169.254.169.254`).
+- **Opt-in operator configuration (`openshell:` in `.roster/config.yml`, `--runtime openshell`)**:
+  - Supports `openshell.enabled` (default `false`), `openshell.runtime_path`, `openshell.gateway_url`, `openshell.prover_path`, and `openshell.sandbox_image` via `.roster/config.yml`, `/config set openshell.*`, and `roster run ... --runtime openshell`.
 - **Multi-model sandbox calibration scorecard (`evaluate_openshell_calibration_scorecard`)**:
   - Evaluates M1–M3 calibration runs across fleet profiles under OpenShell containment, requiring passing boundary proofs, verified provider detachment/cleanup, and independent host review before marking any gate passed.
+

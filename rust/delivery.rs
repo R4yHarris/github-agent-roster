@@ -1550,6 +1550,24 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
         }
         owner.check()?;
         options.loaded.require_current()?;
+        if options
+            .loaded
+            .config
+            .as_value()
+            .get("openshell")
+            .and_then(|o| o.get("enabled"))
+            == Some(&Value::Boolean(true))
+        {
+            let _ = crate::openshell::prepare_delivery_openshell_attempt(
+                owner.root(),
+                &options.loaded.root,
+                options.loaded.config.as_value(),
+                &assignment.task,
+                &assignment.session,
+                &token,
+            )
+            .await?;
+        }
         drop(pre_plan);
         let boundary_options =
             tools::Options::from_config(&options.loaded.config, execution::Role::Coder)?;

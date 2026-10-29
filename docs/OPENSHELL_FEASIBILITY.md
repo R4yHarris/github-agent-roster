@@ -34,3 +34,7 @@ reinforcing Roster's core principles:
 3. **Identity & publication boundary**:
    - OpenShell is an **execution and inference sandbox**, never a GitHub publisher or second Kanban board.
    - The GitHub App (`vendor/github-agent-contracts/scripts/agent-pr.mjs`) remains strictly on the host outside OpenShell sandboxes. No GitHub App private key or installation token is ever registered as an OpenShell provider or mounted into a sandbox.
+4. **WSL 2 & Docker Desktop nested seccomp listener note (`v0.1.5`)**:
+   - On WSL 2 (`Linux 6.6.87.2-microsoft-standard-WSL2`), Landlock ABI v3 (`CONFIG_SECURITY_LANDLOCK=y`), `openshell profile lint`, and `openshell-prover check` operate natively.
+   - However, WSL 2's root `mini_init` and Docker Desktop's `initd` attach an ancestor `SECCOMP_RET_USER_NOTIF` filter (`Seccomp_filters: 1` in WSL 2, `Seccomp_filters: 2` in Docker Desktop). Because Linux kernel `seccomp.c` allows only one `SECCOMP_FILTER_FLAG_NEW_LISTENER` per task hierarchy, `openshell-sandbox` container startup inside WSL 2 / Docker Desktop fails its `seccomp notification probe` with `EBUSY` (`os error 16`). Full container execution requires a native Linux host or MicroVM/K8s worker without an ancestor `SECCOMP_RET_USER_NOTIF` listener.
+
