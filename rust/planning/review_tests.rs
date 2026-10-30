@@ -370,10 +370,19 @@ fn review_runtime_globals_are_not_imaginary_exports() -> Result<(), Error> {
     let checks = vec![
         "Throws `TypeError`, `SyntaxError`, `RangeError`, and `AggregateError` for invalid input"
             .to_owned(),
+        "Verifies `assert.strictEqual`, `Object.keys`, `JSON.parse`, `Array.isArray`, and `Number.isFinite`"
+            .to_owned(),
     ];
     assert!(
         grounding::errors(&checks, None, &[], "", Some(&grounding::Index::default()))?.is_empty()
     );
+    let reqs = intake::requirements(
+        &value("Update assets/logo.svg, sitemap.xml, and infra/main.bicep."),
+        false,
+    )?;
+    assert!(reqs.files.contains(&"assets/logo.svg".to_owned()));
+    assert!(reqs.files.contains(&"sitemap.xml".to_owned()));
+    assert!(reqs.files.contains(&"infra/main.bicep".to_owned()));
     assert!(
         !grounding::errors(
             &["`inventedRuntimeGlobal` is present".to_owned()],

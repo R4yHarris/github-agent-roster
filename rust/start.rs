@@ -1860,8 +1860,10 @@ impl Repository {
 
     pub async fn require_current(&self, git: &Git, token: &CancellationToken) -> Result<(), Error> {
         token.check()?;
+        let inspected = Self::inspect(&self.paths.worktree, git, token).await;
+        token.check()?;
         self.require_indexes_current()?;
-        let current = Self::inspect(&self.paths.worktree, git, token).await?;
+        let current = inspected?;
         token.check()?;
         self.require_indexes_current()?;
         if self.root != current.root

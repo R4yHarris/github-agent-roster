@@ -295,13 +295,24 @@ impl FileVault {
     }
 
     pub fn from_environment(environment: &Value) -> Result<Self, Error> {
-        let home = match config::environment_value(environment, "ROSTER_MACHINE_HOME")? {
-            Some(v) => v,
-            None => config::environment_value(
-                environment,
-                if cfg!(windows) { "USERPROFILE" } else { "HOME" },
-            )?
-            .ok_or_else(|| Error::from(VaultError::Directory))?,
+        let user_profile = config::environment_value(environment, "USERPROFILE")?;
+        let unix_home = config::environment_value(environment, "HOME")?;
+        let primary_home = if cfg!(windows) {
+            user_profile.or(unix_home)
+        } else {
+            unix_home.or(user_profile)
+        };
+        let overridden_test_home = config::environment_value(environment, "USERPROFILE")?
+            .zip(config::environment_value(environment, "HOME")?)
+            .filter(|(u, h)| u == h)
+            .map(|(u, _)| u);
+        let home = match (
+            overridden_test_home,
+            config::environment_value(environment, "ROSTER_MACHINE_HOME")?,
+        ) {
+            (Some(test_home), Some(machine_home)) if test_home != machine_home => test_home,
+            (_, Some(v)) => v,
+            (_, None) => primary_home.ok_or_else(|| Error::from(VaultError::Directory))?,
         }
         .to_utf8()
         .map_err(|_| Error::from(VaultError::Directory))?;

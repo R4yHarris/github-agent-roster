@@ -3015,7 +3015,7 @@ impl ShellSession {
                 };
             }
             let reqs = crate::planning::intake::requirements(&Value::string(text), true)?;
-            if !reqs.explicit && self.has_configured_endpoint() {
+            if !reqs.explicit && reqs.output_directory.is_none() && self.has_configured_endpoint() {
                 if let Some(agent_out) = self.run_agentic_nlp_turn(text).await? {
                     return Ok(ShellAction::Continue(agent_out));
                 }
@@ -4992,7 +4992,7 @@ impl ShellSession {
                     ));
                 }
                 if has_js {
-                    let esm_hint = "\n\nNote for JavaScript tests: when testing a newly added ESM export in `tests/*.test.mjs`, use a namespace import (`import * as mod from '../src/...'`) and call `mod.<fn>(...)` inside `test('...', ...)` so counterfactual evaluation at base fails inside the named test rather than at top-level import time.\n";
+                    let esm_hint = "\n\nNote for JavaScript tests: when testing a newly added ESM export in `tests/*.test.mjs`, place `import * as mod from '../src/...'` at module top level and call `mod.<fn>(...)` inside `test('...', ...)` so counterfactual evaluation at base fails inside the named test rather than at top-level import time.\n";
                     if let Some(pos) = combined.find("## Allowed Files") {
                         combined.insert_str(pos, esm_hint);
                     } else if let Some(pos) = combined.find("## Files allowed") {
@@ -6314,13 +6314,40 @@ impl ShellSession {
                 .map(|s| s.trim().to_owned())
                 .filter(|s| !s.is_empty());
 
-            if (!wrote_files.is_empty() || !requested_deliverables.is_empty())
-                && auto_gate_attempts < 8
-                && _turn_idx + 1 < 48
-            {
+            let effective_repo_dir = wrote_files
+                .first()
+                .and_then(|wf| {
+                    wf.ancestors()
+                        .find(|anc| anc.join(".git").exists())
+                        .map(Path::to_path_buf)
+                })
+                .or_else(|| {
+                    wrote_files
+                        .first()
+                        .and_then(|wf| wf.parent().map(Path::to_path_buf))
+                })
+                .or_else(|| matched_repos.first().map(|r| PathBuf::from(&r.path)))
+                .unwrap_or_else(|| self.cwd.clone());
+            let lower_u_gate = user_text.to_lowercase();
+            let is_delivery_intent = !wrote_files.is_empty()
+                || ((lower_u_gate.contains("write ")
+                    || lower_u_gate.contains("create ")
+                    || lower_u_gate.contains("build ")
+                    || lower_u_gate.contains("deliver ")
+                    || lower_u_gate.contains("implement ")
+                    || lower_u_gate.contains("finish writing"))
+                    && !lower_u_gate.starts_with("inspect ")
+                    && !lower_u_gate.starts_with("compare ")
+                    && !lower_u_gate.starts_with("what ")
+                    && !lower_u_gate.starts_with("which ")
+                    && !lower_u_gate.starts_with("based on "));
+
+            if is_delivery_intent && auto_gate_attempts < 8 && _turn_idx + 1 < 48 {
                 let missing_deliverables = requested_deliverables
                     .iter()
-                    .filter(|rel| !self.cwd.join(rel).is_file())
+                    .filter(|rel| {
+                        !effective_repo_dir.join(rel).is_file() && !self.cwd.join(rel).is_file()
+                    })
                     .cloned()
                     .collect::<Vec<_>>();
                 if !missing_deliverables.is_empty() {
@@ -6345,63 +6372,70 @@ impl ShellSession {
                     continue;
                 }
 
-                let node_bin = find_node20_executable()
-                    .or_else(|| which_executable(if cfg!(windows) { "node.exe" } else { "node" }))
-                    .unwrap_or_else(|| "node".to_owned());
+                if !wrote_files.is_empty() {
+                    let node_bin = find_node20_executable()
+                        .or_else(|| {
+                            which_executable(if cfg!(windows) { "node.exe" } else { "node" })
+                        })
+                        .unwrap_or_else(|| "node".to_owned());
 
-                if self.cwd.join("src").join("cli.mjs").is_file()
-                    && !self.cwd.join("dist").join("index.html").is_file()
-                {
-                    if let Ok(build_out) = StdCommand::new(&node_bin)
-                        .current_dir(&self.cwd)
-                        .arg("src/cli.mjs")
-                        .output()
+                    if effective_repo_dir.join("src").join("cli.mjs").is_file()
+                        && !effective_repo_dir.join("dist").join("index.html").is_file()
                     {
-                        if !build_out.status.success() {
-                            auto_gate_attempts += 1;
-                            seen_tool_calls.clear();
-                            let err_txt: String = format!(
-                                "{}{}",
-                                String::from_utf8_lossy(&build_out.stdout),
-                                String::from_utf8_lossy(&build_out.stderr)
-                            )
-                            .chars()
-                            .take(4000)
-                            .collect();
-                            if let Some(ref c) = content_opt {
+                        if let Ok(build_out) = StdCommand::new(&node_bin)
+                            .current_dir(&effective_repo_dir)
+                            .arg("src/cli.mjs")
+                            .output()
+                        {
+                            if !build_out.status.success() {
+                                auto_gate_attempts += 1;
+                                seen_tool_calls.clear();
+                                let err_txt: String = format!(
+                                    "{}{}",
+                                    String::from_utf8_lossy(&build_out.stdout),
+                                    String::from_utf8_lossy(&build_out.stderr)
+                                )
+                                .chars()
+                                .take(4000)
+                                .collect();
+                                if let Some(ref c) = content_opt {
+                                    messages.push(Value::object(vec![
+                                        ("role", Value::string("assistant")),
+                                        ("content", Value::string(c)),
+                                    ]));
+                                }
                                 messages.push(Value::object(vec![
-                                    ("role", Value::string("assistant")),
-                                    ("content", Value::string(c)),
+                                    ("role", Value::string("user")),
+                                    (
+                                        "content",
+                                        Value::string(&format!(
+                                            "Autonomous build gate ran `node src/cli.mjs` and it failed:\n{err_txt}\n\nFix the error in src/cli.mjs or src/generator.mjs using edit_file/write_file and run run_check(command=\"node_build\")."
+                                        )),
+                                    ),
                                 ]));
+                                continue;
                             }
-                            messages.push(Value::object(vec![
-                                ("role", Value::string("user")),
-                                (
-                                    "content",
-                                    Value::string(&format!(
-                                        "Autonomous build gate ran `node src/cli.mjs` and it failed:\n{err_txt}\n\nFix the error in src/cli.mjs or src/generator.mjs using edit_file/write_file and run run_check(command=\"node_build\")."
-                                    )),
-                                ),
-                            ]));
-                            continue;
+                            tool_trace.push("auto:node_build".to_owned());
                         }
-                        tool_trace.push("auto:node_build".to_owned());
                     }
-                }
 
-                if self.cwd.join("tests").is_dir() {
                     let mut test_files = Vec::new();
-                    if let Ok(rd) = fs::read_dir(self.cwd.join("tests")) {
-                        for entry in rd.flatten() {
-                            let name = entry.file_name().to_string_lossy().to_string();
-                            if name.ends_with(".test.mjs") || name.ends_with(".test.js") {
-                                test_files.push(format!("tests/{name}"));
+                    for test_dir_name in ["tests", "test"] {
+                        let td = effective_repo_dir.join(test_dir_name);
+                        if td.is_dir() {
+                            if let Ok(rd) = fs::read_dir(&td) {
+                                for entry in rd.flatten() {
+                                    let name = entry.file_name().to_string_lossy().to_string();
+                                    if name.ends_with(".test.mjs") || name.ends_with(".test.js") {
+                                        test_files.push(format!("{test_dir_name}/{name}"));
+                                    }
+                                }
                             }
                         }
                     }
                     if !test_files.is_empty() {
                         let mut test_cmd = StdCommand::new(&node_bin);
-                        test_cmd.current_dir(&self.cwd).arg("--test");
+                        test_cmd.current_dir(&effective_repo_dir).arg("--test");
                         for tf in &test_files {
                             test_cmd.arg(tf);
                         }
@@ -6447,15 +6481,25 @@ impl ShellSession {
             break;
         }
 
-        if !wrote_files.is_empty() && !self.cwd.join("rust").join("shell.rs").is_file() {
+        let final_repo_dir = wrote_files
+            .first()
+            .and_then(|wf| {
+                wf.ancestors()
+                    .find(|anc| anc.join(".git").exists())
+                    .map(Path::to_path_buf)
+            })
+            .or_else(|| matched_repos.first().map(|r| PathBuf::from(&r.path)))
+            .unwrap_or_else(|| self.cwd.clone());
+
+        if !wrote_files.is_empty() && !final_repo_dir.join("rust").join("shell.rs").is_file() {
             let node_bin = find_node20_executable()
                 .or_else(|| which_executable(if cfg!(windows) { "node.exe" } else { "node" }))
                 .unwrap_or_else(|| "node".to_owned());
-            if self.cwd.join("src").join("cli.mjs").is_file()
-                && !self.cwd.join("dist").join("index.html").is_file()
+            if final_repo_dir.join("src").join("cli.mjs").is_file()
+                && !final_repo_dir.join("dist").join("index.html").is_file()
             {
                 let _ = StdCommand::new(&node_bin)
-                    .current_dir(&self.cwd)
+                    .current_dir(&final_repo_dir)
                     .arg("src/cli.mjs")
                     .output();
             }
@@ -6464,15 +6508,15 @@ impl ShellSession {
                 || lower_u.contains("work to completion")
                 || lower_u.contains("project #")
                 || lower_u.contains("project_number");
-            if wants_commit_or_board && self.cwd.join(".git").exists() {
-                let _ = bootstrap_greenfield_repo(&self.cwd);
+            if wants_commit_or_board && final_repo_dir.join(".git").exists() {
+                let _ = bootstrap_greenfield_repo(&final_repo_dir);
                 let _ = StdCommand::new("git")
-                    .args(["-C", &self.cwd.display().to_string(), "add", "-A"])
+                    .args(["-C", &final_repo_dir.display().to_string(), "add", "-A"])
                     .output();
                 let _ = StdCommand::new("git")
                     .args([
                         "-C",
-                        &self.cwd.display().to_string(),
+                        &final_repo_dir.display().to_string(),
                         "commit",
                         "-m",
                         "feat: deliver verified project artifacts and test suite",
@@ -6481,7 +6525,7 @@ impl ShellSession {
                 let push_res = StdCommand::new("git")
                     .args([
                         "-C",
-                        &self.cwd.display().to_string(),
+                        &final_repo_dir.display().to_string(),
                         "push",
                         "-u",
                         "origin",
@@ -6492,7 +6536,7 @@ impl ShellSession {
                     let _ = StdCommand::new("git")
                         .args([
                             "-C",
-                            &self.cwd.display().to_string(),
+                            &final_repo_dir.display().to_string(),
                             "push",
                             "--force",
                             "-u",
@@ -6511,7 +6555,7 @@ impl ShellSession {
                         || lower_u.contains("move the completed cards")
                         || lower_u.contains("move completed cards"))
                 {
-                    let (owner, repo_slug) = resolve_board_owner_and_repo(&self.cwd);
+                    let (owner, repo_slug) = resolve_board_owner_and_repo(&final_repo_dir);
                     if let Ok(cards) = list_project_board_cards(&owner, proj_num) {
                         for card in cards {
                             if !card.status.eq_ignore_ascii_case("Done") {
@@ -6527,7 +6571,7 @@ impl ShellSession {
                                     close_cmd.env("GH_TOKEN", tok);
                                 }
                                 let _ = close_cmd
-                                    .current_dir(&self.cwd)
+                                    .current_dir(&final_repo_dir)
                                     .env("GH_PROMPT_DISABLED", "1")
                                     .args(["issue", "close", &issue_s, "--repo", &repo_slug])
                                     .output();
@@ -7141,7 +7185,7 @@ impl ShellSession {
                                     &target_dir.display().to_string(),
                                     "commit",
                                     "-m",
-                                    "feat: deliver verified Azure static marketing site and human checklist",
+                                    "feat: deliver verified project artifacts and test suite",
                                 ])
                                 .output();
                             let push_out = StdCommand::new("git")
@@ -7174,15 +7218,34 @@ impl ShellSession {
                                 .output()
                         }
                     }
+                    "cargo_test" | "cargo" => {
+                        let cargo_bin = find_cargo_executable()
+                            .or_else(|| {
+                                which_executable(if cfg!(windows) { "cargo.exe" } else { "cargo" })
+                            })
+                            .unwrap_or_else(|| "cargo".to_owned());
+                        StdCommand::new(&cargo_bin)
+                            .current_dir(&target_dir)
+                            .args(["test", "--offline"])
+                            .output()
+                    }
+                    "python_test" | "pytest" => StdCommand::new("python")
+                        .current_dir(&target_dir)
+                        .args(["-m", "unittest", "discover"])
+                        .output(),
                     _ => {
                         let mut test_cmd = StdCommand::new(&node_bin);
                         test_cmd.current_dir(&target_dir).arg("--test");
-                        if target_dir.join("tests").is_dir() {
-                            if let Ok(rd) = fs::read_dir(target_dir.join("tests")) {
-                                for entry in rd.flatten() {
-                                    let name = entry.file_name().to_string_lossy().to_string();
-                                    if name.ends_with(".test.mjs") || name.ends_with(".test.js") {
-                                        test_cmd.arg(format!("tests/{name}"));
+                        for test_dir_name in ["tests", "test"] {
+                            let td = target_dir.join(test_dir_name);
+                            if td.is_dir() {
+                                if let Ok(rd) = fs::read_dir(&td) {
+                                    for entry in rd.flatten() {
+                                        let name = entry.file_name().to_string_lossy().to_string();
+                                        if name.ends_with(".test.mjs") || name.ends_with(".test.js")
+                                        {
+                                            test_cmd.arg(format!("{test_dir_name}/{name}"));
+                                        }
                                     }
                                 }
                             }
@@ -7531,8 +7594,16 @@ impl ShellSession {
                     .map(|c| format!("- {c}"))
                     .collect::<Vec<_>>()
                     .join("\n");
+                let has_js = valid_files
+                    .iter()
+                    .any(|f| f.ends_with(".mjs") || f.ends_with(".js"));
+                let esm_hint = if has_js {
+                    "\n\nNote for JavaScript tests: when testing a newly added ESM export in `tests/*.test.mjs`, place `import * as mod from '../src/...'` at module top level and call `mod.<fn>(...)` inside `test('...', ...)` so counterfactual evaluation at base fails inside the named test rather than at top-level import time."
+                } else {
+                    ""
+                };
                 let structured_ask = format!(
-                    "{}\n\nOriginal request: {}\n\n## Allowed Files\n{}\n\n## Acceptance checks\n{}",
+                    "{}\n\nOriginal request: {}{esm_hint}\n\n## Allowed Files\n{}\n\n## Acceptance checks\n{}\n",
                     if outcome.is_empty() {
                         user_text
                     } else {
@@ -7546,13 +7617,45 @@ impl ShellSession {
                 if target_repo.join(".git").exists() {
                     self.cwd = target_repo.clone();
                 }
-                let res = self.run_ask_text_mode(&structured_ask, false).await;
+                let _ = bootstrap_greenfield_repo(&self.cwd);
+                let asks_dir = self.cwd.join(".roster").join("asks");
+                let _ = fs::create_dir_all(&asks_dir);
+                let ask_id = crate::ask::generate_uuid_v4();
+                let ask_file = asks_dir.join(format!("sdlc-{ask_id}.md"));
+                let _ = fs::write(&ask_file, structured_ask.as_bytes());
+                self.last_ask_file = Some(ask_file);
+                let res = self.execute_local_ask_delivery().await;
+                let passed = self.display.get("state") == Some(&Value::string("passed"));
+                let mut applied_files = Vec::new();
+                if passed && !self.cwd.join("rust").join("shell.rs").is_file() {
+                    if let Some(wt) = self.last_worktree.clone() {
+                        let summary_title = if outcome.is_empty() {
+                            user_text
+                        } else {
+                            &outcome
+                        };
+                        if let Ok(applied) =
+                            apply_verified_worktree_to_repo(&self.cwd, &wt, None, summary_title)
+                        {
+                            applied_files = applied;
+                        }
+                    }
+                }
                 self.cwd = prev_cwd;
                 match res {
                     Ok(out) => {
                         command_outputs.push(out.clone());
                         Value::object(vec![
-                            ("status", Value::string("delivered")),
+                            (
+                                "status",
+                                Value::string(if passed { "verified" } else { "failed" }),
+                            ),
+                            (
+                                "applied_files",
+                                Value::Array(
+                                    applied_files.iter().map(|f| Value::string(f)).collect(),
+                                ),
+                            ),
                             ("output", Value::string(&out)),
                         ])
                         .json()
