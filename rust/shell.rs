@@ -2978,9 +2978,20 @@ impl ShellSession {
                     "{badge}\nAttached #{next_id}: {name} ({path_str}). Reference it as #{next_id} or by filename in any subsequent prompt.\n"
                 )));
             }
+            if self.live_output {
+                use std::io::Write;
+                let _ = writeln!(std::io::stdout(), "{badge}");
+                let _ = std::io::stdout().flush();
+            }
             let follow = Box::pin(self.dispatch_line(&drop_match.remainder)).await?;
             return match follow {
-                ShellAction::Continue(out) => Ok(ShellAction::Continue(format!("{badge}\n{out}"))),
+                ShellAction::Continue(out) => {
+                    if self.live_output {
+                        Ok(ShellAction::Continue(out))
+                    } else {
+                        Ok(ShellAction::Continue(format!("{badge}\n{out}")))
+                    }
+                }
                 other => Ok(other),
             };
         }
@@ -5936,11 +5947,64 @@ impl ShellSession {
             let _ = self.compact_conversation_history(false);
         }
 
+        let emit_progress = |live: bool, msg: &str| {
+            if live {
+                use std::io::Write;
+                let _ = writeln!(std::io::stdout(), "  -> {msg}");
+                let _ = std::io::stdout().flush();
+            }
+        };
+        emit_progress(
+            self.live_output,
+            &format!(
+                "Inspecting workspace & discovering repositories ({})...",
+                self.cwd.display()
+            ),
+        );
         let _ = bootstrap_greenfield_repo(&self.cwd);
         let drives = discover_drives(&self.cwd, &self.environment);
         let mut repos = discover_repositories(&self.cwd, &self.environment);
         repos.sort_by_key(|r| std::cmp::Reverse(r.modified_epoch));
         let mut matched_repos = match_target_repositories(user_text, &repos, &self.cwd);
+        for att in &self.attachments {
+            let check_dir = if att.path.is_dir() {
+                Some(att.path.clone())
+            } else {
+                att.path.parent().map(Path::to_path_buf)
+            };
+            if let Some(dir) = check_dir {
+                let dir_str = dir.display().to_string();
+                if let Some(found) = repos
+                    .iter()
+                    .find(|r| {
+                        r.path.eq_ignore_ascii_case(&dir_str)
+                            || dir_str.to_lowercase().starts_with(&r.path.to_lowercase())
+                    })
+                    .cloned()
+                {
+                    if !matched_repos
+                        .iter()
+                        .any(|m| m.path.eq_ignore_ascii_case(&found.path))
+                    {
+                        matched_repos.insert(0, found);
+                    }
+                } else if dir.is_dir() {
+                    let inspected = inspect_git_repo(&dir, false);
+                    if !repos
+                        .iter()
+                        .any(|r| r.path.eq_ignore_ascii_case(&inspected.path))
+                    {
+                        repos.insert(0, inspected.clone());
+                    }
+                    if !matched_repos
+                        .iter()
+                        .any(|m| m.path.eq_ignore_ascii_case(&inspected.path))
+                    {
+                        matched_repos.insert(0, inspected);
+                    }
+                }
+            }
+        }
         if matched_repos.is_empty() {
             if let Some(prev_repo_name) = self
                 .conversation_turns
@@ -5959,6 +6023,16 @@ impl ShellSession {
         let active_target_repo = matched_repos.first().map(|r| r.name.clone());
 
         let deep_initial_evidence = if !matched_repos.is_empty() {
+            let names = matched_repos
+                .iter()
+                .take(4)
+                .map(|r| r.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            emit_progress(
+                self.live_output,
+                &format!("Auditing repository structure, docs & governance ({names})..."),
+            );
             deep_inspect_repositories(
                 &matched_repos,
                 &self.environment,
@@ -6109,15 +6183,36 @@ impl ShellSession {
         let mut auto_gate_attempts = 0_usize;
         let mut final_text = None;
         let requested_deliverables = extract_requested_deliverable_files(user_text);
+        let wants_html_report = regex_lite::Regex::new(
+            r"(?i)\b(?:html\s+report|report\s+in\s+html|nice\s+html|\.html\b)",
+        )
+        .is_ok_and(|re| re.is_match(user_text));
+        let wants_report_file = wants_html_report
+            || regex_lite::Regex::new(
+                r"(?i)\b(?:generat(?:e|ing)\s+a\s+.*report|place\s+it\s+into\s+a\s+.*report|make\s+me\s+a\s+.*(?:markdown|file|report)|save\s+.*report|create\s+a\s+.*report)\b",
+            )
+            .is_ok_and(|re| re.is_match(user_text));
+        let max_turns = if wants_report_file
+            && requested_deliverables.is_empty()
+            && extract_referenced_project_number(user_text).is_none()
+        {
+            1_usize
+        } else {
+            48_usize
+        };
 
-        for _turn_idx in 0..48_usize {
+        for _turn_idx in 0..max_turns {
+            emit_progress(
+                self.live_output,
+                &format!("Synthesizing step {} with LLM...", _turn_idx + 1),
+            );
             let _ = compact_nlp_messages(&mut messages, context_max);
             let req = Value::object(vec![
                 ("messages", Value::Array(messages.clone())),
                 ("tools", tools_def.clone()),
             ]);
             let mut obs = crate::llm::control::NoObserver;
-            let Ok(Ok(res)) = tokio::time::timeout(
+            let (res_message, res_usage, res_finish_reason) = match tokio::time::timeout(
                 std::time::Duration::from_secs(180),
                 chat.complete(
                     &req,
@@ -6132,11 +6227,26 @@ impl ShellSession {
                 ),
             )
             .await
-            else {
-                break;
+            {
+                Ok(Ok(res)) => (res.message, res.usage, res.finish_reason),
+                Ok(Err(failure)) if failure.truncated == Some(true) => {
+                    let msg = failure
+                        .partial
+                        .map(|b| *b)
+                        .unwrap_or_else(|| Value::object(Vec::new()));
+                    (
+                        msg,
+                        None,
+                        failure
+                            .finish_reason
+                            .map(Value::String)
+                            .or_else(|| Some(Value::string("length"))),
+                    )
+                }
+                _ => break,
             };
 
-            if let Some(usage) = &res.usage {
+            if let Some(usage) = &res_usage {
                 if let Some(pt) = domain::safe_integer(usage.get("prompt_tokens")) {
                     total_prompt_tokens = pt;
                     let _ = domain::put(&mut self.display, "contextUsed", Value::Number(pt as f64));
@@ -6151,8 +6261,7 @@ impl ShellSession {
                 }
             }
 
-            let tool_calls = res
-                .message
+            let tool_calls = res_message
                 .get("tool_calls")
                 .and_then(domain::items)
                 .filter(|items| !items.is_empty())
@@ -6200,7 +6309,7 @@ impl ShellSession {
                     ("role", Value::string("assistant")),
                     (
                         "content",
-                        res.message.get("content").cloned().unwrap_or(Value::Null),
+                        res_message.get("content").cloned().unwrap_or(Value::Null),
                     ),
                     ("tool_calls", Value::Array(assistant_tool_calls)),
                 ]));
@@ -6248,6 +6357,7 @@ impl ShellSession {
                     } else {
                         format!("{call_name} {label_arg}")
                     };
+                    emit_progress(self.live_output, &format!("Running tool: {status_label}"));
                     let _ = domain::put(
                         &mut self.display,
                         "lastTestName",
@@ -6279,15 +6389,21 @@ impl ShellSession {
                 continue;
             }
 
-            if domain::is_text(res.finish_reason.as_ref(), "length") {
+            if domain::is_text(res_finish_reason.as_ref(), "length") {
+                let partial_opt = res_message
+                    .get("content")
+                    .and_then(Value::as_string)
+                    .and_then(|t| t.to_utf8().ok())
+                    .map(|s| s.trim().to_owned())
+                    .filter(|s| !s.is_empty());
+                if let Some(ref partial) = partial_opt {
+                    if requested_deliverables.is_empty() && partial.len() >= 400 {
+                        final_text = Some(partial.clone());
+                        break;
+                    }
+                }
                 if _turn_idx + 1 < 48 {
-                    if let Some(partial) = res
-                        .message
-                        .get("content")
-                        .and_then(Value::as_string)
-                        .and_then(|t| t.to_utf8().ok())
-                        .filter(|s| !s.trim().is_empty())
-                    {
+                    if let Some(partial) = partial_opt {
                         messages.push(Value::object(vec![
                             ("role", Value::string("assistant")),
                             ("content", Value::string(&partial)),
@@ -6304,10 +6420,12 @@ impl ShellSession {
                     ]));
                     continue;
                 }
+                if partial_opt.is_some() {
+                    final_text = partial_opt;
+                }
                 break;
             }
-            let content_opt = res
-                .message
+            let content_opt = res_message
                 .get("content")
                 .and_then(Value::as_string)
                 .and_then(|t| t.to_utf8().ok())
@@ -6586,21 +6704,59 @@ impl ShellSession {
             }
         }
 
-        if final_text.is_none() && (!tool_trace.is_empty() || !wrote_files.is_empty()) {
-            let _ = compact_nlp_messages(&mut messages, context_max);
-            let mut grace_messages = messages.clone();
-            grace_messages.push(Value::object(vec![
-                ("role", Value::string("user")),
-                (
-                    "content",
-                    Value::string(
-                        "Tool budget reached. Using all tool outputs and evidence gathered above, write the complete, detailed response or Markdown document fulfilling the user's request now without calling any tools.",
+        if final_text.is_none()
+            && (!tool_trace.is_empty()
+                || !wrote_files.is_empty()
+                || !deep_initial_evidence.is_empty())
+        {
+            emit_progress(
+                self.live_output,
+                "Synthesizing final comprehensive report from collected evidence...",
+            );
+            let mut collected_tool_evidence = String::new();
+            for msg in &messages {
+                if domain::is_text(msg.get("role"), "tool") {
+                    let tname = msg
+                        .get("name")
+                        .and_then(Value::as_string)
+                        .and_then(|t| t.to_utf8().ok())
+                        .unwrap_or_else(|| "tool".to_owned());
+                    let tcontent = msg
+                        .get("content")
+                        .and_then(Value::as_string)
+                        .and_then(|t| t.to_utf8().ok())
+                        .unwrap_or_default();
+                    if !tcontent.is_empty() && collected_tool_evidence.len() < 48_000 {
+                        let snip: String = tcontent.chars().take(6000).collect();
+                        collected_tool_evidence
+                            .push_str(&format!("\n### Tool Output (`{tname}`)\n{snip}\n"));
+                    }
+                }
+            }
+            let synth_user = format!(
+                "{user_context}\n\nAdditional Tool Inspection Evidence:\n{collected_tool_evidence}\n\nWrite the complete, self-contained, deeply technical Markdown report fulfilling the user's request in a single response (covering repository structure, supported features & functionality, outstanding items, and quality, security & maintainability evaluations and numeric scores out of 100). Output ONLY the Markdown document; do not emit <tool_call> tags, function calls, or raw HTML tags."
+            );
+            let grace_messages = vec![
+                Value::object(vec![
+                    ("role", Value::string("system")),
+                    (
+                        "content",
+                        Value::string(
+                            "You are Roster, a Principal Software Architect, Application Security Auditor, and SDLC Compliance Engineer. Author a thorough, board-ready, evidence-grounded Markdown report based strictly on the supplied repository inspection evidence and tool outputs. Cite real file paths, configurations, workflows, and policies found in the repository. Output only pure Markdown without any <tool_call> tags or tool invocations.",
+                        ),
                     ),
-                ),
-            ]));
-            let grace_req = Value::object(vec![("messages", Value::Array(grace_messages))]);
+                ]),
+                Value::object(vec![
+                    ("role", Value::string("user")),
+                    ("content", Value::string(&synth_user)),
+                ]),
+            ];
+            let grace_req = Value::object(vec![
+                ("messages", Value::Array(grace_messages)),
+                ("max_tokens", Value::Number(4096.0)),
+            ]);
             let mut obs = crate::llm::control::NoObserver;
-            if let Ok(Ok(res)) = tokio::time::timeout(
+            let grace_out = match tokio::time::timeout(
                 std::time::Duration::from_secs(180),
                 chat.complete(
                     &grace_req,
@@ -6616,7 +6772,14 @@ impl ShellSession {
             )
             .await
             {
-                if let Some(usage) = &res.usage {
+                Ok(Ok(res)) => Some((res.message, res.usage)),
+                Ok(Err(failure)) if failure.truncated == Some(true) => {
+                    failure.partial.map(|b| (*b, None))
+                }
+                _ => None,
+            };
+            if let Some((grace_msg, grace_usage)) = grace_out {
+                if let Some(usage) = &grace_usage {
                     if let Some(pt) = domain::safe_integer(usage.get("prompt_tokens")) {
                         total_prompt_tokens = pt;
                         let _ =
@@ -6631,8 +6794,7 @@ impl ShellSession {
                         );
                     }
                 }
-                final_text = res
-                    .message
+                final_text = grace_msg
                     .get("content")
                     .and_then(Value::as_string)
                     .and_then(|t| t.to_utf8().ok())
@@ -6647,6 +6809,9 @@ impl ShellSession {
                 final_text = Some(written_body.trim().to_owned());
             }
         }
+        if final_text.is_none() && !deep_initial_evidence.is_empty() {
+            final_text = Some(deep_initial_evidence.clone());
+        }
 
         let _ = domain::put(&mut self.display, "lastTestName", Value::Null);
         let Some(mut reply) = final_text else {
@@ -6658,12 +6823,45 @@ impl ShellSession {
             return Ok(None);
         };
 
-        let wants_report_file = regex_lite::Regex::new(
-            r"(?i)\b(?:generating\s+a\s+report|place\s+it\s+into\s+a\s+.*report|make\s+me\s+a\s+.*(?:markdown|file|report)\s+with\s+the\s+list|save\s+.*report)\b",
-        )
-        .is_ok_and(|re| re.is_match(user_text));
+        if wants_html_report {
+            for wf in &wrote_files {
+                let is_html = wf
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("html"));
+                if is_html {
+                    if let Ok(existing) = fs::read_to_string(wf) {
+                        let trimmed_ex = existing.trim_start();
+                        if !trimmed_ex.starts_with("<!DOCTYPE")
+                            && !trimmed_ex.starts_with("<!doctype")
+                            && !trimmed_ex.starts_with("<html")
+                        {
+                            let repo_label = matched_repos
+                                .first()
+                                .map(|r| r.name.as_str())
+                                .unwrap_or("Repository");
+                            let upgraded = render_markdown_as_html_report(
+                                repo_label,
+                                &existing,
+                                &deep_initial_evidence,
+                            );
+                            if let Ok(redacted_html) = self.redact_text(&upgraded) {
+                                let _ = fs::write(wf, redacted_html.as_bytes());
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
-        if wants_report_file && wrote_files.is_empty() {
+        let has_html_written = wrote_files.iter().any(|wf| {
+            wf.extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("html"))
+        });
+
+        if wants_report_file && (wrote_files.is_empty() || (wants_html_report && !has_html_written))
+        {
             let default_name = if let Some(first) = matched_repos.first() {
                 let stem = first
                     .name
@@ -6671,7 +6869,13 @@ impl ShellSession {
                     .next()
                     .unwrap_or(&first.name)
                     .to_ascii_uppercase();
-                format!("{stem}_COMPLIANCE_REPORT.md")
+                if wants_html_report {
+                    format!("{stem}_REPORT.html")
+                } else {
+                    format!("{stem}_COMPLIANCE_REPORT.md")
+                }
+            } else if wants_html_report {
+                "REPOSITORY_REPORT.html".to_owned()
             } else {
                 "COMPLIANCE_REPORT.md".to_owned()
             };
@@ -6682,6 +6886,16 @@ impl ShellSession {
                 && !user_text
                     .to_lowercase()
                     .contains("dev_drives_and_repositories.md")
+            {
+                if let Some(parent) = target_path.parent() {
+                    target_path = parent.join(&default_name);
+                }
+            }
+            if wants_html_report
+                && target_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_none_or(|e| !e.eq_ignore_ascii_case("html"))
             {
                 if let Some(parent) = target_path.parent() {
                     target_path = parent.join(&default_name);
@@ -6711,7 +6925,16 @@ impl ShellSession {
             } else {
                 reply.clone()
             };
-            let redacted_doc = self.redact_text(&full_doc)?;
+            let file_payload = if wants_html_report {
+                let repo_label = matched_repos
+                    .first()
+                    .map(|r| r.name.as_str())
+                    .unwrap_or("Repository");
+                render_markdown_as_html_report(repo_label, &reply, &deep_initial_evidence)
+            } else {
+                full_doc.clone()
+            };
+            let redacted_doc = self.redact_text(&file_payload)?;
             if let Some(parent) = target_path.parent() {
                 let _ = fs::create_dir_all(parent);
             }
@@ -6722,7 +6945,9 @@ impl ShellSession {
             .is_ok()
             {
                 wrote_files.push(target_path);
-                reply = full_doc;
+                if !wants_html_report {
+                    reply = full_doc;
+                }
             }
         }
 
@@ -7490,7 +7715,22 @@ impl ShellSession {
                     )])
                     .json();
                 }
-                let redacted_body = self.redact_text(&content).unwrap_or(content);
+                let formatted_content = if target_path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .is_some_and(|e| e.eq_ignore_ascii_case("html"))
+                {
+                    let repo_label = matched_repos
+                        .first()
+                        .map(|r| r.name.as_str())
+                        .unwrap_or("Repository");
+                    render_markdown_as_html_report(repo_label, &content, "")
+                } else {
+                    content
+                };
+                let redacted_body = self
+                    .redact_text(&formatted_content)
+                    .unwrap_or(formatted_content);
                 let final_body = if redacted_body.ends_with('\n') {
                     redacted_body
                 } else {
@@ -7791,9 +8031,48 @@ impl ShellSession {
         }
 
         let drives = discover_drives(&self.cwd, &self.environment);
-        let repos = discover_repositories(&self.cwd, &self.environment);
+        let mut repos = discover_repositories(&self.cwd, &self.environment);
         let local_files = collect_workspace_file_map(&self.cwd);
-        let matched_repos = match_target_repositories(text, &repos, &self.cwd);
+        let mut matched_repos = match_target_repositories(text, &repos, &self.cwd);
+        for att in &self.attachments {
+            let check_dir = if att.path.is_dir() {
+                Some(att.path.clone())
+            } else {
+                att.path.parent().map(Path::to_path_buf)
+            };
+            if let Some(dir) = check_dir {
+                let dir_str = dir.display().to_string();
+                if let Some(found) = repos
+                    .iter()
+                    .find(|r| {
+                        r.path.eq_ignore_ascii_case(&dir_str)
+                            || dir_str.to_lowercase().starts_with(&r.path.to_lowercase())
+                    })
+                    .cloned()
+                {
+                    if !matched_repos
+                        .iter()
+                        .any(|m| m.path.eq_ignore_ascii_case(&found.path))
+                    {
+                        matched_repos.insert(0, found);
+                    }
+                } else if dir.is_dir() {
+                    let inspected = inspect_git_repo(&dir, false);
+                    if !repos
+                        .iter()
+                        .any(|r| r.path.eq_ignore_ascii_case(&inspected.path))
+                    {
+                        repos.insert(0, inspected.clone());
+                    }
+                    if !matched_repos
+                        .iter()
+                        .any(|m| m.path.eq_ignore_ascii_case(&inspected.path))
+                    {
+                        matched_repos.insert(0, inspected);
+                    }
+                }
+            }
+        }
         let deep_evidence = if !matched_repos.is_empty() {
             deep_inspect_repositories(
                 &matched_repos,
@@ -7892,8 +8171,8 @@ impl ShellSession {
                         )]);
                         let creds = self.llm_credentials();
                         let mut obs = crate::llm::control::NoObserver;
-                        if let Ok(Ok(res)) = tokio::time::timeout(
-                            std::time::Duration::from_secs(60),
+                        let out_pair = match tokio::time::timeout(
+                            std::time::Duration::from_secs(120),
                             chat.complete(
                                 &req,
                                 &mut transport,
@@ -7908,7 +8187,14 @@ impl ShellSession {
                         )
                         .await
                         {
-                            if let Some(usage) = &res.usage {
+                            Ok(Ok(res)) => Some((res.message, res.usage)),
+                            Ok(Err(failure)) if failure.truncated == Some(true) => {
+                                failure.partial.map(|b| (*b, None))
+                            }
+                            _ => None,
+                        };
+                        if let Some((res_msg, res_usage)) = out_pair {
+                            if let Some(usage) = &res_usage {
                                 if let Some(pt) = domain::safe_integer(usage.get("prompt_tokens")) {
                                     let _ = domain::put(
                                         &mut self.display,
@@ -7926,8 +8212,7 @@ impl ShellSession {
                                     );
                                 }
                             }
-                            generated_body = res
-                                .message
+                            generated_body = res_msg
                                 .get("content")
                                 .and_then(Value::as_string)
                                 .and_then(|t| t.to_utf8().ok())
@@ -7936,6 +8221,31 @@ impl ShellSession {
                         }
                     }
                 }
+            }
+        }
+
+        let wants_html = regex_lite::Regex::new(
+            r"(?i)\b(?:html\s+report|report\s+in\s+html|nice\s+html|\.html\b)",
+        )
+        .is_ok_and(|re| re.is_match(text));
+        if wants_html
+            && target_path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_none_or(|e| !e.eq_ignore_ascii_case("html"))
+        {
+            let stem = matched_repos
+                .first()
+                .map(|r| {
+                    r.name
+                        .split('-')
+                        .next()
+                        .unwrap_or(&r.name)
+                        .to_ascii_uppercase()
+                })
+                .unwrap_or_else(|| "REPOSITORY".to_owned());
+            if let Some(parent) = target_path.parent() {
+                target_path = parent.join(format!("{stem}_REPORT.html"));
             }
         }
 
@@ -7963,10 +8273,23 @@ impl ShellSession {
                 fallback
             }
         };
-        let final_content = if content.ends_with('\n') {
-            content
+        let file_body = if target_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("html"))
+        {
+            let repo_label = matched_repos
+                .first()
+                .map(|r| r.name.as_str())
+                .unwrap_or("Repository");
+            render_markdown_as_html_report(repo_label, &content, &deep_evidence)
         } else {
-            format!("{content}\n")
+            content.clone()
+        };
+        let final_content = if file_body.ends_with('\n') {
+            file_body
+        } else {
+            format!("{file_body}\n")
         };
         if text.to_lowercase().contains("repos directory") {
             if let Some(first_repo) = matched_repos.first() {
@@ -9802,6 +10125,34 @@ fn inspect_git_repo(path: &Path, is_worktree: bool) -> RepoEntry {
         };
     }
 
+    if !path.join(".git").exists() {
+        let modified_utc = time::OffsetDateTime::from_unix_timestamp(latest_mtime as i64)
+            .map(|dt| {
+                format!(
+                    "{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
+                    dt.year(),
+                    dt.month() as u8,
+                    dt.day(),
+                    dt.hour(),
+                    dt.minute(),
+                    dt.second()
+                )
+            })
+            .unwrap_or_else(|_| "-".to_owned());
+        return RepoEntry {
+            name,
+            path: path_str,
+            kind: "Monorepo / Workspace".to_owned(),
+            branch: "local".to_owned(),
+            state: "local-workspace (no .git)".to_owned(),
+            remote: "local-only".to_owned(),
+            last_commit: "-".to_owned(),
+            modified_epoch: latest_mtime,
+            modified_utc,
+            linked_worktrees: Vec::new(),
+        };
+    }
+
     let run_git = |args: &[&str]| -> Option<String> {
         let out = StdCommand::new("git")
             .arg("--no-optional-locks")
@@ -10018,6 +10369,32 @@ pub fn discover_repositories(cwd: &Path, env: &Value) -> Vec<RepoEntry> {
             }
             return;
         }
+        let has_project_marker = depth >= 1
+            && (dir.join("AGENTS.md").is_file()
+                || dir.join("Directory.Build.props").is_file()
+                || dir.join("Cargo.toml").is_file()
+                || dir.join("package.json").is_file()
+                || dir.join("composer.json").is_file()
+                || dir.join("pyproject.toml").is_file());
+        if has_project_marker {
+            let is_numbered_clone = dir
+                .file_name()
+                .and_then(|s| s.to_str())
+                .and_then(|n| n.rsplit_once('-'))
+                .is_some_and(|(stem, suffix)| {
+                    !stem.is_empty()
+                        && suffix.len() >= 3
+                        && suffix.chars().all(|c| c.is_ascii_digit())
+                        && dir.parent().is_some_and(|p| p.join(stem).is_dir())
+                });
+            if !is_numbered_clone {
+                let canonical_key = dir.display().to_string();
+                if seen.insert(canonical_key) {
+                    repos.push(inspect_git_repo(dir, false));
+                }
+            }
+            return;
+        }
         if depth >= max_depth {
             return;
         }
@@ -10036,6 +10413,15 @@ pub fn discover_repositories(cwd: &Path, env: &Value) -> Vec<RepoEntry> {
             if name.starts_with('.') && name != ".roster" && !name.ends_with(".worktrees") {
                 continue;
             }
+            if let Some((stem, suffix)) = name.rsplit_once('-') {
+                if !stem.is_empty()
+                    && suffix.len() >= 3
+                    && suffix.chars().all(|c| c.is_ascii_digit())
+                    && dir.join(stem).is_dir()
+                {
+                    continue;
+                }
+            }
             let Ok(meta) = fs::symlink_metadata(&child) else {
                 continue;
             };
@@ -10046,7 +10432,8 @@ pub fn discover_repositories(cwd: &Path, env: &Value) -> Vec<RepoEntry> {
     }
 
     for root in scan_roots {
-        let max_d = if home.as_ref().is_some_and(|h| h == &root) {
+        let is_mnt = !cfg!(windows) && root.starts_with("/mnt/");
+        let max_d = if home.as_ref().is_some_and(|h| h == &root) || is_mnt {
             1
         } else {
             2
@@ -10066,7 +10453,7 @@ pub fn resolve_inventory_target_path(text: &str, cwd: &Path, env: &Value) -> Pat
             std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from)
         });
 
-    let filename = regex_lite::Regex::new(r"\b([A-Za-z0-9_.-]+\.md)\b")
+    let filename = regex_lite::Regex::new(r"\b([A-Za-z0-9_.-]+\.(?:md|html))\b")
         .ok()
         .and_then(|re| re.captures(text))
         .and_then(|c| c.get(1))
@@ -10110,6 +10497,254 @@ pub fn resolve_inventory_target_path(text: &str, cwd: &Path, env: &Value) -> Pat
     }
 
     cwd.join(filename)
+}
+
+fn html_escape(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 32);
+    for ch in raw.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn render_inline_md(line: &str) -> String {
+    let esc = html_escape(line);
+    let mut out = String::new();
+    let mut chars = esc.chars().peekable();
+    let mut in_code = false;
+    let mut in_bold = false;
+    while let Some(ch) = chars.next() {
+        if ch == '`' {
+            if in_code {
+                out.push_str("</code>");
+                in_code = false;
+            } else {
+                out.push_str("<code>");
+                in_code = true;
+            }
+            continue;
+        }
+        if !in_code && ch == '*' && chars.peek() == Some(&'*') {
+            let _ = chars.next();
+            if in_bold {
+                out.push_str("</strong>");
+                in_bold = false;
+            } else {
+                out.push_str("<strong>");
+                in_bold = true;
+            }
+            continue;
+        }
+        out.push(ch);
+    }
+    if in_code {
+        out.push_str("</code>");
+    }
+    if in_bold {
+        out.push_str("</strong>");
+    }
+    out
+}
+
+fn markdown_to_html_fragment(md: &str) -> String {
+    let mut html = String::new();
+    let mut in_code_block = false;
+    let mut in_list = false;
+    let mut in_table = false;
+    let mut table_header_done = false;
+
+    for raw_line in md.lines() {
+        let trimmed = raw_line.trim_end();
+        if trimmed.trim_start().starts_with("```") {
+            if in_list {
+                html.push_str("</ul>\n");
+                in_list = false;
+            }
+            if in_table {
+                html.push_str("</tbody></table></div>\n");
+                in_table = false;
+                table_header_done = false;
+            }
+            if in_code_block {
+                html.push_str("</code></pre>\n");
+                in_code_block = false;
+            } else {
+                html.push_str("<pre><code>");
+                in_code_block = true;
+            }
+            continue;
+        }
+        if in_code_block {
+            html.push_str(&html_escape(raw_line));
+            html.push('\n');
+            continue;
+        }
+
+        let t = trimmed.trim();
+        if t.starts_with('|') && t.ends_with('|') && t.len() > 2 {
+            if in_list {
+                html.push_str("</ul>\n");
+                in_list = false;
+            }
+            let cells = t[1..t.len() - 1]
+                .split('|')
+                .map(str::trim)
+                .collect::<Vec<_>>();
+            let is_sep = cells
+                .iter()
+                .all(|c| !c.is_empty() && c.chars().all(|ch| matches!(ch, '-' | ':' | ' ')));
+            if is_sep {
+                continue;
+            }
+            if !in_table {
+                html.push_str("<div class=\"table-wrap\"><table><thead><tr>");
+                for cell in &cells {
+                    html.push_str(&format!("<th>{}</th>", render_inline_md(cell)));
+                }
+                html.push_str("</tr></thead><tbody>\n");
+                in_table = true;
+                table_header_done = true;
+            } else if !table_header_done {
+                table_header_done = true;
+            } else {
+                html.push_str("<tr>");
+                for cell in &cells {
+                    html.push_str(&format!("<td>{}</td>", render_inline_md(cell)));
+                }
+                html.push_str("</tr>\n");
+            }
+            continue;
+        } else if in_table {
+            html.push_str("</tbody></table></div>\n");
+            in_table = false;
+            table_header_done = false;
+        }
+
+        if let Some(item) = t.strip_prefix("- ").or_else(|| t.strip_prefix("* ")) {
+            if !in_list {
+                html.push_str("<ul>\n");
+                in_list = true;
+            }
+            html.push_str(&format!("  <li>{}</li>\n", render_inline_md(item)));
+            continue;
+        } else if in_list {
+            html.push_str("</ul>\n");
+            in_list = false;
+        }
+
+        if t.is_empty() {
+            continue;
+        }
+        if t == "---" || t == "***" {
+            html.push_str("<hr/>\n");
+            continue;
+        }
+        if let Some(h4) = t.strip_prefix("#### ") {
+            html.push_str(&format!("<h4>{}</h4>\n", render_inline_md(h4)));
+        } else if let Some(h3) = t.strip_prefix("### ") {
+            html.push_str(&format!("<h3>{}</h3>\n", render_inline_md(h3)));
+        } else if let Some(h2) = t.strip_prefix("## ") {
+            html.push_str(&format!(
+                "<section class=\"card\"><h2>{}</h2>\n",
+                render_inline_md(h2)
+            ));
+        } else if let Some(h1) = t.strip_prefix("# ") {
+            html.push_str(&format!("<h1>{}</h1>\n", render_inline_md(h1)));
+        } else {
+            html.push_str(&format!("<p>{}</p>\n", render_inline_md(t)));
+        }
+    }
+    if in_code_block {
+        html.push_str("</code></pre>\n");
+    }
+    if in_list {
+        html.push_str("</ul>\n");
+    }
+    if in_table {
+        html.push_str("</tbody></table></div>\n");
+    }
+    let open_sections = html.matches("<section class=\"card\">").count();
+    let close_sections = html.matches("</section>").count();
+    for _ in close_sections..open_sections {
+        html.push_str("</section>\n");
+    }
+    html
+}
+
+pub fn render_markdown_as_html_report(
+    repo_name: &str,
+    markdown_or_html: &str,
+    deep_evidence: &str,
+) -> String {
+    let trimmed = markdown_or_html.trim();
+    if trimmed.starts_with("<!DOCTYPE html")
+        || trimmed.starts_with("<!doctype html")
+        || trimmed.starts_with("<html")
+    {
+        return trimmed.to_owned();
+    }
+    let body_html = markdown_to_html_fragment(trimmed);
+    let appendix_html = if !deep_evidence.is_empty() && !trimmed.contains("## Appendix:") {
+        format!(
+            "<section class=\"card\"><h2>Automated Repository Inspection Evidence</h2>\n{}</section>",
+            markdown_to_html_fragment(deep_evidence)
+        )
+    } else {
+        String::new()
+    };
+    let esc_repo = html_escape(repo_name);
+    format!(
+        "<!DOCTYPE html>\n\
+<html lang=\"en\">\n\
+<head>\n\
+  <meta charset=\"utf-8\" />\n\
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n\
+  <title>{esc_repo} — Architecture, Quality, Security &amp; Maintainability Report</title>\n\
+  <style>\n\
+    :root {{ --bg: #0b0f17; --panel: #131b2e; --border: #24324d; --text: #e6edf7; --muted: #9fb0cc; --accent: #38bdf8; --good: #22c55e; --warn: #f59e0b; --code: #090d16; }}\n\
+    * {{ box-sizing: border-box; }}\n\
+    body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.62; padding: 2.2rem 1.4rem; }}\n\
+    .container {{ max-width: 1180px; margin: 0 auto; }}\n\
+    header.hero {{ background: linear-gradient(135deg, #131b2e 0%, #0f172a 100%); border: 1px solid var(--border); border-radius: 14px; padding: 1.8rem 2rem; margin-bottom: 1.6rem; box-shadow: 0 12px 32px rgba(0,0,0,0.35); }}\n\
+    header.hero .eyebrow {{ color: var(--accent); font-size: 0.82rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 0.4rem; }}\n\
+    h1 {{ margin: 0.2rem 0 0.8rem; font-size: 1.85rem; color: #ffffff; }}\n\
+    h2 {{ color: var(--accent); font-size: 1.32rem; border-bottom: 1px solid var(--border); padding-bottom: 0.45rem; margin-top: 1.4rem; }}\n\
+    h3 {{ color: #f8fafc; font-size: 1.1rem; margin-top: 1.2rem; }}\n\
+    h4 {{ color: var(--muted); font-size: 0.96rem; margin-top: 1rem; }}\n\
+    section.card {{ background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 1.35rem 1.6rem; margin-bottom: 1.25rem; }}\n\
+    p, li {{ color: var(--text); }}\n\
+    ul {{ padding-left: 1.35rem; }}\n\
+    code {{ background: var(--code); color: #7dd3fc; padding: 0.14rem 0.4rem; border-radius: 5px; font-family: 'Cascadia Code', 'Fira Code', Consolas, monospace; font-size: 0.9em; }}\n\
+    pre {{ background: var(--code); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; overflow-x: auto; }}\n\
+    pre code {{ padding: 0; background: transparent; color: #e2e8f0; }}\n\
+    .table-wrap {{ overflow-x: auto; margin: 1rem 0; }}\n\
+    table {{ width: 100%; border-collapse: collapse; background: #0e1525; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }}\n\
+    th, td {{ text-align: left; padding: 0.68rem 0.9rem; border-bottom: 1px solid var(--border); font-size: 0.93rem; vertical-align: top; }}\n\
+    th {{ background: #17223b; color: #bae6fd; font-weight: 600; }}\n\
+    tr:hover td {{ background: rgba(56, 189, 248, 0.05); }}\n\
+    hr {{ border: none; border-top: 1px solid var(--border); margin: 1.6rem 0; }}\n\
+    footer {{ text-align: center; color: var(--muted); font-size: 0.85rem; margin-top: 2rem; }}\n\
+  </style>\n\
+</head>\n\
+<body>\n\
+  <div class=\"container\">\n\
+    <header class=\"hero\">\n\
+      <div class=\"eyebrow\">GitHub Agent Roster · Deep Architecture, Quality &amp; Security Audit</div>\n\
+      <h1>{esc_repo} — Engineering &amp; Compliance Evaluation Report</h1>\n\
+    </header>\n\
+    {body_html}\n\
+    {appendix_html}\n\
+    <footer>Generated by <code>github-agent-roster</code> · Grounded Repository Evidence</footer>\n\
+  </div>\n\
+</body>\n\
+</html>\n"
+    )
 }
 
 pub fn render_workspace_inventory_markdown(
@@ -11193,7 +11828,7 @@ pub fn match_target_repositories(text: &str, repos: &[RepoEntry], cwd: &Path) ->
         let exact = matched
             .iter()
             .filter(|r| {
-                r.kind == "Repository" && tokens.iter().any(|tok| r.name.eq_ignore_ascii_case(tok))
+                r.kind != "Worktree" && tokens.iter().any(|tok| r.name.eq_ignore_ascii_case(tok))
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -11282,56 +11917,111 @@ pub fn deep_inspect_repositories(
             repo.remote, repo.last_commit
         ));
 
-        let tracked_files = if let Some(rest) = repo.path.strip_prefix(r"\\wsl.localhost\Ubuntu\") {
-            let linux_path = format!("/{}", rest.replace('\\', "/"));
-            StdCommand::new("wsl.exe")
-                .args([
-                    "-d",
-                    "Ubuntu",
-                    "--",
-                    "git",
-                    "--no-optional-locks",
-                    "-C",
-                    &linux_path,
-                    "ls-files",
-                ])
-                .output()
-                .ok()
-                .filter(|o| o.status.success())
-                .and_then(|o| String::from_utf8(o.stdout).ok())
-                .map(|s| {
-                    s.lines()
-                        .map(|l| l.trim().to_owned())
-                        .filter(|l| !l.is_empty())
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
-        } else {
-            StdCommand::new("git")
-                .arg("--no-optional-locks")
-                .arg("-c")
-                .arg("safe.directory=*")
-                .arg("-c")
-                .arg("core.autocrlf=false")
-                .arg("-C")
-                .arg(repo_path)
-                .arg("ls-files")
-                .output()
-                .ok()
-                .filter(|o| o.status.success())
-                .and_then(|o| String::from_utf8(o.stdout).ok())
-                .map(|s| {
-                    s.lines()
-                        .map(|l| l.trim().to_owned())
-                        .filter(|l| !l.is_empty())
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default()
-        };
+        let mut tracked_files =
+            if let Some(rest) = repo.path.strip_prefix(r"\\wsl.localhost\Ubuntu\") {
+                let linux_path = format!("/{}", rest.replace('\\', "/"));
+                StdCommand::new("wsl.exe")
+                    .args([
+                        "-d",
+                        "Ubuntu",
+                        "--",
+                        "git",
+                        "--no-optional-locks",
+                        "-C",
+                        &linux_path,
+                        "ls-files",
+                    ])
+                    .output()
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| {
+                        s.lines()
+                            .map(|l| l.trim().to_owned())
+                            .filter(|l| !l.is_empty())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            } else {
+                StdCommand::new("git")
+                    .arg("--no-optional-locks")
+                    .arg("-c")
+                    .arg("safe.directory=*")
+                    .arg("-c")
+                    .arg("core.autocrlf=false")
+                    .arg("-C")
+                    .arg(repo_path)
+                    .arg("ls-files")
+                    .output()
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| {
+                        s.lines()
+                            .map(|l| l.trim().to_owned())
+                            .filter(|l| !l.is_empty())
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            };
+
+        if tracked_files.is_empty() {
+            fn collect_local_workspace_files(
+                root: &Path,
+                cur: &Path,
+                depth: usize,
+                out: &mut Vec<String>,
+            ) {
+                if depth > 6 || out.len() >= 1500 {
+                    return;
+                }
+                let Ok(rd) = fs::read_dir(cur) else {
+                    return;
+                };
+                let mut entries = rd.flatten().map(|e| e.path()).collect::<Vec<_>>();
+                entries.sort();
+                for p in entries {
+                    let Some(name) = p.file_name().and_then(|s| s.to_str()) else {
+                        continue;
+                    };
+                    if matches!(
+                        name,
+                        ".git"
+                            | "node_modules"
+                            | "target"
+                            | "bin"
+                            | "obj"
+                            | "dist"
+                            | "vendor"
+                            | "TestResults"
+                            | ".vs"
+                            | ".idea"
+                    ) {
+                        continue;
+                    }
+                    let Ok(meta) = fs::symlink_metadata(&p) else {
+                        continue;
+                    };
+                    if secure::linked(&meta) {
+                        continue;
+                    }
+                    if meta.is_dir() {
+                        collect_local_workspace_files(root, &p, depth + 1, out);
+                    } else if meta.is_file() {
+                        if let Ok(rel) = p.strip_prefix(root) {
+                            out.push(rel.display().to_string().replace('\\', "/"));
+                        }
+                    }
+                }
+            }
+            collect_local_workspace_files(repo_path, repo_path, 0, &mut tracked_files);
+        }
 
         let total_tracked = tracked_files.len();
         let mut src_count = 0_usize;
         let mut test_count = 0_usize;
+        let mut comment_policy_checked = 0_usize;
+        let mut comment_policy_violations = Vec::new();
         let mut workflow_files = Vec::new();
         let mut security_findings = Vec::new();
         let mut sdlc_findings = Vec::new();
@@ -11351,6 +12041,14 @@ pub fn deep_inspect_repositories(
             {
                 workflow_files.push(f.clone());
             }
+            let is_source_ext = lower.ends_with(".cs")
+                || lower.ends_with(".rs")
+                || lower.ends_with(".php")
+                || lower.ends_with(".ts")
+                || lower.ends_with(".tsx")
+                || lower.ends_with(".js")
+                || lower.ends_with(".jsx")
+                || lower.ends_with(".py");
             if lower.contains("test")
                 || lower.starts_with("tests/")
                 || lower.starts_with("__tests__/")
@@ -11361,16 +12059,32 @@ pub fn deep_inspect_repositories(
                 || lower.ends_with("tests.cs")
             {
                 test_count += 1;
-            } else if lower.ends_with(".cs")
-                || lower.ends_with(".rs")
-                || lower.ends_with(".php")
-                || lower.ends_with(".ts")
-                || lower.ends_with(".tsx")
-                || lower.ends_with(".js")
-                || lower.ends_with(".jsx")
-                || lower.ends_with(".py")
-            {
+            } else if is_source_ext {
                 src_count += 1;
+            }
+            if is_source_ext && comment_policy_checked < 200 {
+                let full_p = repo_path.join(f);
+                if let Ok(raw_src) = fs::read_to_string(&full_p) {
+                    comment_policy_checked += 1;
+                    for (line_idx, line) in raw_src.lines().enumerate() {
+                        let tline = line.trim();
+                        if tline.starts_with("//") {
+                            let lcl = tline.to_lowercase();
+                            let is_copyright = line_idx <= 6
+                                && (lcl.contains("copyright")
+                                    || lcl.contains("spdx-license")
+                                    || lcl.contains("all rights reserved")
+                                    || lcl.contains("proprietary"));
+                            if !is_copyright && comment_policy_violations.len() < 12 {
+                                comment_policy_violations.push(format!(
+                                    "`{f}:{}` (`{}`)",
+                                    line_idx + 1,
+                                    tline
+                                ));
+                            }
+                        }
+                    }
+                }
             }
 
             if (file_name == ".env" || file_name.starts_with(".env."))
@@ -11544,19 +12258,46 @@ pub fn deep_inspect_repositories(
                 report.push_str(&format!("  - {finding}\n"));
             }
         }
+        if comment_policy_checked > 0 {
+            if comment_policy_violations.is_empty() {
+                report.push_str(&format!(
+                    "- **No-Comment Policy Audit (Copyright Header Only)**: PASS ({comment_policy_checked} source files verified; 0 inline non-copyright `//` comments found)\n"
+                ));
+            } else {
+                report.push_str(&format!(
+                    "- **No-Comment Policy Audit (Copyright Header Only)**: {} violation(s) across {comment_policy_checked} inspected source files: {}\n",
+                    comment_policy_violations.len(),
+                    comment_policy_violations.join(", ")
+                ));
+            }
+        }
 
         for key_doc in [
             "AGENTS.md",
             "README.md",
+            "Barberlytics.slnx",
             "Directory.Build.props",
             "Directory.Build.targets",
+            "Directory.Packages.props",
             "composer.json",
             "package.json",
+            "quality/Barberlytics-Quality-Summary.md",
+            "security/Barberlytics-Security-Attribution.md",
+            "architecture/Barberlytics-System-Architecture.md",
+            "architecture/NET-Migration-Plan.md",
+            "docs/migration-ledger.md",
+            "docs/controller-inventory.md",
+            "docs/api-contract.md",
+            "docs/open-questions.md",
+            "docs/standards/module-seams.md",
+            "docs/standards/testing-and-coverage.md",
+            "docs/operations/production-readiness.md",
+            "docs/cutover-runbook.md",
+            "tools/AGENTS.addendum.md",
             "docs/Security-Scan.md",
             "docs/architecture.md",
             "docs/ci-cd.md",
             "docs/backlog-status.md",
-            "architecture/NET-Migration-Plan.md",
         ] {
             let p = repo_path.join(key_doc);
             if let Some(excerpt) = read_safe_excerpt(&p, 28, 1600) {
@@ -12152,6 +12893,18 @@ pub fn resolve_agent_path(raw_path: &str, cwd: &Path, repos: &[RepoEntry], env: 
     let direct = Path::new(trimmed);
     if direct.is_absolute() && (direct.exists() || direct.parent().is_some_and(Path::exists)) {
         return direct.to_path_buf();
+    }
+    if let Some(ci) = crate::attachments::resolve_case_insensitive_path(direct) {
+        return ci;
+    }
+    if let Some(translated) = crate::attachments::translate_cross_os_path(trimmed) {
+        let tp = PathBuf::from(&translated);
+        if tp.exists() || tp.parent().is_some_and(Path::exists) {
+            return tp;
+        }
+        if let Some(ci) = crate::attachments::resolve_case_insensitive_path(&tp) {
+            return ci;
+        }
     }
     let norm = trimmed.replace('\\', "/");
     let (first_seg, rest_opt) = match norm.split_once('/') {
@@ -13013,6 +13766,75 @@ impl Drop for RawTerminalGuard {
     }
 }
 
+#[cfg(unix)]
+struct ExecutionTerminalGuard {
+    saved_stty: String,
+}
+
+#[cfg(unix)]
+impl ExecutionTerminalGuard {
+    fn enter() -> Option<Self> {
+        use std::io::IsTerminal;
+        use std::process::Stdio;
+        if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+            return None;
+        }
+        let out = StdCommand::new("stty")
+            .arg("-g")
+            .stdin(Stdio::inherit())
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let saved_stty = String::from_utf8(out.stdout).ok()?.trim().to_owned();
+        if saved_stty.is_empty() {
+            return None;
+        }
+        let _ = StdCommand::new("stty")
+            .args(["-icanon", "-echo", "isig"])
+            .stdin(Stdio::inherit())
+            .status();
+        Some(Self { saved_stty })
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ExecutionTerminalGuard {
+    fn drop(&mut self) {
+        use std::process::Stdio;
+        let _ = StdCommand::new("stty")
+            .args(["-icanon", "-echo", "min", "0", "time", "0"])
+            .stdin(Stdio::inherit())
+            .status();
+        let mut drain_buf = [0_u8; 256];
+        while let Ok(n) = std::io::stdin().read(&mut drain_buf) {
+            if n == 0 {
+                break;
+            }
+        }
+        let _ = StdCommand::new("stty")
+            .arg(&self.saved_stty)
+            .stdin(Stdio::inherit())
+            .status();
+    }
+}
+
+#[cfg(not(unix))]
+struct ExecutionTerminalGuard;
+
+#[cfg(not(unix))]
+impl ExecutionTerminalGuard {
+    fn enter() -> Option<Self> {
+        None
+    }
+}
+
+#[cfg(not(unix))]
+impl Drop for ExecutionTerminalGuard {
+    fn drop(&mut self) {}
+}
+
 fn format_multiline_editor_repaint(
     prompt_str: &str,
     editor: &LineEditor,
@@ -13232,7 +14054,10 @@ pub async fn start_repl(
             let _ = stdout.write_all(b"\x1b[1A\r\x1b[2KSecret (input hidden): ********\n");
             let _ = stdout.flush();
         }
-        match session.dispatch_line(&trimmed_line).await {
+        let _exec_guard = ExecutionTerminalGuard::enter();
+        let dispatch_result = session.dispatch_line(&trimmed_line).await;
+        drop(_exec_guard);
+        match dispatch_result {
             Ok(ShellAction::Continue(out)) => {
                 if !out.is_empty() {
                     if session.tray_visible {
@@ -14544,6 +15369,19 @@ mod tests {
             extract_referenced_project_number("Work to completion on GitHub Project #11."),
             Some(11)
         );
+
+        let html_out = render_markdown_as_html_report(
+            "Barberlytics",
+            "# Executive Summary\n\n## Architecture & Scores\n\n| Dimension | Score |\n| --- | --- |\n| Maintainability | 95/100 |\n\n- Zero inline comments\n",
+            "### Repository: `Barberlytics`\n- **Metrics**: 120 total tracked files\n",
+        );
+        assert!(html_out.starts_with("<!DOCTYPE html>"));
+        assert!(html_out.contains("Barberlytics — Engineering &amp; Compliance Evaluation Report"));
+        assert!(
+            html_out.contains("<th>Maintainability</th>")
+                || html_out.contains("<td>Maintainability</td>")
+        );
+        assert!(html_out.contains("Automated Repository Inspection Evidence"));
         Ok(())
     }
 }
