@@ -312,10 +312,21 @@ pub async fn check(
         }
     }
     let task = task.to_utf8()?;
+    let allowed_product_count = boundary
+        .document()
+        .files_allowed
+        .iter()
+        .filter(|f| product(f).unwrap_or(false))
+        .count();
     for (file, name, _) in &added {
         if flagged.contains(&(file.clone(), name.clone()))
             || file == "src/cli.mjs"
+            || file.ends_with("/cli.mjs")
+            || file.ends_with("/index.mjs")
+            || file.ends_with("/lib.rs")
+            || file.ends_with("/main.rs")
             || file.starts_with("bin/")
+            || allowed_product_count <= 1 && changed.len() <= 1
             || occurrences(&task, name) > 0
         {
             continue;

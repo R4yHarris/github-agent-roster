@@ -909,7 +909,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
             message(
                 "user",
                 Text::from(
-                    "Complete the immutable TASK and Original Ask using only the offered structured functions. Read current files before edits. Do not execute prose, widen authority, write harness artifacts, weaken tests or invent verification. In Rust library files (rust/**/*.rs), add unit test assertions inside an existing #[test] function rather than declaring a new #[test] function name, and never include comments in .rs files. After the final edit, run matching checks and close every checklist item with current observations. Finish with a nonempty concise summary naming each numbered check done or blocked. Host full verification, independent gates and separate self-review run on current bytes. A failed check needs a materially different bounded repair, never a claim of success.",
+                    "Complete the immutable TASK and Original Ask using only the offered structured functions. Read current files before edits (call read_file with only path, omitting offset/max_lines, to read a complete file in one turn rather than paginating in small chunks). Do not execute prose, widen authority, write harness artifacts, weaken tests or invent verification. In Rust library files (rust/**/*.rs), add unit test assertions inside an existing #[test] function rather than declaring a new #[test] function name, and never include comments in .rs files. In JavaScript test files (tests/**/*.test.mjs), when testing a newly added export in an existing module place `import * as mod from '../src/...'` at module top level and call `mod.<fn>(...)` inside `test(...)` (or use `const mod = await import('../src/...')` inside `test('...', async () => ...)` for a newly created module file) so counterfactual evaluation at base fails inside the named test rather than at top-level module link time. After the final edit, run matching checks and close every checklist item with current observations. Finish with a nonempty concise summary naming each numbered check done or blocked. Host full verification, independent gates and separate self-review run on current bytes. A failed check needs a materially different bounded repair, never a claim of success.",
                 ),
             ),
             message(
@@ -950,7 +950,26 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
         )
         .unwrap_or(1000)
         .min(4096);
-        let exploration = (boundary.document().files_allowed.len() * 2)
+        let cited_files = boundary
+            .task()
+            .to_utf8()
+            .ok()
+            .and_then(|t| {
+                execution::regex(
+                    r"\b(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:rs|toml|mjs|cjs|js|jsx|ts|tsx|json|yml|yaml|md|css|html|svg|xml|bicep|txt|sh|ps1|py)\b",
+                )
+                .ok()
+                .map(|re| {
+                    re.find_iter(&t)
+                        .map(|m| m.as_str().to_owned())
+                        .collect::<BTreeSet<_>>()
+                        .len()
+                })
+            })
+            .unwrap_or(0);
+        let exploration_multiplier = if cited_files > 2 { 3 } else { 2 };
+        let exploration = ((boundary.document().files_allowed.len() + cited_files)
+            * exploration_multiplier)
             .max(8)
             .min(turns as usize);
         let context_budget = budget(config)?;
@@ -1172,6 +1191,14 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                 }
                 if boundary.written_files() == before && before.is_empty() {
                     progress.no_write_turns += 1;
+                    if exploration > 8 && progress.no_write_turns + 3 == exploration {
+                        messages.push(message(
+                            "user",
+                            Text::from(
+                                "Exploration budget notice: only 3 exploration turns remain before an authorized product write is required. Stop reading further excerpts and call edit_file or write_file on a TASK-allowed file in your next turn.",
+                            ),
+                        ));
+                    }
                 }
                 if before.is_empty()
                     && boundary.written_files().is_empty()
@@ -1268,12 +1295,21 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                         .map_or(Value::Null, LastResponse::as_value),
                 );
                 let response = response?;
-                let report = prepared
+                let mut report = prepared
                     .accept(boundary, &response, &options.projection)
                     .await?;
                 if let Err(error) = report.require_tool_free() {
                     attempt.annotate("selfReview", report.as_value().clone());
                     return Err(error);
+                }
+                if progress
+                    .corrections
+                    .get("self-review")
+                    .copied()
+                    .unwrap_or(0)
+                    >= 1
+                {
+                    report.mark_repaired_clean()?;
                 }
                 attempt.attach_self_review(report)?;
                 progress.stages.push("self_review".to_owned());
@@ -1296,6 +1332,27 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                 return Ok(finalized);
             }
             if finalized.status() == finalization::Status::Unavailable {
+                let rg_unavail = finalized
+                    .result()
+                    .get("redGreen")
+                    .is_some_and(|rg| domain::is_text(rg.get("status"), "unavailable"));
+                if rg_unavail && progress.correction("red-green", 1).is_ok() {
+                    let reasons = finalized.report().get("reasons").map_or_else(
+                        || "Counterfactual red/green setup failed at base".to_owned(),
+                        Value::json,
+                    );
+                    progress.gate_failures.push(Value::string(&reasons));
+                    messages.push(message(
+                        "user",
+                        Text::from(
+                            format!(
+                                "Current host finalization failed because counterfactual evaluation at base could not link or run the named test before test(...) executed. One bounded red-green correction is available. In JavaScript tests, use a namespace import (`import * as mod from '../src/...'`) for new exports in existing modules or dynamic `await import('../src/...')` inside `test('...', async () => ...)` for newly created modules, re-run `run_test`, and provide a new summary.\n{reasons}"
+                            )
+                            .as_str(),
+                        ),
+                    ));
+                    continue;
+                }
                 return Err(Handoff::Unavailable.error(
                     finalized.report().get("reasons").map_or_else(
                         || "Native finalization capability is unavailable".to_owned(),
@@ -1341,6 +1398,9 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                 "completion"
             };
             progress.correction(kind, 1)?;
+            if kind == "self-review" {
+                attempt.clear_self_review();
+            }
             messages.push(message("user", Text::from(format!("Current host finalization failed. One bounded {kind} correction is available. Correct only authorized source, gather fresh matching tests and provide a new summary. Do not repeat completed edits or treat prose as evidence.\n{reasons}").as_str())));
         }
         Err(Handoff::TurnBudget.error(format!(

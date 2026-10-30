@@ -271,6 +271,7 @@ pub fn read_context(root: &Path, files: &[String], ask: &str) -> Result<Context,
             && !file.starts_with("tests/")
             && !file.contains(".test.")
             && !file.contains(".spec.")
+            && !matches(r"\.(?:json|bicep|ya?ml|toml|html|css|py|sh|ps1)$", file)?
         {
             continue;
         }
@@ -308,7 +309,21 @@ pub fn read_context(root: &Path, files: &[String], ask: &str) -> Result<Context,
         })
         .cloned()
         .collect::<Vec<_>>();
-    let index = index_sources(&readable, &sources)?;
+    let mut index = index_sources(&readable, &sources)?;
+    let extra_token = regex(r"[A-Za-z_$][\w$]*")?;
+    let non_code = regex(r"\.(?:json|bicep|ya?ml|toml|html|css|py|sh|ps1)$")?;
+    for (file, source) in &sources {
+        if !non_code.is_match(file) || source.utf8_len() > 512 * 1024 {
+            continue;
+        }
+        let text_src = encode(source);
+        for matched in extra_token.find_iter(&text_src) {
+            let sym = matched.as_str().to_owned();
+            if !index.symbols.contains(&sym) {
+                index.symbols.push(sym);
+            }
+        }
+    }
     let related = related_exports(&sources, &readable, ask, 6, 4)?;
     let mut blocks = Vec::new();
     let mut used = 0;
@@ -533,7 +548,7 @@ fn name_field(input: &Value, name: &str) -> Result<String, Error> {
 }
 
 fn runtime_global(name: &str) -> bool {
-    const GLOBALS: &str = "AbortController AbortSignal AggregateError ArrayBuffer BigInt BigInt64Array BigUint64Array BroadcastChannel ByteLengthQueuingStrategy CompressionStream CountQueuingStrategy CryptoKey CustomEvent DataView DecompressionStream EvalError EventTarget FinalizationRegistry Float32Array Float64Array FormData Int16Array Int32Array Int8Array MessageChannel MessageEvent MessagePort NaN PerformanceEntry PerformanceMark PerformanceMeasure PerformanceObserver PerformanceObserverEntryList PerformanceResourceTiming RangeError ReadableByteStreamController ReadableStream ReadableStreamBYOBReader ReadableStreamBYOBRequest ReadableStreamDefaultController ReadableStreamDefaultReader ReferenceError RegExp SharedArrayBuffer SubtleCrypto SyntaxError TextDecoder TextDecoderStream TextEncoder TextEncoderStream TransformStream TransformStreamDefaultController TypeError URLSearchParams Uint16Array Uint32Array Uint8Array Uint8ClampedArray WeakMap WeakRef WeakSet WebAssembly WritableStream WritableStreamDefaultController WritableStreamDefaultWriter __defineGetter__ __defineSetter__ __lookupGetter__ __lookupSetter__ clearImmediate clearInterval clearTimeout decodeURI decodeURIComponent encodeURI encodeURIComponent globalThis hasOwnProperty isFinite isNaN isPrototypeOf parseFloat parseInt propertyIsEnumerable queueMicrotask setImmediate setInterval setTimeout structuredClone toLocaleString toString valueOf";
+    const GLOBALS: &str = "AbortController AbortSignal AggregateError Array ArrayBuffer BTreeMap BTreeSet BigInt BigInt64Array BigUint64Array Boolean Box BroadcastChannel Buffer ByteLengthQueuingStrategy CompressionStream CountQueuingStrategy CryptoKey CustomEvent DataView Date DecompressionStream Error EvalError Event EventTarget FinalizationRegistry Float32Array Float64Array FormData Future HashMap HashSet Headers HTMLElement Int16Array Int32Array Int8Array JSON KeyboardEvent Map Math MessageChannel MessageEvent MessagePort MouseEvent Mutex NaN Number Object Option Path PathBuf PerformanceEntry PerformanceMark PerformanceMeasure PerformanceObserver PerformanceObserverEntryList PerformanceResourceTiming Pin Promise Proxy RangeError ReadableByteStreamController ReadableStream ReadableStreamBYOBReader ReadableStreamBYOBRequest ReadableStreamDefaultController ReadableStreamDefaultReader ReferenceError Reflect RegExp Request Response Result RwLock Set SharedArrayBuffer String SubtleCrypto Symbol SyntaxError TextDecoder TextDecoderStream TextEncoder TextEncoderStream TransformStream TransformStreamDefaultController TypeError URL URLSearchParams Uint16Array Uint32Array Uint8Array Uint8ClampedArray Vec WeakMap WeakRef WeakSet WebAssembly WritableStream WritableStreamDefaultController WritableStreamDefaultWriter __defineGetter__ __defineSetter__ __lookupGetter__ __lookupSetter__ after afterEach assert before beforeEach clearImmediate clearInterval clearTimeout console decodeURI decodeURIComponent describe document encodeURI encodeURIComponent fetch globalThis hasOwnProperty isFinite isNaN isPrototypeOf it localStorage navigator parseFloat parseInt process propertyIsEnumerable queueMicrotask sessionStorage setImmediate setInterval setTimeout structuredClone test toLocaleString toString valueOf window";
     GLOBALS
         .split_ascii_whitespace()
         .any(|global| global == name)
@@ -551,6 +566,42 @@ fn runtime_member(namespace: &str, name: &str) -> bool {
             "EOL arch availableParallelism constants cpus devNull endianness freemem getPriority homedir hostname loadavg machine networkInterfaces platform release setPriority tmpdir totalmem type uptime userInfo version"
         }
         "child_process" => "ChildProcess exec execFile execFileSync execSync fork spawn spawnSync",
+        "assert" => {
+            "deepEqual deepStrictEqual doesNotMatch doesNotReject doesNotThrow equal fail ifError match notDeepEqual notDeepStrictEqual notEqual notStrictEqual ok rejects strict strictEqual throws"
+        }
+        "Object" => {
+            "assign create defineProperties defineProperty entries freeze fromEntries getOwnPropertyDescriptor getOwnPropertyDescriptors getOwnPropertyNames getOwnPropertySymbols getPrototypeOf groupBy hasOwn is isExtensible isFrozen isSealed keys preventExtensions seal setPrototypeOf values"
+        }
+        "Array" => "from fromAsync isArray of",
+        "JSON" => "parse rawJSON isRawJSON stringify",
+        "Number" => {
+            "EPSILON MAX_SAFE_INTEGER MAX_VALUE MIN_SAFE_INTEGER MIN_VALUE NaN NEGATIVE_INFINITY POSITIVE_INFINITY isFinite isInteger isNaN isSafeInteger parseFloat parseInt"
+        }
+        "Math" => {
+            "abs acos acosh asin asinh atan atan2 atanh cbrt ceil clz32 cos cosh exp expm1 floor fround hypot imul log log10 log1p log2 max min pow random round sign sin sinh sqrt tan tanh trunc"
+        }
+        "Promise" => "all allSettled any race reject resolve withResolvers",
+        "Buffer" => {
+            "alloc allocUnsafe allocUnsafeSlow byteLength compare concat copyBytesFrom from isBuffer isEncoding poolSize"
+        }
+        "process" => {
+            "arch argv argv0 chdir config cpuUsage cwd emitWarning env execArgv execPath exit exitCode features getegid geteuid getgid getgroups getuid hrtime kill memoryUsage nextTick pid platform ppid release report resourceUsage send stderr stdin stdout title umask uptime version versions"
+        }
+        "url" => {
+            "URL URLSearchParams domainToASCII domainToUnicode fileURLToPath format parse pathToFileURL resolve urlToHttpOptions"
+        }
+        "crypto" => {
+            "Cipheriv Decipheriv Hash Hmac KeyObject Sign Verify X509Certificate checkPrime checkPrimeSync createCipheriv createDecipheriv createDiffieHellman createDiffieHellmanGroup createECDH createHash createHmac createPrivateKey createPublicKey createSecretKey createSign createVerify diffieHellman generateKey generateKeyPair generateKeyPairSync generateKeySync generatePrime generatePrimeSync getCipherInfo getCiphers getCurves getDiffieHellman getFips getHashes hkdf hkdfSync pbkdf2 pbkdf2Sync privateDecrypt privateEncrypt publicDecrypt publicEncrypt randomBytes randomFill randomFillSync randomInt randomUUID scrypt scryptSync secureHeapUsed setEngine setFips sign subtle timingSafeEqual verify webcrypto"
+        }
+        "console" => {
+            "assert clear count countReset debug dir dirxml error group groupCollapsed groupEnd info log table time timeEnd timeLog timeStamp trace warn"
+        }
+        "document" => {
+            "activeElement addEventListener body cookie createDocumentFragment createElement createTextNode documentElement getElementById getElementsByClassName getElementsByName getElementsByTagName head location querySelector querySelectorAll readyState removeEventListener title"
+        }
+        "window" => {
+            "addEventListener clearInterval clearTimeout close confirm dispatchEvent fetch focus getComputedStyle history innerHeight innerWidth localStorage location matchMedia navigator open parent postMessage match print prompt removeEventListener requestAnimationFrame scroll scrollBy scrollTo sessionStorage setInterval setTimeout top"
+        }
         _ => return false,
     };
     common.split(' ').any(|entry| entry == name)

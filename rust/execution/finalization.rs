@@ -754,6 +754,10 @@ impl Attempt {
         Ok(())
     }
 
+    pub(crate) fn clear_self_review(&mut self) {
+        self.self_review = None;
+    }
+
     pub async fn finish(
         mut self,
         boundary: &tools::Boundary,

@@ -1567,7 +1567,11 @@ impl Boundary {
     fn readable(&self, file: &str, directory: bool) -> Result<bool, Error> {
         if policy::readme_only(&self.document.files_allowed) && self.options.role == Role::Coder {
             return Ok(["TASK.md", "README.md"].contains(&file)
-                || self.repair.iter().any(|path| path == file));
+                || self.repair.iter().any(|path| path == file)
+                || !directory
+                    && !planning::forbidden_read(file)
+                    && !private_path(file)
+                    && self.task.to_utf8().is_ok_and(|t| t.contains(file)));
         }
         if self.options.role == Role::Reviewer
             || !self.options.slice_reads_only
@@ -1586,7 +1590,11 @@ impl Boundary {
                 && (file == "."
                     || scope
                         .iter()
-                        .any(|allowed| allowed.starts_with(&format!("{file}/"))))
+                        .any(|allowed| allowed.starts_with(&format!("{file}/")))
+                    || self
+                        .task
+                        .to_utf8()
+                        .is_ok_and(|t| t.contains(&format!("{file}/"))))
             || self.imported_by_allowed(file)?
             || !directory && self.task.to_utf8().is_ok_and(|t| t.contains(file)))
     }
@@ -1652,23 +1660,24 @@ impl Boundary {
         fields(
             args,
             &["path"],
-            &["max_lines", "offset"],
+            &["max_lines", "offset", "start_line"],
             "Tool arguments must contain path",
         )?;
+        let offset_arg = args.get("offset").or_else(|| args.get("start_line"));
         let mut counts = Vec::new();
-        for (name, message) in [
+        for (val_opt, message) in [
             (
-                "max_lines",
+                args.get("max_lines"),
                 "read_file max_lines must be a positive safe integer",
             ),
             (
-                "offset",
+                offset_arg,
                 "read_file offset must be a positive safe integer line number",
             ),
         ] {
-            counts.push(if args.get(name).is_some() {
+            counts.push(if val_opt.is_some() {
                 Some(
-                    domain::safe_integer(args.get(name))
+                    domain::safe_integer(val_opt)
                         .filter(|value| *value > 0)
                         .ok_or_else(|| Error::type_error(message))?,
                 )
@@ -1792,7 +1801,6 @@ impl Boundary {
     }
 
     fn readable_files(&self, file: &str) -> Result<Vec<String>, Error> {
-        self.read_scope(file, true)?;
         let target = if file == "." {
             self.root.clone()
         } else {
@@ -1801,6 +1809,7 @@ impl Boundary {
         secure::check_components(&target)?;
         let metadata = fs::symlink_metadata(&target)
             .map_err(|error| secure::io_error("Inspect search path", &target, error))?;
+        self.read_scope(file, metadata.is_dir())?;
         if metadata.is_file() {
             return Ok(vec![file.to_owned()]);
         }
@@ -1829,6 +1838,16 @@ impl Boundary {
     }
 
     fn search_text(&mut self, args: &Value) -> Result<Value, Error> {
+        let mut normalized_search_args = None;
+        if args.get("query").is_none() && args.get("pattern").is_some() {
+            let mut cloned = args.clone();
+            if let Some(pat) = args.get("pattern").cloned() {
+                let _ = domain::put(&mut cloned, "query", pat);
+            }
+            let _ = domain::remove(&mut cloned, "pattern");
+            normalized_search_args = Some(cloned);
+        }
+        let args = normalized_search_args.as_ref().unwrap_or(args);
         fields(
             args,
             &["query"],
@@ -2135,6 +2154,24 @@ impl Boundary {
         args: &Value,
         observer: &mut O,
     ) -> Result<Value, Error> {
+        let mut normalized_edit_args = None;
+        if name == "edit_file"
+            && args.get("old_string").is_none()
+            && args.get("old_str").is_some()
+            && args.get("new_str").is_some()
+        {
+            let mut cloned = args.clone();
+            if let Some(os) = args.get("old_str").cloned() {
+                let _ = domain::put(&mut cloned, "old_string", os);
+            }
+            if let Some(ns) = args.get("new_str").cloned() {
+                let _ = domain::put(&mut cloned, "new_string", ns);
+            }
+            let _ = domain::remove(&mut cloned, "old_str");
+            let _ = domain::remove(&mut cloned, "new_str");
+            normalized_edit_args = Some(cloned);
+        }
+        let args = normalized_edit_args.as_ref().unwrap_or(args);
         let mandatory: &[&str] = match name {
             "write_file" => &["path", "content"],
             "edit_file" => &["path", "old_string", "new_string"],
@@ -2166,7 +2203,8 @@ impl Boundary {
                 )?;
                 if let Some(previous) = &previous {
                     let old = bytes_text(&previous.bytes)?;
-                    if old.encode_utf16().count() > 2000
+                    if !file.ends_with(".md")
+                        && old.encode_utf16().count() > 2000
                         && value.encode_utf16().count() * 10 < old.encode_utf16().count() * 6
                     {
                         return Err(usage(

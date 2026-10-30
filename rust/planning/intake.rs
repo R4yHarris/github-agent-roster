@@ -330,7 +330,7 @@ pub fn requirements(input: &Value, allow_missing: bool) -> Result<Requirements, 
     } else {
         let source = without_reference_urls(&ask)?;
         let mut files = Vec::new();
-        for entry in regex(r"(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:rs|toml|mjs|js|ts|tsx|json|yml|yaml|md|css|html|txt|sh|ps1|py)")?.find_iter(&source) {
+        for entry in regex(r"(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:rs|toml|mjs|cjs|js|jsx|ts|tsx|json|yml|yaml|md|css|html|svg|xml|bicep|txt|sh|ps1|py)")?.find_iter(&source) {
             let file = entry.as_str();
             if task::allowed_file(&value(file)).is_err()
                 || output_directory.as_deref() == Some(file)

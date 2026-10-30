@@ -2209,10 +2209,13 @@ fn slice_instructions(
             .files
             .iter()
             .all(|f| f.ends_with(".rs") || f.ends_with(".toml"));
-    let test_check_rule = if rust_only {
+    let is_dir_doc = task::directory_document(ask)?;
+    let test_check_rule = if is_dir_doc {
+        "A directory documentation task must choose only Markdown (.md) files in files_allowed and use document-content acceptance_checks (each check must use a verb like documents, describes, covers, includes, or outlines) without node --test."
+    } else if rust_only {
         "A Rust code task must not include node --test; use observable Rust behavior acceptance_checks and files_allowed."
     } else {
-        "A code task needs acceptance_checks including node --test exits 0 and files_allowed."
+        "A code task needs acceptance_checks including node --test exits 0 and files_allowed. When planning JavaScript tests for a newly added export in an existing module, place `import * as mod from '../src/...'` at module top level and call `mod.<fn>(...)` inside `test(...)` (never put a static `import * as` statement inside a function body), or use `const mod = await import('../src/...')` inside `test('...', async () => ...)` for a newly created module."
     };
     text.push_str(&format!("Plan one software task. JSON shape: {{\"title\":\"Task title\",\"acceptance_checks\":[\"check\"],\"files_allowed\":[\"path\"]}}. Keep each text response within 16384 UTF-8 bytes. Return the plan without narration or repeated drafts. Use 1-8 acceptance checks in JSON or TASK.md; group related checks without dropping requirements. Each acceptance check must be at most 240 characters; for a long requirement write several shorter checks (up to 8) instead of one long one, without dropping requirements. {test_check_rule} Optional fields: difficulty (1-5), estimate_min, task_class (feat|fix|docs|test), model, steps, notes. Do not include new_files in JSON; the harness generates New files from the validated files_allowed. "));
     if let Some(locked) = locked {

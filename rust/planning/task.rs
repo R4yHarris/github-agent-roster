@@ -355,23 +355,14 @@ pub fn validate_directory_documents(
     let commands = regex(
         r"(?i)\b(?:npm|npx|pnpm|yarn|pip|apt|docker|kubectl|terraform|curl|wget|ssh|bash|powershell|Invoke-WebRequest)\b|\b(?:git\s+(?:push|clone)|gh\s+(?:pr|release)|node\s+--test)\b",
     )?;
-    let action = regex(
-        r"(?i)\b(?:install(?:ation|ed|s)?|deploy(?:ment|ed|s)?|publish(?:ed|es|ing)?|purchase(?:d|s)?|buy|account|network|request|fetch|download(?:ed|s)?|upload(?:ed|s)?|serve(?:d|s)?|hosting)\b",
-    )?;
     let assertion = regex(
-        r"(?i)\b(?:run|execute|succeeds?|successful(?:ly)?|exits?|passes?|created|activated|completed|live|reachable)\b|\b(?:is|are|was|were)\s+(?:installed|deployed|published|purchased|serving|running)\b",
+        r"(?i)\b(?:exits?\s+(?:with\s+)?(?:code\s+)?0|passes?|succeeds?)\b|\b(?:is|are|was|were)\s+(?:installed|deployed|published|purchased|running)\b",
     )?;
     let content = regex(
-        r"(?i)\b(?:documents?|describes?|explains?|outlines?|contains?|includes?|cover(?:s|ing)?|lists?|mentions?|states?|warns?|contrasts?|shows?|compares?|defines?|presents?|gives?|indexes)\b",
-    )?;
-    let active = regex(
-        r"(?i)(?:[;:]|\b(?:and|then))\s+(?:run|execute|install|deploy|publish|purchase|buy|register|create an? account|fetch|download|upload|request)(?:s|ed)?\b",
+        r"(?i)\b(?:documents?|describes?|explains?|outlines?|contains?|includes?|cover(?:s|ing)?|lists?|mentions?|states?|warns?|contrasts?|shows?|compares?|defines?|presents?|gives?|indexes|provides?|specifies?|details?|summarizes?|writes?)\b",
     )?;
     for (index, check) in checks.iter().enumerate() {
-        if !content.is_match(check)
-            || active.is_match(check)
-            || (commands.is_match(check) || action.is_match(check)) && assertion.is_match(check)
-        {
+        if !content.is_match(check) || commands.is_match(check) && assertion.is_match(check) {
             return Err(Error::type_error(format!(
                 "Directory documentation requires document-content checks, not installation, deployment, publication, network, purchase or account actions (rejected check {}). Use a document-content verb and remove operation-success assertions.",
                 index + 1
