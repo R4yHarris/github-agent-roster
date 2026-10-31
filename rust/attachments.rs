@@ -97,6 +97,91 @@ pub fn image_mime_type(path: &Path) -> &'static str {
     }
 }
 
+pub fn translate_cross_os_path(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().trim_matches(['"', '\'', '`']);
+    if trimmed.is_empty() {
+        return None;
+    }
+    let norm = trimmed.replace('\\', "/");
+    let lower = norm.to_ascii_lowercase();
+    let wsl_after = if lower.starts_with("//wsl.localhost/") {
+        Some(&norm["//wsl.localhost/".len()..])
+    } else if lower.starts_with("/wsl.localhost/") {
+        Some(&norm["/wsl.localhost/".len()..])
+    } else if lower.starts_with("//wsl$/") {
+        Some(&norm["//wsl$/".len()..])
+    } else if lower.starts_with("/wsl$/") {
+        Some(&norm["/wsl$/".len()..])
+    } else {
+        None
+    };
+    if let Some(after) = wsl_after {
+        if let Some((distro, rest)) = after.split_once('/') {
+            if !distro.is_empty() && !rest.is_empty() {
+                return Some(format!("/{rest}"));
+            }
+        }
+    }
+    let bytes = norm.as_bytes();
+    if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/' {
+        let drive = (bytes[0] as char).to_ascii_lowercase();
+        return Some(format!("/mnt/{drive}/{}", &norm[3..]));
+    }
+    if lower.starts_with("/mnt/") && norm.len() >= 7 {
+        let drive = bytes[5] as char;
+        if drive.is_ascii_alphabetic() && bytes[6] == b'/' {
+            return Some(format!(
+                "{}:\\{}",
+                drive.to_ascii_uppercase(),
+                norm[7..].replace('/', "\\")
+            ));
+        }
+    }
+    None
+}
+
+pub fn resolve_case_insensitive_path(cand: &Path) -> Option<PathBuf> {
+    if cand.exists() {
+        return Some(cand.to_path_buf());
+    }
+    if !cand.is_absolute() {
+        return None;
+    }
+    let mut acc = PathBuf::new();
+    for comp in cand.components() {
+        match comp {
+            std::path::Component::Prefix(p) => acc.push(p.as_os_str()),
+            std::path::Component::RootDir => acc.push(comp.as_os_str()),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                acc.pop();
+            }
+            std::path::Component::Normal(seg) => {
+                let direct = acc.join(seg);
+                if direct.exists() {
+                    acc = direct;
+                    continue;
+                }
+                let seg_str = seg.to_str()?;
+                let rd = fs::read_dir(&acc).ok()?;
+                let mut matched = None;
+                for entry in rd.flatten() {
+                    if entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|n| n.eq_ignore_ascii_case(seg_str))
+                    {
+                        matched = Some(entry.path());
+                        break;
+                    }
+                }
+                acc = matched?;
+            }
+        }
+    }
+    acc.exists().then_some(acc)
+}
+
 pub fn resolve_attachment_candidate(raw: &str, cwd: &Path, env: &Value) -> Option<PathBuf> {
     let trimmed = raw.trim();
     if trimmed.is_empty() || trimmed.len() > 2048 {
@@ -131,6 +216,9 @@ pub fn resolve_attachment_candidate(raw: &str, cwd: &Path, env: &Value) -> Optio
         });
 
     let mut candidates = Vec::new();
+    if let Some(translated) = translate_cross_os_path(&without_scheme) {
+        candidates.push(PathBuf::from(translated));
+    }
     if let Some(sub) = without_scheme
         .strip_prefix("~/")
         .or_else(|| without_scheme.strip_prefix(r"~\"))
@@ -163,9 +251,10 @@ pub fn resolve_attachment_candidate(raw: &str, cwd: &Path, env: &Value) -> Optio
     }
 
     for cand in candidates {
-        if let Ok(meta) = fs::symlink_metadata(&cand) {
+        let resolved_cand = resolve_case_insensitive_path(&cand).unwrap_or(cand);
+        if let Ok(meta) = fs::symlink_metadata(&resolved_cand) {
             if !secure::linked(&meta) && (meta.is_file() || meta.is_dir()) {
-                let fname = cand
+                let fname = resolved_cand
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("")
@@ -173,7 +262,7 @@ pub fn resolve_attachment_candidate(raw: &str, cwd: &Path, env: &Value) -> Optio
                 if meta.is_dir() && matches!(fname.as_str(), ".git" | "node_modules" | "target") {
                     continue;
                 }
-                return Some(fs::canonicalize(&cand).unwrap_or(cand));
+                return Some(fs::canonicalize(&resolved_cand).unwrap_or(resolved_cand));
             }
         }
     }
@@ -1279,6 +1368,30 @@ mod tests {
         assert!(!is_whisper_hallucination(
             "Add a unit test to rust/shell.rs"
         ));
+
+        assert_eq!(
+            translate_cross_os_path(r"\\wsl.localhost\Ubuntu\home\r4yharris\repos\barberlytics"),
+            Some("/home/r4yharris/repos/barberlytics".to_owned())
+        );
+        assert_eq!(
+            translate_cross_os_path(r"\\wsl$\Ubuntu-24.04\home\user\project"),
+            Some("/home/user/project".to_owned())
+        );
+        assert_eq!(
+            translate_cross_os_path(r"D:\oss\github-agent-roster"),
+            Some("/mnt/d/oss/github-agent-roster".to_owned())
+        );
+        assert_eq!(
+            translate_cross_os_path("/mnt/d/oss/github-agent-roster"),
+            Some(r"D:\oss\github-agent-roster".to_owned())
+        );
+
+        let mixed_dir = root.join("Barberlytics");
+        files::create_private_directories(&mixed_dir)?;
+        let lower_probe = root.join("barberlytics");
+        let resolved_ci = resolve_case_insensitive_path(&lower_probe)
+            .ok_or_else(|| Error::new("TestError", "expected case-insensitive match"))?;
+        assert!(resolved_ci.is_dir());
 
         let _ = fs::remove_dir_all(&root);
         Ok(())

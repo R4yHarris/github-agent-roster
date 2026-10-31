@@ -91,7 +91,9 @@ pub fn readme_only(files: &[String]) -> bool {
 }
 
 pub fn docs_only(files: &[String]) -> Result<bool, Error> {
-    let pattern = regex(r"^(README|docs/[^/]+)\.md$")?;
+    let pattern = regex(
+        r"^(?:README\.(?:md|html)|docs/[^/]+\.(?:md|html)|docs/reports/[^/]+\.(?:md|html)|[A-Za-z0-9_.-]*(?:REPORT|AUDIT|SUMMARY|INVENTORY|EVALUATION|CHECKLIST|report|audit|summary|inventory|evaluation|checklist)[A-Za-z0-9_.-]*\.(?:md|html))$",
+    )?;
     Ok(!files.is_empty()
         && files
             .iter()

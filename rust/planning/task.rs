@@ -791,19 +791,32 @@ pub fn ensure_files(task: &Text, ask: &str) -> Result<Text, Error> {
 pub fn ensure_checks(task: &Text, ask: &str) -> Result<Text, Error> {
     let source = encode(task);
     if matches(
-        r"(?im)^## +(?:Acceptance Checks|acceptance_checks)\s*$",
+        r"(?im)^## +(?:Acceptance Checks|acceptance_checks|Acceptance Criteria|acceptance_criteria)\s*$",
         &source,
     )? {
         return Ok(task.clone());
     }
-    let checks = ask
-        .replace("\r\n", "\n")
-        .split('\n')
-        .map(trim)
-        .filter(|line| line.starts_with("- ") || line.starts_with("* "))
-        .take(16)
-        .map(|line| line.get(2..).unwrap_or("").to_owned())
-        .collect::<Vec<_>>();
+    let checks = match intake::list_in_ask(ask, "Acceptance checks")? {
+        Some(list) if !list.is_empty() => list
+            .into_iter()
+            .take(8)
+            .map(|c| c.chars().take(235).collect::<String>())
+            .collect::<Vec<_>>(),
+        _ => ask
+            .replace("\r\n", "\n")
+            .split('\n')
+            .map(trim)
+            .filter(|line| line.starts_with("- ") || line.starts_with("* "))
+            .take(8)
+            .map(|line| {
+                line.get(2..)
+                    .unwrap_or("")
+                    .chars()
+                    .take(235)
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>(),
+    };
     if checks.is_empty() {
         return Ok(task.clone());
     }

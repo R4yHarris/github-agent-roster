@@ -750,13 +750,12 @@ impl<O: Observer> Observer for Observations<'_, O> {
             if let Some(authority) = &self.authority {
                 authority.check()?;
             }
-            let transition = match event
+            let event_kind = event
                 .get("type")
                 .and_then(Value::as_string)
                 .map(Text::to_utf8)
-                .transpose()?
-                .as_deref()
-            {
+                .transpose()?;
+            let transition = match event_kind.as_deref() {
                 Some("rescope") => Some("rescope"),
                 Some("perspective-escalation") => Some("perspective-escalation"),
                 Some("review-repair") => Some("review-repair"),
@@ -771,7 +770,7 @@ impl<O: Observer> Observer for Observations<'_, O> {
                     None,
                     Some(redaction::record(&event, &self.redaction)?),
                 )?;
-            } else {
+            } else if event_kind.as_deref() != Some("stream") || self.log.count < 32 {
                 self.log.write("observation", "observed", None)?;
             }
             phase = "delegate";

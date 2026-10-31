@@ -117,6 +117,7 @@ pub fn index_sources(files: &[String], sources: &[(String, Text)]) -> Result<Ind
         files: files.to_owned(),
         ..Index::default()
     };
+    let mut seen_symbols = std::collections::BTreeSet::new();
     let token = regex(r"[A-Za-z_$][\w$]*")?;
     let commonjs = regex(r"\bexports\.([A-Za-z_$][\w$]*)\s*=")?;
     let code = regex(r"\.(?:[cm]?js|[cm]?ts|jsx|tsx|rs)$")?;
@@ -138,7 +139,7 @@ pub fn index_sources(files: &[String], sources: &[(String, Text)]) -> Result<Ind
         let source = encode(source);
         for token in token.find_iter(&source) {
             let name = token.as_str().to_owned();
-            if !result.symbols.contains(&name) {
+            if seen_symbols.insert(name.clone()) {
                 result.symbols.push(name);
             }
         }
@@ -271,7 +272,10 @@ pub fn read_context(root: &Path, files: &[String], ask: &str) -> Result<Context,
             && !file.starts_with("tests/")
             && !file.contains(".test.")
             && !file.contains(".spec.")
-            && !matches(r"\.(?:json|bicep|ya?ml|toml|html|css|py|sh|ps1)$", file)?
+            && !matches(
+                r"\.(?:json|bicep|ya?ml|toml|html|css|py|sh|ps1|cs|md|slnx|props|targets|csproj)$",
+                file,
+            )?
         {
             continue;
         }
@@ -288,8 +292,9 @@ pub fn read_context(root: &Path, files: &[String], ask: &str) -> Result<Context,
         if paths::file_information(&path)?.links != 1 {
             return Err(secure::path_error(&path, "has multiple hard links"));
         }
-        let source = String::from_utf8(snapshot.bytes)
-            .map_err(|_| Error::type_error(format!("Planning input {file} is not UTF-8")))?;
+        let Ok(source) = String::from_utf8(snapshot.bytes) else {
+            continue;
+        };
         if file.starts_with("tests/") || file.contains(".test.") || file.contains(".spec.") {
             test_names.extend(
                 test_pattern
@@ -310,8 +315,10 @@ pub fn read_context(root: &Path, files: &[String], ask: &str) -> Result<Context,
         .cloned()
         .collect::<Vec<_>>();
     let mut index = index_sources(&readable, &sources)?;
+    let mut seen_syms: std::collections::BTreeSet<String> = index.symbols.iter().cloned().collect();
     let extra_token = regex(r"[A-Za-z_$][\w$]*")?;
-    let non_code = regex(r"\.(?:json|bicep|ya?ml|toml|html|css|py|sh|ps1)$")?;
+    let non_code =
+        regex(r"\.(?:json|bicep|ya?ml|toml|html|css|py|sh|ps1|cs|md|slnx|props|targets|csproj)$")?;
     for (file, source) in &sources {
         if !non_code.is_match(file) || source.utf8_len() > 512 * 1024 {
             continue;
@@ -319,7 +326,7 @@ pub fn read_context(root: &Path, files: &[String], ask: &str) -> Result<Context,
         let text_src = encode(source);
         for matched in extra_token.find_iter(&text_src) {
             let sym = matched.as_str().to_owned();
-            if !index.symbols.contains(&sym) {
+            if seen_syms.insert(sym.clone()) {
                 index.symbols.push(sym);
             }
         }
@@ -676,7 +683,9 @@ pub fn errors(
     let id = regex(r"^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$")?;
     let code_like = regex(r"[a-z0-9][A-Z]|^[a-z]+(?:_[a-z0-9]+)+$")?;
     let upper = regex(r"^[A-Z0-9_]+$")?;
-    let path = regex(r"^[\w.@-]+(?:/[\w.@-]+)+\.\w+$")?;
+    let path = regex(
+        r"^(?:[\w.@-]+(?:/[\w.@-]+)+\.\w+|[\w.@-]+\.(?:md|html|htm|json|ya?ml|toml|slnx|sln|csproj|props|targets|bicep|sql|sh|ps1|py|cs|rs|ts|tsx|js|jsx|mjs|cjs|css|svg|xml|txt|config|lock))$",
+    )?;
     let call = regex(r"^([A-Za-z_$][\w$.]*)\s*\(")?;
     for capture in regex(r"`([^`\n]+)`")?.captures_iter(&source) {
         let span = trim(capture.get(1).map_or("", |entry| entry.as_str()));

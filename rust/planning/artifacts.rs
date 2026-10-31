@@ -111,7 +111,9 @@ pub fn build(ask: &Value, options: BuildOptions<'_>) -> Result<Plan, Error> {
         .iter()
         .map(task::allowed_file)
         .collect::<Result<Vec<_>, _>>()?;
-    let docs_only = files.iter().all(|file| file.ends_with(".md"));
+    let docs_only = files
+        .iter()
+        .all(|file| file.ends_with(".md") || file.ends_with(".html"));
     let rust_only = !files.is_empty()
         && files
             .iter()
@@ -178,7 +180,9 @@ pub fn build(ask: &Value, options: BuildOptions<'_>) -> Result<Plan, Error> {
     }
     let mut metadata = metadata;
     domain::remove(&mut metadata, "design")?;
-    if metadata.get("task_class").is_none() {
+    if !files.is_empty() && files.iter().all(|f| f.to_lowercase().ends_with(".html")) {
+        domain::put(&mut metadata, "task_class", Value::string("docs"))?;
+    } else if metadata.get("task_class").is_none() {
         domain::put(
             &mut metadata,
             "task_class",
@@ -427,6 +431,70 @@ pub fn normalize_description(input: &Value) -> Result<Value, Error> {
         "design",
     ] {
         if let Some(entry) = input.get(field) {
+            if field == "acceptance_checks" {
+                if let Some(raw_items) = domain::items(entry) {
+                    if !raw_items.is_empty() && raw_items.iter().all(|v| v.as_string().is_some()) {
+                        let mut pieces = Vec::new();
+                        for val in raw_items {
+                            if let Some(t) = val.as_string() {
+                                let s = trim(&encode(t).replace(['\r', '\n'], " ")).to_owned();
+                                if s.is_empty() {
+                                    continue;
+                                }
+                                if s.chars().count() <= 235 {
+                                    pieces.push(s);
+                                } else {
+                                    for part in s.split("; ") {
+                                        let pt = trim(part);
+                                        if !pt.is_empty() {
+                                            if pt.chars().count() <= 235 {
+                                                pieces.push(pt.to_owned());
+                                            } else {
+                                                let head: String = pt.chars().take(234).collect();
+                                                let cut = head
+                                                    .rfind([',', ';', '.'])
+                                                    .filter(|&i| i > 120)
+                                                    .or_else(|| {
+                                                        head.rfind(' ').filter(|&i| i > 120)
+                                                    })
+                                                    .unwrap_or(head.len());
+                                                let mut clean = trim(&head[..cut]).to_owned();
+                                                if !clean.ends_with('.') {
+                                                    clean.push('.');
+                                                }
+                                                pieces.push(clean);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if pieces.len() > 8 {
+                            let mut merged: Vec<String> = Vec::new();
+                            for p in pieces {
+                                let m_len = merged.len();
+                                if let Some(last) = merged.last_mut() {
+                                    if m_len >= 4
+                                        && last.chars().count() + 2 + p.chars().count() <= 235
+                                    {
+                                        last.push_str("; ");
+                                        last.push_str(&p);
+                                        continue;
+                                    }
+                                }
+                                if m_len < 8 {
+                                    merged.push(p);
+                                }
+                            }
+                            pieces = merged;
+                        }
+                        if !pieces.is_empty() {
+                            domain::put(&mut result, field, strings(&pieces))?;
+                            continue;
+                        }
+                    }
+                }
+            }
             domain::put(&mut result, field, entry.clone())?;
         }
     }
