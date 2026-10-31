@@ -489,6 +489,18 @@ impl Attempt {
         Ok(decoded)
     }
 
+    pub fn reject_pending(&mut self, call: &coder_calls::Call) {
+        if let Some(index) = self.pending.iter().position(|pending| {
+            pending.id == call.id && pending.name == call.name && pending.args == call.args
+        }) {
+            self.pending.remove(index);
+        }
+    }
+
+    pub fn push_pending(&mut self, call: coder_calls::Call) {
+        self.pending.push(call);
+    }
+
     pub async fn execute(
         &mut self,
         boundary: &mut tools::Boundary,
@@ -539,9 +551,25 @@ impl Attempt {
             .workspace
             .execute(boundary, &call.name, &call.args, projection)
             .await;
+        let is_readonly_call = [
+            "read_file",
+            "list_dir",
+            "glob_files",
+            "search_text",
+            "git_status",
+            "git_diff",
+        ]
+        .contains(&call.name.as_str());
         if let Err(error) = &result {
+            let recoverable_readonly_denial = is_readonly_call
+                && error.name == "ToolAccessError"
+                && error
+                    .message
+                    .contains("secrets, Git metadata, policy, workflows, contracts, or debug logs");
             if error.name != "ToolUsageError"
                 && error.name != "TypeError"
+                && error.code != Some("ENOENT")
+                && !recoverable_readonly_denial
                 && !tools::correctable_content(error)
             {
                 self.failure = Some(error.clone());

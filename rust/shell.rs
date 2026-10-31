@@ -2185,7 +2185,35 @@ impl EventSink {
                 };
                 self.send_phase(seat_phase, issue);
             }
-            "tool" => {
+            "seat" => {
+                let seat = event
+                    .get("seat")
+                    .and_then(Value::as_string)
+                    .and_then(|t| t.to_utf8().ok())
+                    .unwrap_or_default();
+                let status = event
+                    .get("status")
+                    .and_then(Value::as_string)
+                    .and_then(|t| t.to_utf8().ok())
+                    .unwrap_or_default();
+                if (seat == "coder" && status == "finalizing") || seat == "reviewer" {
+                    self.send_phase(Some("review"), issue);
+                }
+            }
+            "tool" | "seat-tool" => {
+                if let Some(seat) = event
+                    .get("seat")
+                    .and_then(Value::as_string)
+                    .and_then(|t| t.to_utf8().ok())
+                {
+                    let seat_phase = match seat.as_str() {
+                        "planner" => Some("plan"),
+                        "coder" => Some("draft"),
+                        "reviewer" => Some("review"),
+                        _ => None,
+                    };
+                    self.send_phase(seat_phase, issue);
+                }
                 let name = event
                     .get("name")
                     .and_then(Value::as_string)
@@ -2849,6 +2877,37 @@ impl ShellSession {
         paths::resolve_project_root(&self.cwd).unwrap_or_else(|_| self.cwd.clone())
     }
 
+    fn resolve_target_repo_root(&self, text: &str) -> PathBuf {
+        for att in self.attachments.iter().rev() {
+            let start_dir = if att.path.is_dir() {
+                Some(att.path.as_path())
+            } else {
+                att.path.parent()
+            };
+            if let Some(dir) = start_dir {
+                if let Some(git_anc) = dir.ancestors().find(|a| a.join(".git").exists()) {
+                    return git_anc.to_path_buf();
+                }
+            }
+        }
+        if !text.trim().is_empty() {
+            let repos = discover_repositories(&self.cwd, &self.environment);
+            let matched = match_target_repositories(text, &repos, &self.cwd);
+            if let Some(git_repo) = matched
+                .iter()
+                .find(|r| Path::new(&r.path).join(".git").exists())
+            {
+                return PathBuf::from(&git_repo.path);
+            }
+        }
+        if let Some(ref ask_f) = self.last_ask_file {
+            if let Some(anc) = ask_f.ancestors().find(|a| a.join(".git").exists()) {
+                return anc.to_path_buf();
+            }
+        }
+        self.current_root()
+    }
+
     fn api_key_env(&self) -> Option<String> {
         self.config
             .get("llm")
@@ -3025,12 +3084,6 @@ impl ShellSession {
                     other => Ok(other),
                 };
             }
-            let reqs = crate::planning::intake::requirements(&Value::string(text), true)?;
-            if !reqs.explicit && reqs.output_directory.is_none() && self.has_configured_endpoint() {
-                if let Some(agent_out) = self.run_agentic_nlp_turn(text).await? {
-                    return Ok(ShellAction::Continue(agent_out));
-                }
-            }
             if is_workspace_inventory_ask(text)? {
                 let out = self.execute_workspace_inventory(text).await?;
                 return Ok(ShellAction::Continue(out));
@@ -3038,6 +3091,18 @@ impl ShellSession {
             if crate::ask::is_repository_question_ask(text)? {
                 let ans = self.run_question_text(text).await?;
                 return Ok(ShellAction::Continue(ans));
+            }
+            let reqs = crate::planning::intake::requirements(&Value::string(text), true)?;
+            let target_root = self.resolve_target_repo_root(text);
+            let target_has_git = target_root.join(".git").exists();
+            if !reqs.explicit
+                && reqs.output_directory.is_none()
+                && self.has_configured_endpoint()
+                && (!target_has_git || extract_referenced_project_number(text).is_some())
+            {
+                if let Some(agent_out) = self.run_agentic_nlp_turn(text).await? {
+                    return Ok(ShellAction::Continue(agent_out));
+                }
             }
             let out = self.run_ask_text(text).await?;
             return Ok(ShellAction::Continue(out));
@@ -7967,8 +8032,8 @@ impl ShellSession {
         )]);
         let creds = self.llm_credentials();
         let mut obs = crate::llm::control::NoObserver;
-        let res = tokio::time::timeout(
-            std::time::Duration::from_secs(15),
+        let out_pair = match tokio::time::timeout(
+            std::time::Duration::from_secs(60),
             chat.complete(
                 &req,
                 &mut transport,
@@ -7982,9 +8047,14 @@ impl ShellSession {
             ),
         )
         .await
-        .ok()?
-        .ok()?;
-        if let Some(usage) = &res.usage {
+        {
+            Ok(Ok(res)) => Some((res.message, res.usage)),
+            Ok(Err(failure)) if failure.truncated == Some(true) => {
+                failure.partial.map(|b| (*b, None))
+            }
+            _ => None,
+        }?;
+        if let Some(usage) = &out_pair.1 {
             if let Some(pt) = domain::safe_integer(usage.get("prompt_tokens")) {
                 let _ = domain::put(&mut self.display, "contextUsed", Value::Number(pt as f64));
             }
@@ -7992,8 +8062,8 @@ impl ShellSession {
                 let _ = domain::put(&mut self.display, "outputTokens", Value::Number(ct as f64));
             }
         }
-        let raw_content = res
-            .message
+        let raw_content = out_pair
+            .0
             .get("content")
             .and_then(Value::as_string)
             .and_then(|t| t.to_utf8().ok())?;
@@ -8339,8 +8409,12 @@ impl ShellSession {
             return self.run_question_text(&cleaned).await;
         }
         self.last_ask_text = Some(cleaned.clone());
-        let root = self.current_root();
+        let root = self.resolve_target_repo_root(&cleaned);
+        self.ensure_reachable_fleet_endpoint(&root);
         let has_git = root.join(".git").exists();
+        if has_git {
+            let _ = ensure_repo_git_exclude(&root);
+        }
         let mut classified =
             crate::planning::intake::classify(&Value::string(&cleaned), None, &[])?;
         let mut ask_kind = classified
@@ -8352,6 +8426,41 @@ impl ShellSession {
 
         let mut translation_banner = String::new();
         if ask_kind == "clarify" || !has_git {
+            if self.live_output {
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+                let _ = domain::put(&mut self.display, "state", Value::string("planning"));
+                let _ = domain::put(&mut self.display, "startedAt", Value::Number(now_ms));
+                let mut obs = ShellLiveObserver::new(
+                    &mut self.display,
+                    &mut self.last_measured_seat,
+                    &mut self.last_finish_reason,
+                    &self.ask_queue,
+                    self.statusbar,
+                    self.debug.enabled(),
+                    self.color,
+                    self.live_output,
+                    &mut self.tray_visible,
+                    &mut self.bar_lines,
+                    self.last_issue,
+                );
+                obs.write_live(
+                    &format!(
+                        "{}\n",
+                        ansi_paint(
+                            &format!(
+                                "local translating natural-language ask via LLM (target: {})",
+                                root.display()
+                            ),
+                            "dim",
+                            self.color
+                        )
+                    ),
+                    false,
+                    Some("nlp-translate"),
+                );
+            }
             if let Some(translated) = self
                 .translate_natural_language_with_llm(&cleaned, &root)
                 .await
@@ -8389,15 +8498,65 @@ impl ShellSession {
                         return self.run_question_text(&scoped).await;
                     }
                     NaturalLanguageTranslation::DeliveryTask {
-                        structured_ask,
+                        mut structured_ask,
                         outcome,
-                        files,
+                        mut files,
                         ..
                     } => {
+                        let repo_name = root
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("workspace");
+                        if files == vec!["REPOSITORY_REPORT.html".to_owned()]
+                            && repo_name != "workspace"
+                        {
+                            let stem = repo_name
+                                .split('-')
+                                .next()
+                                .unwrap_or(repo_name)
+                                .to_ascii_uppercase();
+                            let named = format!("{stem}_REPORT.html");
+                            structured_ask =
+                                structured_ask.replace("REPOSITORY_REPORT.html", &named);
+                            files = vec![named];
+                        }
                         translation_banner = format!(
-                            "Translated natural language -> Task: {outcome} [files: {}]\n",
+                            "Translated natural language -> Task: {outcome} [repo: {repo_name}, files: {}]\n",
                             files.join(", ")
                         );
+                        let is_report_slice = files.iter().all(|f| {
+                            let l = f.to_lowercase();
+                            l.ends_with(".html") || l.contains("report") || l.contains("audit")
+                        });
+                        if is_report_slice && has_git {
+                            let inspected = inspect_git_repo(&root, false);
+                            let deep_ev = deep_inspect_repositories(
+                                &[inspected],
+                                &self.environment,
+                                self.api_key_env().as_deref(),
+                            );
+                            let compact_ev: String = deep_ev
+                                .lines()
+                                .filter(|l| {
+                                    l.starts_with("### Repository:")
+                                        || l.starts_with("- **Kind**:")
+                                        || l.starts_with("- **Metrics**:")
+                                        || l.starts_with("- **Root Manifests")
+                                })
+                                .map(|l| l.trim_start_matches("### ").replacen("- ", "• ", 1))
+                                .collect::<Vec<_>>()
+                                .join("\n");
+                            if !compact_ev.trim().is_empty() {
+                                structured_ask = structured_ask.replacen(
+                                    "\n\n## Allowed Files\n",
+                                    &format!(
+                                        "\n\nRepository Inspection Summary:\n{}\n\n## Allowed Files\n",
+                                        compact_ev.trim()
+                                    ),
+                                    1,
+                                );
+                            }
+                        }
                         cleaned = structured_ask;
                         classified =
                             crate::planning::intake::classify(&Value::string(&cleaned), None, &[])?;
@@ -8409,10 +8568,98 @@ impl ShellSession {
                             .unwrap_or_else(|| "slice".to_owned());
                     }
                 }
+            } else if has_git && is_direct_file_creation_request(&cleaned) {
+                let repo_name = root
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("repository");
+                let stem = repo_name
+                    .split('-')
+                    .next()
+                    .unwrap_or(repo_name)
+                    .to_ascii_uppercase();
+                let wants_html = regex_lite::Regex::new(
+                    r"(?i)\b(?:html\s+report|report\s+in\s+html|nice\s+html|\.html\b)",
+                )
+                .is_ok_and(|re| re.is_match(&cleaned));
+                let target_rel = if wants_html {
+                    format!("{stem}_REPORT.html")
+                } else {
+                    resolve_inventory_target_path(&cleaned, &root, &self.environment)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("REPORT.md")
+                        .to_owned()
+                };
+                let outcome_line = format!("Generate {target_rel} for {repo_name}");
+                let inspected = inspect_git_repo(&root, false);
+                let deep_ev = deep_inspect_repositories(
+                    &[inspected],
+                    &self.environment,
+                    self.api_key_env().as_deref(),
+                );
+                let compact_ev: String = deep_ev
+                    .lines()
+                    .filter(|l| {
+                        l.starts_with("### Repository:")
+                            || l.starts_with("- **Kind**:")
+                            || l.starts_with("- **Metrics**:")
+                            || l.starts_with("- **Root Manifests")
+                    })
+                    .map(|l| l.trim_start_matches("### ").replacen("- ", "• ", 1))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                translation_banner = format!(
+                    "Translated natural language -> Task: {outcome_line} [repo: {repo_name}, files: {target_rel}]\n"
+                );
+                cleaned = format!(
+                    "{outcome_line}\n\nOriginal request: {cleaned}\n\nRepository Inspection Summary:\n{}\n\n## Allowed Files\n- `{target_rel}`\n\n## Acceptance checks\n- {target_rel} is created and fulfills the requested repository review and evaluation",
+                    compact_ev.trim()
+                );
+                classified =
+                    crate::planning::intake::classify(&Value::string(&cleaned), None, &[])?;
+                ask_kind = classified
+                    .get("kind")
+                    .and_then(Value::as_string)
+                    .map(Text::to_utf8)
+                    .transpose()?
+                    .unwrap_or_else(|| "slice".to_owned());
             } else if !has_git && is_direct_file_creation_request(&cleaned) {
                 return self
                     .execute_direct_workspace_file_task(&cleaned, None, None)
                     .await;
+            }
+        }
+
+        if !confirm_after_plan
+            && self.live_output
+            && self.has_configured_endpoint()
+            && has_git
+            && ask_kind == "slice"
+        {
+            let asks_rel = self
+                .config
+                .get("paths")
+                .and_then(|paths| paths.get("asks"))
+                .and_then(Value::as_string)
+                .and_then(|t| t.to_utf8().ok())
+                .unwrap_or_else(|| ".roster/asks".to_owned());
+            let ask_id = crate::ask::generate_uuid_v4();
+            let ask_dir = root.join(&asks_rel);
+            let _ = files::create_private_directories(&ask_dir);
+            let ask_path = ask_dir.join(format!("{ask_id}.md"));
+            if fs::write(&ask_path, format!("{cleaned}\n").as_bytes()).is_ok() {
+                self.last_ask_file = Some(ask_path.clone());
+                self.last_task = Some(format!("ask-{ask_id}"));
+                match self.execute_local_ask_delivery_in_root(&root).await {
+                    Ok(delivery_out) => {
+                        return Ok(format!("{translation_banner}{delivery_out}"));
+                    }
+                    Err(err) => {
+                        let _ = domain::put(&mut self.display, "state", Value::string("failed"));
+                        return Err(err);
+                    }
+                }
             }
         }
 
@@ -8631,20 +8878,77 @@ impl ShellSession {
         Ok(plan_summary)
     }
 
+    fn ensure_reachable_fleet_endpoint(&mut self, root: &Path) {
+        if !self.live_output {
+            return;
+        }
+        let is_url_reachable = |raw_url: &str| -> bool {
+            let Ok(parsed) = url::Url::parse(raw_url) else {
+                return false;
+            };
+            let Some(host) = parsed.host_str() else {
+                return false;
+            };
+            let port = parsed.port_or_known_default().unwrap_or(80);
+            use std::net::ToSocketAddrs;
+            let Ok(mut addrs) = (host, port).to_socket_addrs() else {
+                return false;
+            };
+            addrs.any(|addr| {
+                std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(2000))
+                    .is_ok()
+            })
+        };
+        let cur_url = self
+            .config
+            .get("llm")
+            .and_then(|l| l.get("base_url"))
+            .and_then(Value::as_string)
+            .and_then(|t| t.to_utf8().ok())
+            .unwrap_or_default();
+        if !cur_url.is_empty() && is_url_reachable(&cur_url) {
+            return;
+        }
+        let Ok(fleet_cat) =
+            crate::fleet::load_with_env(root, Some(&self.installation), Some(&self.environment))
+        else {
+            return;
+        };
+        for prof in fleet_cat.profiles() {
+            let pv = prof.as_value();
+            let b = clean_display(pv.get("base_url"), "");
+            let pid = clean_display(pv.get("id"), "");
+            if !b.is_empty() && !pid.is_empty() && is_url_reachable(&b) {
+                if let Ok(routed) = crate::fleet::with_profile(&self.config, pv) {
+                    self.config = routed;
+                    self.fleet_profile_id = Some(pid);
+                    self.sync_model_display();
+                    return;
+                }
+            }
+        }
+    }
+
     async fn execute_local_ask_delivery(&mut self) -> Result<String, Error> {
+        let root = self.resolve_target_repo_root("");
+        self.execute_local_ask_delivery_in_root(&root).await
+    }
+
+    async fn execute_local_ask_delivery_in_root(&mut self, root: &Path) -> Result<String, Error> {
         let Some(ask_file) = self.last_ask_file.clone() else {
             return Err(Error::new(
                 "Error",
                 "Plan or supply an Ask before running local delivery.",
             ));
         };
-        let root = self.current_root();
-        let _ = bootstrap_greenfield_repo(&root);
+        self.ensure_reachable_fleet_endpoint(root);
+        let _ = ensure_repo_git_exclude(root);
+        let _ = bootstrap_greenfield_repo(root);
         let env_with_tools = ensure_delivery_tool_env(&self.environment);
-        let mut loaded = config::load(&self.installation, &root, &env_with_tools)?;
+        let mut loaded = config::load(&self.installation, root, &env_with_tools)?;
         if let Some(ref prof_id) = self.fleet_profile_id {
             let fleet_cat = crate::fleet::load_with_env(
-                &root,
+                root,
                 Some(&self.installation),
                 Some(&self.environment),
             )?;
@@ -8701,7 +9005,7 @@ impl ShellSession {
         let result = driver
             .run_local(
                 crate::delivery::Options {
-                    cwd: &root,
+                    cwd: root,
                     installation: &self.installation,
                     loaded: &loaded,
                     input: crate::delivery::Input::AskFile(ask_file.clone()),
@@ -8729,6 +9033,64 @@ impl ShellSession {
                         }
                     }
                 }
+                let mut synced_paths = Vec::new();
+                if let Ok(task_raw) = fs::read_to_string(outcome.worktree.join("TASK.md")) {
+                    if let Ok(allowed) =
+                        crate::planning::task::files_allowed(&Value::string(&task_raw))
+                    {
+                        for rel in allowed {
+                            if rel.contains('*') || is_protected_agent_edit_path(Path::new(&rel)) {
+                                continue;
+                            }
+                            let wt_file = outcome.worktree.join(&rel);
+                            if !wt_file.is_file() {
+                                continue;
+                            }
+                            if wt_file
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .is_some_and(|e| e.eq_ignore_ascii_case("html"))
+                            {
+                                if let Ok(raw_html) = fs::read_to_string(&wt_file) {
+                                    let t = raw_html.trim_start();
+                                    if !t.starts_with("<!DOCTYPE")
+                                        && !t.starts_with("<!doctype")
+                                        && !t.starts_with("<html")
+                                    {
+                                        let repo_label = root
+                                            .file_name()
+                                            .and_then(|n| n.to_str())
+                                            .unwrap_or("Repository");
+                                        let upgraded = render_markdown_as_html_report(
+                                            repo_label, &raw_html, "",
+                                        );
+                                        let _ = fs::write(&wt_file, upgraded.as_bytes());
+                                    }
+                                }
+                            }
+                            if !root.join("rust").join("shell.rs").is_file() {
+                                let dst_repo = root.join(&rel);
+                                if let Some(p) = dst_repo.parent() {
+                                    let _ = fs::create_dir_all(p);
+                                }
+                                if fs::copy(&wt_file, &dst_repo).is_ok() {
+                                    synced_paths.push(dst_repo.display().to_string());
+                                }
+                            }
+                            if self.cwd != root {
+                                if let Some(fname) = Path::new(&rel).file_name() {
+                                    let dst_cwd = self.cwd.join(fname);
+                                    if fs::copy(&wt_file, &dst_cwd).is_ok() {
+                                        let disp = dst_cwd.display().to_string();
+                                        if !synced_paths.contains(&disp) {
+                                            synced_paths.push(disp);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 self.last_worktree = Some(outcome.worktree.clone());
                 self.last_task = Some(outcome.task.clone());
                 let passed = outcome.succeeded();
@@ -8749,7 +9111,11 @@ impl ShellSession {
                         .unwrap_or_else(|| "fail".to_owned())
                 };
                 let _ = domain::put(&mut self.display, "review", Value::string(&rev_verdict));
-                Ok(outcome.format())
+                let mut formatted = outcome.format();
+                for sp in synced_paths {
+                    formatted.push_str(&format!("Wrote file: {sp}\n"));
+                }
+                Ok(formatted)
             }
             Err(err) => {
                 let _ = domain::put(&mut self.display, "state", Value::string("failed"));
@@ -8883,8 +9249,97 @@ pub fn find_node20_executable() -> Option<String> {
     candidates.into_iter().rev().find(|p| is_node20_binary(p))
 }
 
+pub fn ensure_repo_git_exclude(repo_root: &Path) -> Result<bool, Error> {
+    let git_entry = repo_root.join(".git");
+    if !git_entry.exists() {
+        return Ok(false);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for dir_name in [".worktrees", ".roster", ".roster-state"] {
+            let d = repo_root.join(dir_name);
+            if d.is_dir() {
+                let _ = fs::set_permissions(&d, fs::Permissions::from_mode(0o700));
+            }
+        }
+    }
+    let git_dir = if git_entry.is_dir() {
+        git_entry
+    } else if let Ok(raw) = fs::read_to_string(&git_entry) {
+        if let Some(rel) = raw.trim().strip_prefix("gitdir:") {
+            let p = PathBuf::from(rel.trim());
+            if p.is_absolute() {
+                p
+            } else {
+                repo_root.join(p)
+            }
+        } else {
+            return Ok(false);
+        }
+    } else {
+        return Ok(false);
+    };
+    let info_dir = git_dir.join("info");
+    let _ = fs::create_dir_all(&info_dir);
+    let exclude_path = info_dir.join("exclude");
+    let existing = fs::read_to_string(&exclude_path).unwrap_or_default();
+    let existing_lines = existing.lines().map(str::trim).collect::<Vec<_>>();
+    let required = [
+        ".roster/",
+        ".roster/locks/run.lock",
+        ".roster/runs/session.log",
+        ".worktrees/",
+        ".roster-state/",
+        "/ASSIGNMENT.md",
+        "/TASK.md",
+        "/RECIPE.yml",
+        "/ESTIMATE.md",
+        "/CONTEXT.md",
+        "/RESULT.md",
+        "/REVIEW.md",
+        "/PLAN.md",
+        "/RESEARCH.md",
+        "/SELF_REVIEW.md",
+    ];
+    let mut missing = Vec::new();
+    for item in required {
+        if !existing_lines.contains(&item) {
+            missing.push(item);
+        }
+    }
+    if missing.is_empty() {
+        return Ok(false);
+    }
+    let mut next = existing;
+    if !next.is_empty() && !next.ends_with('\n') {
+        next.push('\n');
+    }
+    for item in missing {
+        next.push_str(item);
+        next.push('\n');
+    }
+    fs::write(&exclude_path, next.as_bytes())
+        .map_err(|e| Error::new("Error", format!("{}: {e}", exclude_path.display())))?;
+    Ok(true)
+}
+
 pub fn bootstrap_greenfield_repo(repo_root: &Path) -> Result<bool, Error> {
     if !repo_root.join(".git").exists() || repo_root.join("rust").join("shell.rs").is_file() {
+        return Ok(false);
+    }
+    let _ = ensure_repo_git_exclude(repo_root);
+    let has_head = StdCommand::new("git")
+        .args([
+            "-C",
+            &repo_root.display().to_string(),
+            "rev-parse",
+            "--verify",
+            "HEAD",
+        ])
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if has_head {
         return Ok(false);
     }
     let required_ignores = [
@@ -9642,12 +10097,28 @@ impl crate::llm::control::Observer for ShellLiveObserver<'_> {
                 let _ = domain::put(self.display, "outputTokens", Value::Null);
                 let _ = domain::put(self.display, "toolCount", Value::Number(0.0));
             }
-            "tool" => {
+            "seat" => {
+                let seat = clean_display(event.get("seat"), "");
+                let status = clean_display(event.get("status"), "");
+                if (seat == "coder" && status == "finalizing") || seat == "reviewer" {
+                    let _ = domain::put(self.display, "state", Value::string("reviewing"));
+                }
+            }
+            "tool" | "seat-tool" => {
+                let seat = clean_display(event.get("seat"), "");
+                if seat == "coder" {
+                    let _ = domain::put(self.display, "state", Value::string("drafting"));
+                } else if seat == "reviewer" {
+                    let _ = domain::put(self.display, "state", Value::string("reviewing"));
+                }
                 let count = domain::safe_integer(self.display.get("toolCount")).unwrap_or(0) + 1;
                 let _ = domain::put(self.display, "toolCount", Value::Number(count as f64));
-                if clean_display(event.get("name"), "") == "run_test" {
+                let tool_name = clean_display(event.get("name"), "");
+                if tool_name == "run_test" {
                     let _ = domain::put(self.display, "state", Value::string("testing"));
                     let _ = domain::put(self.display, "lastTestName", Value::string("node --test"));
+                } else if !tool_name.is_empty() {
+                    let _ = domain::put(self.display, "lastTestName", Value::string(&tool_name));
                 }
             }
             "http" => {
@@ -9767,11 +10238,21 @@ impl crate::llm::control::Observer for ShellLiveObserver<'_> {
                         .and_then(|t| t.to_utf8().ok())
                         .unwrap_or_default();
                     self.stream_acc.push_str(&text_chunk);
-                    let wrapped = wrap_narration(&self.stream_acc, terminal_columns()).join("\n");
-                    if !wrapped.is_empty() {
-                        let replace = !start && self.last_key.as_deref() == Some("stream");
-                        let painted = ansi_paint(&wrapped, "white", self.color);
-                        self.write_live(&format!("{painted}\n"), replace, Some("stream"));
+                    let trimmed_acc = self.stream_acc.trim_start();
+                    if !trimmed_acc.starts_with('{')
+                        && !trimmed_acc.starts_with('<')
+                        && !trimmed_acc.starts_with("```")
+                        && !trimmed_acc.to_lowercase().contains("<!doctype")
+                        && !trimmed_acc.contains("<html")
+                        && !trimmed_acc.contains("<section")
+                    {
+                        let wrapped =
+                            wrap_narration(&self.stream_acc, terminal_columns()).join("\n");
+                        if !wrapped.is_empty() {
+                            let replace = !start && self.last_key.as_deref() == Some("stream");
+                            let painted = ansi_paint(&wrapped, "white", self.color);
+                            self.write_live(&format!("{painted}\n"), replace, Some("stream"));
+                        }
                     }
                 }
                 "wait" => {
@@ -11224,7 +11705,7 @@ pub fn parse_natural_language_translation_json(
             })
         }
         "workspace_inventory" => Some(NaturalLanguageTranslation::WorkspaceInventory),
-        "direct_file_task" => {
+        "direct_file_task" if !has_git => {
             let target_file = parsed
                 .get("target_file")
                 .and_then(Value::as_string)
@@ -11269,7 +11750,7 @@ pub fn parse_natural_language_translation_json(
                 files,
             })
         }
-        "delivery_task" | "task" => {
+        "delivery_task" | "task" | "direct_file_task" => {
             let outcome = parsed
                 .get("outcome")
                 .and_then(Value::as_string)
@@ -11293,6 +11774,10 @@ pub fn parse_natural_language_translation_json(
                     summary: outcome,
                 });
             }
+            let wants_html = regex_lite::Regex::new(
+                r"(?i)\b(?:html\s+report|report\s+in\s+html|nice\s+html|\.html\b)",
+            )
+            .is_ok_and(|re| re.is_match(original_ask));
             let mut files = parsed
                 .get("files")
                 .and_then(domain::items)
@@ -11306,6 +11791,20 @@ pub fn parse_natural_language_translation_json(
                         .collect::<Vec<_>>()
                 })
                 .unwrap_or_default();
+            if wants_html {
+                let html_file = target_file
+                    .as_deref()
+                    .filter(|f| f.to_lowercase().ends_with(".html"))
+                    .and_then(|f| crate::planning::task::allowed_file(&Value::string(f)).ok())
+                    .or_else(|| {
+                        files
+                            .iter()
+                            .find(|f| f.to_lowercase().ends_with(".html"))
+                            .cloned()
+                    })
+                    .unwrap_or_else(|| "REPOSITORY_REPORT.html".to_owned());
+                files = vec![html_file];
+            }
             if files.is_empty() {
                 if let Some(ref tf) = target_file {
                     if let Ok(valid) = crate::planning::task::allowed_file(&Value::string(tf)) {
@@ -11329,6 +11828,7 @@ pub fn parse_natural_language_translation_json(
                 .map(|arr| {
                     arr.iter()
                         .filter_map(|v| v.as_string()?.to_utf8().ok())
+                        .map(|c| c.replace('`', ""))
                         .filter(|c| !c.trim().is_empty())
                         .take(4)
                         .collect::<Vec<_>>()
@@ -12072,6 +12572,7 @@ pub fn deep_inspect_repositories(
                             let lcl = tline.to_lowercase();
                             let is_copyright = line_idx <= 6
                                 && (lcl.contains("copyright")
+                                    || lcl.contains("author:")
                                     || lcl.contains("spdx-license")
                                     || lcl.contains("all rights reserved")
                                     || lcl.contains("proprietary"));
@@ -12226,7 +12727,11 @@ pub fn deep_inspect_repositories(
             if workflow_files.is_empty() {
                 "none".to_owned()
             } else {
-                workflow_files.join(", ")
+                workflow_files
+                    .iter()
+                    .map(|wf| wf.strip_prefix(".github/workflows/").unwrap_or(wf))
+                    .collect::<Vec<_>>()
+                    .join(", ")
             }
         ));
         report.push_str(&format!(

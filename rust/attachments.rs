@@ -106,8 +106,12 @@ pub fn translate_cross_os_path(raw: &str) -> Option<String> {
     let lower = norm.to_ascii_lowercase();
     let wsl_after = if lower.starts_with("//wsl.localhost/") {
         Some(&norm["//wsl.localhost/".len()..])
+    } else if lower.starts_with("/wsl.localhost/") {
+        Some(&norm["/wsl.localhost/".len()..])
     } else if lower.starts_with("//wsl$/") {
         Some(&norm["//wsl$/".len()..])
+    } else if lower.starts_with("/wsl$/") {
+        Some(&norm["/wsl$/".len()..])
     } else {
         None
     };

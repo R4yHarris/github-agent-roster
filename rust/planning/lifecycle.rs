@@ -2021,11 +2021,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                         .ok_or_else(|| {
                             Error::new("Error", "Planner task validation changed unexpectedly")
                         })?;
-                    if !starts_json
-                        && failure
-                            .message
-                            .starts_with("Acceptance check must be at most 240 characters")
-                    {
+                    if !starts_json {
                         if validation_used {
                             return self.fallback(
                                 assignment,
@@ -2036,6 +2032,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                             );
                         }
                         validation_used = true;
+                        task_draft = None;
                         messages.push(message("user", Value::string(&format!("The written TASK.md is invalid ({}). Use this single validation correction to return the complete required JSON plan. Keep every requirement and the original Ask; the harness will write the validated artifacts.", failure.message))));
                         continue;
                     }
@@ -2150,6 +2147,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                             return self.fallback(assignment, &options, &samples, turn, &reason);
                         }
                         validation_used = true;
+                        task_draft = None;
                         messages.push(message("assistant", Value::String(self.safe(&content))));
                         messages.push(message("user", value(&format!("The written TASK.md is invalid ({reason}). Return only the required JSON task plan so the harness can finalize the validated artifacts."))));
                         continue;

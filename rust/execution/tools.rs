@@ -580,9 +580,14 @@ impl ReadOnly<'_> {
                     }
                 }
             } else if metadata.is_file() {
-                let (_, _, value) = self
+                let (_, _, value) = match self
                     .boundary
-                    .read_file_value(&Value::object(vec![("path", Value::string(&path))]), true)?;
+                    .read_file_value(&Value::object(vec![("path", Value::string(&path))]), true)
+                {
+                    Ok(v) => v,
+                    Err(err) if err.message.contains("UTF-8") => continue,
+                    Err(err) => return Err(err),
+                };
                 let source = text(&value, "Reviewer search input must be text")?;
                 bytes += source.len() as u64;
                 if bytes > MAX_SNAPSHOT_BYTES {
@@ -1580,6 +1585,21 @@ impl Boundary {
             return Ok(true);
         }
         let scope = self.scope()?;
+        let is_report_slice = !scope.is_empty()
+            && !policy::readme_only(&self.document.files_allowed)
+            && scope.iter().all(|f| {
+                let l = f.to_lowercase();
+                l.ends_with(".html")
+                    || (l.ends_with(".md")
+                        && (l.contains("report")
+                            || l.contains("audit")
+                            || l.contains("summary")
+                            || l.contains("evaluation")
+                            || l.contains("inventory")))
+            });
+        if is_report_slice && !planning::forbidden_read(file) && !private_path(file) {
+            return Ok(true);
+        }
         Ok(planning::is_allowed(file, &scope)
             || self
                 .options
@@ -1692,6 +1712,14 @@ impl Boundary {
         if !reviewer {
             self.read_scope(&file, false)?;
         }
+        let target_path = self.root.join(&file);
+        if let Ok(meta) = fs::symlink_metadata(&target_path) {
+            if !secure::linked(&meta) && meta.is_dir() {
+                return Err(usage(format!(
+                    "read_file: {file} is a directory; use list_dir to inspect directories"
+                )));
+            }
+        }
         let snapshot = regular(&self.root, &file, MAX_FILE_BYTES)?.ok_or_else(|| Error::new("Error", format!("read_file: {file} does not exist. Use list_dir or search_text to find the right path")).coded("ENOENT"))?;
         let source = bytes_text(&snapshot.bytes)?;
         self.check()?;
@@ -1724,6 +1752,22 @@ impl Boundary {
             self.root.join(file)
         };
         secure::check_components(&target)?;
+        if !target.exists() {
+            return Err(Error::new(
+                "Error",
+                format!(
+                    "list_dir: {file} does not exist. Use list_dir on '.' to see existing directories"
+                ),
+            )
+            .coded("ENOENT"));
+        }
+        if let Ok(meta) = fs::symlink_metadata(&target) {
+            if !secure::linked(&meta) && meta.is_file() {
+                return Err(usage(format!(
+                    "list_dir: {file} is a regular file; use read_file instead"
+                )));
+            }
+        }
         let mut result = Vec::new();
         for entry in fs::read_dir(&target)
             .map_err(|error| secure::io_error("List tool directory", &target, error))?
@@ -1739,7 +1783,11 @@ impl Boundary {
             } else {
                 format!("{file}/{name}")
             };
-            if planning::forbidden_read(&child) || private_path(&child) || name == "node_modules" {
+            if planning::forbidden_read(&child)
+                || private_path(&child)
+                || name == "node_modules"
+                || name == ".github"
+            {
                 continue;
             }
             let metadata = fs::symlink_metadata(entry.path())
@@ -1878,7 +1926,12 @@ impl Boundary {
         let mut matches = Vec::new();
         let mut total = 0_u64;
         for file in self.readable_files(&file)? {
-            let result = self.read_file(&Value::object(vec![("path", Value::string(&file))]))?;
+            let result = match self.read_file(&Value::object(vec![("path", Value::string(&file))]))
+            {
+                Ok(v) => v,
+                Err(err) if err.message.contains("UTF-8") => continue,
+                Err(err) => return Err(err),
+            };
             let source = text(&result, "Search input must be text")?;
             total += source.len() as u64;
             if total > MAX_SNAPSHOT_BYTES {
