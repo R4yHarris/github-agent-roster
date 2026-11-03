@@ -4965,21 +4965,37 @@ impl ShellSession {
     }
 
     async fn execute_issue_delivery(&mut self, issue_num: u64) -> Result<String, Error> {
-        let root = self.current_root();
+        self.execute_issue_delivery_in_repo(issue_num, None, None)
+            .await
+    }
+
+    async fn execute_issue_delivery_in_repo(
+        &mut self,
+        issue_num: u64,
+        target_root: Option<&Path>,
+        target_repo_slug: Option<&str>,
+    ) -> Result<String, Error> {
+        let root = match target_root {
+            Some(r) => r.to_path_buf(),
+            None => self.resolve_target_repo_root(""),
+        };
         let _ = bootstrap_greenfield_repo(&root);
+        let _ = ensure_repo_git_exclude(&root);
         let mut cmd = StdCommand::new("gh");
         if let Some(tok) = resolve_gh_token() {
             cmd.env("GH_TOKEN", tok);
         }
+        cmd.env("GH_PROMPT_DISABLED", "1").args([
+            "issue",
+            "view",
+            &issue_num.to_string(),
+            "--json",
+            "title,body,state,url",
+        ]);
+        if let Some(slug) = target_repo_slug.filter(|s| !s.is_empty()) {
+            cmd.args(["--repo", slug]);
+        }
         let out = cmd
-            .env("GH_PROMPT_DISABLED", "1")
-            .args([
-                "issue",
-                "view",
-                &issue_num.to_string(),
-                "--json",
-                "title,body,state,url",
-            ])
             .current_dir(&root)
             .output()
             .map_err(|e| Error::new("Error", format!("gh issue view #{issue_num} failed: {e}")))?;
@@ -5021,6 +5037,34 @@ impl ShellSession {
             {
                 if !reqs.explicit {
                     let mut inferred = reqs.files.clone();
+                    let is_doc_update = regex_lite::Regex::new(
+                        r"(?i)\b(?:document\b|update\s+(?:`?readme\.md`?|`?docs/))",
+                    )
+                    .is_ok_and(|re| re.is_match(&combined))
+                        && !regex_lite::Regex::new(
+                            r"(?i)\b(?:add\s+and\s+export|export\s+(?:a\s+)?function|implement\s+(?:a\s+)?function)\b",
+                        )
+                        .is_ok_and(|re| re.is_match(&combined));
+                    if is_doc_update
+                        && inferred
+                            .iter()
+                            .any(|f| f.ends_with(".md") || f.ends_with(".html"))
+                    {
+                        inferred.retain(|f| f.ends_with(".md") || f.ends_with(".html"));
+                    }
+                    let mut llm_checks: Vec<String> = Vec::new();
+                    self.ensure_reachable_fleet_endpoint(&root);
+                    if let Some(NaturalLanguageTranslation::DeliveryTask {
+                        files, checks, ..
+                    }) = self
+                        .translate_natural_language_with_llm(&combined, &root)
+                        .await
+                    {
+                        if inferred.is_empty() {
+                            inferred = files;
+                        }
+                        llm_checks = checks;
+                    }
                     if inferred.is_empty() {
                         inferred = auto_discover_question_files(&root, &combined);
                     }
@@ -5034,9 +5078,19 @@ impl ShellSession {
                             .map(|f| format!("- `{f}`"))
                             .collect::<Vec<_>>()
                             .join("\n");
-                        let short_title: String = title.chars().take(160).collect();
+                        let checks_block = if !llm_checks.is_empty() {
+                            llm_checks
+                                .iter()
+                                .take(6)
+                                .map(|c| format!("- {}", c.trim_start_matches("- ").trim()))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        } else {
+                            let short_title: String = title.chars().take(160).collect();
+                            format!("- {short_title}")
+                        };
                         combined.push_str(&format!(
-                            "\n\n## Allowed Files\n{bullets}\n\n## Acceptance checks\n- {short_title}\n"
+                            "\n\n## Allowed Files\n{bullets}\n\n## Acceptance checks\n{checks_block}\n"
                         ));
                         if let Ok(updated) =
                             crate::planning::intake::requirements(&Value::string(&combined), true)
@@ -5084,7 +5138,7 @@ impl ShellSession {
         self.last_ask_file = Some(ask_file);
         self.last_issue = Some(issue_num);
         let _ = domain::put(&mut self.display, "issue", Value::Number(issue_num as f64));
-        let delivery_out = self.execute_local_ask_delivery().await?;
+        let delivery_out = self.execute_local_ask_delivery_in_root(&root).await?;
         if self.display.get("state") == Some(&Value::string("passed")) {
             if let Some(wt) = self.last_worktree.clone() {
                 if let Ok(applied) =
@@ -5104,10 +5158,10 @@ impl ShellSession {
     }
 
     pub async fn handle_board_command(&mut self, raw_args: &str) -> Result<String, Error> {
-        let root = self.current_root();
+        let root = self.resolve_target_repo_root(raw_args);
         let trimmed = raw_args.trim();
         let tokens = trimmed.split_whitespace().collect::<Vec<_>>();
-        let (owner, repo_slug) = resolve_board_owner_and_repo(&root);
+        let (owner, mut repo_slug) = resolve_board_owner_and_repo(&root);
         if tokens.is_empty() {
             return list_github_projects(&owner);
         }
@@ -5176,8 +5230,22 @@ impl ShellSession {
                         "Use /board add <PROJECT_NUMBER> <TITLE> [--body <BODY>].",
                     ));
                 }
+                if repo_slug == "R4yHarris/github-agent-roster"
+                    && !root.join("rust").join("shell.rs").is_file()
+                {
+                    if let Ok(existing_cards) = list_project_board_cards(&owner, proj_num) {
+                        if let Some(c) = existing_cards.iter().find(|c| !c.repo_slug.is_empty()) {
+                            repo_slug = c.repo_slug.clone();
+                        }
+                    }
+                }
+                let card_root = if let Some(rname) = repo_slug.rsplit('/').next() {
+                    self.resolve_target_repo_root(rname)
+                } else {
+                    root.clone()
+                };
                 let (issue_num, issue_url) = create_project_board_card(
-                    &root, &owner, &repo_slug, proj_num, title, body, "Todo",
+                    &card_root, &owner, &repo_slug, proj_num, title, body, "Todo",
                 )?;
                 Ok(format!(
                     "Created issue #{issue_num} ({issue_url}) and added to Project #{proj_num} [Todo].\n"
@@ -5203,8 +5271,6 @@ impl ShellSession {
         repo_slug: &str,
         proj_num: u64,
     ) -> Result<String, Error> {
-        let root = self.current_root();
-        let _ = bootstrap_greenfield_repo(&root);
         let cards = list_project_board_cards(owner, proj_num)?;
         let pending = cards
             .iter()
@@ -5223,20 +5289,35 @@ impl ShellSession {
             cards.len()
         );
         for card in pending {
+            let effective_slug = if !card.repo_slug.is_empty() {
+                card.repo_slug.as_str()
+            } else {
+                repo_slug
+            };
+            let repo_name_hint = effective_slug.rsplit('/').next().unwrap_or("");
+            let card_root = self.resolve_target_repo_root(repo_name_hint);
+            let _ = bootstrap_greenfield_repo(&card_root);
             let _ = set_project_card_status(owner, proj_num, card.issue_number, "In Progress");
             summary.push_str(&format!(
                 "\n--- Issue #{}: {} [Todo -> In Progress] ---\n",
                 card.issue_number, card.title
             ));
-            match self.execute_issue_delivery(card.issue_number).await {
+            match self
+                .execute_issue_delivery_in_repo(
+                    card.issue_number,
+                    Some(&card_root),
+                    Some(effective_slug),
+                )
+                .await
+            {
                 Ok(out) => {
                     summary.push_str(&out);
                     let passed = self.display.get("state") == Some(&Value::string("passed"));
                     if passed {
                         let _ = close_issue_and_mark_board_done(
-                            &root,
+                            &card_root,
                             owner,
-                            repo_slug,
+                            effective_slug,
                             proj_num,
                             card.issue_number,
                             &out,
@@ -9068,7 +9149,14 @@ impl ShellSession {
                                     }
                                 }
                             }
-                            if !root.join("rust").join("shell.rs").is_file() {
+                            let is_standalone_report = wt_file
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .is_some_and(|e| e.eq_ignore_ascii_case("html"))
+                                || rel.to_uppercase().contains("REPORT");
+                            if (outcome.succeeded() || is_standalone_report)
+                                && !root.join("rust").join("shell.rs").is_file()
+                            {
                                 let dst_repo = root.join(&rel);
                                 if let Some(p) = dst_repo.parent() {
                                     let _ = fs::create_dir_all(p);
@@ -9077,7 +9165,7 @@ impl ShellSession {
                                     synced_paths.push(dst_repo.display().to_string());
                                 }
                             }
-                            if self.cwd != root {
+                            if self.cwd != root && is_standalone_report {
                                 if let Some(fname) = Path::new(&rel).file_name() {
                                     let dst_cwd = self.cwd.join(fname);
                                     if fs::copy(&wt_file, &dst_cwd).is_ok() {
@@ -9254,16 +9342,6 @@ pub fn ensure_repo_git_exclude(repo_root: &Path) -> Result<bool, Error> {
     if !git_entry.exists() {
         return Ok(false);
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        for dir_name in [".worktrees", ".roster", ".roster-state"] {
-            let d = repo_root.join(dir_name);
-            if d.is_dir() {
-                let _ = fs::set_permissions(&d, fs::Permissions::from_mode(0o700));
-            }
-        }
-    }
     let git_dir = if git_entry.is_dir() {
         git_entry
     } else if let Ok(raw) = fs::read_to_string(&git_entry) {
@@ -9280,6 +9358,42 @@ pub fn ensure_repo_git_exclude(repo_root: &Path) -> Result<bool, Error> {
     } else {
         return Ok(false);
     };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for dir_name in [".worktrees", ".roster", ".roster-state"] {
+            let d = repo_root.join(dir_name);
+            if d.is_dir() {
+                let _ = fs::set_permissions(&d, fs::Permissions::from_mode(0o700));
+                if let Ok(rd) = fs::read_dir(&d) {
+                    for entry in rd.flatten() {
+                        let sub = entry.path();
+                        if sub.is_dir() {
+                            let _ = fs::set_permissions(&sub, fs::Permissions::from_mode(0o700));
+                        }
+                    }
+                }
+            }
+        }
+        if let Ok(rd) = fs::read_dir(&git_dir) {
+            for entry in rd.flatten() {
+                let sub = entry.path();
+                let fname = entry.file_name().to_string_lossy().to_string();
+                if sub.is_dir() && fname.starts_with("roster") {
+                    let _ = fs::set_permissions(&sub, fs::Permissions::from_mode(0o700));
+                    if let Ok(sub_rd) = fs::read_dir(&sub) {
+                        for sub_entry in sub_rd.flatten() {
+                            let child = sub_entry.path();
+                            if child.is_dir() {
+                                let _ =
+                                    fs::set_permissions(&child, fs::Permissions::from_mode(0o700));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     let info_dir = git_dir.join("info");
     let _ = fs::create_dir_all(&info_dir);
     let exclude_path = info_dir.join("exclude");
@@ -9491,6 +9605,24 @@ pub fn apply_verified_worktree_to_repo(
     if copied.is_empty() {
         return Ok(Vec::new());
     }
+    if copied
+        .iter()
+        .any(|f| f.starts_with("src/") && (f.ends_with(".mjs") || f.ends_with(".js")))
+        && repo_root.join("src").join("cli.mjs").is_file()
+        && repo_root.join("dist").is_dir()
+    {
+        if let Some(node_bin) = find_node20_executable()
+            .or_else(|| which_executable(if cfg!(windows) { "node.exe" } else { "node" }))
+        {
+            let _ = StdCommand::new(node_bin)
+                .current_dir(repo_root)
+                .arg("src/cli.mjs")
+                .output();
+            if !copied.iter().any(|f| f == "dist") {
+                copied.push("dist".to_owned());
+            }
+        }
+    }
     let mut add_args = vec![
         "-C".to_owned(),
         repo_root.display().to_string(),
@@ -9506,7 +9638,11 @@ pub fn apply_verified_worktree_to_repo(
     let _ = StdCommand::new("git")
         .args(["-C", &repo_root.display().to_string(), "commit", "-m", &msg])
         .output();
-    let _ = StdCommand::new("git")
+    let mut push_cmd = StdCommand::new("git");
+    if let Some(tok) = resolve_gh_token() {
+        push_cmd.env("GH_TOKEN", tok);
+    }
+    let _ = push_cmd
         .args([
             "-C",
             &repo_root.display().to_string(),
@@ -9516,6 +9652,34 @@ pub fn apply_verified_worktree_to_repo(
             "HEAD",
         ])
         .output();
+    if let Some(wt_name) = worktree.file_name().and_then(|n| n.to_str()) {
+        if wt_name.starts_with("local-") || wt_name.starts_with("issue-") {
+            let _ = StdCommand::new("git")
+                .args([
+                    "-C",
+                    &repo_root.display().to_string(),
+                    "worktree",
+                    "remove",
+                    "--force",
+                    &worktree.display().to_string(),
+                ])
+                .output();
+            let _ = fs::remove_dir_all(worktree);
+            let _ = StdCommand::new("git")
+                .args(["-C", &repo_root.display().to_string(), "worktree", "prune"])
+                .output();
+            let branch_name = format!("agents/{wt_name}");
+            let _ = StdCommand::new("git")
+                .args([
+                    "-C",
+                    &repo_root.display().to_string(),
+                    "branch",
+                    "-D",
+                    &branch_name,
+                ])
+                .output();
+        }
+    }
     Ok(copied)
 }
 
@@ -9538,9 +9702,29 @@ fn resolve_gh_token_for_owner(owner: Option<&str>) -> Option<String> {
     if !candidate_users.contains(&"R4yHarris") {
         candidate_users.push("R4yHarris");
     }
+    let gh_bins: &[&str] = if cfg!(windows) {
+        &["gh"]
+    } else {
+        &["gh", "/mnt/c/Program Files/GitHub CLI/gh.exe"]
+    };
     for user in candidate_users {
-        if let Some(tok) = StdCommand::new("gh")
-            .args(["auth", "token", "--user", user])
+        for gh_bin in gh_bins {
+            if let Some(tok) = StdCommand::new(gh_bin)
+                .args(["auth", "token", "--user", user])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_owned())
+                .filter(|s| !s.is_empty())
+            {
+                return Some(tok);
+            }
+        }
+    }
+    for gh_bin in gh_bins {
+        if let Some(tok) = StdCommand::new(gh_bin)
+            .args(["auth", "token"])
             .output()
             .ok()
             .filter(|o| o.status.success())
@@ -9551,14 +9735,7 @@ fn resolve_gh_token_for_owner(owner: Option<&str>) -> Option<String> {
             return Some(tok);
         }
     }
-    StdCommand::new("gh")
-        .args(["auth", "token"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_owned())
-        .filter(|s| !s.is_empty())
+    None
 }
 
 fn run_gh_json(args: &[&str], cwd: Option<&Path>) -> Result<Value, Error> {
@@ -9612,6 +9789,7 @@ pub struct ProjectBoardCard {
     pub title: String,
     pub status: String,
     pub url: String,
+    pub repo_slug: String,
 }
 
 fn list_github_projects(owner: &str) -> Result<String, Error> {
@@ -9670,12 +9848,14 @@ pub fn list_project_board_cards(
         }
         let title = clean_display(content.and_then(|c| c.get("title")), "-");
         let url = clean_display(content.and_then(|c| c.get("url")), "-");
+        let repo_slug = clean_display(content.and_then(|c| c.get("repository")), "");
         cards.push(ProjectBoardCard {
             item_id,
             issue_number,
             title,
             status,
             url,
+            repo_slug,
         });
     }
     cards.sort_by_key(|c| c.issue_number);
@@ -11547,10 +11727,34 @@ pub fn translate_natural_language_command(text: &str) -> Option<String> {
             r"(?i)^(?:please\s+|can\s+you\s+)*(?:show|check|what\s+is)\s+(?:me\s+)?(?:the\s+|my\s+|current\s+)*(?:fleet\s+)?(?:routing|route|auto-route)(?:\s+status)?[?.!]*$",
             "/route status",
         ),
+        (
+            r"(?i)^(?:please\s+|can\s+you\s+)*(?:show|list|view)\s+(?:me\s+)?(?:the\s+|my\s+)*(?:github\s+)?(?:project\s+|kanban\s+)?boards?[?.!]*$",
+            "/board",
+        ),
     ];
     for (pat, cmd) in patterns {
         if regex_lite::Regex::new(pat).ok()?.is_match(trimmed) {
             return Some((*cmd).to_owned());
+        }
+    }
+    if let Some(caps) = regex_lite::Regex::new(
+        r"(?i)^(?:please\s+|can\s+you\s+)*(?:run|execute)\s+(?:the\s+|my\s+)?(?:github\s+)?(?:project|kanban|board)(?:\s+board)?\s+#?(\d+)[?.!]*$",
+    )
+    .ok()?
+    .captures(trimmed)
+    {
+        if let Some(num) = caps.get(1).map(|m| m.as_str()) {
+            return Some(format!("/board run {num}"));
+        }
+    }
+    if let Some(caps) = regex_lite::Regex::new(
+        r"(?i)^(?:please\s+|can\s+you\s+)*(?:show|list|view|inspect)\s+(?:the\s+|my\s+)?(?:github\s+)?(?:project|kanban|board)(?:\s+board)?\s+#?(\d+)[?.!]*$",
+    )
+    .ok()?
+    .captures(trimmed)
+    {
+        if let Some(num) = caps.get(1).map(|m| m.as_str()) {
+            return Some(format!("/board list {num}"));
         }
     }
     if let Some(caps) = regex_lite::Regex::new(
@@ -11951,7 +12155,11 @@ pub fn run_self_update(
     if before_full != remote_full
         && run_git(&install_dir, &["merge", "--ff-only", &remote_full]).is_err()
     {
-        let _ = run_git(&install_dir, &["checkout", "-B", "main", &remote_full])?;
+        let _ = run_git(
+            &install_dir,
+            &["checkout", "-f", "-B", "main", &remote_full],
+        )?;
+        let _ = run_git(&install_dir, &["reset", "--hard", &remote_full]);
     }
     let _ = run_git(&install_dir, &["config", "core.autocrlf", "false"]);
     let _ = run_git(
@@ -15571,6 +15779,18 @@ mod tests {
         assert_eq!(
             translate_natural_language_command("update roster"),
             Some("/update".to_owned())
+        );
+        assert_eq!(
+            translate_natural_language_command("show my project boards"),
+            Some("/board".to_owned())
+        );
+        assert_eq!(
+            translate_natural_language_command("show kanban board #9"),
+            Some("/board list 9".to_owned())
+        );
+        assert_eq!(
+            translate_natural_language_command("run kanban board #9"),
+            Some("/board run 9".to_owned())
         );
 
         let ws_files = vec!["README.md".to_owned(), "rust/shell.rs".to_owned()];

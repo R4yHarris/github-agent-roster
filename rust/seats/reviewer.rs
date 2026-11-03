@@ -1502,7 +1502,22 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
             ),
             message("user", audit_body),
         ];
-        let audit_request = request(&audit_messages, None, true);
+        let is_deepseek = crate::llm::reasoning::uses_deepseek_reasoning(
+            config.as_value().get("llm").unwrap_or(&Value::Null),
+        )
+        .unwrap_or(false);
+        let apply_reviewer_json_guard = |mut req: Value| -> Value {
+            if is_deepseek {
+                let _ = domain::put(&mut req, "reasoning_effort", Value::string("none"));
+                let _ = domain::put(
+                    &mut req,
+                    "chat_template_kwargs",
+                    Value::object(vec![("thinking", Value::Boolean(false))]),
+                );
+            }
+            req
+        };
+        let audit_request = apply_reviewer_json_guard(request(&audit_messages, None, true));
         let mut auditor = BuiltinChat::new(
             config.as_value(),
             admission,
@@ -1561,7 +1576,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                     "Invalid Original Ask audit JSON ({}). Remember: requirements already present in the complete delivered files on disk count as satisfied even if unchanged in the diff. If the delivered files on disk satisfy the Original Ask, return ONLY: {{\"verdict\":\"pass\",\"reasons\":[],\"security_notes\":[],\"checks\":[{{\"id\":1,\"met\":true,\"evidence\":\"Delivered files satisfy the Original Ask.\"}}]}}. Only return verdict \"fail\" if a requested deliverable is genuinely missing from the complete delivered files, with one exact grounds entry {{\"obligation\":\"...\",\"file\":\"...\",\"excerpt\":\"...\",\"reason\":\"...\"}} per reason.",
                     first_err.message
                 );
-                let retry_req = request(
+                let retry_req = apply_reviewer_json_guard(request(
                     &[
                         audit_messages[0].clone(),
                         audit_messages[1].clone(),
@@ -1570,7 +1585,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                     ],
                     None,
                     true,
-                );
+                ));
                 if let Ok(retry_audited) = self
                     .complete(boundary, &mut auditor, &retry_req, context_budget)
                     .await
@@ -1674,7 +1689,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                 .complete(
                     boundary,
                     &mut chat,
-                    &request(&messages, None, true),
+                    &apply_reviewer_json_guard(request(&messages, None, true)),
                     context_budget,
                 )
                 .await
