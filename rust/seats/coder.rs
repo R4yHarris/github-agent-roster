@@ -1022,7 +1022,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                 && ((is_html_single
                     && (progress.no_write_turns >= 1 || options.continuation.is_some()))
                     || (is_single_docs
-                        && (progress.no_write_turns >= 2 || options.continuation.is_some()))
+                        && (progress.no_write_turns >= 3 || options.continuation.is_some()))
                     || (exploration > 4 && progress.no_write_turns + 2 >= exploration));
             let mut synth_summary: Option<Text> = None;
             let mut synth_completion: Option<Completion> = None;
@@ -1071,6 +1071,11 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                     "src/Web/barberlytics-web/src/api/http.ts",
                     "src/App/barberlytics-app/src/api/session.ts",
                     "src/App/barberlytics-app/src/api/http.ts",
+                    "package.json",
+                    "docs/ARCHITECTURE.md",
+                    "src/components.mjs",
+                    "src/generator.mjs",
+                    "src/cli.mjs",
                 ];
                 for rel_candidate in grounded_candidates {
                     if collected_evidence.len() >= 48_000 {
