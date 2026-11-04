@@ -847,11 +847,11 @@ impl Evidence {
             String::new()
         };
         for tracked_path in changes.tracked() {
-            if !planning::forbidden_read(tracked_path)
+            if selected.len() < 24
+                && !planning::forbidden_read(tracked_path)
                 && (combined_utf8.contains(tracked_path.as_str())
                     || task_utf8.contains(tracked_path.as_str())
-                    || (selected.len() < 28
-                        && !delivered_doc_utf8.is_empty()
+                    || (!delivered_doc_utf8.is_empty()
                         && (delivered_doc_utf8.contains(tracked_path.as_str())
                             || ((tracked_path.starts_with("src/Web/barberlytics-web/src/")
                                 || tracked_path.starts_with("src/App/barberlytics-app/src/"))
@@ -879,6 +879,9 @@ impl Evidence {
                 return Err(execution::denied(
                     "Review source selection is protected or ambiguous",
                 ));
+            }
+            if is_html_report {
+                continue;
             }
             if let Some(source) =
                 evidence::read_product(boundary.root(), file, execution::MAX_FILE_BYTES)?
@@ -1034,6 +1037,14 @@ impl Evidence {
                         }
                     }
                     sources_text.push_str(&picked.join("\n"));
+                } else if is_html_report && !files.contains(&file) && source.0.len() > 8_000 {
+                    sources_text.0.extend(source.0.iter().take(4_000));
+                    sources_text.push_str(
+                        "\n\n... [Unchanged cited reference file middle omitted] ...\n\n",
+                    );
+                    sources_text
+                        .0
+                        .extend(source.0.iter().skip(source.0.len().saturating_sub(4_000)));
                 } else if source.0.len() > 24_000 {
                     sources_text.0.extend(source.0.iter().take(12_000));
                     sources_text.push_str("\n\n... [Large file middle omitted; full unified diff is provided in ## Diff] ...\n\n");
@@ -1673,7 +1684,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
         let reviewer_system = if is_html_only {
             Text::from(
                 format!(
-                    "{INSTRUCTIONS}\n\nFor a self-contained HTML repository review/evaluation report (.html): (1) Author-chosen evaluation rubrics, composite weights (such as 0.35/0.35/0.30), and numeric 0-100 scores are valid analytical evaluations when tied to cited repository files and industry best-practice references (such as OWASP ASVS, ISO/IEC 25010, or Microsoft .NET Architecture Guidelines) — do not reject numeric scores or rubric weights because weights are analytical choices rather than literal constants in a repository file. (2) An 'Outstanding Items' section/table is expected to filter to non-completed rows (Partial, Blocked, Open gap, Duplicate) from docs/backlog-status.md and docs/Security-Scan.md rather than repeating all completed E2E/unit rows. (3) Report header/footer metadata (such as review scope or date) is valid report chrome, not a fabricated repository metric. (4) All required sources are already provided in ## Exact delivered sources; return the final strict verdict JSON directly in this turn without emitting {{\"requests\":[...]}}."
+                    "{INSTRUCTIONS}\n\nFor a self-contained HTML repository or PR review/evaluation report (.html): (1) Author-chosen evaluation rubrics, composite weights (such as 0.35/0.35/0.30), and numeric 0-100 scores are valid analytical evaluations when tied to cited repository files and industry best-practice references (such as OWASP ASVS, ISO/IEC 25010, or Microsoft .NET Architecture Guidelines) — do not reject numeric scores or rubric weights because weights are analytical choices rather than literal constants in a repository file. (2) An 'Outstanding Items' or 'Open Tradeoffs' section/table is expected to highlight open gaps, platform tradeoffs, or non-completed rows from docs/backlog-status.md, docs/Security-Scan.md, docs/PR_159_WINDOWS_N1X_SUMMARY.md, or architecture docs rather than repeating all completed rows. (3) Report header/footer metadata (such as review scope or date) is valid report chrome, not a fabricated repository metric. (4) All required sources are already provided in ## Exact delivered sources; return the final strict verdict JSON directly in this turn without emitting {{\"requests\":[...]}}."
                 )
                 .as_str(),
             )

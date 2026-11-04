@@ -131,6 +131,16 @@ pub fn build(ask: &Value, options: BuildOptions<'_>) -> Result<Plan, Error> {
         Some(scope) => scope.clone(),
         None => intake::requirements(&value(&ask), false)?,
     };
+    let mut files = files;
+    if requirements.files.len() == 1
+        && requirements.files[0].ends_with(".html")
+        && files.contains(&requirements.files[0])
+    {
+        files.retain(|f| f == &requirements.files[0]);
+    }
+    let docs_only = files
+        .iter()
+        .all(|file| file.ends_with(".md") || file.ends_with(".html"));
     if requirements.output_directory.is_some() && checks.is_empty() {
         return Err(Error::type_error(
             "Acceptance checks must include a verifiable requested outcome",
