@@ -652,8 +652,8 @@ pub fn errors(
         for export in members(Some(item), "exports") {
             let name = text(export, "Design export must be text")?;
             let exported = index.exports(&file);
-            if if exported.is_empty() {
-                !index.symbols.contains(&name)
+            if if exported.is_empty() || file.ends_with(".rs") || file.ends_with(".py") {
+                !index.symbols.contains(&name) && !exported.contains(&name)
             } else {
                 !exported.contains(&name)
             } {
@@ -671,10 +671,12 @@ pub fn errors(
                 "design.new_exports puts `{name}` in `{file}`, outside files_allowed"
             ));
         }
-        if let Some((owner, _)) = index
-            .exports_by_file
-            .iter()
-            .find(|(other, names)| other != &file && names.contains(&name))
+        if !file.ends_with(".rs")
+            && !file.ends_with(".py")
+            && let Some((owner, _)) = index
+                .exports_by_file
+                .iter()
+                .find(|(other, names)| other != &file && names.contains(&name))
         {
             errors.push(format!("design.new_exports `{name}` already exists in `{owner}`; extend that module instead"));
         }
@@ -728,8 +730,12 @@ pub fn errors(
             }
         }
     }
-    let html_only = !files.is_empty() && files.iter().all(|f| f.ends_with(".html"));
-    if !html_only {
+    let skip_name_check = !files.is_empty()
+        && (files.iter().all(|f| f.ends_with(".html"))
+            || files
+                .iter()
+                .all(|f| (f.ends_with(".rs") || f.ends_with(".py")) && !f.starts_with("rust/")));
+    if !skip_name_check {
         for name in distinct(names) {
             if index.symbols.contains(&name)
                 || declared.contains(&name)

@@ -321,6 +321,9 @@ pub async fn run(
     for file in files {
         if !(substance::is_test_file(file)? || file.ends_with(".rs"))
             || crate::planning::forbidden_read(file)
+            || (file.ends_with(".rs")
+                && !owner.root().join("Cargo.toml").is_file()
+                && !file.starts_with("tests/"))
         {
             continue;
         }

@@ -3148,7 +3148,31 @@ impl Boundary {
             environment.insert("CARGO_NET_OFFLINE".to_owned(), "true".to_owned());
             environment.insert("RUSTUP_AUTO_INSTALL".to_owned(), "0".to_owned());
             environment.insert("CARGO_INCREMENTAL".to_owned(), "0".to_owned());
+            if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+                let protoc_cand = home.join(".local").join("bin").join("protoc");
+                if protoc_cand.is_file() {
+                    environment.insert("PROTOC".to_owned(), protoc_cand.display().to_string());
+                }
+            }
             let is_roster_self = self.root.join("rust").join("shell.rs").is_file();
+            let has_root_cargo = self.root.join("Cargo.toml").is_file();
+            let sub_crate = if !has_root_cargo {
+                requirements
+                    .files
+                    .iter()
+                    .chain(self.written.iter())
+                    .filter_map(|f| f.split('/').next())
+                    .find(|c| self.root.join(c).join("Cargo.toml").is_file())
+                    .map(str::to_owned)
+                    .or_else(|| {
+                        ["helios", "eos", "flare", "selene"]
+                            .into_iter()
+                            .find(|c| self.root.join(c).join("Cargo.toml").is_file())
+                            .map(str::to_owned)
+                    })
+            } else {
+                None
+            };
             if is_roster_self && !environment.contains_key("CARGO_TARGET_DIR") {
                 let manifest_target = Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
                 if manifest_target.is_dir() && !manifest_target.starts_with(&self.root) {
@@ -3164,6 +3188,21 @@ impl Boundary {
                                 "CARGO_TARGET_DIR".to_owned(),
                                 shared_target.display().to_string(),
                             );
+                        }
+                    }
+                }
+            } else if let Some(ref sc) = sub_crate {
+                if !environment.contains_key("CARGO_TARGET_DIR") {
+                    if let Ok(repo_paths) = paths::repository_paths(&self.root) {
+                        if let Some(main_root) = repo_paths.common_dir.parent() {
+                            let shared_target = main_root.join(sc).join("target");
+                            if !shared_target.starts_with(&self.root) {
+                                let _ = fs::create_dir_all(&shared_target);
+                                environment.insert(
+                                    "CARGO_TARGET_DIR".to_owned(),
+                                    shared_target.display().to_string(),
+                                );
+                            }
                         }
                     }
                 }
@@ -3192,67 +3231,122 @@ impl Boundary {
                 .iter()
                 .chain(self.written.iter())
                 .any(|f| f.starts_with("tests/"));
-            let (clippy_args, test_args) = if has_integration_test || !is_roster_self {
-                (
-                    vec![
-                        "clippy".to_owned(),
-                        "--all-targets".to_owned(),
-                        "--locked".to_owned(),
-                        "--offline".to_owned(),
-                        "--".to_owned(),
-                        "-D".to_owned(),
-                        "warnings".to_owned(),
-                    ],
-                    vec![
-                        "test".to_owned(),
-                        "--all-targets".to_owned(),
-                        "--locked".to_owned(),
-                        "--offline".to_owned(),
-                    ],
-                )
-            } else {
-                let single_mod = if requirements.files.len() == 1 {
-                    requirements.files[0]
-                        .strip_prefix("rust/")
-                        .and_then(|s| s.strip_suffix(".rs"))
-                        .filter(|s| !s.contains('/') && *s != "lib" && *s != "main")
-                        .map(|s| format!("{s}::tests"))
-                } else {
-                    None
-                };
-                let mut t_args = vec![
-                    "test".to_owned(),
+            let cargo_steps: [Vec<String>; 3] = if let Some(ref sc) = sub_crate {
+                let manifest_rel = format!("{sc}/Cargo.toml");
+                let mut check_step = vec![
+                    "check".to_owned(),
+                    "--manifest-path".to_owned(),
+                    manifest_rel.clone(),
                     "--lib".to_owned(),
-                    "--locked".to_owned(),
                     "--offline".to_owned(),
                 ];
-                if let Some(filter) = single_mod {
-                    t_args.push(filter);
+                let mut test_step = vec![
+                    "test".to_owned(),
+                    "--manifest-path".to_owned(),
+                    manifest_rel.clone(),
+                    "--lib".to_owned(),
+                    "--offline".to_owned(),
+                ];
+                if sc == "helios" {
+                    for s in [&mut check_step, &mut test_step] {
+                        s.push("--features".to_owned());
+                        s.push("runtime-package,frontend".to_owned());
+                    }
+                    if requirements
+                        .files
+                        .iter()
+                        .chain(self.written.iter())
+                        .any(|f| f.contains("runtime_package/"))
+                    {
+                        test_step.push("--".to_owned());
+                        test_step.push("runtime_package::describe::tests".to_owned());
+                    } else if requirements
+                        .files
+                        .iter()
+                        .chain(self.written.iter())
+                        .any(|f| f.contains("output/"))
+                    {
+                        test_step.push("--".to_owned());
+                        test_step.push("output".to_owned());
+                    }
                 }
-                (
+                [
                     vec![
-                        "clippy".to_owned(),
+                        "metadata".to_owned(),
+                        "--manifest-path".to_owned(),
+                        manifest_rel,
+                        "--format-version".to_owned(),
+                        "1".to_owned(),
+                        "--no-deps".to_owned(),
+                        "--offline".to_owned(),
+                    ],
+                    check_step,
+                    test_step,
+                ]
+            } else {
+                let (clippy_args, test_args) = if has_integration_test || !is_roster_self {
+                    (
+                        vec![
+                            "clippy".to_owned(),
+                            "--all-targets".to_owned(),
+                            "--locked".to_owned(),
+                            "--offline".to_owned(),
+                            "--".to_owned(),
+                            "-D".to_owned(),
+                            "warnings".to_owned(),
+                        ],
+                        vec![
+                            "test".to_owned(),
+                            "--all-targets".to_owned(),
+                            "--locked".to_owned(),
+                            "--offline".to_owned(),
+                        ],
+                    )
+                } else {
+                    let single_mod = if requirements.files.len() == 1 {
+                        requirements.files[0]
+                            .strip_prefix("rust/")
+                            .and_then(|s| s.strip_suffix(".rs"))
+                            .filter(|s| !s.contains('/') && *s != "lib" && *s != "main")
+                            .map(|s| format!("{s}::tests"))
+                    } else {
+                        None
+                    };
+                    let mut t_args = vec![
+                        "test".to_owned(),
                         "--lib".to_owned(),
-                        "--bins".to_owned(),
                         "--locked".to_owned(),
                         "--offline".to_owned(),
+                    ];
+                    if let Some(filter) = single_mod {
+                        t_args.push(filter);
+                    }
+                    (
+                        vec![
+                            "clippy".to_owned(),
+                            "--lib".to_owned(),
+                            "--bins".to_owned(),
+                            "--locked".to_owned(),
+                            "--offline".to_owned(),
+                            "--".to_owned(),
+                            "-D".to_owned(),
+                            "warnings".to_owned(),
+                        ],
+                        t_args,
+                    )
+                };
+                [
+                    vec![
+                        "fmt".to_owned(),
+                        "--all".to_owned(),
                         "--".to_owned(),
-                        "-D".to_owned(),
-                        "warnings".to_owned(),
+                        "--check".to_owned(),
                     ],
-                    t_args,
-                )
+                    clippy_args,
+                    test_args,
+                ]
             };
-            for args in [
-                vec![
-                    "fmt".to_owned(),
-                    "--all".to_owned(),
-                    "--".to_owned(),
-                    "--check".to_owned(),
-                ],
-                clippy_args,
-                test_args,
-            ] {
+            for args in cargo_steps {
                 commands.push(format!("cargo {}", args.join(" ")));
                 let output = self
                     .process(
