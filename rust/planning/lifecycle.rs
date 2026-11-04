@@ -1004,16 +1004,16 @@ pub async fn tracked_files(
         .split('\0')
         .filter(|file| {
             !file.is_empty()
-                && !file
-                    .split('/')
-                    .any(|part| part.eq_ignore_ascii_case("vendor"))
+                && !file.split('/').any(|part| {
+                    part.eq_ignore_ascii_case("vendor") || part.eq_ignore_ascii_case("third_party")
+                })
                 && !forbidden_write(file)
         })
         .map(str::to_owned)
         .collect::<Vec<_>>();
-    if files.len() > 1500 {
+    if files.len() > 4096 {
         return Err(Error::type_error(
-            "Planning repository inventory exceeds 1500 files; provide a bounded relevant inventory",
+            "Planning repository inventory exceeds 4096 files; provide a bounded relevant inventory",
         ));
     }
     for file in &files {
