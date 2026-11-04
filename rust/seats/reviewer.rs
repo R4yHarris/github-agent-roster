@@ -1018,6 +1018,7 @@ impl Evidence {
                 if is_html_report
                     && !files.contains(&file)
                     && file.ends_with(".md")
+                    && !file.contains("PR_159")
                     && source.0.len() > 8_000
                     && let Ok(raw_md) = source.to_utf8()
                 {
@@ -1037,7 +1038,11 @@ impl Evidence {
                         }
                     }
                     sources_text.push_str(&picked.join("\n"));
-                } else if is_html_report && !files.contains(&file) && source.0.len() > 8_000 {
+                } else if is_html_report
+                    && !files.contains(&file)
+                    && !file.contains("PR_159")
+                    && source.0.len() > 8_000
+                {
                     sources_text.0.extend(source.0.iter().take(4_000));
                     sources_text.push_str(
                         "\n\n... [Unchanged cited reference file middle omitted] ...\n\n",

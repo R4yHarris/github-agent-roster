@@ -1051,13 +1051,14 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                     }
                 }
                 let static_candidates = [
+                    "docs/PR_159_WINDOWS_N1X_SUMMARY.md",
+                    ".gitattributes",
                     "AGENTS.md",
                     "README.md",
                     "CONTRIBUTING.md",
                     "SECURITY.md",
                     "pyproject.toml",
                     "Cargo.toml",
-                    "docs/PR_159_WINDOWS_N1X_SUMMARY.md",
                     "docs/core-design.md",
                     "docs/runtime-package-design.md",
                     "docs/model-preparation.md",
@@ -1131,8 +1132,9 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                     }
                     let full_p = boundary.root().join(rel_candidate);
                     if let Ok(raw_f) = std::fs::read_to_string(&full_p) {
-                        let snip: String = if raw_f.len() > 8_000 && rel_candidate.ends_with(".md")
-                        {
+                        let snip: String = if rel_candidate.contains("PR_159") {
+                            raw_f.chars().take(24_000).collect()
+                        } else if raw_f.len() > 8_000 && rel_candidate.ends_with(".md") {
                             let all_lines: Vec<&str> = raw_f.lines().collect();
                             let total_l = all_lines.len();
                             let mut picked = Vec::new();
