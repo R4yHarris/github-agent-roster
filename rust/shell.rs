@@ -9217,9 +9217,6 @@ impl ShellSession {
             .and_then(Value::as_string)
             .and_then(|t| t.to_utf8().ok())
             .unwrap_or_default();
-        if !cur_url.is_empty() && is_url_reachable(&cur_url) {
-            return;
-        }
         let Ok(fleet_cat) =
             crate::fleet::load_with_env(root, Some(&self.installation), Some(&self.environment))
                 .or_else(|_| {
@@ -9232,7 +9229,32 @@ impl ShellSession {
         else {
             return;
         };
-        for prof in fleet_cat.profiles() {
+        if self.fleet_profile_id.is_none() && cur_url.contains("aperture.xen.blackmesaresearch.ai")
+        {
+            for prof in fleet_cat.profiles().iter().rev() {
+                let pv = prof.as_value();
+                let b = clean_display(pv.get("base_url"), "");
+                let pid = clean_display(pv.get("id"), "");
+                let hw = clean_display(pv.get("hardware"), "");
+                if !b.is_empty()
+                    && !pid.is_empty()
+                    && !b.contains("aperture.xen.blackmesaresearch.ai")
+                    && hw.starts_with("dgx-spark")
+                    && is_url_reachable(&b)
+                {
+                    if let Ok(routed) = crate::fleet::with_profile(&self.config, pv) {
+                        self.config = routed;
+                        self.fleet_profile_id = Some(pid);
+                        self.sync_model_display();
+                        return;
+                    }
+                }
+            }
+        }
+        if !cur_url.is_empty() && is_url_reachable(&cur_url) {
+            return;
+        }
+        for prof in fleet_cat.profiles().iter().rev() {
             let pv = prof.as_value();
             let b = clean_display(pv.get("base_url"), "");
             let pid = clean_display(pv.get("id"), "");
