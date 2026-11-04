@@ -728,16 +728,19 @@ pub fn errors(
             }
         }
     }
-    for name in distinct(names) {
-        if index.symbols.contains(&name)
-            || declared.contains(&name)
-            || ask.contains(&name)
-            || runtime_global(&name)
-            || runtime_names.contains(&name) && !qualified_names.contains(&name)
-        {
-            continue;
+    let html_only = !files.is_empty() && files.iter().all(|f| f.ends_with(".html"));
+    if !html_only {
+        for name in distinct(names) {
+            if index.symbols.contains(&name)
+                || declared.contains(&name)
+                || ask.contains(&name)
+                || runtime_global(&name)
+                || runtime_names.contains(&name) && !qualified_names.contains(&name)
+            {
+                continue;
+            }
+            errors.push(format!("`{name}` does not exist in the repository; cite a real export or declare it in design.new_exports (in TASK.md: a `## Design` section with `New exports:` then `- \\`{name}\\` in \\`<file>\\``)"));
         }
-        errors.push(format!("`{name}` does not exist in the repository; cite a real export or declare it in design.new_exports (in TASK.md: a `## Design` section with `New exports:` then `- \\`{name}\\` in \\`<file>\\``)"));
     }
     for file in distinct(paths) {
         if !index.files.contains(&file) && !is_allowed(&file, files) && !ask.contains(&file) {

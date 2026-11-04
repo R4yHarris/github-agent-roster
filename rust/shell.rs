@@ -5189,6 +5189,7 @@ impl ShellSession {
             .unwrap_or_default();
         let asks_dir = root.join(".roster").join("asks");
         let _ = fs::create_dir_all(&asks_dir);
+        let _ = ensure_repo_git_exclude(&root);
         let ask_file = asks_dir.join(format!("issue-{issue_num}.md"));
         let mut combined: String = if body.trim().is_empty() {
             title.clone()
@@ -5204,6 +5205,9 @@ impl ShellSession {
             {
                 if !reqs.explicit {
                     let mut inferred = reqs.files.clone();
+                    let is_html_report = inferred.iter().any(|f| f.ends_with(".html"))
+                        && regex_lite::Regex::new(r"(?i)\b(?:html5?\s+report|review\b|\.html\b)")
+                            .is_ok_and(|re| re.is_match(&combined));
                     let is_doc_update = regex_lite::Regex::new(
                         r"(?i)\b(?:document\b|update\s+(?:`?readme\.md`?|`?docs/))",
                     )
@@ -5212,7 +5216,9 @@ impl ShellSession {
                             r"(?i)\b(?:add\s+and\s+export|export\s+(?:a\s+)?function|implement\s+(?:a\s+)?function)\b",
                         )
                         .is_ok_and(|re| re.is_match(&combined));
-                    if is_doc_update
+                    if is_html_report {
+                        inferred.retain(|f| f.ends_with(".html"));
+                    } else if is_doc_update
                         && inferred
                             .iter()
                             .any(|f| f.ends_with(".md") || f.ends_with(".html"))
@@ -5221,16 +5227,20 @@ impl ShellSession {
                     }
                     let mut llm_checks: Vec<String> = Vec::new();
                     self.ensure_reachable_fleet_endpoint(&root);
-                    if let Some(NaturalLanguageTranslation::DeliveryTask {
-                        files, checks, ..
-                    }) = self
-                        .translate_natural_language_with_llm(&combined, &root)
-                        .await
-                    {
-                        if inferred.is_empty() {
-                            inferred = files;
+                    if !(is_html_report && !inferred.is_empty()) {
+                        if let Some(NaturalLanguageTranslation::DeliveryTask {
+                            files,
+                            checks,
+                            ..
+                        }) = self
+                            .translate_natural_language_with_llm(&combined, &root)
+                            .await
+                        {
+                            if inferred.is_empty() {
+                                inferred = files;
+                            }
+                            llm_checks = checks;
                         }
-                        llm_checks = checks;
                     }
                     if inferred.is_empty() {
                         inferred = auto_discover_question_files(&root, &combined);
@@ -5245,7 +5255,17 @@ impl ShellSession {
                             .map(|f| format!("- `{f}`"))
                             .collect::<Vec<_>>()
                             .join("\n");
-                        let checks_block = if !llm_checks.is_empty() {
+                        let checks_block = if is_html_report {
+                            valid_inferred
+                                .iter()
+                                .map(|f| {
+                                    format!(
+                                        "- {f} is created and fulfills the requested repository review and evaluation"
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        } else if !llm_checks.is_empty() {
                             llm_checks
                                 .iter()
                                 .take(6)
@@ -9172,6 +9192,7 @@ impl ShellSession {
         if !self.live_output {
             return;
         }
+        let _ = ensure_repo_git_exclude(root);
         let is_url_reachable = |raw_url: &str| -> bool {
             let Ok(parsed) = url::Url::parse(raw_url) else {
                 return false;
@@ -9201,6 +9222,13 @@ impl ShellSession {
         }
         let Ok(fleet_cat) =
             crate::fleet::load_with_env(root, Some(&self.installation), Some(&self.environment))
+                .or_else(|_| {
+                    crate::fleet::load_with_env(
+                        &self.installation,
+                        Some(&self.installation),
+                        Some(&self.environment),
+                    )
+                })
         else {
             return;
         };
