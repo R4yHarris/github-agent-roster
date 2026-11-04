@@ -1019,8 +1019,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                     .to_lowercase()
                     .ends_with(".html");
             let force_write = !wrote_in_this_attempt
-                && ((is_html_single
-                    && (progress.no_write_turns >= 1 || options.continuation.is_some()))
+                && (is_html_single
                     || (is_single_docs
                         && (progress.no_write_turns >= 3 || options.continuation.is_some()))
                     || (exploration > 4 && progress.no_write_turns + 2 >= exploration));
@@ -1126,21 +1125,34 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                         grounded_candidates.push(s);
                     }
                 }
+                let max_evidence_chars = (context_budget / 2).clamp(48_000, 120_000);
+                let max_file_chars = if context_budget >= 120_000 {
+                    14_000
+                } else {
+                    4_500
+                };
+                let md_summarize_threshold = if context_budget >= 120_000 {
+                    24_000
+                } else {
+                    8_000
+                };
                 for rel_candidate in &grounded_candidates {
-                    if collected_evidence.len() >= 48_000 {
+                    if collected_evidence.len() >= max_evidence_chars {
                         break;
                     }
                     let full_p = boundary.root().join(rel_candidate);
                     if let Ok(raw_f) = std::fs::read_to_string(&full_p) {
-                        let snip: String = if rel_candidate.contains("PR_159") {
+                        let snip: String = if rel_candidate.contains("PR_") {
                             raw_f.chars().take(24_000).collect()
-                        } else if raw_f.len() > 8_000 && rel_candidate.ends_with(".md") {
+                        } else if raw_f.len() > md_summarize_threshold
+                            && rel_candidate.ends_with(".md")
+                        {
                             let all_lines: Vec<&str> = raw_f.lines().collect();
                             let total_l = all_lines.len();
                             let mut picked = Vec::new();
                             for (idx, line) in all_lines.iter().enumerate() {
-                                if idx < 50
-                                    || idx + 30 >= total_l
+                                if idx < 65
+                                    || idx + 40 >= total_l
                                     || line.contains("| Partial |")
                                     || line.contains("| Blocked |")
                                     || line.contains("| Open gap |")
@@ -1154,7 +1166,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                         } else if rel_candidate.ends_with(".slnx") {
                             raw_f.chars().take(10_500).collect()
                         } else {
-                            raw_f.chars().take(4_500).collect()
+                            raw_f.chars().take(max_file_chars).collect()
                         };
                         collected_evidence.push_str(&format!(
                             "\n### Grounded Repository File (`{rel_candidate}`)\n{snip}\n"

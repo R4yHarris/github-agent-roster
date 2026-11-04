@@ -1018,16 +1018,16 @@ impl Evidence {
                 if is_html_report
                     && !files.contains(&file)
                     && file.ends_with(".md")
-                    && !file.contains("PR_159")
-                    && source.0.len() > 8_000
+                    && !file.contains("PR_")
+                    && source.0.len() > 16_000
                     && let Ok(raw_md) = source.to_utf8()
                 {
                     let all_lines: Vec<&str> = raw_md.lines().collect();
                     let total_l = all_lines.len();
                     let mut picked = Vec::new();
                     for (idx, line) in all_lines.iter().enumerate() {
-                        if idx < 50
-                            || idx + 30 >= total_l
+                        if idx < 65
+                            || idx + 40 >= total_l
                             || line.contains("| Partial |")
                             || line.contains("| Blocked |")
                             || line.contains("| Open gap |")
@@ -1040,16 +1040,16 @@ impl Evidence {
                     sources_text.push_str(&picked.join("\n"));
                 } else if is_html_report
                     && !files.contains(&file)
-                    && !file.contains("PR_159")
-                    && source.0.len() > 8_000
+                    && !file.contains("PR_")
+                    && source.0.len() > 14_000
                 {
-                    sources_text.0.extend(source.0.iter().take(4_000));
+                    sources_text.0.extend(source.0.iter().take(7_000));
                     sources_text.push_str(
                         "\n\n... [Unchanged cited reference file middle omitted] ...\n\n",
                     );
                     sources_text
                         .0
-                        .extend(source.0.iter().skip(source.0.len().saturating_sub(4_000)));
+                        .extend(source.0.iter().skip(source.0.len().saturating_sub(7_000)));
                 } else if source.0.len() > 24_000 {
                     sources_text.0.extend(source.0.iter().take(12_000));
                     sources_text.push_str("\n\n... [Large file middle omitted; full unified diff is provided in ## Diff] ...\n\n");
