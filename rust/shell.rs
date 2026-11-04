@@ -5438,10 +5438,16 @@ impl ShellSession {
                             .any(|f| f.ends_with(".md") || f.ends_with(".html"))
                     {
                         inferred.retain(|f| f.ends_with(".md") || f.ends_with(".html"));
+                    } else {
+                        let ranked =
+                            discover_and_rank_issue_code_files(&root, &combined, &inferred);
+                        if !ranked.is_empty() {
+                            inferred = ranked;
+                        }
                     }
                     let mut llm_checks: Vec<String> = Vec::new();
                     self.ensure_reachable_fleet_endpoint(&root);
-                    if !(is_html_report && !inferred.is_empty()) {
+                    if inferred.is_empty() {
                         if let Some(NaturalLanguageTranslation::DeliveryTask {
                             files,
                             checks,
@@ -5483,11 +5489,17 @@ impl ShellSession {
                             llm_checks
                                 .iter()
                                 .take(6)
-                                .map(|c| format!("- {}", c.trim_start_matches("- ").trim()))
+                                .map(|c| {
+                                    format!(
+                                        "- {}",
+                                        c.replace('`', "").trim_start_matches("- ").trim()
+                                    )
+                                })
                                 .collect::<Vec<_>>()
                                 .join("\n")
                         } else {
-                            let short_title: String = title.chars().take(160).collect();
+                            let short_title: String =
+                                title.replace('`', "").chars().take(160).collect();
                             format!("- {short_title}")
                         };
                         combined.push_str(&format!(
@@ -14627,6 +14639,111 @@ pub fn normalize_and_validate_allowed_files(repo_root: &Path, proposed: &[String
         }
     }
     out.into_iter().take(8).collect()
+}
+
+fn discover_and_rank_issue_code_files(
+    root: &Path,
+    text: &str,
+    raw_inferred: &[String],
+) -> Vec<String> {
+    let is_code_ext = |f: &str| {
+        f.ends_with(".rs")
+            || f.ends_with(".py")
+            || f.ends_with(".mjs")
+            || f.ends_with(".js")
+            || f.ends_with(".ts")
+            || f.ends_with(".cs")
+    };
+    let code_inferred = raw_inferred
+        .iter()
+        .filter(|f| is_code_ext(f) && root.join(f).is_file())
+        .cloned()
+        .collect::<Vec<_>>();
+    if (1..=2).contains(&code_inferred.len()) && !raw_inferred.iter().any(|f| f.ends_with(".txt")) {
+        return code_inferred;
+    }
+    let mut scores: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+    for cf in &code_inferred {
+        let mut s = 4_i64;
+        if text.contains(&format!("{cf}:")) {
+            s += 8;
+        }
+        if cf.contains("/chatml.rs")
+            || cf.contains("/protocol/")
+            || cf.contains("/contract.rs")
+            || cf.contains("/cache.rs")
+            || cf.contains("package_cache.rs")
+        {
+            s -= 6;
+        }
+        scores.insert(cf.clone(), s);
+    }
+    let mut symbols = Vec::new();
+    if let Ok(bt_re) = regex_lite::Regex::new(r"`([^`\n]{3,80})`") {
+        if let Ok(id_re) = regex_lite::Regex::new(r"\b([A-Za-z_][A-Za-z0-9_]{3,48})\b") {
+            let stop = [
+                "true", "false", "null", "None", "Some", "Self", "Result", "Error", "String",
+                "Value", "flare", "inspect", "json", "cargo", "test", "python3", "curl", "http",
+                "data", "type", "object", "boolean", "integer", "string", "array", "main",
+            ];
+            for cap in bt_re.captures_iter(text) {
+                let span = cap.get(1).map_or("", |m| m.as_str());
+                for id_cap in id_re.captures_iter(span) {
+                    let sym = id_cap.get(1).map_or("", |m| m.as_str());
+                    if !stop.contains(&sym) && !symbols.iter().any(|s| s == sym) {
+                        symbols.push(sym.to_owned());
+                    }
+                }
+            }
+        }
+    }
+    let root_s = root.display().to_string();
+    for sym in symbols.iter().take(10) {
+        if let Ok(out) = StdCommand::new("git")
+            .args([
+                "-C",
+                &root_s,
+                "grep",
+                "-l",
+                "--fixed-strings",
+                sym,
+                "--",
+                "*.rs",
+                "*.py",
+                "*.mjs",
+                "*.js",
+                "*.ts",
+            ])
+            .output()
+        {
+            if out.status.success() {
+                let matched_files: Vec<String> = String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| {
+                        !l.is_empty()
+                            && !l.contains("/examples/")
+                            && !l.contains("/benches/")
+                            && !l.ends_with("_pb2.py")
+                    })
+                    .map(str::to_owned)
+                    .collect();
+                if matched_files.len() <= 20 {
+                    for mf in matched_files {
+                        let bonus = if mf.contains("/src/") || mf.starts_with("ignition/") {
+                            3_i64
+                        } else {
+                            1_i64
+                        };
+                        *scores.entry(mf).or_insert(0) += bonus;
+                    }
+                }
+            }
+        }
+    }
+    let mut ranked: Vec<(String, i64)> = scores.into_iter().filter(|(_, sc)| *sc > 0).collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.len().cmp(&b.0.len())));
+    ranked.into_iter().take(2).map(|(f, _)| f).collect()
 }
 
 fn auto_discover_question_files(root: &Path, question: &str) -> Vec<String> {
