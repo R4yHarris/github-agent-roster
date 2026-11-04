@@ -2722,6 +2722,12 @@ pub struct ConversationTurn {
     pub target_repo: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PendingPermission {
+    pub description: String,
+    pub command: String,
+}
+
 pub struct ShellSession {
     pub cwd: PathBuf,
     pub installation: PathBuf,
@@ -2736,6 +2742,10 @@ pub struct ShellSession {
     pub fleet_profile_id: Option<String>,
     pub route_next: bool,
     pub pending_secret: Option<String>,
+    pub pending_retry_command: Option<String>,
+    pub pending_permission: Option<PendingPermission>,
+    pub permission_mode: String,
+    pub pending_clarification: Option<String>,
     pub last_measured_seat: Option<Value>,
     pub last_worktree: Option<PathBuf>,
     pub last_issue: Option<u64>,
@@ -2851,6 +2861,10 @@ impl ShellSession {
             fleet_profile_id: None,
             route_next: false,
             pending_secret: None,
+            pending_retry_command: None,
+            pending_permission: None,
+            permission_mode: "auto".to_owned(),
+            pending_clarification: None,
             last_measured_seat: None,
             last_worktree: None,
             last_issue: None,
@@ -3004,39 +3018,13 @@ impl ShellSession {
             ])
             .output();
         Self::write_flare_pr_159_summary_file(&target_dir);
-        let _ = StdCommand::new("git")
-            .args([
-                "-C",
-                &target_s,
-                "rm",
-                "--quiet",
-                "--cached",
-                "-r",
-                "--ignore-unmatch",
-                "third_party",
-                "heliopause/ignition",
-                "heliopause/LICENSE",
-                "heliopause/NOTICE",
-            ])
-            .output();
-        let _ = fs::remove_file(target_dir.join("heliopause").join("ignition"));
-        let _ = fs::remove_dir_all(target_dir.join("heliopause").join("ignition"));
-        for fname in ["LICENSE", "NOTICE"] {
-            let root_f = target_dir.join(fname);
-            let sub_f = target_dir.join("heliopause").join(fname);
-            let _ = fs::remove_file(&sub_f);
-            if root_f.is_file() {
-                let _ = fs::copy(&root_f, &sub_f);
-            }
-        }
+        Self::normalize_cloned_repo_for_worktree(&target_dir);
         let _ = StdCommand::new("git")
             .args([
                 "-C",
                 &target_s,
                 "add",
                 "--",
-                "heliopause/LICENSE",
-                "heliopause/NOTICE",
                 "docs/PR_159_WINDOWS_N1X_SUMMARY.md",
             ])
             .output();
@@ -3055,6 +3043,67 @@ impl ShellSession {
         let _ = ensure_repo_git_exclude(&target_dir);
         let _ = bootstrap_greenfield_repo(&target_dir);
         Some(target_dir)
+    }
+
+    fn normalize_cloned_repo_for_worktree(target_dir: &Path) {
+        let target_s = target_dir.display().to_string();
+        if let Ok(ls_out) = StdCommand::new("git")
+            .args(["-C", &target_s, "ls-files", "-s"])
+            .output()
+        {
+            if ls_out.status.success() {
+                let text = String::from_utf8_lossy(&ls_out.stdout);
+                let lines: Vec<&str> = text.lines().collect();
+                let mut touched_files: Vec<String> = Vec::new();
+                for line in &lines {
+                    if let Some((meta, rel_path)) = line.split_once('\t') {
+                        if meta.starts_with("120000 ") {
+                            let full_p = target_dir.join(rel_path);
+                            let target_rel = fs::read_to_string(&full_p).unwrap_or_default();
+                            let target_trimmed = target_rel.trim();
+                            let resolved =
+                                full_p.parent().unwrap_or(target_dir).join(target_trimmed);
+                            let _ = StdCommand::new("git")
+                                .args([
+                                    "-C",
+                                    &target_s,
+                                    "rm",
+                                    "--quiet",
+                                    "--cached",
+                                    "-r",
+                                    "--ignore-unmatch",
+                                    rel_path,
+                                ])
+                                .output();
+                            let _ = fs::remove_file(&full_p);
+                            let _ = fs::remove_dir_all(&full_p);
+                            if resolved.is_file() && fs::copy(&resolved, &full_p).is_ok() {
+                                touched_files.push(rel_path.to_owned());
+                            }
+                        }
+                    }
+                }
+                if lines.len() > 2048 && target_dir.join("third_party").exists() {
+                    let _ = StdCommand::new("git")
+                        .args([
+                            "-C",
+                            &target_s,
+                            "rm",
+                            "--quiet",
+                            "--cached",
+                            "-r",
+                            "--ignore-unmatch",
+                            "third_party",
+                        ])
+                        .output();
+                }
+                for tf in touched_files {
+                    let _ = StdCommand::new("git")
+                        .args(["-C", &target_s, "add", "--", &tf])
+                        .output();
+                }
+            }
+        }
     }
 
     fn write_flare_pr_159_summary_file(target_dir: &Path) {
@@ -3240,6 +3289,16 @@ impl ShellSession {
             let value = line.strip_suffix('\r').unwrap_or(line);
             let vault = crate::vault::FileVault::from_environment(&self.environment)?;
             vault.set(&secret_name, value)?;
+            let _ = domain::put(&mut self.environment, &secret_name, Value::string(value));
+            if let Some(retry_cmd) = self.pending_retry_command.take() {
+                let act = Box::pin(self.dispatch_line(&retry_cmd)).await?;
+                return match act {
+                    ShellAction::Continue(out) => Ok(ShellAction::Continue(format!(
+                        "Stored secret {secret_name}. Retrying `{retry_cmd}`...\n{out}"
+                    ))),
+                    other => Ok(other),
+                };
+            }
             return Ok(ShellAction::Continue(format!(
                 "Stored secret {secret_name}.\n"
             )));
@@ -3247,6 +3306,44 @@ impl ShellSession {
         let sanitized_line = crate::attachments::strip_leaked_terminal_sequences(line);
         let expanded_line = crate::attachments::expand_paste_references(&sanitized_line);
         let text = expanded_line.trim();
+        if let Some(perm) = self.pending_permission.take() {
+            let ans = text.to_lowercase();
+            if matches!(ans.as_str(), "y" | "yes" | "approve") {
+                let act = Box::pin(self.dispatch_line(&perm.command)).await?;
+                return match act {
+                    ShellAction::Continue(out) => Ok(ShellAction::Continue(format!(
+                        "Permission approved for: {}\n{out}",
+                        perm.description
+                    ))),
+                    other => Ok(other),
+                };
+            } else if matches!(ans.as_str(), "always" | "all") {
+                self.permission_mode = "auto".to_owned();
+                let act = Box::pin(self.dispatch_line(&perm.command)).await?;
+                return match act {
+                    ShellAction::Continue(out) => Ok(ShellAction::Continue(format!(
+                        "Permission approved (session set to auto-approve): {}\n{out}",
+                        perm.description
+                    ))),
+                    other => Ok(other),
+                };
+            }
+            return Ok(ShellAction::Continue(format!(
+                "Cancelled sensitive action: {}\n",
+                perm.description
+            )));
+        }
+        if let Some(orig_ask) = self.pending_clarification.take() {
+            if !text.is_empty()
+                && !text.starts_with('/')
+                && !text.starts_with('!')
+                && !matches!(text.to_lowercase().as_str(), "exit" | "cancel" | "quit")
+            {
+                let combined_ask = format!("{orig_ask}\n\nUser clarification: {text}");
+                let out = self.run_ask_text(&combined_ask).await?;
+                return Ok(ShellAction::Continue(out));
+            }
+        }
         if text.is_empty() {
             if self.pending_confirm {
                 self.pending_confirm = false;
@@ -3275,7 +3372,23 @@ impl ShellSession {
             if cmd_trimmed.is_empty() {
                 return Err(Error::type_error("Use !<command> to run a shell command."));
             }
-            let out = self.execute_bang_shell_command(cmd_trimmed)?;
+            let is_destructive = regex_lite::Regex::new(
+                r"(?i)\b(?:rm\s+-rf|git\s+reset\s+--hard|git\s+push\s+--force|git\s+clean\s+-[a-z]*f|Remove-Item\s+.*-Recurse)\b",
+            )
+            .is_ok_and(|re| re.is_match(cmd_trimmed));
+            let has_yes = cmd_trimmed.ends_with(" --yes");
+            let effective_cmd = cmd_trimmed.strip_suffix(" --yes").unwrap_or(cmd_trimmed);
+            if is_destructive && self.permission_mode == "prompt" && !has_yes {
+                self.pending_permission = Some(PendingPermission {
+                    description: format!("Execute destructive shell command `!{effective_cmd}`"),
+                    command: format!("!{effective_cmd} --yes"),
+                });
+                return Ok(ShellAction::Continue(format!(
+                    "[Permission Required] Destructive shell command `!{effective_cmd}` in {}. Approve? (y/n/always):\n",
+                    self.cwd.display()
+                )));
+            }
+            let out = self.execute_bang_shell_command(effective_cmd)?;
             return Ok(ShellAction::Continue(out));
         }
         if let Some(drop_match) =
@@ -4878,6 +4991,14 @@ impl ShellSession {
                     ),
                 ))
             }
+            "auth" => {
+                let out = self.handle_auth_command(raw_args)?;
+                Ok(ShellAction::Continue(out))
+            }
+            "permissions" | "permission" => {
+                let out = self.handle_permissions_command(raw_args)?;
+                Ok(ShellAction::Continue(out))
+            }
             _ => Err(Error::new("Error", unknown.trim())),
         }
     }
@@ -5522,6 +5643,18 @@ impl ShellSession {
                     .get(1)
                     .and_then(|s| s.trim_start_matches('#').parse::<u64>().ok())
                     .ok_or_else(|| Error::type_error("Use /board delete <PROJECT_NUMBER>."))?;
+                let has_yes = tokens
+                    .iter()
+                    .any(|&t| t == "--yes" || t == "-y" || t == "--force");
+                if self.permission_mode == "prompt" && !has_yes {
+                    self.pending_permission = Some(PendingPermission {
+                        description: format!("Delete GitHub Project #{proj_num}"),
+                        command: format!("/board delete {proj_num} --yes"),
+                    });
+                    return Ok(format!(
+                        "[Permission Required] Permanently delete GitHub Project #{proj_num} (owner: {owner}). Approve? (y/n/always):\n"
+                    ));
+                }
                 delete_or_close_github_project_board(&owner, proj_num, true)
             }
             "close" => {
@@ -5530,6 +5663,13 @@ impl ShellSession {
                     .and_then(|s| s.trim_start_matches('#').parse::<u64>().ok())
                     .ok_or_else(|| Error::type_error("Use /board close <PROJECT_NUMBER>."))?;
                 delete_or_close_github_project_board(&owner, proj_num, false)
+            }
+            "reset" => {
+                let proj_num = tokens
+                    .get(1)
+                    .and_then(|s| s.trim_start_matches('#').parse::<u64>().ok())
+                    .ok_or_else(|| Error::type_error("Use /board reset <PROJECT_NUMBER>."))?;
+                self.reset_project_board(&owner, &repo_slug, proj_num)
             }
             "add" => {
                 let proj_num = tokens
@@ -5582,9 +5722,143 @@ impl ShellSession {
                     .await
             }
             _ => Err(Error::type_error(
-                "Use /board [N|list N|create TITLE|delete N|close N|add N TITLE --body BODY|move N ISSUE STATUS|run N].",
+                "Use /board [N|list N|create TITLE|delete N|close N|reset N|add N TITLE --body BODY|move N ISSUE STATUS|run N].",
             )),
         }
+    }
+
+    pub fn handle_auth_command(&mut self, raw_args: &str) -> Result<String, Error> {
+        let trimmed = raw_args.trim();
+        let words = trimmed.split_whitespace().collect::<Vec<_>>();
+        let sub = words.first().copied().unwrap_or("status");
+        match sub {
+            "status" | "scopes" => {
+                let gh_tok = resolve_gh_token_for_owner(None);
+                let gh_status = if gh_tok.is_some() {
+                    "authenticated (token resolved)"
+                } else {
+                    "unauthenticated (run `gh auth login --scopes repo,project,read:project` or `/auth token GH_TOKEN`)"
+                };
+                let app_id = crate::config::environment_value(&self.environment, "GITHUB_APP_ID")
+                    .ok()
+                    .flatten()
+                    .and_then(|t| t.to_utf8().ok())
+                    .or_else(|| std::env::var("GITHUB_APP_ID").ok())
+                    .unwrap_or_default();
+                let key_path = crate::config::environment_value(
+                    &self.environment,
+                    "GITHUB_APP_PRIVATE_KEY_PATH",
+                )
+                .ok()
+                .flatten()
+                .and_then(|t| t.to_utf8().ok())
+                .or_else(|| std::env::var("GITHUB_APP_PRIVATE_KEY_PATH").ok())
+                .unwrap_or_default();
+                let app_status = if !app_id.is_empty() && Path::new(&key_path).is_file() {
+                    format!("configured (App ID {app_id}, key file present)")
+                } else if !app_id.is_empty() {
+                    format!("incomplete (App ID {app_id}, private key path missing)")
+                } else {
+                    "not configured in current environment".to_owned()
+                };
+                let api_key_name = self
+                    .api_key_env()
+                    .unwrap_or_else(|| "ROSTER_API_KEY".to_owned());
+                let has_vault_key = crate::vault::FileVault::from_environment(&self.environment)
+                    .ok()
+                    .and_then(|v| v.get(&api_key_name).ok().flatten())
+                    .is_some();
+                let has_env_key =
+                    crate::config::environment_value(&self.environment, &api_key_name)
+                        .ok()
+                        .flatten()
+                        .is_some();
+                let llm_key_status = if has_vault_key {
+                    format!("{api_key_name} (stored in encrypted vault)")
+                } else if has_env_key {
+                    format!("{api_key_name} (present in environment)")
+                } else {
+                    format!("{api_key_name} (unset; use `/auth token {api_key_name}`)")
+                };
+                Ok(format!(
+                    "Authentication & Credential Status:\n- GitHub CLI (gh): {gh_status}\n- GitHub App Publisher: {app_status}\n- Active LLM Credential: {llm_key_status}\n"
+                ))
+            }
+            "token" | "set" => {
+                let Some(&name) = words.get(1) else {
+                    return Err(Error::type_error("Use /auth token <SECRET_NAME> [VALUE]."));
+                };
+                if let Some(&val) = words.get(2) {
+                    let vault = crate::vault::FileVault::from_environment(&self.environment)?;
+                    vault.set(name, val)?;
+                    let _ = domain::put(&mut self.environment, name, Value::string(val));
+                    return Ok(format!("Stored credential {name}.\n"));
+                }
+                self.pending_secret = Some(name.to_owned());
+                Ok(format!(
+                    "[Auth Required] Enter value for {name} at the next prompt (input is stored in encrypted vault):\n"
+                ))
+            }
+            _ => Err(Error::type_error(
+                "Use /auth [status|scopes|token <NAME> [VALUE]].",
+            )),
+        }
+    }
+
+    pub fn handle_permissions_command(&mut self, raw_args: &str) -> Result<String, Error> {
+        let trimmed = raw_args.trim().to_lowercase();
+        match trimmed.as_str() {
+            "" | "status" => Ok(format!(
+                "Permission gate mode: {}\nGuarded sensitive operations: board_delete, destructive_shell (!rm -rf / !git reset --hard / !git push --force), repo_settings\nUse `/permissions prompt` to require interactive (y/n/always) approval or `/permissions auto` for autonomous execution.\n",
+                self.permission_mode
+            )),
+            "prompt" | "ask" | "interactive" => {
+                self.permission_mode = "prompt".to_owned();
+                Ok("Permission gate mode: prompt (sensitive actions require interactive approval).\n".to_owned())
+            }
+            "auto" | "autonomous" => {
+                self.permission_mode = "auto".to_owned();
+                Ok("Permission gate mode: auto (sensitive actions execute without interactive prompt).\n".to_owned())
+            }
+            _ => Err(Error::type_error("Use /permissions [status|prompt|auto].")),
+        }
+    }
+
+    fn reset_project_board(
+        &mut self,
+        owner: &str,
+        repo_slug: &str,
+        proj_num: u64,
+    ) -> Result<String, Error> {
+        let cards = list_project_board_cards(owner, proj_num)?;
+        let tok = resolve_gh_token_for_owner(Some(owner));
+        let mut reset_count = 0usize;
+        for card in &cards {
+            let effective_slug = if !card.repo_slug.is_empty() {
+                card.repo_slug.as_str()
+            } else {
+                repo_slug
+            };
+            let mut reopen_cmd = StdCommand::new("gh");
+            if let Some(ref t) = tok {
+                reopen_cmd.env("GH_TOKEN", t);
+            }
+            let _ = reopen_cmd
+                .env("GH_PROMPT_DISABLED", "1")
+                .args([
+                    "issue",
+                    "reopen",
+                    &card.issue_number.to_string(),
+                    "--repo",
+                    effective_slug,
+                ])
+                .output();
+            let _ = set_project_card_status(owner, proj_num, card.issue_number, "Todo");
+            reset_count += 1;
+        }
+        Ok(format!(
+            "Reset {reset_count} card(s) on GitHub Project #{proj_num} to [Todo] and reopened closed issues.\n"
+        ))
     }
 
     async fn execute_project_board_run(
@@ -9111,8 +9385,9 @@ impl ShellSession {
                 template: str_field("template"),
                 checkpoint: cp,
             };
+            self.pending_clarification = Some(cleaned.clone());
             return Ok(format!(
-                "{}Checkpoint saved privately: {cp_id}. Use /clarify to inspect, /clarify TEXT with explicit Allowed Files to resume, or /clarify cancel.\n",
+                "{}Checkpoint saved privately: {cp_id}. Reply directly at roster> with clarification details to resume automatically, or use /clarify cancel.\n",
                 crate::ask::format_ask(&clarify_out)
             ));
         }
@@ -9551,7 +9826,62 @@ impl ShellSession {
                         .unwrap_or_else(|| "fail".to_owned())
                 };
                 let _ = domain::put(&mut self.display, "review", Value::string(&rev_verdict));
+                let timings_snap = ownership.timings().snapshot();
+                let total_us = timings_snap
+                    .get("elapsed_us")
+                    .and_then(Value::as_number)
+                    .unwrap_or(0.0);
+                let mut prep_us = 0.0_f64;
+                let mut coder_us = 0.0_f64;
+                let mut reviewer_us = 0.0_f64;
+                let mut model_us = 0.0_f64;
+                if let Some(aggs) = timings_snap.get("aggregates").and_then(domain::items) {
+                    for agg in aggs {
+                        let lbl = clean_display(agg.get("label"), "");
+                        let tus = agg
+                            .get("total_us")
+                            .and_then(Value::as_number)
+                            .unwrap_or(0.0);
+                        match lbl.as_str() {
+                            "delivery.preparation" => prep_us = tus,
+                            "seat.coder.await" => coder_us = tus,
+                            "seat.reviewer.await" => reviewer_us = tus,
+                            "model.await" => model_us = tus,
+                            _ => {}
+                        }
+                    }
+                }
+                let total_s = total_us / 1_000_000.0;
+                let prep_s = prep_us / 1_000_000.0;
+                let coder_s = coder_us / 1_000_000.0;
+                let reviewer_s = reviewer_us / 1_000_000.0;
+                let planner_s = (total_s - prep_s - coder_s - reviewer_s).max(0.0);
+                let seat_tok = |r: &Option<crate::run::RunRecord>| -> (u64, u64) {
+                    r.as_ref().map_or((0, 0), |rec| {
+                        (
+                            rec.metrics().context_used.unwrap_or(0),
+                            rec.metrics().context_out.unwrap_or(0),
+                        )
+                    })
+                };
+                let (p_in, p_out) = seat_tok(&outcome.planner_run);
+                let (c_in, c_out) = seat_tok(&outcome.coder_run);
+                let (r_in, r_out) = seat_tok(&outcome.reviewer_run);
+                let total_in = p_in + c_in + r_in;
+                let total_out = p_out + c_out + r_out;
+                let denom_s = if model_us > 0.0 {
+                    model_us / 1_000_000.0
+                } else {
+                    total_s.max(0.001)
+                };
+                let tok_per_s = (total_out as f64) / denom_s;
+                let cont = outcome.orchestration.counts;
+                let total_cont = cont.rescopes + cont.perspectives + cont.review_repairs;
                 let mut formatted = outcome.format();
+                formatted.push_str(&format!(
+                    "Efficiency: total={total_s:.1}s (prep={prep_s:.1}s, planner={planner_s:.1}s, coder={coder_s:.1}s, reviewer={reviewer_s:.1}s) | tokens_in={total_in} tokens_out={total_out} ({tok_per_s:.1} out_tok/s) | planner={p_in}/{p_out} coder={c_in}/{c_out} reviewer={r_in}/{r_out} | continuations={total_cont} (first_try={})\n",
+                    passed && total_cont == 0
+                ));
                 for sp in synced_paths {
                     formatted.push_str(&format!("Wrote file: {sp}\n"));
                 }
@@ -12203,10 +12533,28 @@ pub fn translate_natural_language_command(text: &str) -> Option<String> {
             r"(?i)^(?:please\s+|can\s+you\s+)*(?:show|list|view)\s+(?:me\s+)?(?:the\s+|my\s+)*(?:github\s+)?(?:project\s+|kanban\s+)?boards?[?.!]*$",
             "/board",
         ),
+        (
+            r"(?i)^(?:please\s+|can\s+you\s+)*(?:show|check|what\s+is)\s+(?:me\s+)?(?:the\s+|my\s+|current\s+)*(?:auth|authentication|credentials?|login)(?:\s+status|\s+scopes?)?[?.!]*$",
+            "/auth status",
+        ),
+        (
+            r"(?i)^(?:please\s+|can\s+you\s+)*(?:show|check|what\s+are)\s+(?:me\s+)?(?:the\s+|my\s+|current\s+)*(?:permissions?|permission\s+gate|approvals?)(?:\s+status|\s+mode)?[?.!]*$",
+            "/permissions status",
+        ),
     ];
     for (pat, cmd) in patterns {
         if regex_lite::Regex::new(pat).ok()?.is_match(trimmed) {
             return Some((*cmd).to_owned());
+        }
+    }
+    if let Some(caps) = regex_lite::Regex::new(
+        r"(?i)^(?:please\s+|can\s+you\s+)*(?:reset)\s+(?:the\s+|my\s+)?(?:github\s+)?(?:project|kanban|board)(?:\s+board)?\s+#?(\d+)[?.!]*$",
+    )
+    .ok()?
+    .captures(trimmed)
+    {
+        if let Some(num) = caps.get(1).map(|m| m.as_str()) {
+            return Some(format!("/board reset {num}"));
         }
     }
     if let Some(caps) = regex_lite::Regex::new(
@@ -16599,6 +16947,41 @@ mod tests {
                 || html_out.contains("<td>Maintainability</td>")
         );
         assert!(html_out.contains("Automated Repository Inspection Evidence"));
+
+        assert_eq!(
+            translate_natural_language_command("check my auth status"),
+            Some("/auth status".to_owned())
+        );
+        assert_eq!(
+            translate_natural_language_command("check permissions status"),
+            Some("/permissions status".to_owned())
+        );
+        assert_eq!(
+            translate_natural_language_command("reset project board #10"),
+            Some("/board reset 10".to_owned())
+        );
+
+        let perm_dir = std::env::temp_dir().join(format!(
+            "roster-perm-test-{}-{}",
+            std::process::id(),
+            files::nonce()?
+        ));
+        files::create_private_directories(&perm_dir)?;
+        let install = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let env = Value::object(vec![
+            ("HOME", Value::string(&perm_dir.display().to_string())),
+            (
+                "USERPROFILE",
+                Value::string(&perm_dir.display().to_string()),
+            ),
+        ]);
+        let mut perm_session = ShellSession::new(&perm_dir, install, &env, false)?;
+        let auth_out = perm_session.handle_auth_command("status")?;
+        assert!(auth_out.contains("Authentication & Credential Status:"));
+        let perm_out = perm_session.handle_permissions_command("prompt")?;
+        assert!(perm_out.contains("Permission gate mode: prompt"));
+        assert_eq!(perm_session.permission_mode, "prompt");
+        let _ = fs::remove_dir_all(&perm_dir);
         Ok(())
     }
 }
