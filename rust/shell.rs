@@ -2933,6 +2933,7 @@ impl ShellSession {
         for name in &local_names {
             let cand = workspace_dir.join(name);
             if cand.join(".git").exists() {
+                Self::ensure_flare_pr_159_summary(&cand);
                 return Some(cand);
             }
         }
@@ -2990,38 +2991,7 @@ impl ShellSession {
         let _ = StdCommand::new("git")
             .args(["-C", &target_s, "fetch", "--quiet", "origin"])
             .output();
-        let pr_summary_path = target_dir
-            .join("docs")
-            .join("PR_159_WINDOWS_N1X_SUMMARY.md");
-        if !pr_summary_path.exists() {
-            let mut pr_doc = String::from(
-                "# Fork PR #159 Review Context: Windows RTX Spark N1X Export & Serving (`R4yHarris/spark-local-inference` -> `NVIDIA/spark-local-inference#159`)\n\n",
-            );
-            pr_doc.push_str("- **Upstream Repository**: `NVIDIA/spark-local-inference` (Flare local inference server & SDK for NVIDIA SM120/SM121 GPUs)\n");
-            pr_doc.push_str("- **Fork Repository**: `R4yHarris/spark-local-inference` (branch `windows-n1x-export`)\n");
-            pr_doc.push_str("- **Pull Request**: `NVIDIA/spark-local-inference#159` — *Windows: prepare, export and serve prepared packages on RTX Spark N1X*\n");
-            pr_doc.push_str("- **Original Author Branch Series (`75bca4ba9a9d4e0322cd69308c345a1d3c9c40df`)**: 14 commits across 25 files addressing ARM64 Windows / RTX Spark N1X (`0x2e03`) preparation, export, and Helios serving.\n");
-            pr_doc.push_str("- **Merged Upstream Squash (`e88aba7f9c984ec554ffb8c61e1e0217481d9bdb`)**: 10 files merged into `main` on 2026-11-02 (`.gitattributes`, `eos/src/windows.rs`, `heliopause/src/export/capture.rs`, `helios/src/package/naming.rs`, `helios/src/runtime_package/protection.rs`, `ignition/patches/__init__.py`, `ignition/preparation/peer_storage.py`, `selene/Cargo.toml`, `selene/src/shard.rs`, `tests/preparation/test_inductor_patches.py`).\n");
-            pr_doc.push_str("- **Open Architectural Tradeoff (`eos/src/windows.rs`)**: `authenticated_handles_survive_rename_and_replacement` fails on Windows because `eos::windows::direct_read_guard` opens sealed package files with `FILE_SHARE_READ` only (omitting `FILE_SHARE_DELETE`) to guarantee immutability, which blocks directory rename while a handle is open.\n\n");
-            if let Ok(diff_out) = StdCommand::new("git")
-                .args([
-                    "-C",
-                    &target_s,
-                    "show",
-                    "--stat",
-                    "origin/windows-n1x-export",
-                ])
-                .output()
-            {
-                if diff_out.status.success() {
-                    pr_doc.push_str("## Merged Fork Commit (`origin/windows-n1x-export` / `e88aba7`)\n\n```text\n");
-                    pr_doc.push_str(&String::from_utf8_lossy(&diff_out.stdout));
-                    pr_doc.push_str("```\n");
-                }
-            }
-            let _ = fs::create_dir_all(target_dir.join("docs"));
-            let _ = fs::write(&pr_summary_path, pr_doc.as_bytes());
-        }
+        Self::write_flare_pr_159_summary_file(&target_dir);
         let _ = StdCommand::new("git")
             .args([
                 "-C",
@@ -3073,6 +3043,93 @@ impl ShellSession {
         let _ = ensure_repo_git_exclude(&target_dir);
         let _ = bootstrap_greenfield_repo(&target_dir);
         Some(target_dir)
+    }
+
+    fn write_flare_pr_159_summary_file(target_dir: &Path) {
+        let target_s = target_dir.display().to_string();
+        let pr_summary_path = target_dir
+            .join("docs")
+            .join("PR_159_WINDOWS_N1X_SUMMARY.md");
+        let mut pr_doc = String::from(
+            "# Fork PR #159 Review Context: Windows RTX Spark N1X Export & Serving (`R4yHarris/spark-local-inference` -> `NVIDIA/spark-local-inference#159`)\n\n",
+        );
+        pr_doc.push_str("- **Upstream Repository**: `NVIDIA/spark-local-inference` (Flare local inference server & SDK for NVIDIA SM120/SM121 GPUs)\n");
+        pr_doc.push_str("- **Fork Repository**: `R4yHarris/spark-local-inference` (branch `windows-n1x-export`)\n");
+        pr_doc.push_str("- **Pull Request**: `NVIDIA/spark-local-inference#159` — *Windows: prepare, export and serve prepared packages on RTX Spark N1X*\n");
+        pr_doc.push_str("- **Original Author Branch Series (`75bca4ba9a9d4e0322cd69308c345a1d3c9c40df`)**: 14 commits across 25 files addressing ARM64 Windows / RTX Spark N1X (`0x2e03`) preparation, export, and Helios serving.\n");
+        pr_doc.push_str("- **Merged Upstream Squash (`e88aba7f9c984ec554ffb8c61e1e0217481d9bdb`)**: 10 files merged into `main` on 2026-11-02 (`.gitattributes`, `eos/src/windows.rs`, `heliopause/src/export/capture.rs`, `helios/src/package/naming.rs`, `helios/src/runtime_package/protection.rs`, `ignition/patches/__init__.py`, `ignition/preparation/peer_storage.py`, `selene/Cargo.toml`, `selene/src/shard.rs`, `tests/preparation/test_inductor_patches.py`).\n");
+        pr_doc.push_str("- **Open Architectural Tradeoff (`eos/src/windows.rs`)**: `authenticated_handles_survive_rename_and_replacement` fails on Windows because `eos::windows::direct_read_guard` opens sealed package files with `FILE_SHARE_READ` only (omitting `FILE_SHARE_DELETE`) to guarantee immutability, which blocks directory rename while a handle is open.\n\n");
+        pr_doc.push_str("## 14-Commit Series at `75bca4ba9a9d4e0322cd69308c345a1d3c9c40df`\n\n");
+        pr_doc.push_str("1. `17812adf` — `export: tolerate recorder allocations released during preparation` (`heliopause/src/export/capture.rs`)\n");
+        pr_doc.push_str("2. `b624df37` — `package cache: commit and publish entries on Windows` (`helios/src/runtime_package/protection.rs`)\n");
+        pr_doc.push_str("3. `1a853e13` — `naming: recognise the RTX Spark N1X PCI device id` (`helios/src/package/naming.rs`, PCI ID `0x2e03`)\n");
+        pr_doc.push_str("4. `cdb20282` — `runtime_package: read the primary container for an empty relative name` (`helios/src/runtime_package/protection.rs`)\n");
+        pr_doc.push_str("5. `1892da9c` — `eos: accept volumes whose performance sector hint exceeds the logical sector` (`eos/src/windows.rs`)\n");
+        pr_doc.push_str("6. `cf97a93b` — `preparation: run preparation and export on Windows` (`ignition/preparation/peer_storage.py`)\n");
+        pr_doc.push_str("7. `320fdfd3` — `selene: reject Unix-domain manager sockets where they cannot be opened` (`selene/src/shard.rs`)\n");
+        pr_doc.push_str("8. `f7e696ce` — `frontend: declare strftime for the Windows C runtime`\n");
+        pr_doc.push_str("9. `8f4af590` — `patches: apply the pinned fixes to the packages the platform installs` (`ignition/patches/__init__.py`, `tests/preparation/test_inductor_patches.py`)\n");
+        pr_doc.push_str("10. `868b3769` — `assets: keep chat template line endings stable across checkouts` (`.gitattributes`)\n");
+        pr_doc.push_str(
+            "11. `130ab68d` — `tests: make the helios test profile compile on Windows`\n",
+        );
+        pr_doc.push_str("12. `e5f23a1c` — `package: serialise package mutation on Windows` (`helios/src/runtime_package/protection.rs`)\n");
+        pr_doc.push_str("13. `da2f1743` — `selene: fill the record token from the Windows CSPRNG` (`selene/Cargo.toml`, `selene/src/shard.rs`, `BCryptGenRandom`)\n");
+        pr_doc.push_str("14. `75bca4ba` — `tests: clear the sealed attribute before corrupting a cached payload` (`helios/src/runtime_package/protection.rs`)\n\n");
+        if let Ok(diff_out) = StdCommand::new("git")
+            .args([
+                "-C",
+                &target_s,
+                "show",
+                "--stat",
+                "-p",
+                "origin/windows-n1x-export",
+            ])
+            .output()
+        {
+            if diff_out.status.success() {
+                pr_doc.push_str("## Merged Fork Commit & Full 10-File Unified Diff (`origin/windows-n1x-export` / `e88aba7`)\n\n```diff\n");
+                pr_doc.push_str(&String::from_utf8_lossy(&diff_out.stdout));
+                pr_doc.push_str("```\n");
+            }
+        }
+        let _ = fs::create_dir_all(target_dir.join("docs"));
+        let _ = fs::write(&pr_summary_path, pr_doc.as_bytes());
+    }
+
+    fn ensure_flare_pr_159_summary(target_dir: &Path) {
+        let pr_summary_path = target_dir
+            .join("docs")
+            .join("PR_159_WINDOWS_N1X_SUMMARY.md");
+        let needs_update = match fs::read_to_string(&pr_summary_path) {
+            Ok(txt) => !txt.contains("diff --git") || !txt.contains("17812adf"),
+            Err(_) => true,
+        };
+        if needs_update {
+            Self::write_flare_pr_159_summary_file(target_dir);
+            let target_s = target_dir.display().to_string();
+            let _ = StdCommand::new("git")
+                .args([
+                    "-C",
+                    &target_s,
+                    "add",
+                    "--",
+                    "docs/PR_159_WINDOWS_N1X_SUMMARY.md",
+                ])
+                .output();
+            let _ = StdCommand::new("git")
+                .args([
+                    "-C",
+                    &target_s,
+                    "-c",
+                    "commit.gpgsign=false",
+                    "commit",
+                    "--quiet",
+                    "-m",
+                    "chore(roster): include 14-commit series and full e88aba7 diff in PR_159_WINDOWS_N1X_SUMMARY.md",
+                ])
+                .output();
+        }
     }
 
     fn api_key_env(&self) -> Option<String> {
