@@ -2991,6 +2991,18 @@ impl ShellSession {
         let _ = StdCommand::new("git")
             .args(["-C", &target_s, "fetch", "--quiet", "origin"])
             .output();
+        let _ = StdCommand::new("git")
+            .args([
+                "-C",
+                &target_s,
+                "-c",
+                "commit.gpgsign=false",
+                "merge",
+                "--no-edit",
+                "--quiet",
+                "origin/windows-n1x-export",
+            ])
+            .output();
         Self::write_flare_pr_159_summary_file(&target_dir);
         let _ = StdCommand::new("git")
             .args([
@@ -3101,13 +3113,37 @@ impl ShellSession {
         let pr_summary_path = target_dir
             .join("docs")
             .join("PR_159_WINDOWS_N1X_SUMMARY.md");
-        let needs_update = match fs::read_to_string(&pr_summary_path) {
-            Ok(txt) => !txt.contains("diff --git") || !txt.contains("17812adf"),
-            Err(_) => true,
+        let naming_path = target_dir
+            .join("helios")
+            .join("src")
+            .join("package")
+            .join("naming.rs");
+        let needs_merge = match fs::read_to_string(&naming_path) {
+            Ok(txt) => !txt.contains("0x2e03"),
+            Err(_) => false,
         };
+        let needs_update = needs_merge
+            || match fs::read_to_string(&pr_summary_path) {
+                Ok(txt) => !txt.contains("diff --git") || !txt.contains("17812adf"),
+                Err(_) => true,
+            };
         if needs_update {
-            Self::write_flare_pr_159_summary_file(target_dir);
             let target_s = target_dir.display().to_string();
+            if needs_merge {
+                let _ = StdCommand::new("git")
+                    .args([
+                        "-C",
+                        &target_s,
+                        "-c",
+                        "commit.gpgsign=false",
+                        "merge",
+                        "--no-edit",
+                        "--quiet",
+                        "origin/windows-n1x-export",
+                    ])
+                    .output();
+            }
+            Self::write_flare_pr_159_summary_file(target_dir);
             let _ = StdCommand::new("git")
                 .args([
                     "-C",
