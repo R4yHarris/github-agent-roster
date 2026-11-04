@@ -5523,7 +5523,13 @@ impl ShellSession {
                     .files
                     .iter()
                     .any(|f| f.ends_with(".mjs") || f.ends_with(".js"));
-                if reqs.explicit && !reqs.files.is_empty() && !is_native && !is_docs && !has_test {
+                if reqs.explicit
+                    && !reqs.files.is_empty()
+                    && !is_native
+                    && !is_docs
+                    && !has_test
+                    && root.join("package.json").is_file()
+                {
                     let auto_test = format!("tests/issue_{issue_num}.test.mjs");
                     if let Some(pos) = combined.find("## Acceptance") {
                         combined.insert_str(pos, &format!("- `{auto_test}`\n\n"));
@@ -14679,13 +14685,13 @@ fn discover_and_rank_issue_code_files(
         scores.insert(cf.clone(), s);
     }
     let mut symbols = Vec::new();
+    let stop = [
+        "true", "false", "null", "None", "Some", "Self", "Result", "Error", "String", "Value",
+        "flare", "inspect", "json", "cargo", "test", "python3", "curl", "http", "data", "type",
+        "object", "boolean", "integer", "string", "array", "main",
+    ];
     if let Ok(bt_re) = regex_lite::Regex::new(r"`([^`\n]{3,80})`") {
         if let Ok(id_re) = regex_lite::Regex::new(r"\b([A-Za-z_][A-Za-z0-9_]{3,48})\b") {
-            let stop = [
-                "true", "false", "null", "None", "Some", "Self", "Result", "Error", "String",
-                "Value", "flare", "inspect", "json", "cargo", "test", "python3", "curl", "http",
-                "data", "type", "object", "boolean", "integer", "string", "array", "main",
-            ];
             for cap in bt_re.captures_iter(text) {
                 let span = cap.get(1).map_or("", |m| m.as_str());
                 for id_cap in id_re.captures_iter(span) {
@@ -14697,8 +14703,20 @@ fn discover_and_rank_issue_code_files(
             }
         }
     }
+    if let Ok(code_id_re) = regex_lite::Regex::new(
+        r"\b([A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+|[a-z][a-z0-9]*(?:_[a-z0-9]+)+)\b",
+    ) {
+        for cap in code_id_re.captures_iter(text) {
+            let sym = cap.get(1).map_or("", |m| m.as_str());
+            if !stop.contains(&sym) && !symbols.iter().any(|s| s == sym) {
+                symbols.push(sym.to_owned());
+            }
+        }
+    }
+    let lower_text = text.to_lowercase();
+    let wants_inspection = lower_text.contains("inspect") || lower_text.contains("describe");
     let root_s = root.display().to_string();
-    for sym in symbols.iter().take(10) {
+    for sym in symbols.iter().take(12) {
         if let Ok(out) = StdCommand::new("git")
             .args([
                 "-C",
@@ -14728,13 +14746,19 @@ fn discover_and_rank_issue_code_files(
                     })
                     .map(str::to_owned)
                     .collect();
-                if matched_files.len() <= 20 {
+                if matched_files.len() <= 25 {
                     for mf in matched_files {
-                        let bonus = if mf.contains("/src/") || mf.starts_with("ignition/") {
+                        let mut bonus = if mf.contains("/src/") || mf.starts_with("ignition/") {
                             3_i64
                         } else {
                             1_i64
                         };
+                        if wants_inspection
+                            && (mf.ends_with("runtime_package/protection.rs")
+                                || mf.ends_with("runtime_package/describe.rs"))
+                        {
+                            bonus += 4;
+                        }
                         *scores.entry(mf).or_insert(0) += bonus;
                     }
                 }
