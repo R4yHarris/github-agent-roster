@@ -1360,15 +1360,16 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                 .filter(|file| {
                     !file.is_empty()
                         && !planning::forbidden_write(file)
-                        && !file
-                            .split('/')
-                            .any(|part| part.eq_ignore_ascii_case("vendor"))
+                        && !file.split('/').any(|part| {
+                            part.eq_ignore_ascii_case("vendor")
+                                || part.eq_ignore_ascii_case("third_party")
+                        })
                 })
                 .map(str::to_owned)
                 .collect::<Vec<_>>();
-            if inventory.len() > 1500 {
+            if inventory.len() > 4096 {
                 return Err(Error::type_error(
-                    "Local planning inventory exceeds 1500 files; a bounded host inventory is required",
+                    "Local planning inventory exceeds 4096 files; a bounded host inventory is required",
                 ));
             }
             let planning = Box::pin(driver.run_planner_session_owned_after_pre_plan(

@@ -126,9 +126,13 @@ pub fn index_sources(files: &[String], sources: &[(String, Text)]) -> Result<Ind
     let alias = regex(r"\s+as\s+")?;
     for file in files
         .iter()
-        .filter(|file| !file.starts_with("vendor/") && !forbidden_read(file))
+        .filter(|file| {
+            !file.starts_with("vendor/")
+                && !file.starts_with("third_party/")
+                && !forbidden_read(file)
+        })
         .filter(|file| code.is_match(file))
-        .take(1500)
+        .take(4096)
     {
         let Some((_, source)) = sources.iter().find(|(name, _)| name == file) else {
             continue;
@@ -252,9 +256,9 @@ pub fn related_exports(
 }
 
 pub fn read_context(root: &Path, files: &[String], ask: &str) -> Result<Context, Error> {
-    if files.len() > 1500 {
+    if files.len() > 4096 {
         return Err(Error::type_error(
-            "Planning repository inventory exceeds 1500 files",
+            "Planning repository inventory exceeds 4096 files",
         ));
     }
     let mut sources = Vec::new();
@@ -262,9 +266,9 @@ pub fn read_context(root: &Path, files: &[String], ask: &str) -> Result<Context,
     let test_pattern = regex(r#"\b(?:test|it)\s*\(\s*['"]([^'"\n]+)['"]"#)?;
     for file in files {
         if forbidden_read(file)
-            || file
-                .split('/')
-                .any(|part| part.eq_ignore_ascii_case("vendor"))
+            || file.split('/').any(|part| {
+                part.eq_ignore_ascii_case("vendor") || part.eq_ignore_ascii_case("third_party")
+            })
         {
             continue;
         }
@@ -308,15 +312,23 @@ pub fn read_context(root: &Path, files: &[String], ask: &str) -> Result<Context,
         .iter()
         .filter(|file| {
             !forbidden_read(file)
-                && !file
-                    .split('/')
-                    .any(|part| part.eq_ignore_ascii_case("vendor"))
+                && !file.split('/').any(|part| {
+                    part.eq_ignore_ascii_case("vendor") || part.eq_ignore_ascii_case("third_party")
+                })
         })
         .cloned()
         .collect::<Vec<_>>();
     let mut index = index_sources(&readable, &sources)?;
     let mut seen_syms: std::collections::BTreeSet<String> = index.symbols.iter().cloned().collect();
     let extra_token = regex(r"[A-Za-z_$][\w$]*")?;
+    for file in &readable {
+        for matched in extra_token.find_iter(file) {
+            let sym = matched.as_str().to_owned();
+            if seen_syms.insert(sym.clone()) {
+                index.symbols.push(sym);
+            }
+        }
+    }
     let non_code =
         regex(r"\.(?:json|bicep|ya?ml|toml|html|css|py|sh|ps1|cs|md|slnx|props|targets|csproj)$")?;
     for (file, source) in &sources {

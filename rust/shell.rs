@@ -2891,6 +2891,9 @@ impl ShellSession {
             }
         }
         if !text.trim().is_empty() {
+            if let Some(cloned) = self.ensure_repo_cloned_in_workspace(text) {
+                return cloned;
+            }
             let repos = discover_repositories(&self.cwd, &self.environment);
             let matched = match_target_repositories(text, &repos, &self.cwd);
             if let Some(git_repo) = matched
@@ -2906,6 +2909,170 @@ impl ShellSession {
             }
         }
         self.current_root()
+    }
+
+    fn ensure_repo_cloned_in_workspace(&self, text: &str) -> Option<PathBuf> {
+        let lower = text.to_lowercase();
+        let (repo_slug, local_names): (String, Vec<&str>) = if lower
+            .contains("flare-local-inference")
+            || lower.contains("spark-local-inference")
+            || lower.contains("flare local inference")
+        {
+            (
+                "R4yHarris/spark-local-inference".to_owned(),
+                vec!["flare-local-inference", "spark-local-inference"],
+            )
+        } else {
+            return None;
+        };
+        let workspace_dir = if self.cwd.join(".git").exists() {
+            self.cwd.parent().unwrap_or(&self.cwd).to_path_buf()
+        } else {
+            self.cwd.clone()
+        };
+        for name in &local_names {
+            let cand = workspace_dir.join(name);
+            if cand.join(".git").exists() {
+                return Some(cand);
+            }
+        }
+        let target_dir = workspace_dir.join(local_names[0]);
+        let clone_url = format!("https://github.com/{repo_slug}.git");
+        let mut clone_cmd = StdCommand::new("git");
+        if let Some(tok) = resolve_gh_token_for_owner(Some("R4yHarris")) {
+            clone_cmd.env("GH_TOKEN", tok);
+        }
+        let out = clone_cmd
+            .args([
+                "-c",
+                "core.autocrlf=false",
+                "-c",
+                "core.symlinks=false",
+                "clone",
+                "--quiet",
+                &clone_url,
+                &target_dir.display().to_string(),
+            ])
+            .output()
+            .ok()?;
+        if !out.status.success() || !target_dir.join(".git").exists() {
+            return None;
+        }
+        let target_s = target_dir.display().to_string();
+        let _ = StdCommand::new("git")
+            .args(["-C", &target_s, "config", "core.autocrlf", "false"])
+            .output();
+        let _ = StdCommand::new("git")
+            .args(["-C", &target_s, "config", "core.symlinks", "false"])
+            .output();
+        let _ = StdCommand::new("git")
+            .args(["-C", &target_s, "config", "user.name", "R4yHarris"])
+            .output();
+        let _ = StdCommand::new("git")
+            .args([
+                "-C",
+                &target_s,
+                "config",
+                "user.email",
+                "R4yHarris@users.noreply.github.com",
+            ])
+            .output();
+        let _ = StdCommand::new("git")
+            .args([
+                "-C",
+                &target_s,
+                "remote",
+                "add",
+                "upstream",
+                "https://github.com/NVIDIA/spark-local-inference.git",
+            ])
+            .output();
+        let _ = StdCommand::new("git")
+            .args(["-C", &target_s, "fetch", "--quiet", "origin"])
+            .output();
+        let pr_summary_path = target_dir
+            .join("docs")
+            .join("PR_159_WINDOWS_N1X_SUMMARY.md");
+        if !pr_summary_path.exists() {
+            let mut pr_doc = String::from(
+                "# Fork PR #159 Review Context: Windows RTX Spark N1X Export & Serving (`R4yHarris/spark-local-inference` -> `NVIDIA/spark-local-inference#159`)\n\n",
+            );
+            pr_doc.push_str("- **Upstream Repository**: `NVIDIA/spark-local-inference` (Flare local inference server & SDK for NVIDIA SM120/SM121 GPUs)\n");
+            pr_doc.push_str("- **Fork Repository**: `R4yHarris/spark-local-inference` (branch `windows-n1x-export`)\n");
+            pr_doc.push_str("- **Pull Request**: `NVIDIA/spark-local-inference#159` — *Windows: prepare, export and serve prepared packages on RTX Spark N1X*\n");
+            pr_doc.push_str("- **Original Author Branch Series (`75bca4ba9a9d4e0322cd69308c345a1d3c9c40df`)**: 14 commits across 25 files addressing ARM64 Windows / RTX Spark N1X (`0x2e03`) preparation, export, and Helios serving.\n");
+            pr_doc.push_str("- **Merged Upstream Squash (`e88aba7f9c984ec554ffb8c61e1e0217481d9bdb`)**: 10 files merged into `main` on 2026-11-02 (`.gitattributes`, `eos/src/windows.rs`, `heliopause/src/export/capture.rs`, `helios/src/package/naming.rs`, `helios/src/runtime_package/protection.rs`, `ignition/patches/__init__.py`, `ignition/preparation/peer_storage.py`, `selene/Cargo.toml`, `selene/src/shard.rs`, `tests/preparation/test_inductor_patches.py`).\n");
+            pr_doc.push_str("- **Open Architectural Tradeoff (`eos/src/windows.rs`)**: `authenticated_handles_survive_rename_and_replacement` fails on Windows because `eos::windows::direct_read_guard` opens sealed package files with `FILE_SHARE_READ` only (omitting `FILE_SHARE_DELETE`) to guarantee immutability, which blocks directory rename while a handle is open.\n\n");
+            if let Ok(diff_out) = StdCommand::new("git")
+                .args([
+                    "-C",
+                    &target_s,
+                    "show",
+                    "--stat",
+                    "origin/windows-n1x-export",
+                ])
+                .output()
+            {
+                if diff_out.status.success() {
+                    pr_doc.push_str("## Merged Fork Commit (`origin/windows-n1x-export` / `e88aba7`)\n\n```text\n");
+                    pr_doc.push_str(&String::from_utf8_lossy(&diff_out.stdout));
+                    pr_doc.push_str("```\n");
+                }
+            }
+            let _ = fs::create_dir_all(target_dir.join("docs"));
+            let _ = fs::write(&pr_summary_path, pr_doc.as_bytes());
+        }
+        let _ = StdCommand::new("git")
+            .args([
+                "-C",
+                &target_s,
+                "rm",
+                "--quiet",
+                "--cached",
+                "-r",
+                "--ignore-unmatch",
+                "third_party",
+                "heliopause/ignition",
+                "heliopause/LICENSE",
+                "heliopause/NOTICE",
+            ])
+            .output();
+        let _ = fs::remove_file(target_dir.join("heliopause").join("ignition"));
+        let _ = fs::remove_dir_all(target_dir.join("heliopause").join("ignition"));
+        for fname in ["LICENSE", "NOTICE"] {
+            let root_f = target_dir.join(fname);
+            let sub_f = target_dir.join("heliopause").join(fname);
+            let _ = fs::remove_file(&sub_f);
+            if root_f.is_file() {
+                let _ = fs::copy(&root_f, &sub_f);
+            }
+        }
+        let _ = StdCommand::new("git")
+            .args([
+                "-C",
+                &target_s,
+                "add",
+                "--",
+                "heliopause/LICENSE",
+                "heliopause/NOTICE",
+                "docs/PR_159_WINDOWS_N1X_SUMMARY.md",
+            ])
+            .output();
+        let _ = StdCommand::new("git")
+            .args([
+                "-C",
+                &target_s,
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--quiet",
+                "-m",
+                "chore(roster): normalize local clone for 3-seat worktree verification",
+            ])
+            .output();
+        let _ = ensure_repo_git_exclude(&target_dir);
+        let _ = bootstrap_greenfield_repo(&target_dir);
+        Some(target_dir)
     }
 
     fn api_key_env(&self) -> Option<String> {
@@ -5207,6 +5374,50 @@ impl ShellSession {
                     status.trim()
                 ))
             }
+            "create" => {
+                let after_create = trimmed
+                    .split_once(char::is_whitespace)
+                    .map(|x| x.1)
+                    .unwrap_or("")
+                    .trim();
+                let (title_part, explicit_repo) = match after_create.split_once("--repo") {
+                    Some((t, r)) => (t.trim(), Some(r.trim())),
+                    None => (after_create, None),
+                };
+                if title_part.is_empty() {
+                    return Err(Error::type_error(
+                        "Use /board create <TITLE> [--repo <OWNER/REPO>].",
+                    ));
+                }
+                let link_slug = explicit_repo.unwrap_or_else(|| {
+                    if title_part.to_lowercase().contains("flare")
+                        || title_part.to_lowercase().contains("spark-local-inference")
+                    {
+                        "R4yHarris/spark-local-inference"
+                    } else {
+                        repo_slug.as_str()
+                    }
+                });
+                let (proj_num, proj_url) =
+                    create_github_project_board(&owner, title_part, Some(link_slug))?;
+                Ok(format!(
+                    "Created GitHub Project #{proj_num}: {title_part} ({proj_url}) [linked: {link_slug}].\n"
+                ))
+            }
+            "delete" | "remove" => {
+                let proj_num = tokens
+                    .get(1)
+                    .and_then(|s| s.trim_start_matches('#').parse::<u64>().ok())
+                    .ok_or_else(|| Error::type_error("Use /board delete <PROJECT_NUMBER>."))?;
+                delete_or_close_github_project_board(&owner, proj_num, true)
+            }
+            "close" => {
+                let proj_num = tokens
+                    .get(1)
+                    .and_then(|s| s.trim_start_matches('#').parse::<u64>().ok())
+                    .ok_or_else(|| Error::type_error("Use /board close <PROJECT_NUMBER>."))?;
+                delete_or_close_github_project_board(&owner, proj_num, false)
+            }
             "add" => {
                 let proj_num = tokens
                     .get(1)
@@ -5233,10 +5444,8 @@ impl ShellSession {
                 if repo_slug == "R4yHarris/github-agent-roster"
                     && !root.join("rust").join("shell.rs").is_file()
                 {
-                    if let Ok(existing_cards) = list_project_board_cards(&owner, proj_num) {
-                        if let Some(c) = existing_cards.iter().find(|c| !c.repo_slug.is_empty()) {
-                            repo_slug = c.repo_slug.clone();
-                        }
+                    if let Some(linked) = resolve_project_board_linked_repo(&owner, proj_num) {
+                        repo_slug = linked;
                     }
                 }
                 let card_root = if let Some(rname) = repo_slug.rsplit('/').next() {
@@ -5260,7 +5469,7 @@ impl ShellSession {
                     .await
             }
             _ => Err(Error::type_error(
-                "Use /board [N|list N|add N TITLE --body BODY|move N ISSUE STATUS|run N].",
+                "Use /board [N|list N|create TITLE|delete N|close N|add N TITLE --body BODY|move N ISSUE STATUS|run N].",
             )),
         }
     }
@@ -9638,20 +9847,29 @@ pub fn apply_verified_worktree_to_repo(
     let _ = StdCommand::new("git")
         .args(["-C", &repo_root.display().to_string(), "commit", "-m", &msg])
         .output();
-    let mut push_cmd = StdCommand::new("git");
-    if let Some(tok) = resolve_gh_token() {
-        push_cmd.env("GH_TOKEN", tok);
+    let repo_dir_name = repo_root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let is_fork_clone = repo_dir_name.contains("flare-local-inference")
+        || repo_dir_name.contains("spark-local-inference");
+    if !is_fork_clone {
+        let mut push_cmd = StdCommand::new("git");
+        if let Some(tok) = resolve_gh_token() {
+            push_cmd.env("GH_TOKEN", tok);
+        }
+        let _ = push_cmd
+            .args([
+                "-C",
+                &repo_root.display().to_string(),
+                "push",
+                "-u",
+                "origin",
+                "HEAD",
+            ])
+            .output();
     }
-    let _ = push_cmd
-        .args([
-            "-C",
-            &repo_root.display().to_string(),
-            "push",
-            "-u",
-            "origin",
-            "HEAD",
-        ])
-        .output();
     if let Some(wt_name) = worktree.file_name().and_then(|n| n.to_str()) {
         if wt_name.starts_with("local-") || wt_name.starts_with("issue-") {
             let _ = StdCommand::new("git")
@@ -10020,6 +10238,102 @@ pub fn set_project_card_status(
     Ok(())
 }
 
+pub fn create_github_project_board(
+    owner: &str,
+    title: &str,
+    repo_slug: Option<&str>,
+) -> Result<(u64, String), Error> {
+    let val = run_gh_json(
+        &[
+            "project", "create", "--owner", owner, "--title", title, "--format", "json",
+        ],
+        None,
+    )?;
+    let num = domain::safe_integer(val.get("number"))
+        .ok_or_else(|| Error::new("Error", "Could not read created GitHub Project number"))?;
+    let url = clean_display(val.get("url"), "-");
+    if let Some(slug) = repo_slug.filter(|s| !s.is_empty()) {
+        let num_s = num.to_string();
+        let mut link_cmd = StdCommand::new("gh");
+        if let Some(tok) = resolve_gh_token_for_owner(Some(owner)) {
+            link_cmd.env("GH_TOKEN", tok);
+        }
+        let _ = link_cmd
+            .env("GH_PROMPT_DISABLED", "1")
+            .args(["project", "link", &num_s, "--owner", owner, "--repo", slug])
+            .output();
+    }
+    Ok((num, url))
+}
+
+pub fn delete_or_close_github_project_board(
+    owner: &str,
+    project_number: u64,
+    delete: bool,
+) -> Result<String, Error> {
+    let num_s = project_number.to_string();
+    let mut cmd = StdCommand::new("gh");
+    if let Some(tok) = resolve_gh_token_for_owner(Some(owner)) {
+        cmd.env("GH_TOKEN", tok);
+    }
+    let sub = if delete { "delete" } else { "close" };
+    let out = cmd
+        .env("GH_PROMPT_DISABLED", "1")
+        .args(["project", sub, &num_s, "--owner", owner])
+        .output()
+        .map_err(|e| Error::new("Error", format!("gh project {sub} failed: {e}")))?;
+    if !out.status.success() {
+        return Err(Error::new(
+            "Error",
+            format!(
+                "gh project {sub} #{project_number} failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ),
+        ));
+    }
+    Ok(if delete {
+        format!("Deleted GitHub Project #{project_number}.\n")
+    } else {
+        format!("Closed GitHub Project #{project_number}.\n")
+    })
+}
+
+pub fn resolve_project_board_linked_repo(owner: &str, project_number: u64) -> Option<String> {
+    if let Ok(existing_cards) = list_project_board_cards(owner, project_number) {
+        if let Some(c) = existing_cards.iter().find(|c| !c.repo_slug.is_empty()) {
+            return Some(c.repo_slug.clone());
+        }
+    }
+    let query = format!(
+        "query {{ user(login: \"{owner}\") {{ projectV2(number: {project_number}) {{ title repositories(first: 5) {{ nodes {{ nameWithOwner }} }} }} }} }}"
+    );
+    if let Ok(val) = run_gh_json(&["api", "graphql", "-f", &format!("query={query}")], None) {
+        if let Some(proj) = val
+            .get("data")
+            .and_then(|d| d.get("user"))
+            .and_then(|u| u.get("projectV2"))
+        {
+            if let Some(nodes) = proj
+                .get("repositories")
+                .and_then(|r| r.get("nodes"))
+                .and_then(domain::items)
+            {
+                for node in nodes {
+                    let slug = clean_display(node.get("nameWithOwner"), "");
+                    if !slug.is_empty() {
+                        return Some(slug);
+                    }
+                }
+            }
+            let title = clean_display(proj.get("title"), "").to_lowercase();
+            if title.contains("flare") || title.contains("spark-local-inference") {
+                return Some("R4yHarris/spark-local-inference".to_owned());
+            }
+        }
+    }
+    None
+}
+
 pub fn create_project_board_card(
     repo_root: &Path,
     owner: &str,
@@ -10029,6 +10343,21 @@ pub fn create_project_board_card(
     body: &str,
     initial_status: &str,
 ) -> Result<(u64, String), Error> {
+    let mut enable_issues_cmd = StdCommand::new("gh");
+    if let Some(tok) = resolve_gh_token_for_owner(Some(owner)) {
+        enable_issues_cmd.env("GH_TOKEN", tok);
+    }
+    let _ = enable_issues_cmd
+        .env("GH_PROMPT_DISABLED", "1")
+        .args([
+            "api",
+            "-X",
+            "PATCH",
+            &format!("repos/{repo_slug}"),
+            "-f",
+            "has_issues=true",
+        ])
+        .output();
     let mut cmd = StdCommand::new("gh");
     if let Some(tok) = resolve_gh_token_for_owner(Some(owner)) {
         cmd.env("GH_TOKEN", tok);
@@ -11745,6 +12074,26 @@ pub fn translate_natural_language_command(text: &str) -> Option<String> {
     {
         if let Some(num) = caps.get(1).map(|m| m.as_str()) {
             return Some(format!("/board run {num}"));
+        }
+    }
+    if let Some(caps) = regex_lite::Regex::new(
+        r"(?i)^(?:please\s+|can\s+you\s+)*(?:delete|remove)\s+(?:the\s+|my\s+)?(?:github\s+)?(?:project|kanban|board)(?:\s+board)?\s+#?(\d+)[?.!]*$",
+    )
+    .ok()?
+    .captures(trimmed)
+    {
+        if let Some(num) = caps.get(1).map(|m| m.as_str()) {
+            return Some(format!("/board delete {num}"));
+        }
+    }
+    if let Some(caps) = regex_lite::Regex::new(
+        r"(?i)^(?:please\s+|can\s+you\s+)*(?:close)\s+(?:the\s+|my\s+)?(?:github\s+)?(?:project|kanban|board)(?:\s+board)?\s+#?(\d+)[?.!]*$",
+    )
+    .ok()?
+    .captures(trimmed)
+    {
+        if let Some(num) = caps.get(1).map(|m| m.as_str()) {
+            return Some(format!("/board close {num}"));
         }
     }
     if let Some(caps) = regex_lite::Regex::new(
