@@ -1479,10 +1479,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                         config.as_value().get("llm").unwrap_or(&Value::Null),
                     )
                     .unwrap_or(false)
-                        && boundary.document().files_allowed.iter().any(|f| {
-                            std::fs::read_to_string(boundary.root().join(f))
-                                .is_ok_and(|s| s.contains("</think>"))
-                        })
+                        && !boundary.root().join("rust").join("shell.rs").is_file()
                     {
                         let _ = domain::put(&mut req, "reasoning_effort", Value::string("none"));
                         let _ = domain::put(
