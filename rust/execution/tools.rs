@@ -1726,17 +1726,33 @@ impl Boundary {
         let source =
             planning::memory::redact(&Text::from(source.as_str()), &self.redaction).to_utf8()?;
         if counts.iter().all(Option::is_none) {
-            if !reviewer && source.len() > 48_000 {
+            if source.len() > 48_000 {
                 let all_lines: Vec<&str> = source.lines().collect();
                 let total = all_lines.len();
-                let task_str = self.task.to_utf8().unwrap_or_default();
-                let mut keywords = Vec::new();
-                if let Ok(re) = regex(r"`([A-Za-z_][A-Za-z0-9_]{3,48})`") {
-                    for cap in re.captures_iter(&task_str) {
+                let mut search_str = self.task.to_utf8().unwrap_or_default();
+                search_str.push(' ');
+                search_str.push_str(&self.assignment.ask.to_utf8().unwrap_or_default());
+                let mut keywords: Vec<String> = Vec::new();
+                if let Ok(re) = regex(r"`([A-Za-z_][A-Za-z0-9_.:]{3,64})`") {
+                    for cap in re.captures_iter(&search_str) {
+                        if let Some(m) = cap.get(1) {
+                            for part in m.as_str().split(['.', ':']) {
+                                if part.len() >= 4 && !keywords.iter().any(|k| k == part) {
+                                    keywords.push(part.to_owned());
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Ok(re) = regex(r"\b([A-Za-z_][A-Za-z0-9_]{3,48})\b") {
+                    for cap in re.captures_iter(&search_str) {
                         if let Some(m) = cap.get(1) {
                             let kw = m.as_str();
-                            if !keywords.contains(&kw) {
-                                keywords.push(kw);
+                            let is_symbol = kw.contains('_')
+                                || (kw.chars().any(char::is_uppercase)
+                                    && kw.chars().any(char::is_lowercase));
+                            if is_symbol && !keywords.iter().any(|k| k == kw) {
+                                keywords.push(kw.to_owned());
                             }
                         }
                     }
@@ -1749,7 +1765,7 @@ impl Boundary {
                     *slot = true;
                 }
                 for (idx, line) in all_lines.iter().enumerate() {
-                    if keywords.iter().any(|kw| line.contains(kw)) {
+                    if keywords.iter().any(|kw| line.contains(kw.as_str())) {
                         let start = idx.saturating_sub(35);
                         let end = (idx + 45).min(total);
                         for slot in &mut include[start..end] {
@@ -1778,7 +1794,12 @@ impl Boundary {
             return Ok((file, snapshot, Value::string(&source)));
         }
         let offset = counts.get(1).copied().flatten().unwrap_or(1) - 1;
-        let count = counts.first().copied().flatten().unwrap_or(u64::MAX);
+        let raw_count = counts.first().copied().flatten().unwrap_or(u64::MAX);
+        let count = if source.len() > 48_000 {
+            raw_count.min(250)
+        } else {
+            raw_count
+        };
         Ok((
             file,
             snapshot,
@@ -3308,7 +3329,7 @@ impl Boundary {
                         .any(|f| f.contains("runtime_package/"))
                     {
                         test_step.push("--".to_owned());
-                        test_step.push("runtime_package::describe::tests".to_owned());
+                        test_step.push("descri".to_owned());
                     } else if requirements
                         .files
                         .iter()

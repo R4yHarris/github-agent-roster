@@ -1050,12 +1050,67 @@ impl Evidence {
                     sources_text
                         .0
                         .extend(source.0.iter().skip(source.0.len().saturating_sub(7_000)));
-                } else if source.0.len() > 24_000 {
-                    sources_text.0.extend(source.0.iter().take(12_000));
-                    sources_text.push_str("\n\n... [Large file middle omitted; full unified diff is provided in ## Diff] ...\n\n");
-                    sources_text
-                        .0
-                        .extend(source.0.iter().skip(source.0.len().saturating_sub(12_000)));
+                } else if (!files.contains(&file) && source.0.len() > 8_000)
+                    || source.0.len() > 24_000
+                {
+                    if let Ok(raw_src) = source.to_utf8() {
+                        let all_lines: Vec<&str> = raw_src.lines().collect();
+                        let total = all_lines.len();
+                        let mut search_str = boundary.task().to_utf8().unwrap_or_default();
+                        search_str.push(' ');
+                        search_str
+                            .push_str(&boundary.assignment().ask.to_utf8().unwrap_or_default());
+                        let mut keywords: Vec<String> = Vec::new();
+                        if let Ok(re) = execution::regex(r"\b([A-Za-z_][A-Za-z0-9_]{3,48})\b") {
+                            for cap in re.captures_iter(&search_str) {
+                                if let Some(m) = cap.get(1) {
+                                    let kw = m.as_str();
+                                    let is_symbol = kw.contains('_')
+                                        || (kw.chars().any(char::is_uppercase)
+                                            && kw.chars().any(char::is_lowercase));
+                                    if is_symbol && !keywords.iter().any(|k| k == kw) {
+                                        keywords.push(kw.to_owned());
+                                    }
+                                }
+                            }
+                        }
+                        let mut include = vec![false; total];
+                        for slot in include.iter_mut().take(total.min(80)) {
+                            *slot = true;
+                        }
+                        for slot in include.iter_mut().skip(total.saturating_sub(80)) {
+                            *slot = true;
+                        }
+                        for (idx, line) in all_lines.iter().enumerate() {
+                            if keywords.iter().any(|kw| line.contains(kw.as_str())) {
+                                let start = idx.saturating_sub(35);
+                                let end = (idx + 45).min(total);
+                                for slot in &mut include[start..end] {
+                                    *slot = true;
+                                }
+                            }
+                        }
+                        let mut excerpt = Vec::new();
+                        let mut in_gap = false;
+                        for (idx, &keep) in include.iter().enumerate() {
+                            if keep {
+                                in_gap = false;
+                                excerpt.push(all_lines[idx]);
+                            } else if !in_gap {
+                                in_gap = true;
+                                excerpt.push(
+                                    "// ... [Large file middle omitted; full unified diff is provided in ## Diff] ...",
+                                );
+                            }
+                        }
+                        sources_text.push_str(&excerpt.join("\n"));
+                    } else {
+                        sources_text.0.extend(source.0.iter().take(12_000));
+                        sources_text.push_str("\n\n... [Large file middle omitted; full unified diff is provided in ## Diff] ...\n\n");
+                        sources_text
+                            .0
+                            .extend(source.0.iter().skip(source.0.len().saturating_sub(12_000)));
+                    }
                 } else {
                     sources_text.0.extend(&source.0);
                 }
