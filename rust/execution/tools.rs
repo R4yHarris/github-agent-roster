@@ -2551,9 +2551,17 @@ impl Boundary {
                     let snapshot = regular(&self.root, &file, MAX_FILE_BYTES)?
                         .ok_or_else(|| denied("Checkpoint product disappeared"))?;
                     let source = bytes_text(&snapshot.bytes)?;
-                    if planning::memory::redact(&Text::from(source.as_str()), &self.redaction)
-                        != Text::from(source.as_str())
-                    {
+                    let has_secret = if self.root.join("rust").join("shell.rs").is_file() {
+                        planning::memory::redact(&Text::from(source.as_str()), &self.redaction)
+                            != Text::from(source.as_str())
+                    } else {
+                        !crate::state::redaction::secret_material_lines(
+                            &Text::from(source.as_str()),
+                            &self.redaction,
+                        )
+                        .is_empty()
+                    };
+                    if has_secret {
                         return Err(denied(
                             "Checkpoint refuses product files containing secret material",
                         ));
