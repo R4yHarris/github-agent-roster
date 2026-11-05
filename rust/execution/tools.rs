@@ -3401,7 +3401,7 @@ impl Boundary {
                     test_step.push("--test-threads=2".to_owned());
                 } else if sc == "flare" {
                     test_step.push("--".to_owned());
-                    test_step.push("package_cache".to_owned());
+                    test_step.push("entry_path_tests".to_owned());
                     test_step.push("--test-threads=2".to_owned());
                 } else if sc == "heliopause" {
                     test_step.push("--".to_owned());
