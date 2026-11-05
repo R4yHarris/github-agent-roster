@@ -307,18 +307,29 @@ fn bounded_request(request: &Value, budget: usize) -> Result<(), Error> {
 }
 
 fn budget(config: &crate::config::Config) -> Result<usize, Error> {
-    usize::try_from(
-        domain::safe_integer(
+    let raw = domain::safe_integer(
+        config
+            .as_value()
+            .get("seat")
+            .and_then(|seat| seat.get("context_chars")),
+    )
+    .filter(|budget| *budget > 0)
+    .ok_or_else(|| Error::type_error("Seat context budget must be positive"))?;
+    let mut b = usize::try_from(raw)
+        .map_err(|_| Error::type_error("Seat context budget exceeds this platform"))?;
+    if b >= 200_000 {
+        if let Some(ctx_max) = domain::safe_integer(
             config
                 .as_value()
-                .get("seat")
-                .and_then(|seat| seat.get("context_chars")),
-        )
-        .filter(|budget| *budget > 0)
-        .ok_or_else(|| Error::type_error("Seat context budget must be positive"))?,
-    )
-    .map(|budget| budget.min(4 * 1024 * 1024))
-    .map_err(|_| Error::type_error("Seat context budget exceeds this platform"))
+                .get("llm")
+                .and_then(|llm| llm.get("context_max")),
+        ) {
+            if let Ok(ctx_chars) = usize::try_from(ctx_max.saturating_mul(3)) {
+                b = b.max(ctx_chars);
+            }
+        }
+    }
+    Ok(b.min(4 * 1024 * 1024))
 }
 
 async fn cancellation(token: Option<&CancellationToken>) -> Result<crate::cancel::Reason, Error> {

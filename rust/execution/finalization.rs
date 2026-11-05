@@ -756,13 +756,23 @@ impl Attempt {
     ) -> Result<self_review::Request, Error> {
         self.check(boundary)?;
         let changes = evidence::changes(boundary, None).await?;
-        let budget = domain::safe_integer(
+        let mut budget = domain::safe_integer(
             self.config
                 .as_value()
                 .get("seat")
                 .and_then(|seat| seat.get("context_chars")),
         )
         .unwrap_or(8000);
+        if budget >= 200_000 {
+            if let Some(ctx_max) = domain::safe_integer(
+                self.config
+                    .as_value()
+                    .get("llm")
+                    .and_then(|llm| llm.get("context_max")),
+            ) {
+                budget = budget.max(ctx_max.saturating_mul(3)).min(4 * 1024 * 1024);
+            }
+        }
         self_review::Request::prepare(
             boundary,
             &changes,

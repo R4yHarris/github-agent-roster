@@ -1726,6 +1726,55 @@ impl Boundary {
         let source =
             planning::memory::redact(&Text::from(source.as_str()), &self.redaction).to_utf8()?;
         if counts.iter().all(Option::is_none) {
+            if !reviewer && source.len() > 48_000 {
+                let all_lines: Vec<&str> = source.lines().collect();
+                let total = all_lines.len();
+                let task_str = self.task.to_utf8().unwrap_or_default();
+                let mut keywords = Vec::new();
+                if let Ok(re) = regex(r"`([A-Za-z_][A-Za-z0-9_]{3,48})`") {
+                    for cap in re.captures_iter(&task_str) {
+                        if let Some(m) = cap.get(1) {
+                            let kw = m.as_str();
+                            if !keywords.contains(&kw) {
+                                keywords.push(kw);
+                            }
+                        }
+                    }
+                }
+                let mut include = vec![false; total];
+                for slot in include.iter_mut().take(total.min(80)) {
+                    *slot = true;
+                }
+                for slot in include.iter_mut().skip(total.saturating_sub(80)) {
+                    *slot = true;
+                }
+                for (idx, line) in all_lines.iter().enumerate() {
+                    if keywords.iter().any(|kw| line.contains(kw)) {
+                        let start = idx.saturating_sub(35);
+                        let end = (idx + 45).min(total);
+                        for slot in &mut include[start..end] {
+                            *slot = true;
+                        }
+                    }
+                }
+                let mut excerpt = Vec::new();
+                let mut in_gap = false;
+                for (idx, &keep) in include.iter().enumerate() {
+                    if keep {
+                        in_gap = false;
+                        excerpt.push(all_lines[idx]);
+                    } else if !in_gap {
+                        in_gap = true;
+                        excerpt.push(
+                            "// ... [unrelated lines omitted; use offset/max_lines if needed] ...",
+                        );
+                    }
+                }
+                let joined = excerpt.join("\n");
+                if joined.len() < source.len() {
+                    return Ok((file, snapshot, Value::string(&joined)));
+                }
+            }
             return Ok((file, snapshot, Value::string(&source)));
         }
         let offset = counts.get(1).copied().flatten().unwrap_or(1) - 1;
