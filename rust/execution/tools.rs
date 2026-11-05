@@ -1614,7 +1614,18 @@ impl Boundary {
                     false
                 }
             });
+        let same_python_repo = !planning::forbidden_read(file)
+            && !private_path(file)
+            && scope.iter().any(|allowed| allowed.ends_with(".py"))
+            && (file.ends_with(".py")
+                || file == "pyproject.toml"
+                || directory
+                    && (file == "ignition"
+                        || file.starts_with("ignition/")
+                        || file == "tests"
+                        || file.starts_with("tests/")));
         Ok(same_rust_crate
+            || same_python_repo
             || planning::is_allowed(file, &scope)
             || self
                 .options
@@ -3004,7 +3015,121 @@ impl Boundary {
         Ok(node.clone())
     }
 
+    async fn python_checks(&self, scope: &[String]) -> Result<NodeChecks, Error> {
+        let python = ["/usr/bin/python3", "/usr/local/bin/python3"]
+            .into_iter()
+            .map(PathBuf::from)
+            .find(|candidate| candidate.is_file())
+            .unwrap_or_else(|| PathBuf::from("python3"));
+        let mut environment = BTreeMap::from([
+            ("ROSTER_SEAT".to_owned(), "coder".to_owned()),
+            ("PYTHONDONTWRITEBYTECODE".to_owned(), "1".to_owned()),
+            ("PYTHONPATH".to_owned(), ".".to_owned()),
+        ]);
+        if let Ok(home) = std::env::var("HOME") {
+            environment.insert("HOME".to_owned(), home);
+        }
+        let mut candidates = scope
+            .iter()
+            .chain(self.written.iter())
+            .filter(|file| !file.contains('*') && file.ends_with(".py"))
+            .cloned()
+            .collect::<Vec<_>>();
+        candidates.sort();
+        candidates.dedup();
+        let mut result = NodeChecks {
+            output: ObservedProcess {
+                exit: 0,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            },
+            skipped: false,
+            commands: Vec::new(),
+            syntax_file: None,
+        };
+        let mut test_files = Vec::new();
+        for file in &candidates {
+            if regular(&self.root, file, MAX_FILE_BYTES)?.is_none() {
+                continue;
+            }
+            result
+                .commands
+                .push(format!("python3 -B -m py_compile {file}"));
+            let output = self
+                .process(
+                    &python,
+                    &[
+                        "-B".to_owned(),
+                        "-m".to_owned(),
+                        "py_compile".to_owned(),
+                        file.clone(),
+                    ],
+                    &environment,
+                    30_000,
+                    1024 * 1024,
+                )
+                .await?;
+            if output.exit != 0 {
+                result.output = output;
+                result.syntax_file = Some(file.clone());
+                return Ok(result);
+            }
+            if file.starts_with("tests/") || file.contains("/test_") || file.starts_with("test_") {
+                if !test_files.contains(file) {
+                    test_files.push(file.clone());
+                }
+            } else if let Some(stem) = Path::new(file).file_stem().and_then(|s| s.to_str()) {
+                for candidate in [
+                    format!("tests/preparation/test_{stem}.py"),
+                    format!("tests/test_{stem}.py"),
+                ] {
+                    if regular(&self.root, &candidate, MAX_FILE_BYTES)?.is_some()
+                        && !test_files.contains(&candidate)
+                    {
+                        test_files.push(candidate);
+                    }
+                }
+            }
+        }
+        if !test_files.is_empty() {
+            let filter = "not calibration and not parallel and not remote and not adapter and not wide_rows and not strided_destination and not shared_scalar and not device_budget and not discrete and not tuning_races and not integrated_device and not windows_device and not source_mutation";
+            let mut args = vec![
+                "-B".to_owned(),
+                "-m".to_owned(),
+                "pytest".to_owned(),
+                "-p".to_owned(),
+                "no:cacheprovider".to_owned(),
+            ];
+            args.extend(test_files.clone());
+            args.push("-k".to_owned());
+            args.push(filter.to_owned());
+            result
+                .commands
+                .push(format!("python3 -B -m pytest {}", test_files.join(" ")));
+            result.output = self
+                .process(
+                    &python,
+                    &args,
+                    &environment,
+                    policy::FULL_TEST_TIMEOUT_MS,
+                    4 * 1024 * 1024,
+                )
+                .await?;
+        } else {
+            result.output.stdout = b"python3 -m py_compile passed".to_vec();
+        }
+        Ok(result)
+    }
+
     async fn node_checks(&self, scope: &[String], full: bool) -> Result<NodeChecks, Error> {
+        if !self.root.join("package.json").is_file()
+            && scope
+                .iter()
+                .chain(self.written.iter())
+                .any(|file| file.ends_with(".py"))
+        {
+            return self.python_checks(scope).await;
+        }
         let relevant = policy::relevant_tests(scope)?;
         let tests_root = self.root.join("tests");
         secure::check_components(&tests_root).map_err(|cause| {
@@ -3373,7 +3498,11 @@ impl Boundary {
                         .files
                         .iter()
                         .chain(self.written.iter())
-                        .any(|f| f.contains("output/") || f.contains("server"));
+                        .any(|f| {
+                            f.contains("output/")
+                                || f.contains("server")
+                                || f.contains("scheduler/")
+                        });
                     let feats = if is_server_or_output {
                         "server"
                     } else {
@@ -3400,6 +3529,15 @@ impl Boundary {
                     {
                         test_step.push("--".to_owned());
                         test_step.push("output::".to_owned());
+                        test_step.push("--test-threads=2".to_owned());
+                    } else if requirements
+                        .files
+                        .iter()
+                        .chain(self.written.iter())
+                        .any(|f| f.contains("scheduler/"))
+                    {
+                        test_step.push("--".to_owned());
+                        test_step.push("scheduler::cache_memory".to_owned());
                         test_step.push("--test-threads=2".to_owned());
                     } else if requirements
                         .files
