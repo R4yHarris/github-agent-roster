@@ -3242,6 +3242,10 @@ impl Boundary {
                 if protoc_cand.is_file() {
                     environment.insert("PROTOC".to_owned(), protoc_cand.display().to_string());
                 }
+                let cmake_cand = home.join(".local").join("bin").join("cmake");
+                if cmake_cand.is_file() {
+                    environment.insert("CMAKE".to_owned(), cmake_cand.display().to_string());
+                }
             }
             let is_roster_self = self.root.join("rust").join("shell.rs").is_file();
             let has_root_cargo = self.root.join("Cargo.toml").is_file();
@@ -3337,9 +3341,19 @@ impl Boundary {
                     "--offline".to_owned(),
                 ];
                 if sc == "helios" {
+                    let is_output = requirements
+                        .files
+                        .iter()
+                        .chain(self.written.iter())
+                        .any(|f| f.contains("output/"));
+                    let feats = if is_output {
+                        "server"
+                    } else {
+                        "runtime-package,frontend"
+                    };
                     for s in [&mut check_step, &mut test_step] {
                         s.push("--features".to_owned());
-                        s.push("runtime-package,frontend".to_owned());
+                        s.push(feats.to_owned());
                     }
                     if requirements
                         .files
@@ -3349,14 +3363,11 @@ impl Boundary {
                     {
                         test_step.push("--".to_owned());
                         test_step.push("descri".to_owned());
-                    } else if requirements
-                        .files
-                        .iter()
-                        .chain(self.written.iter())
-                        .any(|f| f.contains("output/"))
-                    {
+                        test_step.push("--test-threads=2".to_owned());
+                    } else if is_output {
                         test_step.push("--".to_owned());
-                        test_step.push("output".to_owned());
+                        test_step.push("output::".to_owned());
+                        test_step.push("--test-threads=2".to_owned());
                     }
                 }
                 [
