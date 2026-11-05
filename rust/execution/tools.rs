@@ -3237,6 +3237,8 @@ impl Boundary {
             environment.insert("CARGO_NET_OFFLINE".to_owned(), "true".to_owned());
             environment.insert("RUSTUP_AUTO_INSTALL".to_owned(), "0".to_owned());
             environment.insert("CARGO_INCREMENTAL".to_owned(), "0".to_owned());
+            environment.insert("CARGO_PROFILE_DEV_DEBUG".to_owned(), "0".to_owned());
+            environment.insert("CARGO_PROFILE_TEST_DEBUG".to_owned(), "0".to_owned());
             if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
                 let protoc_cand = home.join(".local").join("bin").join("protoc");
                 if protoc_cand.is_file() {
@@ -3258,7 +3260,7 @@ impl Boundary {
                     .find(|c| self.root.join(c).join("Cargo.toml").is_file())
                     .map(str::to_owned)
                     .or_else(|| {
-                        ["helios", "eos", "flare", "selene"]
+                        ["helios", "heliopause", "eos", "flare", "selene"]
                             .into_iter()
                             .find(|c| self.root.join(c).join("Cargo.toml").is_file())
                             .map(str::to_owned)
@@ -3284,18 +3286,16 @@ impl Boundary {
                         }
                     }
                 }
-            } else if let Some(ref sc) = sub_crate {
-                if !environment.contains_key("CARGO_TARGET_DIR") {
-                    if let Ok(repo_paths) = paths::repository_paths(&self.root) {
-                        if let Some(main_root) = repo_paths.common_dir.parent() {
-                            let shared_target = main_root.join(sc).join("target");
-                            if !shared_target.starts_with(&self.root) {
-                                let _ = fs::create_dir_all(&shared_target);
-                                environment.insert(
-                                    "CARGO_TARGET_DIR".to_owned(),
-                                    shared_target.display().to_string(),
-                                );
-                            }
+            } else if sub_crate.is_some() && !environment.contains_key("CARGO_TARGET_DIR") {
+                if let Ok(repo_paths) = paths::repository_paths(&self.root) {
+                    if let Some(main_root) = repo_paths.common_dir.parent() {
+                        let shared_target = main_root.join("target");
+                        if !shared_target.starts_with(&self.root) {
+                            let _ = fs::create_dir_all(&shared_target);
+                            environment.insert(
+                                "CARGO_TARGET_DIR".to_owned(),
+                                shared_target.display().to_string(),
+                            );
                         }
                     }
                 }
@@ -3326,27 +3326,32 @@ impl Boundary {
                 .any(|f| f.starts_with("tests/"));
             let cargo_steps: [Vec<String>; 3] = if let Some(ref sc) = sub_crate {
                 let manifest_rel = format!("{sc}/Cargo.toml");
+                let target_flag = if self.root.join(sc).join("src").join("lib.rs").is_file() {
+                    "--lib"
+                } else {
+                    "--bins"
+                };
                 let mut check_step = vec![
                     "check".to_owned(),
                     "--manifest-path".to_owned(),
                     manifest_rel.clone(),
-                    "--lib".to_owned(),
+                    target_flag.to_owned(),
                     "--offline".to_owned(),
                 ];
                 let mut test_step = vec![
                     "test".to_owned(),
                     "--manifest-path".to_owned(),
                     manifest_rel.clone(),
-                    "--lib".to_owned(),
+                    target_flag.to_owned(),
                     "--offline".to_owned(),
                 ];
                 if sc == "helios" {
-                    let is_output = requirements
+                    let is_server_or_output = requirements
                         .files
                         .iter()
                         .chain(self.written.iter())
-                        .any(|f| f.contains("output/"));
-                    let feats = if is_output {
+                        .any(|f| f.contains("output/") || f.contains("server"));
+                    let feats = if is_server_or_output {
                         "server"
                     } else {
                         "runtime-package,frontend"
@@ -3364,11 +3369,37 @@ impl Boundary {
                         test_step.push("--".to_owned());
                         test_step.push("descri".to_owned());
                         test_step.push("--test-threads=2".to_owned());
-                    } else if is_output {
+                    } else if requirements
+                        .files
+                        .iter()
+                        .chain(self.written.iter())
+                        .any(|f| f.contains("output/"))
+                    {
                         test_step.push("--".to_owned());
                         test_step.push("output::".to_owned());
                         test_step.push("--test-threads=2".to_owned());
+                    } else if requirements
+                        .files
+                        .iter()
+                        .chain(self.written.iter())
+                        .any(|f| f.contains("server"))
+                    {
+                        test_step.push("--".to_owned());
+                        test_step.push("metrics_route".to_owned());
+                        test_step.push("--test-threads=2".to_owned());
                     }
+                } else if sc == "selene" {
+                    test_step.push("--".to_owned());
+                    test_step.push("disk_store::tests::thin".to_owned());
+                    test_step.push("--test-threads=2".to_owned());
+                } else if sc == "flare" {
+                    test_step.push("--".to_owned());
+                    test_step.push("package_cache".to_owned());
+                    test_step.push("--test-threads=2".to_owned());
+                } else if sc == "heliopause" {
+                    test_step.push("--".to_owned());
+                    test_step.push("export::archive::tests".to_owned());
+                    test_step.push("--test-threads=2".to_owned());
                 }
                 [
                     vec![
