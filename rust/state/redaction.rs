@@ -478,7 +478,7 @@ fn assignment(units: &[u16], position: usize, secret: bool) -> Option<(usize, Te
         end
     };
     let value = units.get(value_start..end)?;
-    if code_reference(value) {
+    if code_reference(value) || value.windows(2).any(|w| w == [92, 114] || w == [92, 110]) {
         return Some((end, Text(units.get(position..end)?.to_vec())));
     }
     let mut replacement = Text(key.to_vec());
