@@ -1463,13 +1463,25 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                 let completion = if let Some(sc) = synth_completion.take() {
                     sc
                 } else {
+                    let mut req = request(&messages, Some(definitions), false);
+                    if crate::llm::reasoning::uses_deepseek_reasoning(
+                        config.as_value().get("llm").unwrap_or(&Value::Null),
+                    )
+                    .unwrap_or(false)
+                        && boundary.document().files_allowed.iter().any(|f| {
+                            std::fs::read_to_string(boundary.root().join(f))
+                                .is_ok_and(|s| s.contains("</think>"))
+                        })
+                    {
+                        let _ = domain::put(&mut req, "reasoning_effort", Value::string("none"));
+                        let _ = domain::put(
+                            &mut req,
+                            "chat_template_kwargs",
+                            Value::object(vec![("thinking", Value::Boolean(false))]),
+                        );
+                    }
                     match self
-                        .complete(
-                            boundary,
-                            &mut chat,
-                            &request(&messages, Some(definitions), false),
-                            context_budget,
-                        )
+                        .complete(boundary, &mut chat, &req, context_budget)
                         .await
                     {
                         Ok(completion) => completion,
