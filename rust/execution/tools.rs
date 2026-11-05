@@ -2672,6 +2672,10 @@ impl Boundary {
                     .replace('\\', "/");
                 let first = file.split('/').next().unwrap_or("");
                 if [".git", "node_modules", "target", ".worktrees"].contains(&first)
+                    || file
+                        .split('/')
+                        .any(|part| matches!(part, "__pycache__" | ".pytest_cache"))
+                    || file.ends_with(".pyc")
                     || [".roster/locks", ".roster/checkpoints"]
                         .iter()
                         .any(|prefix| file == *prefix || file.starts_with(&format!("{prefix}/")))
@@ -3024,6 +3028,10 @@ impl Boundary {
         let mut environment = BTreeMap::from([
             ("ROSTER_SEAT".to_owned(), "coder".to_owned()),
             ("PYTHONDONTWRITEBYTECODE".to_owned(), "1".to_owned()),
+            (
+                "PYTHONPYCACHEPREFIX".to_owned(),
+                "/tmp/roster-pycache".to_owned(),
+            ),
             ("PYTHONPATH".to_owned(), ".".to_owned()),
         ]);
         if let Ok(home) = std::env::var("HOME") {
@@ -3054,14 +3062,14 @@ impl Boundary {
             }
             result
                 .commands
-                .push(format!("python3 -B -m py_compile {file}"));
+                .push(format!("python3 -B -c compile {file}"));
             let output = self
                 .process(
                     &python,
                     &[
                         "-B".to_owned(),
-                        "-m".to_owned(),
-                        "py_compile".to_owned(),
+                        "-c".to_owned(),
+                        "import pathlib, sys; compile(pathlib.Path(sys.argv[1]).read_bytes(), sys.argv[1], 'exec')".to_owned(),
                         file.clone(),
                     ],
                     &environment,
