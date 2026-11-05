@@ -998,7 +998,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                 .document()
                 .files_allowed
                 .iter()
-                .any(|f| f.ends_with(".rs"))
+                .any(|f| f.ends_with(".rs") || f.ends_with(".py"))
         {
             14
         } else {
