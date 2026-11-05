@@ -993,9 +993,20 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
             })
             .unwrap_or(0);
         let exploration_multiplier = if cited_files > 2 { 3 } else { 2 };
+        let exploration_floor = if !boundary.root().join("rust").join("shell.rs").is_file()
+            && boundary
+                .document()
+                .files_allowed
+                .iter()
+                .any(|f| f.ends_with(".rs"))
+        {
+            14
+        } else {
+            8
+        };
         let exploration = ((boundary.document().files_allowed.len() + cited_files)
             * exploration_multiplier)
-            .max(8)
+            .max(exploration_floor)
             .min(turns as usize);
         let context_budget = budget(config)?;
         boundary.require_git().await?;
@@ -1734,7 +1745,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                                 "Exploration notice: you have gathered sufficient repository evidence across 2 exploration turns. In your next turn, call write_file to create the allowed report/documentation file now.",
                             ),
                         ));
-                    } else if exploration > 8 && progress.no_write_turns + 3 == exploration {
+                    } else if exploration >= 8 && progress.no_write_turns + 3 == exploration {
                         messages.push(message(
                             "user",
                             Text::from(
