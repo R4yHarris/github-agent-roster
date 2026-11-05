@@ -3397,7 +3397,7 @@ impl Boundary {
                     }
                 } else if sc == "selene" {
                     test_step.push("--".to_owned());
-                    test_step.push("disk_store::tests::thin".to_owned());
+                    test_step.push("disk_store::tests".to_owned());
                     test_step.push("--test-threads=2".to_owned());
                 } else if sc == "flare" {
                     test_step.push("--".to_owned());
