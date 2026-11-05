@@ -10105,6 +10105,7 @@ pub fn ensure_repo_git_exclude(repo_root: &Path) -> Result<bool, Error> {
         ".roster/runs/session.log",
         ".worktrees/",
         ".roster-state/",
+        "/target/",
         "/ASSIGNMENT.md",
         "/TASK.md",
         "/RECIPE.yml",

@@ -1780,6 +1780,13 @@ impl Boundary {
                     *slot = true;
                 }
                 for (idx, line) in all_lines.iter().enumerate() {
+                    if line.trim().starts_with("mod tests") {
+                        let start = idx.saturating_sub(5);
+                        let end = (idx + 120).min(total);
+                        for slot in &mut include[start..end] {
+                            *slot = true;
+                        }
+                    }
                     if keywords.iter().any(|kw| line.contains(kw.as_str())) {
                         let start = idx.saturating_sub(35);
                         let end = (idx + 45).min(total);
@@ -1811,7 +1818,7 @@ impl Boundary {
         let offset = counts.get(1).copied().flatten().unwrap_or(1) - 1;
         let raw_count = counts.first().copied().flatten().unwrap_or(u64::MAX);
         let count = if source.len() > 48_000 {
-            raw_count.min(250)
+            raw_count.min(1000)
         } else {
             raw_count
         };
