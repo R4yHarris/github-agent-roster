@@ -1819,8 +1819,21 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                 .ok_or_else(|| {
                     Handoff::Unavailable.error("Required self-review has no configured endpoint")
                 })?;
+                let mut sr_req = prepared.request();
+                if crate::llm::reasoning::uses_deepseek_reasoning(
+                    config.as_value().get("llm").unwrap_or(&Value::Null),
+                )
+                .unwrap_or(false)
+                {
+                    let _ = domain::put(&mut sr_req, "reasoning_effort", Value::string("none"));
+                    let _ = domain::put(
+                        &mut sr_req,
+                        "chat_template_kwargs",
+                        Value::object(vec![("thinking", Value::Boolean(false))]),
+                    );
+                }
                 let response = self
-                    .complete(boundary, &mut reviewer, &prepared.request(), context_budget)
+                    .complete(boundary, &mut reviewer, &sr_req, context_budget)
                     .await;
                 attempt.annotate(
                     "selfReviewResponse",
