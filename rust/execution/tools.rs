@@ -1600,7 +1600,22 @@ impl Boundary {
         if is_report_slice && !planning::forbidden_read(file) && !private_path(file) {
             return Ok(true);
         }
-        Ok(planning::is_allowed(file, &scope)
+        let same_rust_crate = !planning::forbidden_read(file)
+            && !private_path(file)
+            && scope.iter().any(|allowed| {
+                if !allowed.ends_with(".rs") {
+                    return false;
+                }
+                if let Some((crate_prefix, _)) = allowed.split_once("/src/") {
+                    file == crate_prefix || file.starts_with(&format!("{crate_prefix}/"))
+                } else if allowed.starts_with("src/") {
+                    file == "src" || file.starts_with("src/")
+                } else {
+                    false
+                }
+            });
+        Ok(same_rust_crate
+            || planning::is_allowed(file, &scope)
             || self
                 .options
                 .required_reads
@@ -1996,13 +2011,17 @@ impl Boundary {
         let mut matches = Vec::new();
         let mut total = 0_u64;
         for file in self.readable_files(&file)? {
-            let result = match self.read_file(&Value::object(vec![("path", Value::string(&file))]))
-            {
+            let Some(snapshot) = regular(&self.root, &file, MAX_FILE_BYTES)? else {
+                continue;
+            };
+            let raw = match bytes_text(&snapshot.bytes) {
                 Ok(v) => v,
                 Err(err) if err.message.contains("UTF-8") => continue,
                 Err(err) => return Err(err),
             };
-            let source = text(&result, "Search input must be text")?;
+            let source =
+                planning::memory::redact(&Text::from(raw.as_str()), &self.redaction).to_utf8()?;
+            self.seen.insert(key(&file), snapshot);
             total += source.len() as u64;
             if total > MAX_SNAPSHOT_BYTES {
                 return Err(usage("Tool search exceeds 128 MiB"));
