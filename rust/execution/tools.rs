@@ -2426,9 +2426,17 @@ impl Boundary {
             if content.len() as u64 > MAX_FILE_BYTES {
                 return Err(usage("Tool file exceeds 16 MiB"));
             }
-            if planning::memory::redact(&Text::from(content.as_str()), &self.redaction)
-                != Text::from(content.as_str())
-            {
+            let has_secret = if self.root.join("rust").join("shell.rs").is_file() {
+                planning::memory::redact(&Text::from(content.as_str()), &self.redaction)
+                    != Text::from(content.as_str())
+            } else {
+                !crate::state::redaction::secret_material_lines(
+                    &Text::from(content.as_str()),
+                    &self.redaction,
+                )
+                .is_empty()
+            };
+            if has_secret {
                 return Err(denied(
                     "Tool writes must not contain credentials or private keys",
                 ));

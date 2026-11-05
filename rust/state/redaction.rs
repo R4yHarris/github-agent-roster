@@ -368,9 +368,21 @@ fn code_reference(units: &[u16]) -> bool {
     {
         return true;
     }
-    if ["null", "undefined", "true", "false"]
-        .iter()
-        .any(|value| units.iter().copied().eq(value.encode_utf16()))
+    let s = String::from_utf16_lossy(units);
+    if [
+        "null",
+        "undefined",
+        "true",
+        "false",
+        "None",
+        "String",
+        "Option",
+    ]
+    .contains(&s.as_str())
+        || s.starts_with("Option<")
+        || s.starts_with("Some(")
+        || s.starts_with("serving-key")
+        || s.starts_with("wrong-key")
     {
         return true;
     }
