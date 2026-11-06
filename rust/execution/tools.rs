@@ -2893,9 +2893,27 @@ impl Boundary {
         };
         let _scope = self.span(label);
         self.check()?;
+        let mut effective_env = extra_env.clone();
+        let mut temp_index_path = None;
+        if args.first().map(String::as_str) == Some("diff")
+            && !effective_env.contains_key("GIT_INDEX_FILE")
+            && let Some(idx_bytes) = self
+                .git_seal
+                .as_ref()
+                .and_then(checkpoints::GitSeal::primary_index_bytes)
+        {
+            let lock_dir = self.root.join(".roster").join("locks");
+            if fs::create_dir_all(&lock_dir).is_ok() {
+                let tmp = lock_dir.join(format!("git-diff-index-{}", std::process::id()));
+                if fs::write(&tmp, idx_bytes).is_ok() {
+                    effective_env.insert("GIT_INDEX_FILE".to_owned(), tmp.display().to_string());
+                    temp_index_path = Some(tmp);
+                }
+            }
+        }
         let mut command = self
             .host
-            .git_command(&self.root, &self.no_hooks, args, extra_env);
+            .git_command(&self.root, &self.no_hooks, args, &effective_env);
         let command_scope = self.span(super::timing::Label::OwnedGit);
         let output = process::execute_timed(
             &mut command,
@@ -2907,6 +2925,10 @@ impl Boundary {
             command_scope.as_ref(),
         )
         .await;
+        if let Some(ref tmp) = temp_index_path {
+            let _ = fs::remove_file(tmp);
+            let _ = fs::remove_file(format!("{}.lock", tmp.display()));
+        }
         if let Some(scope) = command_scope {
             scope.finish_status(output.is_ok());
         }
