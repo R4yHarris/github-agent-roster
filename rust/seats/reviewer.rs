@@ -1862,12 +1862,23 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                 ]);
                 draft.ask_audit = Some(audit.clone());
             }
+            let all_checks_met =
+                report
+                    .get("checks")
+                    .and_then(domain::items)
+                    .is_some_and(|items| {
+                        !items.is_empty()
+                            && items
+                                .iter()
+                                .all(|c| c.get("met") == Some(&Value::Boolean(true)))
+                    });
             if !boundary.root().join("rust").join("shell.rs").is_file()
                 && options.previous_findings.is_empty()
-                && report
+                && (report
                     .get("defects")
                     .and_then(domain::items)
                     .is_none_or(<[_]>::is_empty)
+                    || all_checks_met)
                 && boundary
                     .document()
                     .files_allowed
