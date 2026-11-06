@@ -5511,6 +5511,11 @@ impl ShellSession {
                             reqs = updated;
                         }
                     }
+                } else if !combined.to_lowercase().contains("acceptance check")
+                    && !combined.to_lowercase().contains("acceptance criteria")
+                {
+                    let short_title: String = title.replace('`', "").chars().take(160).collect();
+                    combined.push_str(&format!("\n\n## Acceptance checks\n- {short_title}\n"));
                 }
                 let is_native =
                     crate::execution::policy::requires_native(&reqs.files).unwrap_or(false);
@@ -14903,7 +14908,7 @@ fn discover_and_rank_issue_code_files(
         .filter(|f| is_code_ext(f) && root.join(f).is_file())
         .cloned()
         .collect::<Vec<_>>();
-    if (1..=2).contains(&code_inferred.len()) && !raw_inferred.iter().any(|f| f.ends_with(".txt")) {
+    if (1..=4).contains(&code_inferred.len()) && !raw_inferred.iter().any(|f| f.ends_with(".txt")) {
         return code_inferred;
     }
     let mut scores: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();

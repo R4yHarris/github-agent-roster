@@ -2152,8 +2152,10 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                         messages.push(message("user", value(&format!("The written TASK.md is invalid ({reason}). Return only the required JSON task plan so the harness can finalize the validated artifacts."))));
                         continue;
                     }
-                    if turn >= budget + usize::from(repair_used) {
-                        if repair_used {
+                    if turn >= budget + usize::from(repair_used)
+                        || (boundary.is_some() && turn >= 3)
+                    {
+                        if repair_used || boundary.is_some() {
                             return self.fallback(assignment, &options, &samples, turn, &reason);
                         }
                         return Err(text_error(
@@ -2225,6 +2227,12 @@ fn slice_instructions(
         ));
     }
     text.push_str("Stay within the human Ask paths. Work toward a complete executable handoff. Preserve every requested outcome: checks and Design must agree with the unchanged Ask and with each other. Validate worked examples and expected results against the operation's ordinary semantics; do not invent exceptions. ");
+    if tools && !scope.files.is_empty() {
+        text.push_str(&format!(
+            "Authorized files_allowed pool: [{}]. Every path in files_allowed must be chosen from this list. ",
+            scope.files.join(", ")
+        ));
+    }
     if let Some(directory) = &scope.output_directory {
         text.push_str(&format!("The human grants only the output directory \"{directory}\". Choose concrete files beneath it, never a wildcard or an outside file. Do not choose hidden path components (including .gitignore) or vendor paths. Test scratch fixtures belong in the OS temporary directory, not files_allowed. Preserve Original Ask exactly, including spelling. Declare new paths under ## New files when writing TASK.md; JSON plans are declared by the harness. "));
     }

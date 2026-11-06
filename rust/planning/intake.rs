@@ -318,7 +318,7 @@ pub fn requirements(input: &Value, allow_missing: bool) -> Result<Requirements, 
     let ask = clean_ask(input)?;
     let explicit = list_in_ask(
         &ask,
-        "(?:Files allowed|Allowed files|files_allowed|allowed_files)",
+        "(?:Files allowed|Allowed files|Scope & Files Allowed|Scope and Files Allowed|files_allowed|allowed_files)",
     )?;
     let output_directory = task::output_directory(&ask)?;
     let files = if let Some(explicit) = &explicit {
