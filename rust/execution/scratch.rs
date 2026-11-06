@@ -370,12 +370,20 @@ impl<'a> Scratch<'a> {
         }
 
         for (path, object) in links {
-            let approved = modules
-                .iter()
-                .find(|module| module.path == path)
-                .ok_or_else(|| {
-                    unsupported("Initialized base submodule has no explicit local-source approval")
-                })?;
+            let Some(approved) = modules.iter().find(|module| module.path == path) else {
+                if path != "vendor/github-agent-contracts"
+                    && !source.join(&path).join(".git").exists()
+                    && source.join(".gitmodules").is_file()
+                {
+                    let target = destination.join(&path);
+                    paths::ensure_local_path(&target, destination)?;
+                    files::create_private_directories(&target)?;
+                    continue;
+                }
+                return Err(unsupported(
+                    "Initialized base submodule has no explicit local-source approval",
+                ));
+            };
             let expected = tools::bytes_text(
                 &self
                     .owner

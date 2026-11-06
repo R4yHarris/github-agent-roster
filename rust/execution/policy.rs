@@ -107,11 +107,33 @@ pub fn requires_native(files: &[String]) -> Result<bool, Error> {
         .any(|file| pattern.is_match(&file.replace('\\', "/"))))
 }
 
+pub fn consumer_requires_modern_node(root: &std::path::Path) -> bool {
+    let Ok(raw) = std::fs::read_to_string(root.join("package.json")) else {
+        return false;
+    };
+    let Ok(pkg) = crate::json::parse(&Text::from(raw.as_str())) else {
+        return false;
+    };
+    if domain::is_text(pkg.get("name"), "github-agent-roster") {
+        return false;
+    }
+    let Some(engine_str) = pkg
+        .get("engines")
+        .and_then(|e| e.get("node"))
+        .and_then(Value::as_string)
+        .and_then(|t| t.to_utf8().ok())
+    else {
+        return false;
+    };
+    regex(r"\b(?:2[2-9]|3[0-9])\b").is_ok_and(|re| re.is_match(&engine_str))
+}
+
 pub fn relevant_tests(files: &[String]) -> Result<Vec<String>, Error> {
     if docs_only(files)? {
         return Ok(Vec::new());
     }
-    let pattern = regex(r"(?:^|/)(?:test(?:[._-][^/]+)?|[^/]+[._-]test)\.[cm]?js$")?;
+    let pattern =
+        regex(r"(?:^tests?/.+\.[cm]?js$|(?:^|/)(?:test(?:[._-][^/]+)?|[^/]+[._-]test)\.[cm]?js$)")?;
     let extension = regex(r"\.[cm]?js$")?;
     let mut tests = Vec::new();
     for file in files {
@@ -180,7 +202,9 @@ pub fn verification_decision(files: &[String]) -> Result<Value, Error> {
     let docs = docs_only(files)?;
     let update = relevant_tests(files)?
         .into_iter()
-        .filter(|file| files.contains(file) || file.starts_with("tests/"))
+        .filter(|file| {
+            files.contains(file) || file.starts_with("tests/") || file.starts_with("test/")
+        })
         .collect::<Vec<_>>();
     Ok(Value::object(vec![
         ("run", Value::Boolean(!docs && !update.is_empty())),

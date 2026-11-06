@@ -261,6 +261,57 @@ fn scoped_test_selection_preserves_shards_and_docs() -> Result<(), Error> {
 }
 
 #[test]
+fn consumer_node_test_directory_and_sibling_tap_verdict_are_supported() -> Result<(), Error> {
+    let scope = vec![
+        "lib/web/cookies/index.js".to_owned(),
+        "test/cookie/cookies.js".to_owned(),
+    ];
+    assert_eq!(
+        policy::relevant_tests(&scope)?,
+        vec!["test/cookie/cookies.js".to_owned()]
+    );
+    let run = backend::Run {
+        exit: Some(1),
+        stdout: b"TAP version 13\nnot ok 1 - regression test\nok 2 - control test\n".to_vec(),
+        stderr: Vec::new(),
+        timed_out: false,
+        overflow: false,
+    };
+    assert_eq!(
+        counterfactual::verdict(
+            &run,
+            &Text::from("regression test"),
+            counterfactual::Engine::Node
+        )?,
+        counterfactual::Verdict::Fail
+    );
+    assert_eq!(
+        counterfactual::verdict(
+            &run,
+            &Text::from("control test"),
+            counterfactual::Engine::Node
+        )?,
+        counterfactual::Verdict::Pass
+    );
+    let crashed = backend::Run {
+        exit: Some(1),
+        stdout: b"TAP version 13\nok 1 - control test\n".to_vec(),
+        stderr: Vec::new(),
+        timed_out: false,
+        overflow: false,
+    };
+    assert_eq!(
+        counterfactual::verdict(
+            &crashed,
+            &Text::from("control test"),
+            counterfactual::Engine::Node
+        )?,
+        counterfactual::Verdict::Missing
+    );
+    Ok(())
+}
+
+#[test]
 fn required_context_cannot_be_truncated_or_count_unicode_scalars() -> Result<(), Error> {
     let section = context::Section::required("Rules", Text(vec![0xd800, 0xd83d, 0xde00]));
     let (pack, truncated) = context::bounded_pack(std::slice::from_ref(&section), 1000, false)?;
