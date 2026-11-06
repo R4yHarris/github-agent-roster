@@ -2207,11 +2207,14 @@ fn slice_instructions(
             .files
             .iter()
             .all(|f| f.ends_with(".rs") || f.ends_with(".toml"));
+    let python_only = !scope.files.is_empty() && scope.files.iter().all(|f| f.ends_with(".py"));
     let is_dir_doc = task::directory_document(ask)?;
     let test_check_rule = if is_dir_doc {
         "A directory documentation task must choose only Markdown (.md) files in files_allowed and use document-content acceptance_checks (each check must use a verb like documents, describes, covers, includes, or outlines) without node --test."
     } else if rust_only {
         "A Rust code task must not include node --test; use observable Rust behavior acceptance_checks and files_allowed."
+    } else if python_only {
+        "A Python code task must not include node --test; use observable Python behavior acceptance_checks and files_allowed."
     } else {
         "A code task needs acceptance_checks including node --test exits 0 and files_allowed. When planning JavaScript tests for a newly added export in an existing module, place `import * as mod from '../src/...'` at module top level and call `mod.<fn>(...)` inside `test(...)` (never put a static `import * as` statement inside a function body), or use `const mod = await import('../src/...')` inside `test('...', async () => ...)` for a newly created module."
     };
