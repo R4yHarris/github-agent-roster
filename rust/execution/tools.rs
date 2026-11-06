@@ -3092,8 +3092,16 @@ impl Boundary {
                     format!("tests/cli/test_{stem}.py"),
                     format!("tests/test_{stem}.py"),
                     "tests/cli/test_models.py".to_owned(),
+                    "tests/cli/test_help.py".to_owned(),
+                    "tests/cli/test_config.py".to_owned(),
                 ] {
-                    if (candidate != "tests/cli/test_models.py" || file.contains("recipes/"))
+                    let match_special = match candidate.as_str() {
+                        "tests/cli/test_models.py" => file.contains("recipes/"),
+                        "tests/cli/test_help.py" => file.contains("cli/__init__.py"),
+                        "tests/cli/test_config.py" => file.contains("cli/environment.py"),
+                        _ => true,
+                    };
+                    if match_special
                         && regular(&self.root, &candidate, MAX_FILE_BYTES)?.is_some()
                         && !test_files.contains(&candidate)
                     {
@@ -3513,6 +3521,7 @@ impl Boundary {
                             f.contains("output/")
                                 || f.contains("server")
                                 || f.contains("scheduler/")
+                                || f.contains("execution/")
                         });
                     let feats = if is_server_or_output {
                         "server"
@@ -3540,6 +3549,24 @@ impl Boundary {
                     {
                         test_step.push("--".to_owned());
                         test_step.push("output::".to_owned());
+                        test_step.push("--test-threads=2".to_owned());
+                    } else if requirements
+                        .files
+                        .iter()
+                        .chain(self.written.iter())
+                        .any(|f| f.contains("roce_fabric"))
+                    {
+                        test_step.push("--".to_owned());
+                        test_step.push("execution::roce_fabric::tests".to_owned());
+                        test_step.push("--test-threads=2".to_owned());
+                    } else if requirements
+                        .files
+                        .iter()
+                        .chain(self.written.iter())
+                        .any(|f| f.contains("speculation"))
+                    {
+                        test_step.push("--".to_owned());
+                        test_step.push("scheduler::speculation::tests".to_owned());
                         test_step.push("--test-threads=2".to_owned());
                     } else if requirements
                         .files
