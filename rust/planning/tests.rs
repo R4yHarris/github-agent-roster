@@ -1158,3 +1158,36 @@ async fn planning_provenance_reuses_the_existing_store_and_checks_actual_artifac
     );
     Ok(())
 }
+
+#[test]
+fn polyglot_grounding_indexes_python_and_rust_definitions_when_no_js_src_exists()
+-> Result<(), Error> {
+    let files = vec![
+        "ignition/recipes/__init__.py".to_owned(),
+        "flare/src/inspect.rs".to_owned(),
+    ];
+    let sources = vec![
+        (
+            "ignition/recipes/__init__.py".to_owned(),
+            Text::from("def resolve_checkpoint(path):\n    return path\n"),
+        ),
+        (
+            "flare/src/inspect.rs".to_owned(),
+            Text::from(
+                "pub fn render_speculation(width: u64) -> String {\n    width.to_string()\n}\n",
+            ),
+        ),
+    ];
+    let index = grounding::index_sources(&files, &sources)?;
+    assert!(index.symbols.contains(&"resolve_checkpoint".to_owned()));
+    assert!(index.symbols.contains(&"render_speculation".to_owned()));
+    let related = grounding::related_exports(
+        &sources,
+        &files,
+        "Update resolve_checkpoint in ignition recipes and render_speculation in flare inspect",
+        6,
+        4,
+    )?;
+    assert_eq!(related.len(), 2);
+    Ok(())
+}
