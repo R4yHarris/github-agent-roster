@@ -9929,11 +9929,46 @@ fn ensure_delivery_tool_env(env: &Value) -> Value {
             let _ = domain::put(&mut next, "ROSTER_NODE20", Value::string(&p));
         }
     }
-    if next.get("ROSTER_CARGO").is_none() {
-        if let Some(p) = find_cargo_executable()
-            .or_else(|| which_executable(if cfg!(windows) { "cargo.exe" } else { "cargo" }))
-        {
+    let cargo_needs_resolve = next
+        .get("ROSTER_CARGO")
+        .and_then(Value::as_string)
+        .and_then(|t| t.to_utf8().ok())
+        .is_none_or(|s| {
+            let p = Path::new(&s);
+            s.is_empty()
+                || s.ends_with("rustup")
+                || s.ends_with("rustup.exe")
+                || fs::symlink_metadata(p).is_err_and(|_| true)
+                || fs::symlink_metadata(p).is_ok_and(|m| crate::state::secure::linked(&m))
+        });
+    if cargo_needs_resolve {
+        if let Some(p) = find_cargo_executable() {
             let _ = domain::put(&mut next, "ROSTER_CARGO", Value::string(&p));
+        }
+    }
+    if let Some(home) = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+    {
+        if next.get("CARGO_HOME").is_none() {
+            let ch = home.join(".cargo");
+            if ch.is_dir() {
+                let _ = domain::put(
+                    &mut next,
+                    "CARGO_HOME",
+                    Value::string(&ch.display().to_string()),
+                );
+            }
+        }
+        if next.get("RUSTUP_HOME").is_none() {
+            let rh = home.join(".rustup");
+            if rh.is_dir() {
+                let _ = domain::put(
+                    &mut next,
+                    "RUSTUP_HOME",
+                    Value::string(&rh.display().to_string()),
+                );
+            }
         }
     }
     next
@@ -9941,9 +9976,38 @@ fn ensure_delivery_tool_env(env: &Value) -> Value {
 
 pub fn find_cargo_executable() -> Option<String> {
     let bin_name = if cfg!(windows) { "cargo.exe" } else { "cargo" };
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .or_else(|| std::env::var_os("HOME"))
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from);
+    let mut rustup_roots = Vec::new();
+    if let Some(rh) = std::env::var_os("RUSTUP_HOME").map(PathBuf::from) {
+        rustup_roots.push(rh);
+    }
+    if let Some(ref h) = home {
+        rustup_roots.push(h.join(".rustup"));
+    }
+    for root in rustup_roots {
+        let toolchains = root.join("toolchains");
+        if let Ok(rd) = fs::read_dir(&toolchains) {
+            let mut entries: Vec<PathBuf> = rd.flatten().map(|e| e.path()).collect();
+            entries.sort_by_key(|p| {
+                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                (!name.starts_with("stable"), name.to_owned())
+            });
+            for entry in entries {
+                let candidate = entry.join("bin").join(bin_name);
+                if let Some(real) = canonical_real_binary(&candidate) {
+                    if !real.ends_with("rustup") && !real.ends_with("rustup.exe") {
+                        return Some(real);
+                    }
+                }
+            }
+        }
+    }
     if cfg!(windows) {
-        if let Some(home) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
-            let session_states = home.join(".copilot").join("session-state");
+        if let Some(ref h) = home {
+            let session_states = h.join(".copilot").join("session-state");
             if let Ok(rd) = fs::read_dir(&session_states) {
                 for entry in rd.flatten() {
                     let candidate = entry
@@ -9954,13 +10018,16 @@ pub fn find_cargo_executable() -> Option<String> {
                         .join("bin")
                         .join("cargo.exe");
                     if let Some(real) = canonical_real_binary(&candidate) {
-                        return Some(real);
+                        if !real.ends_with("rustup.exe") {
+                            return Some(real);
+                        }
                     }
                 }
             }
         }
     }
     which_executable(bin_name)
+        .filter(|real| !real.ends_with("rustup") && !real.ends_with("rustup.exe"))
 }
 
 fn canonical_real_binary(candidate: &Path) -> Option<String> {
