@@ -9812,7 +9812,7 @@ impl ShellSession {
         self.ensure_reachable_fleet_endpoint(root);
         let _ = ensure_repo_git_exclude(root);
         let _ = bootstrap_greenfield_repo(root);
-        let env_with_tools = ensure_delivery_tool_env(&self.environment);
+        let env_with_tools = ensure_delivery_tool_env_for_root(&self.environment, Some(root));
         let mut loaded = config::load(&self.installation, root, &env_with_tools)?;
         if let Some(ref prof_id) = self.fleet_profile_id {
             let fleet_cat = crate::fleet::load_with_env(
@@ -10058,16 +10058,36 @@ impl ShellSession {
 }
 
 fn ensure_delivery_tool_env(env: &Value) -> Value {
+    ensure_delivery_tool_env_for_root(env, None)
+}
+
+fn ensure_delivery_tool_env_for_root(env: &Value, root: Option<&Path>) -> Value {
     let mut next = env.clone();
     if next.get("ROSTER_GIT").is_none() {
         if let Some(p) = which_executable(if cfg!(windows) { "git.exe" } else { "git" }) {
             let _ = domain::put(&mut next, "ROSTER_GIT", Value::string(&p));
         }
     }
-    if next.get("ROSTER_NODE20").is_none() {
-        if let Some(p) = find_node20_executable()
-            .or_else(|| which_executable(if cfg!(windows) { "node.exe" } else { "node" }))
-        {
+    let modern_node = root.is_some_and(crate::execution::policy::consumer_requires_modern_node);
+    let node_needs_resolve = next
+        .get("ROSTER_NODE20")
+        .and_then(Value::as_string)
+        .and_then(|t| t.to_utf8().ok())
+        .is_none_or(|s| {
+            let p = Path::new(&s);
+            s.is_empty()
+                || fs::symlink_metadata(p).is_err_and(|_| true)
+                || fs::symlink_metadata(p).is_ok_and(|m| crate::state::secure::linked(&m))
+                || (modern_node && is_node20_binary(&s))
+        });
+    if node_needs_resolve {
+        let resolved = if modern_node {
+            find_modern_node_executable().or_else(find_node20_executable)
+        } else {
+            find_node20_executable()
+        }
+        .or_else(|| which_executable(if cfg!(windows) { "node.exe" } else { "node" }));
+        if let Some(p) = resolved {
             let _ = domain::put(&mut next, "ROSTER_NODE20", Value::string(&p));
         }
     }
@@ -10274,6 +10294,66 @@ pub fn find_node20_executable() -> Option<String> {
     }
     candidates.sort();
     candidates.into_iter().rev().find(|p| is_node20_binary(p))
+}
+
+fn is_modern_node_binary(path: &str) -> bool {
+    StdCommand::new(path)
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .is_some_and(|v| {
+            let t = v.trim();
+            t.starts_with("v24.") || t.starts_with("v22.")
+        })
+}
+
+pub fn find_modern_node_executable() -> Option<String> {
+    let bin_name = if cfg!(windows) { "node.exe" } else { "node" };
+    if let Some(p) = which_executable(bin_name) {
+        if is_modern_node_binary(&p) {
+            return Some(p);
+        }
+    }
+    let mut nvm_roots = Vec::new();
+    for var in ["NVM_HOME", "LOCALAPPDATA", "APPDATA", "USERPROFILE", "HOME"] {
+        if let Some(val) = std::env::var_os(var) {
+            let base = PathBuf::from(val);
+            nvm_roots.push(base.clone());
+            nvm_roots.push(base.join("nvm"));
+            nvm_roots.push(base.join(".nvm").join("versions").join("node"));
+        }
+    }
+    let mut candidates = Vec::new();
+    for root in nvm_roots {
+        let Ok(rd) = fs::read_dir(&root) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with("v24.")
+                || name.starts_with("24.")
+                || name.starts_with("v22.")
+                || name.starts_with("22.")
+            {
+                let p1 = entry.path().join(bin_name);
+                let p2 = entry.path().join("bin").join(bin_name);
+                for cand in [p1, p2] {
+                    if let Some(real) = canonical_real_binary(&cand) {
+                        if !candidates.contains(&real) {
+                            candidates.push(real);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    candidates.sort();
+    candidates
+        .into_iter()
+        .rev()
+        .find(|p| is_modern_node_binary(p))
 }
 
 pub fn ensure_repo_git_exclude(repo_root: &Path) -> Result<bool, Error> {

@@ -2343,9 +2343,17 @@ async fn modules(
                 continue;
             }
             let full = format!("{prefix}{path}");
-            let approval = approvals.iter().find(|approval| approval.path == full).ok_or_else(|| {
-                crate::execution::unsupported("A selected gitlink has no explicit approved local submodule source; no .gitmodules URL was fetched")
-            })?;
+            let Some(approval) = approvals.iter().find(|approval| approval.path == full) else {
+                if path != "vendor/github-agent-contracts"
+                    && !source.join(path).join(".git").exists()
+                    && source.join(".gitmodules").is_file()
+                {
+                    continue;
+                }
+                return Err(crate::execution::unsupported(
+                    "A selected gitlink has no explicit approved local submodule source; no .gitmodules URL was fetched",
+                ));
+            };
             if !approval.source.is_absolute() {
                 return Err(Error::type_error(
                     "Submodule source must be an absolute approved local directory",

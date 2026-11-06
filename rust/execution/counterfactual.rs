@@ -15,7 +15,7 @@ pub(crate) struct Target {
     pub(crate) engine: Engine,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Verdict {
     Pass,
     Fail,
@@ -71,6 +71,7 @@ pub(crate) fn verdict(run: &backend::Run, name: &Text, engine: Engine) -> Result
     };
     let expected = name.to_utf8()?;
     let mut found = Vec::new();
+    let mut any_failed = false;
     for capture in pattern.captures_iter(&output) {
         let (actual, result) = if engine == Engine::Node {
             let actual = capture
@@ -95,6 +96,9 @@ pub(crate) fn verdict(run: &backend::Run, name: &Text, engine: Engine) -> Result
             };
             (actual, result)
         };
+        if result == Verdict::Fail {
+            any_failed = true;
+        }
         if actual == expected
             || engine == Engine::Cargo && actual.ends_with(&format!("::{expected}"))
         {
@@ -111,7 +115,7 @@ pub(crate) fn verdict(run: &backend::Run, name: &Text, engine: Engine) -> Result
     if result == Verdict::Fail && run.exit.is_none_or(|exit| exit <= 0 || exit > 255) {
         return Ok(Verdict::Missing);
     }
-    if result == Verdict::Pass && !run.success() {
+    if result == Verdict::Pass && !run.success() && !any_failed {
         return Ok(Verdict::Missing);
     }
     Ok(result)
@@ -160,9 +164,12 @@ pub(crate) async fn node_version(
             1024,
         )
         .await?;
-    if !version.success()
-        || !regex(r"^v20\.[0-9]+\.[0-9]+\s*$")?.is_match(&tools::bytes_text(&version.stdout)?)
-    {
+    let v_pat = if policy::consumer_requires_modern_node(owner.root()) {
+        r"^v(?:20|22|24)\.[0-9]+\.[0-9]+\s*$"
+    } else {
+        r"^v20\.[0-9]+\.[0-9]+\s*$"
+    };
+    if !version.success() || !regex(v_pat)?.is_match(&tools::bytes_text(&version.stdout)?) {
         return Err(denied(
             "Counterfactual Node checks require an actually observed approved Node 20",
         ));

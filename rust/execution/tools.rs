@@ -1620,8 +1620,19 @@ impl Boundary {
             && (file.ends_with(".py")
                 || matches!(file, "pyproject.toml" | "setup.py" | "setup.cfg")
                 || directory);
+        let same_js_lib_repo = !planning::forbidden_read(file)
+            && !private_path(file)
+            && scope
+                .iter()
+                .any(|allowed| allowed.starts_with("lib/") || allowed.starts_with("test/"))
+            && (file.starts_with("lib/")
+                || file.starts_with("test/")
+                || file.starts_with("types/")
+                || matches!(file, "index.js" | "index.d.ts" | "package.json")
+                || directory);
         Ok(same_rust_crate
             || same_python_repo
+            || same_js_lib_repo
             || planning::is_allowed(file, &scope)
             || self
                 .options
@@ -3029,7 +3040,16 @@ impl Boundary {
                 1024,
             )
             .await?;
-        if output.exit != 0 || !bytes_text(&output.stdout)?.trim().starts_with("v20.") {
+        let ver = bytes_text(&output.stdout)?;
+        let trimmed = ver.trim();
+        let valid = if policy::consumer_requires_modern_node(&self.root) {
+            trimmed.starts_with("v20.")
+                || trimmed.starts_with("v22.")
+                || trimmed.starts_with("v24.")
+        } else {
+            trimmed.starts_with("v20.")
+        };
+        if output.exit != 0 || !valid {
             return Err(usage(
                 "Consumer verification requires Node 20; no runtime was silently substituted",
             ));
@@ -3269,7 +3289,44 @@ impl Boundary {
         {
             return self.python_checks(scope).await;
         }
-        let relevant = policy::relevant_tests(scope)?;
+        let mut effective_scope = scope.to_vec();
+        for w in &self.written {
+            if !effective_scope.contains(w) {
+                effective_scope.push(w.clone());
+            }
+        }
+        let mut relevant = policy::relevant_tests(&effective_scope)?;
+        if relevant.is_empty() && self.root.join("test").is_dir() {
+            for file in &effective_scope {
+                let norm = file.replace('\\', "/");
+                let Some(stem) = norm
+                    .rsplit('/')
+                    .next()
+                    .and_then(|s| s.strip_suffix(".js").or_else(|| s.strip_suffix(".mjs")))
+                else {
+                    continue;
+                };
+                let mut cands = vec![format!("test/{stem}.js")];
+                if let Some(rest) = norm.strip_prefix("lib/") {
+                    if let Some((dir, _)) = rest.rsplit_once('/') {
+                        let last_dir = dir.rsplit('/').next().unwrap_or(dir);
+                        cands.push(format!("test/{last_dir}/{stem}.js"));
+                        cands.push(format!("test/{last_dir}s/{stem}.js"));
+                        if let Some(singular) = last_dir.strip_suffix('s') {
+                            cands.push(format!("test/{singular}/{last_dir}.js"));
+                            cands.push(format!("test/{singular}/{stem}.js"));
+                        }
+                    }
+                }
+                for cand in cands {
+                    if regular(&self.root, &cand, MAX_FILE_BYTES)?.is_some()
+                        && !relevant.contains(&cand)
+                    {
+                        relevant.push(cand);
+                    }
+                }
+            }
+        }
         let tests_root = self.root.join("tests");
         secure::check_components(&tests_root).map_err(|cause| {
             denied("Test paths may not traverse links or junctions").caused_by(cause)
@@ -3305,7 +3362,7 @@ impl Boundary {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => return Err(secure::io_error("Read tests directory", &tests_root, error)),
         }
-        let tests = policy::expand_shards(&relevant, &available, scope)?;
+        let tests = policy::expand_shards(&relevant, &available, &effective_scope)?;
         for file in &tests {
             regular(&self.root, file, MAX_FILE_BYTES)?
                 .ok_or_else(|| denied("Selected test file disappeared"))?;
@@ -3386,7 +3443,8 @@ impl Boundary {
             jobs.to_string(),
             format!("--test-timeout={}", policy::FULL_TEST_TIMEOUT_MS),
         ];
-        if !full {
+        if !full || (!tests.is_empty() && (self.root.join("test").is_dir() || available.len() > 20))
+        {
             args.extend(tests);
         }
         result.commands.push(format!("node {}", args.join(" ")));

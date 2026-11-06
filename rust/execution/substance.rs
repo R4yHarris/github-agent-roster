@@ -900,7 +900,7 @@ pub fn adds_test_evidence(added: &Text) -> Result<bool, Error> {
         return Ok(true);
     }
     Ok(
-        regex(r"(?:assert(?:\.[A-Za-z]+)?|expect|t\.assert\.[A-Za-z]+)\s*\(")?
+        regex(r"(?:assert(?:\.[A-Za-z]+)?|expect|t\.assert\.[A-Za-z]+|(?:[A-Za-z_$][\w$]*\.)?(?:strictEqual|deepStrictEqual|notStrictEqual|equal|deepEqual|throws|rejects|doesNotThrow|doesNotReject))\s*\(")?
             .find_iter(&masked)
             .any(|whole| boundary(&masked, whole.start(), false)),
     )
@@ -977,22 +977,24 @@ pub fn analyze(file: &Text, source: &Text, added: &Text) -> Result<Vec<Text>, Er
             }
         }
     }
-    for (value, name) in seeded(added, &masked_added)? {
-        if tainted(&masked_added, added, &value, &all_sinks, &instances)? {
-            continue;
+    if !all_sinks.is_empty() {
+        for (value, name) in seeded(added, &masked_added)? {
+            if tainted(&masked_added, added, &value, &all_sinks, &instances)? {
+                continue;
+            }
+            let mut reason = Text::from("Test substance: sentinel ");
+            if let Some(name) = name {
+                reason.push_str(&name);
+            } else {
+                reason.0.push(39);
+                reason.0.extend(value.0.into_iter().take(40));
+                reason.0.push(39);
+            }
+            reason.push_str(" in ");
+            reason.0.extend(&file.0);
+            reason.push_str(" is asserted absent but never passed to app code (arguments, config, or process.env); the assertion cannot fail.");
+            reasons.push(reason);
         }
-        let mut reason = Text::from("Test substance: sentinel ");
-        if let Some(name) = name {
-            reason.push_str(&name);
-        } else {
-            reason.0.push(39);
-            reason.0.extend(value.0.into_iter().take(40));
-            reason.0.push(39);
-        }
-        reason.push_str(" in ");
-        reason.0.extend(&file.0);
-        reason.push_str(" is asserted absent but never passed to app code (arguments, config, or process.env); the assertion cannot fail.");
-        reasons.push(reason);
     }
     Ok(reasons)
 }
