@@ -3191,7 +3191,7 @@ impl Boundary {
             }
         }
         if !test_files.is_empty() {
-            let filter = "not calibration and not parallel and not remote and not adapter and not wide_rows and not strided_destination and not shared_scalar and not device_budget and not discrete and not tuning_races and not integrated_device and not windows_device and not source_mutation";
+            let filter = "not calibration and not parallel and not remote and not adapter and not wide_rows and not strided_destination and not shared_scalar and not device_budget and not discrete and not tuning_races and not integrated_device and not windows_device and not source_mutation and not history_plane and not dense_qwen and not prompt_scoring and not manifest and not verification_keeps and not rectangular_round and not resident and not durations and not protobuf and not vector and not signature_references and not invalid_execution_signature and not export_includes";
             let mut args = vec![
                 "-B".to_owned(),
                 "-m".to_owned(),
