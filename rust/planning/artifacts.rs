@@ -117,7 +117,7 @@ pub fn build(ask: &Value, options: BuildOptions<'_>) -> Result<Plan, Error> {
     let rust_only = !files.is_empty()
         && files
             .iter()
-            .all(|file| file.ends_with(".rs") || file.ends_with(".toml"))
+            .all(|file| file.ends_with(".rs") || file.ends_with(".toml") || file.ends_with(".py"))
         && !ask.contains("node --test");
     let checks = task::checked_list(options.checks, "Acceptance checks", 8)?
         .iter()
