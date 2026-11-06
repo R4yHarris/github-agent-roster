@@ -1863,6 +1863,18 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
                 draft.ask_audit = Some(audit.clone());
             }
             if !boundary.root().join("rust").join("shell.rs").is_file()
+                && options.previous_findings.is_empty()
+                && report
+                    .get("defects")
+                    .and_then(domain::items)
+                    .is_none_or(<[_]>::is_empty)
+                && boundary
+                    .document()
+                    .files_allowed
+                    .iter()
+                    .any(|f| f.ends_with(".rs") || f.ends_with(".py"))
+                && coder.result().get("tests").and_then(|t| t.get("exit"))
+                    == Some(&Value::Number(0.0))
                 && coder.finalized().status() == execution::finalization::Status::Pass
                 && domain::is_text(audit.get("verdict"), "pass")
                 && domain::is_text(report.get("verdict"), "fail")

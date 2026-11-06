@@ -205,14 +205,16 @@ pub fn invocation_host(
                     cargo_environment
                         .insert("CARGO_HOME".to_owned(), cargo_home.display().to_string());
                     if let Some(tc_root) = cargo_home.parent() {
-                        let rustup_candidate = tc_root.join("rustup");
-                        if !cargo_environment.contains_key("RUSTUP_HOME")
-                            && rustup_candidate.is_dir()
-                        {
-                            cargo_environment.insert(
-                                "RUSTUP_HOME".to_owned(),
-                                rustup_candidate.display().to_string(),
-                            );
+                        for rustup_name in ["rustup", ".rustup"] {
+                            let rustup_candidate = tc_root.join(rustup_name);
+                            if !cargo_environment.contains_key("RUSTUP_HOME")
+                                && rustup_candidate.is_dir()
+                            {
+                                cargo_environment.insert(
+                                    "RUSTUP_HOME".to_owned(),
+                                    rustup_candidate.display().to_string(),
+                                );
+                            }
                         }
                         let dlltool = tc_root
                             .join("llvm-dlltool-20261006")
@@ -225,6 +227,33 @@ pub fn invocation_host(
                                 "RUSTFLAGS".to_owned(),
                                 format!("-C dlltool={}", dlltool.display()),
                             );
+                        }
+                    }
+                } else if let Some(toolchains_dir) = cargo_home.parent() {
+                    if toolchains_dir
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .is_some_and(|n| n.eq_ignore_ascii_case("toolchains"))
+                        && let Some(rustup_home) = toolchains_dir.parent()
+                    {
+                        if !cargo_environment.contains_key("RUSTUP_HOME") && rustup_home.is_dir() {
+                            cargo_environment.insert(
+                                "RUSTUP_HOME".to_owned(),
+                                rustup_home.display().to_string(),
+                            );
+                        }
+                        if let Some(user_root) = rustup_home.parent() {
+                            for cargo_name in [".cargo", "cargo"] {
+                                let cargo_cand = user_root.join(cargo_name);
+                                if !cargo_environment.contains_key("CARGO_HOME")
+                                    && cargo_cand.is_dir()
+                                {
+                                    cargo_environment.insert(
+                                        "CARGO_HOME".to_owned(),
+                                        cargo_cand.display().to_string(),
+                                    );
+                                }
+                            }
                         }
                     }
                 }

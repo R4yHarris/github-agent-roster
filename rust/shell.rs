@@ -7350,6 +7350,123 @@ impl ShellSession {
                             tool_trace.push("auto:node_test(pass)".to_owned());
                         }
                     }
+
+                    let wrote_python = wrote_files
+                        .iter()
+                        .any(|p| p.extension().and_then(|e| e.to_str()) == Some("py"));
+                    if wrote_python && test_files.is_empty() {
+                        let py_bin = which_executable(if cfg!(windows) {
+                            "python.exe"
+                        } else {
+                            "python3"
+                        })
+                        .or_else(|| which_executable("python"))
+                        .unwrap_or_else(|| "python3".to_owned());
+                        let mut py_test_files = Vec::new();
+                        let td = effective_repo_dir.join("tests");
+                        if td.is_dir()
+                            && let Ok(rd) = fs::read_dir(&td)
+                        {
+                            for entry in rd.flatten() {
+                                let name = entry.file_name().to_string_lossy().to_string();
+                                if (name.starts_with("test_") || name.ends_with("_test.py"))
+                                    && name.ends_with(".py")
+                                {
+                                    py_test_files.push(format!("tests/{name}"));
+                                }
+                            }
+                        }
+                        if !py_test_files.is_empty() {
+                            let mut py_cmd = StdCommand::new(&py_bin);
+                            py_cmd
+                                .current_dir(&effective_repo_dir)
+                                .env("PYTHONDONTWRITEBYTECODE", "1")
+                                .env("PYTHONPATH", ".")
+                                .args(["-B", "-m", "pytest", "-p", "no:cacheprovider"]);
+                            for pf in &py_test_files {
+                                py_cmd.arg(pf);
+                            }
+                            if let Ok(py_out) = py_cmd.output() {
+                                if !py_out.status.success() {
+                                    auto_gate_attempts += 1;
+                                    seen_tool_calls.clear();
+                                    let code = py_out.status.code().unwrap_or(1);
+                                    let py_txt: String = format!(
+                                        "{}{}",
+                                        String::from_utf8_lossy(&py_out.stdout),
+                                        String::from_utf8_lossy(&py_out.stderr)
+                                    )
+                                    .chars()
+                                    .take(6000)
+                                    .collect();
+                                    if let Some(ref c) = content_opt {
+                                        messages.push(Value::object(vec![
+                                            ("role", Value::string("assistant")),
+                                            ("content", Value::string(c)),
+                                        ]));
+                                    }
+                                    messages.push(Value::object(vec![
+                                        ("role", Value::string("user")),
+                                        (
+                                            "content",
+                                            Value::string(&format!(
+                                                "Autonomous verification gate ran `python3 -B -m pytest` and it failed (exit_code={code}):\n{py_txt}\n\nDo not stop with failing tests. Use edit_file or write_file to fix the failing Python test or source file now, then call run_check(command=\"pytest\") until exit_code == 0."
+                                            )),
+                                        ),
+                                    ]));
+                                    continue;
+                                }
+                                tool_trace.push("auto:pytest(pass)".to_owned());
+                            }
+                        }
+                    }
+
+                    let wrote_rust = wrote_files
+                        .iter()
+                        .any(|p| p.extension().and_then(|e| e.to_str()) == Some("rs"));
+                    if wrote_rust
+                        && effective_repo_dir.join("Cargo.toml").is_file()
+                        && !effective_repo_dir.join("rust").join("shell.rs").is_file()
+                    {
+                        if let Some(cargo_bin) = find_cargo_executable() {
+                            if let Ok(cargo_out) = StdCommand::new(&cargo_bin)
+                                .current_dir(&effective_repo_dir)
+                                .args(["test", "--offline"])
+                                .output()
+                            {
+                                if !cargo_out.status.success() {
+                                    auto_gate_attempts += 1;
+                                    seen_tool_calls.clear();
+                                    let code = cargo_out.status.code().unwrap_or(1);
+                                    let cargo_txt: String = format!(
+                                        "{}{}",
+                                        String::from_utf8_lossy(&cargo_out.stdout),
+                                        String::from_utf8_lossy(&cargo_out.stderr)
+                                    )
+                                    .chars()
+                                    .take(6000)
+                                    .collect();
+                                    if let Some(ref c) = content_opt {
+                                        messages.push(Value::object(vec![
+                                            ("role", Value::string("assistant")),
+                                            ("content", Value::string(c)),
+                                        ]));
+                                    }
+                                    messages.push(Value::object(vec![
+                                        ("role", Value::string("user")),
+                                        (
+                                            "content",
+                                            Value::string(&format!(
+                                                "Autonomous verification gate ran `cargo test --offline` and it failed (exit_code={code}):\n{cargo_txt}\n\nDo not stop with failing tests. Use edit_file or write_file to fix the failing Rust source or test file now, then call run_check(command=\"cargo_test\") until exit_code == 0."
+                                            )),
+                                        ),
+                                    ]));
+                                    continue;
+                                }
+                                tool_trace.push("auto:cargo_test(pass)".to_owned());
+                            }
+                        }
+                    }
                 }
             }
 
@@ -8214,10 +8331,30 @@ impl ShellSession {
                             .args(["test", "--offline"])
                             .output()
                     }
-                    "python_test" | "pytest" => StdCommand::new("python")
-                        .current_dir(&target_dir)
-                        .args(["-m", "unittest", "discover"])
-                        .output(),
+                    "python_test" | "pytest" => {
+                        let py_bin = which_executable(if cfg!(windows) {
+                            "python.exe"
+                        } else {
+                            "python3"
+                        })
+                        .or_else(|| which_executable("python"))
+                        .unwrap_or_else(|| "python3".to_owned());
+                        let pytest_out = StdCommand::new(&py_bin)
+                            .current_dir(&target_dir)
+                            .env("PYTHONDONTWRITEBYTECODE", "1")
+                            .env("PYTHONPATH", ".")
+                            .args(["-B", "-m", "pytest", "-p", "no:cacheprovider"])
+                            .output();
+                        match pytest_out {
+                            Ok(ref o) if o.status.success() => pytest_out,
+                            _ => StdCommand::new(&py_bin)
+                                .current_dir(&target_dir)
+                                .env("PYTHONDONTWRITEBYTECODE", "1")
+                                .env("PYTHONPATH", ".")
+                                .args(["-B", "-m", "unittest", "discover"])
+                                .output(),
+                        }
+                    }
                     _ => {
                         let mut test_cmd = StdCommand::new(&node_bin);
                         test_cmd.current_dir(&target_dir).arg("--test");
@@ -9976,16 +10113,33 @@ fn ensure_delivery_tool_env(env: &Value) -> Value {
 
 pub fn find_cargo_executable() -> Option<String> {
     let bin_name = if cfg!(windows) { "cargo.exe" } else { "cargo" };
-    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
-        .or_else(|| std::env::var_os("HOME"))
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from);
+    let mut home_dirs = Vec::new();
+    for var in ["USERPROFILE", "HOME"] {
+        if let Some(val) = std::env::var_os(var).map(PathBuf::from) {
+            if !home_dirs.contains(&val) {
+                home_dirs.push(val);
+            }
+        }
+    }
     let mut rustup_roots = Vec::new();
     if let Some(rh) = std::env::var_os("RUSTUP_HOME").map(PathBuf::from) {
         rustup_roots.push(rh);
     }
-    if let Some(ref h) = home {
-        rustup_roots.push(h.join(".rustup"));
+    for home in &home_dirs {
+        rustup_roots.push(home.join(".rustup"));
+        rustup_roots.push(home.join("rustup"));
+        let session_states = home.join(".copilot").join("session-state");
+        if let Ok(rd) = fs::read_dir(&session_states) {
+            for entry in rd.flatten() {
+                rustup_roots.push(
+                    entry
+                        .path()
+                        .join("files")
+                        .join("rust-toolchain")
+                        .join("rustup"),
+                );
+            }
+        }
     }
     for root in rustup_roots {
         let toolchains = root.join("toolchains");
@@ -10006,8 +10160,8 @@ pub fn find_cargo_executable() -> Option<String> {
         }
     }
     if cfg!(windows) {
-        if let Some(ref h) = home {
-            let session_states = h.join(".copilot").join("session-state");
+        for home in &home_dirs {
+            let session_states = home.join(".copilot").join("session-state");
             if let Ok(rd) = fs::read_dir(&session_states) {
                 for entry in rd.flatten() {
                     let candidate = entry
@@ -10036,6 +10190,19 @@ fn canonical_real_binary(candidate: &Path) -> Option<String> {
     }
     let resolved = fs::canonicalize(candidate).unwrap_or_else(|_| candidate.to_path_buf());
     let clean = paths::strip_verbatim(resolved);
+    let cand_name = candidate
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let clean_name = clean
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if !cand_name.starts_with("rustup") && clean_name.starts_with("rustup") {
+        return None;
+    }
     if clean.is_file() {
         Some(clean.display().to_string())
     } else {
@@ -13124,6 +13291,9 @@ pub fn run_self_update(
         })
         .map(PathBuf::from);
     if cargo_bin.is_none() {
+        cargo_bin = find_cargo_executable().map(PathBuf::from);
+    }
+    if cargo_bin.is_none() {
         let user_cargo =
             home.join(".cargo")
                 .join("bin")
@@ -14816,7 +14986,10 @@ fn discover_and_rank_issue_code_files(
                     .collect();
                 if matched_files.len() <= 25 {
                     for mf in matched_files {
-                        let mut bonus = if mf.contains("/src/") || mf.starts_with("ignition/") {
+                        let mut bonus = if mf.contains("/src/")
+                            || mf.starts_with("src/")
+                            || (!mf.starts_with("tests/") && !mf.starts_with("docs/"))
+                        {
                             3_i64
                         } else {
                             1_i64

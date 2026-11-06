@@ -1618,12 +1618,8 @@ impl Boundary {
             && !private_path(file)
             && scope.iter().any(|allowed| allowed.ends_with(".py"))
             && (file.ends_with(".py")
-                || file == "pyproject.toml"
-                || directory
-                    && (file == "ignition"
-                        || file.starts_with("ignition/")
-                        || file == "tests"
-                        || file.starts_with("tests/")));
+                || matches!(file, "pyproject.toml" | "setup.py" | "setup.cfg")
+                || directory);
         Ok(same_rust_crate
             || same_python_repo
             || planning::is_allowed(file, &scope)
@@ -3020,22 +3016,43 @@ impl Boundary {
     }
 
     async fn python_checks(&self, scope: &[String]) -> Result<NodeChecks, Error> {
-        let python = ["/usr/bin/python3", "/usr/local/bin/python3"]
-            .into_iter()
-            .map(PathBuf::from)
-            .find(|candidate| candidate.is_file())
-            .unwrap_or_else(|| PathBuf::from("python3"));
+        let python = if cfg!(windows) {
+            std::env::var_os("PATH")
+                .and_then(|paths| {
+                    std::env::split_paths(&paths).find_map(|dir| {
+                        let cand = dir.join("python.exe");
+                        let s = cand.to_string_lossy().to_lowercase();
+                        (cand.is_file() && !s.contains("windowsapps")).then_some(cand)
+                    })
+                })
+                .or_else(|| {
+                    [r"C:\Program Files\Microsoft SDKs\Azure\CLI2\python.exe"]
+                        .into_iter()
+                        .map(PathBuf::from)
+                        .find(|cand| cand.is_file())
+                })
+                .unwrap_or_else(|| PathBuf::from("python.exe"))
+        } else {
+            ["/usr/bin/python3", "/usr/local/bin/python3"]
+                .into_iter()
+                .map(PathBuf::from)
+                .find(|candidate| candidate.is_file())
+                .unwrap_or_else(|| PathBuf::from("python3"))
+        };
+        let pycache_prefix = std::env::temp_dir()
+            .join("roster-pycache")
+            .display()
+            .to_string();
         let mut environment = BTreeMap::from([
             ("ROSTER_SEAT".to_owned(), "coder".to_owned()),
             ("PYTHONDONTWRITEBYTECODE".to_owned(), "1".to_owned()),
-            (
-                "PYTHONPYCACHEPREFIX".to_owned(),
-                "/tmp/roster-pycache".to_owned(),
-            ),
+            ("PYTHONPYCACHEPREFIX".to_owned(), pycache_prefix),
             ("PYTHONPATH".to_owned(), ".".to_owned()),
         ]);
-        if let Ok(home) = std::env::var("HOME") {
-            environment.insert("HOME".to_owned(), home);
+        for var in ["HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA"] {
+            if let Ok(val) = std::env::var(var) {
+                environment.insert(var.to_owned(), val);
+            }
         }
         let mut candidates = scope
             .iter()
@@ -3056,6 +3073,7 @@ impl Boundary {
             syntax_file: None,
         };
         let mut test_files = Vec::new();
+        let mut source_py_files = Vec::new();
         for file in &candidates {
             if regular(&self.root, file, MAX_FILE_BYTES)?.is_none() {
                 continue;
@@ -3082,22 +3100,92 @@ impl Boundary {
                 result.syntax_file = Some(file.clone());
                 return Ok(result);
             }
-            if file.starts_with("tests/") || file.contains("/test_") || file.starts_with("test_") {
+            if file.starts_with("tests/")
+                || file.contains("/test_")
+                || file.starts_with("test_")
+                || file.ends_with("_test.py")
+            {
                 if !test_files.contains(file) {
                     test_files.push(file.clone());
                 }
-            } else if let Some(stem) = Path::new(file).file_stem().and_then(|s| s.to_str()) {
-                for candidate in [
+            } else {
+                source_py_files.push(file.clone());
+            }
+        }
+        if test_files.is_empty() {
+            for file in &source_py_files {
+                let raw_stem = Path::new(file)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default();
+                let stem = if raw_stem == "__init__" {
+                    Path::new(file)
+                        .parent()
+                        .and_then(|p| p.file_name())
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(raw_stem)
+                } else {
+                    raw_stem
+                };
+                if stem.is_empty() {
+                    continue;
+                }
+                let mut candidate_paths = vec![
+                    format!("tests/test_{stem}.py"),
                     format!("tests/preparation/test_{stem}.py"),
                     format!("tests/cli/test_{stem}.py"),
-                    format!("tests/test_{stem}.py"),
-                    "tests/cli/test_models.py".to_owned(),
-                ] {
-                    if (candidate != "tests/cli/test_models.py" || file.contains("recipes/"))
-                        && regular(&self.root, &candidate, MAX_FILE_BYTES)?.is_some()
+                ];
+                let tests_dir = self.root.join("tests");
+                if let Ok(rd) = fs::read_dir(&tests_dir) {
+                    for entry in rd.flatten() {
+                        let p = entry.path();
+                        if p.is_dir()
+                            && let Some(sub_name) = p.file_name().and_then(|n| n.to_str())
+                        {
+                            candidate_paths.push(format!("tests/{sub_name}/test_{stem}.py"));
+                        }
+                    }
+                }
+                for candidate in candidate_paths {
+                    if regular(&self.root, &candidate, MAX_FILE_BYTES)?.is_some()
                         && !test_files.contains(&candidate)
                     {
                         test_files.push(candidate);
+                    }
+                }
+                if test_files.is_empty() {
+                    let module_dot = file
+                        .strip_suffix("/__init__.py")
+                        .or_else(|| file.strip_suffix(".py"))
+                        .unwrap_or(file)
+                        .replace('/', ".");
+                    if let Ok(rd) = fs::read_dir(&tests_dir) {
+                        for entry in rd.flatten() {
+                            let p = entry.path();
+                            if p.is_dir()
+                                && let Ok(sub_rd) = fs::read_dir(&p)
+                            {
+                                for sub_entry in sub_rd.flatten() {
+                                    let sp = sub_entry.path();
+                                    let sname =
+                                        sub_entry.file_name().to_string_lossy().into_owned();
+                                    if sname.starts_with("test_")
+                                        && sname.ends_with(".py")
+                                        && let Ok(rel) = sp.strip_prefix(&self.root)
+                                    {
+                                        let rel_s = rel.to_string_lossy().replace('\\', "/");
+                                        if let Ok(Some(snap)) =
+                                            regular(&self.root, &rel_s, MAX_FILE_BYTES)
+                                            && let Ok(txt) = bytes_text(&snap.bytes)
+                                            && (txt.contains(&module_dot) || txt.contains(stem))
+                                            && !test_files.contains(&rel_s)
+                                        {
+                                            test_files.push(rel_s);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -3117,7 +3205,7 @@ impl Boundary {
             result
                 .commands
                 .push(format!("python3 -B -m pytest {}", test_files.join(" ")));
-            result.output = self
+            let pytest_out = self
                 .process(
                     &python,
                     &args,
@@ -3126,6 +3214,24 @@ impl Boundary {
                     4 * 1024 * 1024,
                 )
                 .await?;
+            if pytest_out.exit != 0
+                && String::from_utf8_lossy(&pytest_out.stderr).contains("No module named pytest")
+            {
+                let runner = "import importlib.util, inspect, pathlib, shutil, sys, tempfile\npassed = 0\nfor rel in sys.argv[1:]:\n    spec = importlib.util.spec_from_file_location('test_mod', rel)\n    mod = importlib.util.module_from_spec(spec)\n    spec.loader.exec_module(mod)\n    for name, fn in inspect.getmembers(mod, inspect.isfunction):\n        if name.startswith('test_'):\n            sig = inspect.signature(fn)\n            if 'tmp_path' in sig.parameters:\n                td = pathlib.Path(tempfile.mkdtemp())\n                try:\n                    fn(td)\n                finally:\n                    shutil.rmtree(td, ignore_errors=True)\n            else:\n                fn()\n            passed += 1\nprint(f'{passed} passed')\n";
+                let mut fb_args = vec!["-B".to_owned(), "-c".to_owned(), runner.to_owned()];
+                fb_args.extend(test_files.clone());
+                result.output = self
+                    .process(
+                        &python,
+                        &fb_args,
+                        &environment,
+                        policy::FULL_TEST_TIMEOUT_MS,
+                        4 * 1024 * 1024,
+                    )
+                    .await?;
+            } else {
+                result.output = pytest_out;
+            }
         } else {
             result.output.stdout = b"python3 -m py_compile passed".to_vec();
         }
@@ -3419,10 +3525,18 @@ impl Boundary {
                     .find(|c| self.root.join(c).join("Cargo.toml").is_file())
                     .map(str::to_owned)
                     .or_else(|| {
-                        ["helios", "heliopause", "eos", "flare", "selene"]
-                            .into_iter()
-                            .find(|c| self.root.join(c).join("Cargo.toml").is_file())
-                            .map(str::to_owned)
+                        let Ok(rd) = fs::read_dir(&self.root) else {
+                            return None;
+                        };
+                        let mut dirs = rd.flatten().map(|e| e.path()).collect::<Vec<_>>();
+                        dirs.sort();
+                        dirs.into_iter().find_map(|p| {
+                            if p.is_dir() && p.join("Cargo.toml").is_file() {
+                                p.file_name().and_then(|n| n.to_str()).map(str::to_owned)
+                            } else {
+                                None
+                            }
+                        })
                     })
             } else {
                 None
@@ -3504,83 +3618,66 @@ impl Boundary {
                     target_flag.to_owned(),
                     "--offline".to_owned(),
                 ];
-                if sc == "helios" {
-                    let is_server_or_output = requirements
-                        .files
-                        .iter()
-                        .chain(self.written.iter())
-                        .any(|f| {
-                            f.contains("output/")
-                                || f.contains("server")
-                                || f.contains("scheduler/")
-                        });
-                    let feats = if is_server_or_output {
-                        "server"
+                let cargo_toml_text =
+                    fs::read_to_string(self.root.join(&manifest_rel)).unwrap_or_default();
+                let touches_server_domain = requirements
+                    .files
+                    .iter()
+                    .chain(self.written.iter())
+                    .any(|f| {
+                        f.contains("output/") || f.contains("server") || f.contains("scheduler/")
+                    });
+                let inferred_features =
+                    if touches_server_domain && cargo_toml_text.contains("\nserver =") {
+                        Some("server".to_owned())
+                    } else if cargo_toml_text.contains("\nruntime-package =")
+                        && cargo_toml_text.contains("\nfrontend =")
+                    {
+                        Some("runtime-package,frontend".to_owned())
                     } else {
-                        "runtime-package,frontend"
+                        None
                     };
+                if let Some(feats) = inferred_features {
                     for s in [&mut check_step, &mut test_step] {
                         s.push("--features".to_owned());
-                        s.push(feats.to_owned());
+                        s.push(feats.clone());
                     }
-                    if requirements
-                        .files
-                        .iter()
-                        .chain(self.written.iter())
-                        .any(|f| f.contains("runtime_package/"))
-                    {
-                        test_step.push("--".to_owned());
-                        test_step.push("descri".to_owned());
-                        test_step.push("--test-threads=2".to_owned());
-                    } else if requirements
-                        .files
-                        .iter()
-                        .chain(self.written.iter())
-                        .any(|f| f.contains("output/"))
-                    {
-                        test_step.push("--".to_owned());
-                        test_step.push("output::".to_owned());
-                        test_step.push("--test-threads=2".to_owned());
-                    } else if requirements
-                        .files
-                        .iter()
-                        .chain(self.written.iter())
-                        .any(|f| f.contains("scheduler/"))
-                    {
-                        test_step.push("--".to_owned());
-                        test_step.push("scheduler::cache_memory".to_owned());
-                        test_step.push("--test-threads=2".to_owned());
-                    } else if requirements
-                        .files
-                        .iter()
-                        .chain(self.written.iter())
-                        .any(|f| f.contains("server"))
-                    {
-                        test_step.push("--".to_owned());
-                        test_step.push("metrics_route".to_owned());
-                        test_step.push("--test-threads=2".to_owned());
-                    }
-                } else if sc == "selene" {
+                }
+                let src_prefix = format!("{sc}/src/");
+                let derived_filter = requirements
+                    .files
+                    .iter()
+                    .chain(self.written.iter())
+                    .find_map(|f| {
+                        let rel = f.strip_prefix(&src_prefix)?;
+                        let mod_rel = rel
+                            .strip_suffix("/mod.rs")
+                            .or_else(|| rel.strip_suffix(".rs"))?;
+                        if matches!(mod_rel, "lib" | "main") {
+                            let full_src =
+                                fs::read_to_string(self.root.join(f)).unwrap_or_default();
+                            regex(r"(?m)^\s*mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{")
+                                .ok()
+                                .and_then(|re| {
+                                    re.captures_iter(&full_src).find_map(|cap| {
+                                        let m = cap.get(1)?.as_str();
+                                        (m != "tests" && m.contains("test")).then(|| m.to_owned())
+                                    })
+                                })
+                        } else if mod_rel == "server" {
+                            Some("metrics_route".to_owned())
+                        } else {
+                            let mod_path = mod_rel.replace('/', "::");
+                            if !mod_path.contains("::") {
+                                Some(format!("{mod_path}::tests"))
+                            } else {
+                                Some(mod_path)
+                            }
+                        }
+                    });
+                if let Some(filter) = derived_filter {
                     test_step.push("--".to_owned());
-                    test_step.push("disk_store::tests".to_owned());
-                    test_step.push("--test-threads=2".to_owned());
-                } else if sc == "flare" {
-                    let flare_filter = if requirements
-                        .files
-                        .iter()
-                        .chain(self.written.iter())
-                        .any(|f| f.contains("inspect.rs"))
-                    {
-                        "inspect::tests"
-                    } else {
-                        "entry_path_tests"
-                    };
-                    test_step.push("--".to_owned());
-                    test_step.push(flare_filter.to_owned());
-                    test_step.push("--test-threads=2".to_owned());
-                } else if sc == "heliopause" {
-                    test_step.push("--".to_owned());
-                    test_step.push("export::archive::tests".to_owned());
+                    test_step.push(filter);
                     test_step.push("--test-threads=2".to_owned());
                 }
                 [
@@ -3659,6 +3756,9 @@ impl Boundary {
                     test_args,
                 ]
             };
+            let had_sub_lock = sub_crate
+                .as_ref()
+                .is_some_and(|sc| self.root.join(sc).join("Cargo.lock").is_file());
             for args in cargo_steps {
                 commands.push(format!("cargo {}", args.join(" ")));
                 let output = self
@@ -3677,6 +3777,9 @@ impl Boundary {
                     break;
                 }
                 completed += 1;
+            }
+            if !had_sub_lock && let Some(ref sc) = sub_crate {
+                let _ = fs::remove_file(self.root.join(sc).join("Cargo.lock"));
             }
             coverage.cargo = completed == 3 && exit == 0;
         } else if docs {

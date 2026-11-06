@@ -109,6 +109,11 @@ fn exported_names(source: &str) -> Result<Vec<String>, Error> {
             .captures_iter(source)
             .filter_map(|captures| captures.get(1).map(|entry| entry.as_str().to_owned())),
     );
+    items.extend(
+        regex(r"(?m)^(?:async\s+)?(?:def|class)\s+([A-Za-z_][A-Za-z0-9_]*)\b")?
+            .captures_iter(source)
+            .filter_map(|captures| captures.get(1).map(|entry| entry.as_str().to_owned())),
+    );
     Ok(distinct(items))
 }
 
@@ -120,7 +125,7 @@ pub fn index_sources(files: &[String], sources: &[(String, Text)]) -> Result<Ind
     let mut seen_symbols = std::collections::BTreeSet::new();
     let token = regex(r"[A-Za-z_$][\w$]*")?;
     let commonjs = regex(r"\bexports\.([A-Za-z_$][\w$]*)\s*=")?;
-    let code = regex(r"\.(?:[cm]?js|[cm]?ts|jsx|tsx|rs)$")?;
+    let code = regex(r"\.(?:[cm]?js|[cm]?ts|jsx|tsx|rs|py)$")?;
     let export_list = regex(r"(?m)^export\s*\{([^}]*)\}")?;
     let identifier = regex(r"^[A-Za-z_$][\w$]*$")?;
     let alias = regex(r"\s+as\s+")?;
@@ -202,8 +207,23 @@ pub fn related_exports(
         return Ok(Vec::new());
     }
     let pattern = regex(r"^src/.+\.(?:mjs|cjs|js|ts)$")?;
+    let polyglot_pattern = regex(r"\.(?:rs|py)$")?;
+    let use_polyglot = !files.iter().any(|file| pattern.is_match(file));
     let mut scored = Vec::new();
-    for file in files.iter().filter(|file| pattern.is_match(file)).take(400) {
+    for file in files
+        .iter()
+        .filter(|file| {
+            if use_polyglot {
+                polyglot_pattern.is_match(file)
+                    && !file.starts_with("tests/")
+                    && !file.contains("/tests/")
+                    && !file.contains("/benches/")
+            } else {
+                pattern.is_match(file)
+            }
+        })
+        .take(400)
+    {
         let Some((_, source)) = sources.iter().find(|(name, _)| name == file) else {
             continue;
         };
@@ -352,10 +372,18 @@ pub fn read_context(root: &Path, files: &[String], ask: &str) -> Result<Context,
         };
         let source = encode(source).replace("\r\n", "\n");
         for name in names {
-            let declaration = regex(&format!(
-                r"^export\s+(?:default\s+)?(?:async\s+)?(?:function\*?|const|let|class)\s+{}\b",
-                regex_lite::escape(name)
-            ))?;
+            let escaped = regex_lite::escape(name);
+            let declaration = if file.ends_with(".rs") {
+                regex(&format!(
+                    r"^\s*pub(?:\([^)]*\))?\s+(?:async\s+)?(?:fn|struct|enum|trait|type|const|static)\s+{escaped}\b"
+                ))?
+            } else if file.ends_with(".py") {
+                regex(&format!(r"^(?:async\s+)?(?:def|class)\s+{escaped}\b"))?
+            } else {
+                regex(&format!(
+                    r"^export\s+(?:default\s+)?(?:async\s+)?(?:function\*?|const|let|class)\s+{escaped}\b"
+                ))?
+            };
             let lines = source.split('\n').collect::<Vec<_>>();
             let Some(start) = lines.iter().position(|line| declaration.is_match(line)) else {
                 continue;
