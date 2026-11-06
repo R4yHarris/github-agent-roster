@@ -156,6 +156,13 @@ impl GitSeal {
         &self.validation
     }
 
+    pub(crate) fn primary_index_bytes(&self) -> Option<&[u8]> {
+        self.indexes
+            .files
+            .first()
+            .and_then(|(_, snap)| snap.as_ref().map(|s| s.bytes.as_slice()))
+    }
+
     pub(crate) fn require_current<'a>(
         &'a self,
         boundary: &'a Boundary,
