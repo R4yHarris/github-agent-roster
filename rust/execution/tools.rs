@@ -3089,9 +3089,12 @@ impl Boundary {
             } else if let Some(stem) = Path::new(file).file_stem().and_then(|s| s.to_str()) {
                 for candidate in [
                     format!("tests/preparation/test_{stem}.py"),
+                    format!("tests/cli/test_{stem}.py"),
                     format!("tests/test_{stem}.py"),
+                    "tests/cli/test_models.py".to_owned(),
                 ] {
-                    if regular(&self.root, &candidate, MAX_FILE_BYTES)?.is_some()
+                    if (candidate != "tests/cli/test_models.py" || file.contains("recipes/"))
+                        && regular(&self.root, &candidate, MAX_FILE_BYTES)?.is_some()
                         && !test_files.contains(&candidate)
                     {
                         test_files.push(candidate);
@@ -3562,8 +3565,18 @@ impl Boundary {
                     test_step.push("disk_store::tests".to_owned());
                     test_step.push("--test-threads=2".to_owned());
                 } else if sc == "flare" {
+                    let flare_filter = if requirements
+                        .files
+                        .iter()
+                        .chain(self.written.iter())
+                        .any(|f| f.contains("inspect.rs"))
+                    {
+                        "inspect::tests"
+                    } else {
+                        "entry_path_tests"
+                    };
                     test_step.push("--".to_owned());
-                    test_step.push("entry_path_tests".to_owned());
+                    test_step.push(flare_filter.to_owned());
                     test_step.push("--test-threads=2".to_owned());
                 } else if sc == "heliopause" {
                     test_step.push("--".to_owned());
