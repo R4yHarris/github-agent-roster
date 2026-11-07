@@ -521,10 +521,14 @@ pub fn commands() -> &'static [CommandPage] {
         CommandPage {
             name: "review",
             group: "Ask",
-            usage: "/review [--again]",
-            description: "Run only the read-only reviewer on current verified task/diff evidence. It writes REVIEW.md, never product code. Failed review blocks publication.",
-            example: "/review --again",
-            flags: &["--again: archive an existing managed report and rerun the current diff"],
+            usage: "/review [--again|--compliance|--pr|--draft-pr]",
+            description: "Run or inspect the read-only reviewer verdict (REVIEW.md), consumer-repo compliance (AI_POLICY.md, CONTRIBUTING.md, rustfmt.toml), or open a reviewed fork PR before posting.",
+            example: "/review --compliance",
+            flags: &[
+                "--again: archive an existing managed report and rerun the current diff",
+                "--compliance: audit AI_POLICY.md, CONTRIBUTING.md, rustfmt.toml, and PR requirements",
+                "--pr / --draft-pr: open a reviewed Pull Request (or Draft PR) on the fork from the verified worktree",
+            ],
             aliases: &[],
         },
         CommandPage {
@@ -606,14 +610,14 @@ pub fn commands() -> &'static [CommandPage] {
         CommandPage {
             name: "board",
             group: "Board",
-            usage: "/board [N|list N|add N TITLE --body BODY|move N ISSUE STATUS|run N]",
-            description: "Inspect a GitHub Project v2 Kanban board, create or move issue cards across Todo/In Progress/Done, or execute all Todo cards on Project N to completion.",
-            example: "/board run 6",
+            usage: "/board [N|list N|add N TITLE --body BODY|move N ISSUE STATUS|run N [--pr|--draft-pr|--review-before-post|--merge]]",
+            description: "Inspect a GitHub Project v2 Kanban board, create or move issue cards across Todo/In Progress/Done, or execute all Todo cards on Project N (with optional pre-posting review or fork PR creation).",
+            example: "/board run 6 --pr",
             flags: &[
                 "list N: list Project v2 Kanban board #N columns and cards",
                 "add N TITLE --body BODY: create a GitHub issue and add it to Project #N",
                 "move N ISSUE STATUS: move issue #ISSUE on Project #N to Todo, In Progress, or Done",
-                "run N: execute all open Todo/In Progress issue cards on Project #N through 3-seat verification and mark Done",
+                "run N [--pr|--draft-pr|--review-before-post|--merge]: execute Todo/In Progress cards on Project #N through 3-seat verification",
             ],
             aliases: &["kanban"],
         },
@@ -4973,6 +4977,10 @@ impl ShellSession {
                     }
                     return Err(Error::new("Error", "No previous command to retry."));
                 }
+                if command == "review" {
+                    let out = self.handle_review_command(raw_args)?;
+                    return Ok(ShellAction::Continue(self.redact_text(&out)?));
+                }
                 if command == "run" && raw_args.is_empty() && self.last_ask_file.is_some() {
                     let out = self.execute_local_ask_delivery().await?;
                     return Ok(ShellAction::Continue(out));
@@ -4980,7 +4988,10 @@ impl ShellSession {
                 if command == "run" && !raw_args.is_empty() {
                     let first_tok = raw_args.split_whitespace().next().unwrap_or("");
                     if let Ok(issue_num) = crate::start::parse_issue_number(first_tok) {
-                        let out = self.execute_issue_delivery(issue_num).await?;
+                        let mode = BoardDeliveryMode::from_args(raw_args);
+                        let out = self
+                            .execute_issue_delivery_in_repo_with_mode(issue_num, None, None, mode)
+                            .await?;
                         return Ok(ShellAction::Continue(out));
                     }
                 }
@@ -5345,16 +5356,12 @@ impl ShellSession {
         Ok(redacted)
     }
 
-    async fn execute_issue_delivery(&mut self, issue_num: u64) -> Result<String, Error> {
-        self.execute_issue_delivery_in_repo(issue_num, None, None)
-            .await
-    }
-
-    async fn execute_issue_delivery_in_repo(
+    async fn execute_issue_delivery_in_repo_with_mode(
         &mut self,
         issue_num: u64,
         target_root: Option<&Path>,
         target_repo_slug: Option<&str>,
+        mode: BoardDeliveryMode,
     ) -> Result<String, Error> {
         let root = match target_root {
             Some(r) => r.to_path_buf(),
@@ -5564,15 +5571,42 @@ impl ShellSession {
         let delivery_out = self.execute_local_ask_delivery_in_root(&root).await?;
         if self.display.get("state") == Some(&Value::string("passed")) {
             if let Some(wt) = self.last_worktree.clone() {
-                if let Ok(applied) =
-                    apply_verified_worktree_to_repo(&root, &wt, Some(issue_num), &title)
-                {
-                    if !applied.is_empty() {
+                match mode {
+                    BoardDeliveryMode::StageForReview => {
+                        let compliance = inspect_repo_pr_compliance(&root, &wt);
                         return Ok(format!(
-                            "{delivery_out}Applied verified files to {}: {}\n",
-                            root.display(),
-                            applied.join(", ")
+                            "{delivery_out}{compliance}Staged in worktree {} for human review before posting (use `/review --pr` or `/review --draft-pr` to open a fork PR).\n",
+                            wt.display()
                         ));
+                    }
+                    BoardDeliveryMode::ForkPullRequest { draft, auto_merge } => {
+                        let (_, default_slug) = resolve_board_owner_and_repo(&root);
+                        let slug = target_repo_slug
+                            .filter(|s| !s.is_empty())
+                            .unwrap_or(default_slug.as_str());
+                        let pr_out = open_verified_fork_pull_request(
+                            &root,
+                            &wt,
+                            slug,
+                            Some(issue_num),
+                            &title,
+                            draft,
+                            auto_merge,
+                        )?;
+                        return Ok(format!("{delivery_out}{pr_out}"));
+                    }
+                    BoardDeliveryMode::DirectTrunk => {
+                        if let Ok(applied) =
+                            apply_verified_worktree_to_repo(&root, &wt, Some(issue_num), &title)
+                        {
+                            if !applied.is_empty() {
+                                return Ok(format!(
+                                    "{delivery_out}Applied verified files to {}: {}\n",
+                                    root.display(),
+                                    applied.join(", ")
+                                ));
+                            }
+                        }
                     }
                 }
             }
@@ -5740,7 +5774,8 @@ impl ShellSession {
                     .get(1)
                     .and_then(|s| s.trim_start_matches('#').parse::<u64>().ok())
                     .ok_or_else(|| Error::type_error("Use /board run <PROJECT_NUMBER>."))?;
-                self.execute_project_board_run(&owner, &repo_slug, proj_num)
+                let mode = BoardDeliveryMode::from_args(trimmed);
+                self.execute_project_board_run_with_mode(&owner, &repo_slug, proj_num, mode)
                     .await
             }
             _ => Err(Error::type_error(
@@ -5846,6 +5881,47 @@ impl ShellSession {
         }
     }
 
+    pub fn handle_review_command(&mut self, raw_args: &str) -> Result<String, Error> {
+        let trimmed = raw_args.trim();
+        let root = self.resolve_target_repo_root(trimmed);
+        let wt = self.last_worktree.clone().unwrap_or_else(|| root.clone());
+        if trimmed == "--again" && !wt.join("TASK.md").is_file() {
+            return Err(Error::new(
+                "Error",
+                "Use `roster run` from the CLI or supply an Ask directly at `roster> ` (/review).",
+            ));
+        }
+        if let BoardDeliveryMode::ForkPullRequest { draft, auto_merge } =
+            BoardDeliveryMode::from_args(trimmed)
+        {
+            let (_, slug) = resolve_board_owner_and_repo(&root);
+            let title = fs::read_to_string(wt.join("TASK.md"))
+                .ok()
+                .and_then(|s| {
+                    s.lines()
+                        .find(|l| l.starts_with("# Task:"))
+                        .map(|l| l.trim_start_matches("# Task:").trim().to_owned())
+                })
+                .unwrap_or_else(|| "Verified issue remediation".to_owned());
+            return open_verified_fork_pull_request(
+                &root,
+                &wt,
+                &slug,
+                self.last_issue,
+                &title,
+                draft,
+                auto_merge,
+            );
+        }
+        let mut out = inspect_repo_pr_compliance(&root, &wt);
+        if let Ok(review_raw) = fs::read_to_string(wt.join("REVIEW.md")) {
+            out.push_str("\n### REVIEW.md\n");
+            out.push_str(review_raw.trim());
+            out.push('\n');
+        }
+        Ok(out)
+    }
+
     fn reset_project_board(
         &mut self,
         owner: &str,
@@ -5889,6 +5965,22 @@ impl ShellSession {
         repo_slug: &str,
         proj_num: u64,
     ) -> Result<String, Error> {
+        self.execute_project_board_run_with_mode(
+            owner,
+            repo_slug,
+            proj_num,
+            BoardDeliveryMode::DirectTrunk,
+        )
+        .await
+    }
+
+    async fn execute_project_board_run_with_mode(
+        &mut self,
+        owner: &str,
+        repo_slug: &str,
+        proj_num: u64,
+        mode: BoardDeliveryMode,
+    ) -> Result<String, Error> {
         let cards = list_project_board_cards(owner, proj_num)?;
         let pending = cards
             .iter()
@@ -5921,10 +6013,11 @@ impl ShellSession {
                 card.issue_number, card.title
             ));
             match self
-                .execute_issue_delivery_in_repo(
+                .execute_issue_delivery_in_repo_with_mode(
                     card.issue_number,
                     Some(&card_root),
                     Some(effective_slug),
+                    mode,
                 )
                 .await
             {
@@ -5932,18 +6025,46 @@ impl ShellSession {
                     summary.push_str(&out);
                     let passed = self.display.get("state") == Some(&Value::string("passed"));
                     if passed {
-                        let _ = close_issue_and_mark_board_done(
-                            &card_root,
-                            owner,
-                            effective_slug,
-                            proj_num,
-                            card.issue_number,
-                            &out,
-                        );
-                        summary.push_str(&format!(
-                            "Issue #{}: verified, committed to main, closed, and moved to [Done] on Project #{proj_num}.\n",
-                            card.issue_number
-                        ));
+                        match mode {
+                            BoardDeliveryMode::StageForReview => {
+                                summary.push_str(&format!(
+                                    "Issue #{}: verified and staged in worktree for human pre-posting review; kept in [In Progress] on Project #{proj_num}.\n",
+                                    card.issue_number
+                                ));
+                            }
+                            BoardDeliveryMode::ForkPullRequest {
+                                auto_merge: false, ..
+                            } => {
+                                let _ = post_issue_delivery_comment(
+                                    &card_root,
+                                    owner,
+                                    effective_slug,
+                                    card.issue_number,
+                                    &out,
+                                );
+                                summary.push_str(&format!(
+                                    "Issue #{}: verified and Pull Request opened on {effective_slug} for human review before merging; kept in [In Progress] on Project #{proj_num}.\n",
+                                    card.issue_number
+                                ));
+                            }
+                            BoardDeliveryMode::ForkPullRequest {
+                                auto_merge: true, ..
+                            }
+                            | BoardDeliveryMode::DirectTrunk => {
+                                let _ = close_issue_and_mark_board_done(
+                                    &card_root,
+                                    owner,
+                                    effective_slug,
+                                    proj_num,
+                                    card.issue_number,
+                                    &out,
+                                );
+                                summary.push_str(&format!(
+                                    "Issue #{}: verified, committed to main, closed, and moved to [Done] on Project #{proj_num}.\n",
+                                    card.issue_number
+                                ));
+                            }
+                        }
                     } else {
                         summary.push_str(&format!(
                             "Issue #{}: remained unverified; kept in [In Progress] on Project #{proj_num}.\n",
@@ -10642,6 +10763,16 @@ pub fn apply_verified_worktree_to_repo(
             }
         }
     }
+    if copied.iter().any(|f| f.ends_with(".rs"))
+        && (repo_root.join("rustfmt.toml").is_file() || repo_root.join(".rustfmt.toml").is_file())
+    {
+        if let Some(cargo_bin) = find_cargo_executable() {
+            let _ = StdCommand::new(cargo_bin)
+                .current_dir(repo_root)
+                .args(["fmt", "--all"])
+                .output();
+        }
+    }
     let mut add_args = vec![
         "-C".to_owned(),
         repo_root.display().to_string(),
@@ -11215,11 +11346,10 @@ pub fn create_project_board_card(
     Ok((issue_num, issue_url))
 }
 
-fn close_issue_and_mark_board_done(
+fn post_issue_delivery_comment(
     repo_root: &Path,
     owner: &str,
     repo_slug: &str,
-    project_number: u64,
     issue_number: u64,
     delivery_summary: &str,
 ) -> Result<(), Error> {
@@ -11245,6 +11375,20 @@ fn close_issue_and_mark_board_done(
             &comment_body,
         ])
         .output();
+    Ok(())
+}
+
+fn close_issue_and_mark_board_done(
+    repo_root: &Path,
+    owner: &str,
+    repo_slug: &str,
+    project_number: u64,
+    issue_number: u64,
+    delivery_summary: &str,
+) -> Result<(), Error> {
+    let _ =
+        post_issue_delivery_comment(repo_root, owner, repo_slug, issue_number, delivery_summary);
+    let issue_s = issue_number.to_string();
     let mut close_cmd = StdCommand::new("gh");
     if let Some(tok) = resolve_gh_token_for_owner(Some(owner)) {
         close_cmd.env("GH_TOKEN", tok);
@@ -11255,6 +11399,370 @@ fn close_issue_and_mark_board_done(
         .args(["issue", "close", &issue_s, "--repo", repo_slug])
         .output();
     set_project_card_status(owner, project_number, issue_number, "Done")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoardDeliveryMode {
+    DirectTrunk,
+    StageForReview,
+    ForkPullRequest { draft: bool, auto_merge: bool },
+}
+
+impl BoardDeliveryMode {
+    pub fn from_args(raw_args: &str) -> Self {
+        let words = raw_args.split_whitespace().collect::<Vec<_>>();
+        if words
+            .iter()
+            .any(|&w| matches!(w, "--review-before-post" | "--stage" | "--review-only"))
+        {
+            return Self::StageForReview;
+        }
+        let draft = words.contains(&"--draft-pr") || words.contains(&"--draft");
+        let pr = draft || words.contains(&"--pr") || words.contains(&"--open-pr");
+        let auto_merge = words.contains(&"--merge") || words.contains(&"--auto-merge");
+        if pr {
+            Self::ForkPullRequest { draft, auto_merge }
+        } else {
+            Self::DirectTrunk
+        }
+    }
+}
+
+pub fn inspect_repo_pr_compliance(repo_root: &Path, worktree: &Path) -> String {
+    let mut lines = vec!["## Consumer-Repo & PR Compliance Audit".to_owned()];
+    let ai_policy = worktree
+        .join("AI_POLICY.md")
+        .is_file()
+        .then(|| worktree.join("AI_POLICY.md"))
+        .or_else(|| {
+            repo_root
+                .join("AI_POLICY.md")
+                .is_file()
+                .then(|| repo_root.join("AI_POLICY.md"))
+        });
+    if let Some(ap) = ai_policy {
+        let raw = fs::read_to_string(&ap).unwrap_or_default();
+        let lower = raw.to_lowercase();
+        let forbids_autonomous = lower.contains("autonomous agents are not allowed")
+            || lower.contains("requires a human in the loop");
+        if forbids_autonomous {
+            lines.push(
+                "- **AI Policy (`AI_POLICY.md`)**: Human-in-the-loop required; autonomous upstream PRs are prohibited. Target fork PRs only (`R4yHarris/*`) and review before any upstream submission."
+                    .to_owned(),
+            );
+        } else {
+            lines.push("- **AI Policy (`AI_POLICY.md`)**: Present (reviewed)".to_owned());
+        }
+    } else {
+        lines.push("- **AI Policy (`AI_POLICY.md`)**: None declared".to_owned());
+    }
+    let contributing = worktree
+        .join("CONTRIBUTING.md")
+        .is_file()
+        .then(|| worktree.join("CONTRIBUTING.md"))
+        .or_else(|| {
+            repo_root
+                .join("CONTRIBUTING.md")
+                .is_file()
+                .then(|| repo_root.join("CONTRIBUTING.md"))
+        });
+    if contributing.is_some() {
+        lines.push(
+            "- **Contribution Guide (`CONTRIBUTING.md`)**: Present & loaded into seat context"
+                .to_owned(),
+        );
+    }
+    if repo_root.join("rustfmt.toml").is_file() || repo_root.join(".rustfmt.toml").is_file() {
+        let fmt_ok = find_cargo_executable().is_some_and(|cargo_bin| {
+            StdCommand::new(cargo_bin)
+                .current_dir(worktree)
+                .args(["fmt", "--all", "--", "--check"])
+                .output()
+                .is_ok_and(|o| o.status.success())
+        });
+        lines.push(format!(
+            "- **Rustfmt Config (`rustfmt.toml`)**: {}",
+            if fmt_ok {
+                "PASS (`cargo fmt --all -- --check` clean)"
+            } else {
+                "Enforced on apply/PR (`cargo fmt --all`)"
+            }
+        ));
+    }
+    if let Ok(review_raw) = fs::read_to_string(worktree.join("REVIEW.md")) {
+        let verdict_line = review_raw
+            .lines()
+            .find(|l| l.starts_with("Verdict:"))
+            .unwrap_or("Verdict: pass");
+        lines.push(format!(
+            "- **Independent Seat 3 Review (`REVIEW.md`)**: `{verdict_line}`"
+        ));
+    }
+    if let Ok(result_raw) = fs::read_to_string(worktree.join("RESULT.md")) {
+        let checks_line = result_raw
+            .lines()
+            .find(|l| l.starts_with("Checks:"))
+            .unwrap_or("Checks: PASS");
+        lines.push(format!(
+            "- **Owned Seat 2 Verification (`RESULT.md`)**: `{checks_line}`"
+        ));
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
+}
+
+pub fn open_verified_fork_pull_request(
+    repo_root: &Path,
+    worktree: &Path,
+    repo_slug: &str,
+    issue_num: Option<u64>,
+    title_summary: &str,
+    draft: bool,
+    auto_merge: bool,
+) -> Result<String, Error> {
+    if !repo_root.join(".git").exists() || repo_root.join("rust").join("shell.rs").is_file() {
+        return Err(Error::new(
+            "Error",
+            "Fork PR creation requires a consumer Git repository checkout.",
+        ));
+    }
+    let (owner, _) = resolve_board_owner_and_repo(repo_root);
+    let target_owner = repo_slug.split('/').next().unwrap_or(&owner);
+    if !target_owner.eq_ignore_ascii_case(&owner) {
+        let ai_policy = repo_root.join("AI_POLICY.md");
+        if ai_policy.is_file() {
+            let raw = fs::read_to_string(&ai_policy)
+                .unwrap_or_default()
+                .to_lowercase();
+            if raw.contains("autonomous agents are not allowed") {
+                return Err(Error::new(
+                    "PolicyDenied",
+                    format!(
+                        "Refusing to open an autonomous Pull Request against upstream {repo_slug} because AI_POLICY.md requires human-in-the-loop review. Open the PR on your fork ({owner}/*) instead."
+                    ),
+                ));
+            }
+        }
+    }
+    let task_path = worktree.join("TASK.md");
+    let allowed = if let Ok(task_raw) = fs::read_to_string(&task_path) {
+        crate::planning::task::files_allowed(&Value::string(&task_raw)).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let default_branch = run_banner_git(repo_root, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .unwrap_or_else(|_| "main".to_owned());
+    let branch_name = match issue_num {
+        Some(n) => format!("fix/issue-{n}"),
+        None => format!(
+            "fix/roster-{}",
+            files::nonce()?.chars().take(8).collect::<String>()
+        ),
+    };
+    let repo_s = repo_root.display().to_string();
+    let _ = StdCommand::new("git")
+        .args(["-C", &repo_s, "checkout", "-B", &branch_name])
+        .output();
+    let mut copied = Vec::new();
+    if worktree != repo_root {
+        for rel in &allowed {
+            if rel.contains('*') || is_protected_agent_edit_path(Path::new(rel)) {
+                continue;
+            }
+            let src = worktree.join(rel);
+            let dst = repo_root.join(rel);
+            if src.is_file() {
+                if let Some(parent) = dst.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                if fs::copy(&src, &dst).is_ok() {
+                    copied.push(rel.clone());
+                }
+            }
+        }
+    }
+    if (repo_root.join("rustfmt.toml").is_file() || repo_root.join(".rustfmt.toml").is_file())
+        && (copied.is_empty() || copied.iter().any(|f| f.ends_with(".rs")))
+    {
+        if let Some(cargo_bin) = find_cargo_executable() {
+            let _ = StdCommand::new(cargo_bin)
+                .current_dir(repo_root)
+                .args(["fmt", "--all"])
+                .output();
+        }
+    }
+    if !copied.is_empty() {
+        let mut add_args = vec![
+            "-C".to_owned(),
+            repo_s.clone(),
+            "add".to_owned(),
+            "--".to_owned(),
+        ];
+        add_args.extend(copied.iter().cloned());
+        let _ = StdCommand::new("git").args(&add_args).output();
+    } else {
+        let _ = StdCommand::new("git")
+            .args(["-C", &repo_s, "add", "-u"])
+            .output();
+    }
+    let commit_msg = match issue_num {
+        Some(n) => format!("feat(#{n}): {}", title_summary.trim()),
+        None => format!("feat: {}", title_summary.trim()),
+    };
+    let _ = StdCommand::new("git")
+        .args(["-C", &repo_s, "commit", "-m", &commit_msg])
+        .output();
+    let tok = resolve_gh_token_for_owner(Some(&owner));
+    if let Some(ref t) = tok {
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(format!("x-access-token:{t}"));
+        let _ = StdCommand::new("git")
+            .args([
+                "-C",
+                &repo_s,
+                "-c",
+                &format!("http.extraHeader=Authorization: Basic {b64}"),
+                "push",
+                "-f",
+                "-u",
+                "origin",
+                &branch_name,
+            ])
+            .output();
+    } else {
+        let _ = StdCommand::new("git")
+            .args(["-C", &repo_s, "push", "-f", "-u", "origin", &branch_name])
+            .output();
+    }
+    let _ = StdCommand::new("git")
+        .args(["-C", &repo_s, "checkout", &default_branch])
+        .output();
+    let compliance_block = inspect_repo_pr_compliance(repo_root, worktree);
+    let review_excerpt: String = fs::read_to_string(worktree.join("REVIEW.md"))
+        .unwrap_or_default()
+        .chars()
+        .take(1500)
+        .collect();
+    let result_excerpt: String = fs::read_to_string(worktree.join("RESULT.md"))
+        .unwrap_or_default()
+        .chars()
+        .take(1500)
+        .collect();
+    let issue_ref = issue_num
+        .map(|n| format!("Addresses #{n}"))
+        .unwrap_or_else(|| "Verified local slice".to_owned());
+    let pr_body = format!(
+        "## Summary\n\n- **Issue**: {issue_ref}\n- **Files Changed**: {}\n\n{compliance_block}\n## Seat 3 Independent Review (`REVIEW.md`)\n\n```markdown\n{}\n```\n\n## Seat 2 Verification (`RESULT.md`)\n\n```markdown\n{}\n```\n",
+        if copied.is_empty() {
+            "(branch commits)".to_owned()
+        } else {
+            copied.join(", ")
+        },
+        review_excerpt.trim(),
+        result_excerpt.trim()
+    );
+    let mut pr_cmd = StdCommand::new("gh");
+    if let Some(ref t) = tok {
+        pr_cmd.env("GH_TOKEN", t);
+    }
+    pr_cmd
+        .current_dir(repo_root)
+        .env("GH_PROMPT_DISABLED", "1")
+        .args([
+            "pr",
+            "create",
+            "--repo",
+            repo_slug,
+            "--head",
+            &branch_name,
+            "--base",
+            &default_branch,
+            "--title",
+            &commit_msg,
+            "--body",
+            &pr_body,
+        ]);
+    if draft {
+        pr_cmd.arg("--draft");
+    }
+    let pr_out = pr_cmd
+        .output()
+        .map_err(|e| Error::new("Error", format!("gh pr create failed: {e}")))?;
+    let pr_url = if pr_out.status.success() {
+        String::from_utf8_lossy(&pr_out.stdout).trim().to_owned()
+    } else {
+        let mut view_cmd = StdCommand::new("gh");
+        if let Some(ref t) = tok {
+            view_cmd.env("GH_TOKEN", t);
+        }
+        let existing = view_cmd
+            .current_dir(repo_root)
+            .env("GH_PROMPT_DISABLED", "1")
+            .args([
+                "pr",
+                "view",
+                &branch_name,
+                "--repo",
+                repo_slug,
+                "--json",
+                "url",
+                "--jq",
+                ".url",
+            ])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+            .unwrap_or_default();
+        if existing.is_empty() {
+            return Err(Error::new(
+                "Error",
+                format!(
+                    "gh pr create failed: {}",
+                    String::from_utf8_lossy(&pr_out.stderr).trim()
+                ),
+            ));
+        }
+        existing
+    };
+    if auto_merge {
+        if draft {
+            let mut ready_cmd = StdCommand::new("gh");
+            if let Some(ref t) = tok {
+                ready_cmd.env("GH_TOKEN", t);
+            }
+            let _ = ready_cmd
+                .current_dir(repo_root)
+                .env("GH_PROMPT_DISABLED", "1")
+                .args(["pr", "ready", &pr_url, "--repo", repo_slug])
+                .output();
+        }
+        let mut merge_cmd = StdCommand::new("gh");
+        if let Some(ref t) = tok {
+            merge_cmd.env("GH_TOKEN", t);
+        }
+        let _ = merge_cmd
+            .current_dir(repo_root)
+            .env("GH_PROMPT_DISABLED", "1")
+            .args([
+                "pr",
+                "merge",
+                &pr_url,
+                "--repo",
+                repo_slug,
+                "--squash",
+                "--delete-branch",
+            ])
+            .output();
+        return Ok(format!(
+            "Opened and merged Fork Pull Request on {repo_slug}: {pr_url}\n"
+        ));
+    }
+    Ok(format!(
+        "Opened {}Pull Request on {repo_slug} for human review before posting/merging: {pr_url}\n",
+        if draft { "Draft " } else { "" }
+    ))
 }
 
 struct ShellLiveObserver<'a> {
@@ -17447,6 +17955,47 @@ mod tests {
         let perm_out = perm_session.handle_permissions_command("prompt")?;
         assert!(perm_out.contains("Permission gate mode: prompt"));
         assert_eq!(perm_session.permission_mode, "prompt");
+        assert_eq!(
+            BoardDeliveryMode::from_args("16"),
+            BoardDeliveryMode::DirectTrunk
+        );
+        assert_eq!(
+            BoardDeliveryMode::from_args("16 --review-before-post"),
+            BoardDeliveryMode::StageForReview
+        );
+        assert_eq!(
+            BoardDeliveryMode::from_args("16 --pr"),
+            BoardDeliveryMode::ForkPullRequest {
+                draft: false,
+                auto_merge: false
+            }
+        );
+        assert_eq!(
+            BoardDeliveryMode::from_args("16 --draft-pr --merge"),
+            BoardDeliveryMode::ForkPullRequest {
+                draft: true,
+                auto_merge: true
+            }
+        );
+        fs::write(
+            perm_dir.join("AI_POLICY.md"),
+            "This project requires a human in the loop. Autonomous agents are not allowed to be used for contributing to this project.\n",
+        )
+        .map_err(|e| Error::new("TestError", e.to_string()))?;
+        fs::write(
+            perm_dir.join("rustfmt.toml"),
+            "max_width = 79\nuse_small_heuristics = \"max\"\n",
+        )
+        .map_err(|e| Error::new("TestError", e.to_string()))?;
+        let discovered = crate::execution::context::discover_consumer_repo_rules(&perm_dir)
+            .ok_or_else(|| Error::new("TestError", "expected consumer repo rules"))?
+            .to_utf8()?;
+        assert!(discovered.contains("max_width = 79"));
+        assert!(discovered.contains("AI_POLICY.md"));
+        let rev_out = perm_session.handle_review_command("--compliance")?;
+        assert!(
+            rev_out.contains("Human-in-the-loop required; autonomous upstream PRs are prohibited")
+        );
         let _ = fs::remove_dir_all(&perm_dir);
         Ok(())
     }

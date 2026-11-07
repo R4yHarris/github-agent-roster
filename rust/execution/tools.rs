@@ -3794,7 +3794,30 @@ impl Boundary {
                     test_step.push(filter);
                     test_step.push("--test-threads=2".to_owned());
                 }
-                [
+                let first_step = if self.root.join("rustfmt.toml").is_file()
+                    || self.root.join(".rustfmt.toml").is_file()
+                {
+                    let mut fmt_args = vec![
+                        "fmt".to_owned(),
+                        "--manifest-path".to_owned(),
+                        manifest_rel,
+                        "--".to_owned(),
+                        "--check".to_owned(),
+                    ];
+                    let rs_files: Vec<String> = requirements
+                        .files
+                        .iter()
+                        .chain(self.written.iter())
+                        .filter(|f| f.ends_with(".rs"))
+                        .cloned()
+                        .collect();
+                    for rf in rs_files {
+                        if !fmt_args.contains(&rf) {
+                            fmt_args.push(rf);
+                        }
+                    }
+                    fmt_args
+                } else {
                     vec![
                         "metadata".to_owned(),
                         "--manifest-path".to_owned(),
@@ -3803,10 +3826,9 @@ impl Boundary {
                         "1".to_owned(),
                         "--no-deps".to_owned(),
                         "--offline".to_owned(),
-                    ],
-                    check_step,
-                    test_step,
-                ]
+                    ]
+                };
+                [first_step, check_step, test_step]
             } else {
                 let (clippy_args, test_args) = if has_integration_test || !is_roster_self {
                     (
