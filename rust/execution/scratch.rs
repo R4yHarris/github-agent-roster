@@ -316,6 +316,15 @@ impl<'a> Scratch<'a> {
                 links.push((name.to_owned(), object.to_owned()));
                 continue;
             }
+            if kind == "blob"
+                && mode == "120000"
+                && !policy::managed(name)
+                && !crate::planning::forbidden_read(name)
+                && fs::symlink_metadata(source.join(name)).is_ok_and(|m| secure::linked(&m))
+            {
+                skipped.push(name.to_owned());
+                continue;
+            }
             if kind != "blob" || !["100644", "100755"].contains(&mode) {
                 return Err(unsupported(
                     "Symbolic/special entries in selected base revision",

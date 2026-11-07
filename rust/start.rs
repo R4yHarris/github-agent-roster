@@ -2302,6 +2302,13 @@ async fn modules(
                 ));
             }
             if parts.first() == Some(&"120000") {
+                if !policy::managed(path)
+                    && !crate::planning::forbidden_read(path)
+                    && std::fs::symlink_metadata(source.join(path))
+                        .is_ok_and(|m| secure::linked(&m))
+                {
+                    continue;
+                }
                 return Err(crate::execution::unsupported(
                     "Linked files in the selected local base",
                 ));
