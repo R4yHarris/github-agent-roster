@@ -3085,11 +3085,20 @@ impl Boundary {
             .join("roster-pycache")
             .display()
             .to_string();
+        let py_path = if self.root.join("src").is_dir() {
+            if cfg!(windows) {
+                "src;.".to_owned()
+            } else {
+                "src:.".to_owned()
+            }
+        } else {
+            ".".to_owned()
+        };
         let mut environment = BTreeMap::from([
             ("ROSTER_SEAT".to_owned(), "coder".to_owned()),
             ("PYTHONDONTWRITEBYTECODE".to_owned(), "1".to_owned()),
             ("PYTHONPYCACHEPREFIX".to_owned(), pycache_prefix),
-            ("PYTHONPATH".to_owned(), ".".to_owned()),
+            ("PYTHONPATH".to_owned(), py_path),
         ]);
         for var in ["HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA"] {
             if let Ok(val) = std::env::var(var) {
@@ -3172,8 +3181,10 @@ impl Boundary {
                 if stem.is_empty() {
                     continue;
                 }
+                let clean_stem = stem.trim_start_matches('_');
                 let mut candidate_paths = vec![
                     format!("tests/test_{stem}.py"),
+                    format!("tests/test_{clean_stem}.py"),
                     format!("tests/preparation/test_{stem}.py"),
                     format!("tests/cli/test_{stem}.py"),
                 ];
