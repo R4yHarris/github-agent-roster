@@ -210,6 +210,49 @@ pub fn seat_rules(agents: &str) -> Result<String, Error> {
     })
 }
 
+pub fn discover_consumer_repo_rules(root: &Path) -> Option<Text> {
+    if root.join("rust").join("shell.rs").is_file() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    for fmt_name in ["rustfmt.toml", ".rustfmt.toml"] {
+        let p = root.join(fmt_name);
+        if let Ok(Some(snap)) = secure::read(&p, 16_384) {
+            if let Ok(raw) = String::from_utf8(snap.bytes) {
+                let trimmed: String = raw.trim().chars().take(400).collect();
+                if !trimmed.is_empty() {
+                    parts.push(format!(
+                        "### `{fmt_name}` (strictly enforce line width & formatting in all edited `.rs` files)\n```toml\n{trimmed}\n```"
+                    ));
+                }
+            }
+        }
+    }
+    for doc_name in [
+        "CLAUDE.md",
+        ".github/copilot-instructions.md",
+        "CONTRIBUTING.md",
+        "AI_POLICY.md",
+        ".github/PULL_REQUEST_TEMPLATE.md",
+    ] {
+        let p = root.join(doc_name);
+        if let Ok(Some(snap)) = secure::read(&p, 32_768) {
+            if let Ok(raw) = String::from_utf8(snap.bytes) {
+                let cleaned = seat_rules(&raw).unwrap_or(raw);
+                let excerpt: String = cleaned.trim().chars().take(600).collect();
+                if !excerpt.is_empty() {
+                    parts.push(format!("### `{doc_name}`\n{excerpt}"));
+                }
+            }
+        }
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(Text::from(parts.join("\n\n").as_str()))
+    }
+}
+
 pub fn coder_skill_names(source: &Text) -> Result<Vec<String>, Error> {
     let mut names = skills::task_names(&Value::String(source.clone()))?;
     let document = task::parse(&Value::String(source.clone()), &task::Authority::default())?;
@@ -603,9 +646,9 @@ pub(crate) async fn load_as(
                 .map_err(|_| Error::type_error("AGENTS.md must be UTF-8"))?;
             Text::from(seat_rules(&agents)?.as_str())
         }
-        None if minimum => {
+        None if minimum => discover_consumer_repo_rules(boundary.root()).unwrap_or_else(|| {
             Text::from("(No root AGENTS.md in this worktree; no repository coding rules supplied.)")
-        }
+        }),
         None => {
             return Err(Error::new("Error", "Required root AGENTS.md is missing").coded("ENOENT"));
         }
