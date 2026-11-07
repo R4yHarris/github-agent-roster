@@ -3437,11 +3437,16 @@ impl Boundary {
         let jobs = policy::test_concurrency(
             std::thread::available_parallelism().map_or(1, |count| count.get() as u32),
         );
+        let per_test_timeout = if self.root.join("test").is_dir() {
+            30_000
+        } else {
+            policy::FULL_TEST_TIMEOUT_MS
+        };
         let mut args = vec![
             "--test".to_owned(),
             "--test-concurrency".to_owned(),
             jobs.to_string(),
-            format!("--test-timeout={}", policy::FULL_TEST_TIMEOUT_MS),
+            format!("--test-timeout={per_test_timeout}"),
         ];
         if !full || (!tests.is_empty() && (self.root.join("test").is_dir() || available.len() > 20))
         {

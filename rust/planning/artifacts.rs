@@ -119,7 +119,7 @@ pub fn build(ask: &Value, options: BuildOptions<'_>) -> Result<Plan, Error> {
             .iter()
             .all(|file| file.ends_with(".rs") || file.ends_with(".toml") || file.ends_with(".py"))
         && !ask.contains("node --test");
-    let checks = task::checked_list(options.checks, "Acceptance checks", 8)?
+    let mut checks = task::checked_list(options.checks, "Acceptance checks", 8)?
         .iter()
         .enumerate()
         .map(|(index, entry)| task::acceptance_check(entry, index).map(|entry| encode(&entry)))
@@ -127,6 +127,16 @@ pub fn build(ask: &Value, options: BuildOptions<'_>) -> Result<Plan, Error> {
         .into_iter()
         .filter(|check| !((docs_only || rust_only) && check.contains("node --test")))
         .collect::<Vec<_>>();
+    if checks.len() > 1
+        && checks
+            .iter()
+            .any(|c| c.contains("node --test ") && !c.starts_with("node --test exits"))
+    {
+        checks.retain(|c| {
+            let t = c.trim().trim_end_matches('.');
+            t != "node --test exits 0"
+        });
+    }
     let requirements = match options.scope {
         Some(scope) => scope.clone(),
         None => intake::requirements(&value(&ask), false)?,

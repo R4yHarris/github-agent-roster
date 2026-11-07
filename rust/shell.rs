@@ -5520,14 +5520,13 @@ impl ShellSession {
                 let is_native =
                     crate::execution::policy::requires_native(&reqs.files).unwrap_or(false);
                 let is_docs = crate::execution::policy::docs_only(&reqs.files).unwrap_or(false);
-                let has_test = reqs
-                    .files
-                    .iter()
-                    .any(|f| f.starts_with("tests/") || f.contains(".test."));
-                let has_js = reqs
-                    .files
-                    .iter()
-                    .any(|f| f.ends_with(".mjs") || f.ends_with(".js"));
+                let has_test = reqs.files.iter().any(|f| {
+                    f.starts_with("tests/")
+                        || f.starts_with("test/")
+                        || f.contains(".test.")
+                        || crate::execution::substance::is_test_file(f).unwrap_or(false)
+                });
+                let has_js = reqs.files.iter().any(|f| f.ends_with(".mjs"));
                 if reqs.explicit
                     && !reqs.files.is_empty()
                     && !is_native
