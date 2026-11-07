@@ -334,7 +334,10 @@ pub async fn run(
         if !(substance::is_test_file(file)? || file.ends_with(".rs"))
             || crate::planning::forbidden_read(file)
             || (file.ends_with(".rs")
-                && !owner.root().join("Cargo.toml").is_file()
+                && (!owner.root().join("Cargo.toml").is_file()
+                    || file
+                        .split_once("/src/")
+                        .is_some_and(|(sc, _)| owner.root().join(sc).join("Cargo.toml").is_file()))
                 && !file.starts_with("tests/"))
         {
             continue;

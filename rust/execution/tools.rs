@@ -3612,31 +3612,49 @@ impl Boundary {
             }
             let is_roster_self = self.root.join("rust").join("shell.rs").is_file();
             let has_root_cargo = self.root.join("Cargo.toml").is_file();
-            let sub_crate = if !has_root_cargo {
+            let workspace_sub_crate = if !is_roster_self {
                 requirements
                     .files
                     .iter()
                     .chain(self.written.iter())
-                    .filter_map(|f| f.split('/').next())
-                    .find(|c| self.root.join(c).join("Cargo.toml").is_file())
-                    .map(str::to_owned)
-                    .or_else(|| {
-                        let Ok(rd) = fs::read_dir(&self.root) else {
-                            return None;
-                        };
-                        let mut dirs = rd.flatten().map(|e| e.path()).collect::<Vec<_>>();
-                        dirs.sort();
-                        dirs.into_iter().find_map(|p| {
-                            if p.is_dir() && p.join("Cargo.toml").is_file() {
-                                p.file_name().and_then(|n| n.to_str()).map(str::to_owned)
-                            } else {
-                                None
-                            }
-                        })
+                    .find_map(|f| {
+                        let (prefix, _) = f.split_once("/src/")?;
+                        self.root
+                            .join(prefix)
+                            .join("Cargo.toml")
+                            .is_file()
+                            .then(|| prefix.to_owned())
                     })
             } else {
                 None
             };
+            let sub_crate = workspace_sub_crate.or_else(|| {
+                if !has_root_cargo {
+                    requirements
+                        .files
+                        .iter()
+                        .chain(self.written.iter())
+                        .filter_map(|f| f.split('/').next())
+                        .find(|c| self.root.join(c).join("Cargo.toml").is_file())
+                        .map(str::to_owned)
+                        .or_else(|| {
+                            let Ok(rd) = fs::read_dir(&self.root) else {
+                                return None;
+                            };
+                            let mut dirs = rd.flatten().map(|e| e.path()).collect::<Vec<_>>();
+                            dirs.sort();
+                            dirs.into_iter().find_map(|p| {
+                                if p.is_dir() && p.join("Cargo.toml").is_file() {
+                                    p.file_name().and_then(|n| n.to_str()).map(str::to_owned)
+                                } else {
+                                    None
+                                }
+                            })
+                        })
+                } else {
+                    None
+                }
+            });
             if is_roster_self && !environment.contains_key("CARGO_TARGET_DIR") {
                 let manifest_target = Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
                 if manifest_target.is_dir() && !manifest_target.starts_with(&self.root) {
