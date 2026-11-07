@@ -952,7 +952,7 @@ impl<T: Transport, O: Observer> Driver<'_, T, O> {
             messages.push(message("user", prepared.research));
         }
         if attempt.workspace().source().is_some() {
-            messages.push(message("user", Text::from("Observed acceptance is enabled. For update_checklist, send items with id, status and a nonempty evidence string citing the current observed file path or actual run_test/command reference. Never supply evidenceRef or observation IDs: the host assigns and validates them. Changed source revokes old closures; gather a current read or passing test after the last edit. A blocked item needs actual current failing test evidence.")));
+            messages.push(message("user", Text::from("Observed acceptance is enabled. For update_checklist, send items with id, status and a nonempty evidence string citing the current observed file path or actual run_test/command reference. A passing run_test observation (exit_code 0) satisfies any node --test, cargo test, or pytest acceptance check in TASK.md. Never supply evidenceRef or observation IDs: the host assigns and validates them. Changed source revokes old closures; gather a current read or passing test after the last edit. A blocked item needs actual current failing test evidence.")));
         }
         if prepared.all_met {
             messages.push(message("user", Text::from("Every deterministically selected pre-coder check already held. Do not change product behavior; pin only missing authorized test evidence, or report that the existing task needs host rescoping. Existing passes alone do not implement an Ask.")));

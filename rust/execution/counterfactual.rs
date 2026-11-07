@@ -194,6 +194,11 @@ pub(crate) async fn run_one(
                 "Selected consumer Node counterfactual has no explicit host executable approval",
             )
         })?;
+        let per_test_timeout = if owner.root().join("test").is_dir() {
+            approval.timeout().min(30_000)
+        } else {
+            approval.timeout()
+        };
         return owner
             .run(
                 directory,
@@ -201,7 +206,7 @@ pub(crate) async fn run_one(
                 &[
                     "--test".to_owned(),
                     "--test-reporter=tap".to_owned(),
-                    format!("--test-timeout={}", approval.timeout()),
+                    format!("--test-timeout={per_test_timeout}"),
                     target.file.clone(),
                 ],
                 &env,
